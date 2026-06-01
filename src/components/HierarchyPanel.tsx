@@ -1,0 +1,68 @@
+import { Box, Camera, Circle, FilePlus2, LampDesk, Square, Trash2 } from 'lucide-react';
+import clsx from 'clsx';
+import { useEditorStore } from '../store/editorStore';
+import type { SceneObject, SceneObjectKind } from '../types';
+
+const objectIcon: Record<SceneObjectKind, typeof Box> = {
+  empty: Square,
+  cube: Box,
+  sphere: Circle,
+  capsule: Box,
+  plane: Square,
+  light: LampDesk,
+  camera: Camera,
+};
+
+function HierarchyRow({ object }: { object: SceneObject }) {
+  const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
+  const selectObject = useEditorStore((state) => state.selectObject);
+  const Icon = objectIcon[object.kind];
+
+  return (
+    <button
+      className={clsx('hierarchy-row', selectedObjectId === object.id && 'selected')}
+      onClick={() => selectObject(object.id)}
+      title={object.name}
+    >
+      <Icon size={15} aria-hidden />
+      <span>{object.name}</span>
+    </button>
+  );
+}
+
+export function HierarchyPanel() {
+  const sceneObjects = useEditorStore((state) => state.sceneObjects);
+  const createObject = useEditorStore((state) => state.createObject);
+  const deleteSelectedObject = useEditorStore((state) => state.deleteSelectedObject);
+
+  return (
+    <aside className="panel hierarchy-panel">
+      <div className="panel-header">
+        <div>
+          <span className="eyebrow">Scene</span>
+          <h2>Hierarchy</h2>
+        </div>
+        <div className="panel-actions">
+          <button className="icon-button compact" title="Create empty object" onClick={() => createObject('empty')}>
+            <FilePlus2 size={15} aria-hidden />
+          </button>
+          <button className="icon-button compact danger" title="Delete selected object" onClick={deleteSelectedObject}>
+            <Trash2 size={15} aria-hidden />
+          </button>
+        </div>
+      </div>
+
+      <div className="scene-root">
+        <span className="root-dot" />
+        <strong>Scene</strong>
+        <small>{sceneObjects.length} objects</small>
+      </div>
+
+      <div className="hierarchy-list">
+        {sceneObjects.map((object) => (
+          <HierarchyRow key={object.id} object={object} />
+        ))}
+      </div>
+    </aside>
+  );
+}
