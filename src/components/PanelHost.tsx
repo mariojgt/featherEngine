@@ -3,6 +3,8 @@ import { HierarchyPanel } from './HierarchyPanel';
 import { InspectorPanel } from './InspectorPanel';
 import { AssetBrowser } from './AssetBrowser';
 import { VisualScriptingPanel } from './VisualScriptingPanel';
+import { MaterialEditorPanel } from './MaterialEditorPanel';
+import { AnimatorEditorPanel } from './AnimatorEditorPanel';
 import { broadcastPanelClosed, initStoreSync } from '../sync/storeSync';
 
 const PANELS: Record<string, () => JSX.Element> = {
@@ -10,6 +12,8 @@ const PANELS: Record<string, () => JSX.Element> = {
   inspector: InspectorPanel,
   project: AssetBrowser,
   scripting: VisualScriptingPanel,
+  materials: MaterialEditorPanel,
+  animator: AnimatorEditorPanel,
 };
 
 /**

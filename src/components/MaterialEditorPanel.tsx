@@ -21,9 +21,27 @@ import type { AssetItem, GraphNodeCategory, MaterialDefinition, MeshRendererComp
 
 const nodeTypes: NodeTypes = { nodeforge: NodeForgeGraphNode };
 
-const paletteGroups: Array<{ title: string; icon: typeof Palette; nodes: string[] }> = [
-  { title: 'Inputs', icon: Hash, nodes: ['Color', 'Scalar', 'Texture'] },
-  { title: 'Operators', icon: SlidersHorizontal, nodes: ['Mix'] },
+// `key` is the nodeKindByLabel key passed to addMaterialNode; `label` is the friendly button text.
+const paletteGroups: Array<{ title: string; icon: typeof Palette; nodes: Array<{ label: string; key: string }> }> = [
+  {
+    title: 'Inputs',
+    icon: Hash,
+    nodes: [
+      { label: 'Color', key: 'Color' },
+      { label: 'Scalar', key: 'Scalar' },
+      { label: 'Texture', key: 'Texture' },
+    ],
+  },
+  {
+    title: 'Operators',
+    icon: SlidersHorizontal,
+    nodes: [
+      { label: 'Mix', key: 'Mix' },
+      { label: 'Multiply', key: 'Multiply' },
+      { label: 'Add', key: 'Add (Material)' },
+      { label: 'Clamp', key: 'Clamp (Material)' },
+    ],
+  },
 ];
 
 const nodeChoices: NodeChoice[] = [
@@ -31,6 +49,9 @@ const nodeChoices: NodeChoice[] = [
   { label: 'Scalar', category: 'Material' },
   { label: 'Texture', category: 'Material' },
   { label: 'Mix', category: 'Material' },
+  { label: 'Multiply', category: 'Material' },
+  { label: 'Add', category: 'Material', nodeLabel: 'Add (Material)' },
+  { label: 'Clamp', category: 'Material', nodeLabel: 'Clamp (Material)' },
 ];
 
 /** A live sphere preview that mirrors exactly how the material resolves (graph + flat fields). */
@@ -244,9 +265,9 @@ function MaterialFlow({ material }: { material: MaterialDefinition }) {
             </h3>
             <div>
               {nodes.map((node) => (
-                <button key={node} onClick={() => selectGraphNode(addMaterialNode(node, 'Material'))} title={`Add ${node}`}>
+                <button key={node.key} onClick={() => selectGraphNode(addMaterialNode(node.key, 'Material'))} title={`Add ${node.label}`}>
                   <Plus size={13} aria-hidden />
-                  <span>{node}</span>
+                  <span>{node.label}</span>
                 </button>
               ))}
             </div>

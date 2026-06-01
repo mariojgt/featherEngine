@@ -30,12 +30,74 @@ import {
   type SceneObject,
   type SceneObjectKind,
   type ScriptBlueprint,
+  type SkeletonAsset,
+  type SkeletalMeshAsset,
+  type AnimationAsset,
+  type AnimatorController,
+  type AnimatorParameter,
+  type AnimatorState,
+  type AnimatorTransition,
+  type AnimatorCondition,
+  type CharacterControllerComponent,
   type TransformComponent,
   type Vector3Tuple,
 } from '../types';
 import { getActivePhysics, startPhysics, stopPhysics } from '../runtime/physicsWorld';
+import { cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
+import { resolveMaterial } from '../three/materialResolve';
+import type { ModelInspection } from '../three/inspectModel';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+/** Live state of one object's Animator Controller during Play. */
+export interface RuntimeAnimator {
+  /** Active state id within the controller. */
+  stateId: string;
+  /** Current parameter values, keyed by parameter id. */
+  params: Record<string, number | boolean>;
+  /** Crossfade seconds for the transition that produced the current state (read by SkinnedModel). */
+  fade: number;
+}
+
+/** A factory for a fresh default animator component (used when one is first enabled). */
+const defaultAnimator = (): AnimatorComponent => ({ enabled: false, speed: 1, loop: true });
+
+/** Interpolate an angle toward a target along the shortest arc (radians). */
+const lerpAngle = (from: number, to: number, t: number): number => {
+  let delta = (to - from) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return from + delta * Math.min(Math.max(t, 0), 1);
+};
+
+/** A factory for a fresh default character controller (sensible third-person defaults). */
+export const defaultCharacter = (): CharacterControllerComponent => ({
+  enabled: false,
+  moveSpeed: 3.4,
+  sprintMultiplier: 2,
+  crouchMultiplier: 0.45,
+  jumpStrength: 5,
+  gravity: 12,
+  turnSpeed: 10,
+  modelYawOffset: 0,
+  groundLevel: 0,
+  keyForward: 'KeyW',
+  keyBackward: 'KeyS',
+  keyLeft: 'KeyA',
+  keyRight: 'KeyD',
+  keyJump: 'Space',
+  keySprint: 'ShiftLeft',
+  keyCrouch: 'KeyC',
+  cameraFollow: true,
+  // Behind (-Z) and above a +Z-forward character.
+  cameraOffset: [0, 2.6, -6],
+  mouseLook: true,
+  mouseSensitivity: 0.0025,
+  cameraPitch: 0.28,
+  cameraMinPitch: -0.2,
+  cameraMaxPitch: 1.2,
+  cameraRelativeMovement: true,
+});
 
 export interface CreateObjectOptions {
   name?: string;
@@ -262,6 +324,11 @@ const nodeDescriptions: Record<string, string> = {
   Scalar: 'Outputs a constant number.',
   Texture: 'Outputs an image texture (feed Base Color or Normal).',
   Mix: 'Blends two colors by a 0-1 factor.',
+  Multiply: 'Multiplies two numbers, two colors, or a color by a scalar.',
+  'Add (Material)': 'Adds two numbers or two colors.',
+  'Clamp (Material)': 'Clamps a number to a min/max range.',
+  'Get Material Color': "Reads this object's current material color at runtime.",
+  'Get Material Property': "Reads this object's current metalness/roughness/glow at runtime.",
   Translate: 'Moves the attached object.',
   Rotate: 'Rotates the attached object.',
   'Apply Force': 'Adds force to a rigid body.',
@@ -269,6 +336,14 @@ const nodeDescriptions: Record<string, string> = {
   'Play Sound': 'Plays an audio source.',
   'Set Material Color': 'Changes the attached object\'s material color at runtime (per-object).',
   'Set Material Property': 'Sets a numeric material property (metalness/roughness/glow) at runtime (per-object).',
+  'Set Anim Float': 'Writes a float into the object\'s animator parameter (e.g. Speed) to drive its state machine.',
+  'Set Anim Bool': 'Writes a true/false into the object\'s animator parameter.',
+  'Set Anim Trigger': 'Fires a one-shot animator trigger (e.g. Jump, Attack) consumed by a transition.',
+  'Get Move Input': 'Outputs a world-space move direction (Vector3) from WASD / arrow keys.',
+  Move: 'Moves the owner along the ground by a direction vector at a speed, turning it to face travel.',
+  Jump: 'Makes the owning character jump (needs a Character Controller for height/gravity).',
+  'Is Grounded': 'Outputs true when the owning character is on the ground.',
+  'Set Camera': 'Overrides the follow-camera distance/height at runtime.',
   'Save Game': 'Writes persistent variables into local save storage.',
   'Load Game': 'Restores persistent variables from local save storage.',
   'Clear Save': 'Deletes a local save slot.',
@@ -319,11 +394,24 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Play Sound': 'action.playSound',
   'Set Material Color': 'action.setMaterialColor',
   'Set Material Property': 'action.setMaterialProperty',
+  'Set Anim Float': 'animator.setFloat',
+  'Set Anim Bool': 'animator.setBool',
+  'Set Anim Trigger': 'animator.setTrigger',
+  'Get Move Input': 'input.move',
+  Move: 'action.move',
+  Jump: 'action.jump',
+  'Is Grounded': 'query.grounded',
+  'Set Camera': 'action.setCamera',
   'Material Output': 'material.output',
   Color: 'material.color',
   Scalar: 'material.scalar',
   Texture: 'material.texture',
   Mix: 'material.mix',
+  Multiply: 'material.multiply',
+  'Add (Material)': 'material.add',
+  'Clamp (Material)': 'material.clamp',
+  'Get Material Color': 'action.getMaterialColor',
+  'Get Material Property': 'action.getMaterialProperty',
   'Save Game': 'save.write',
   'Load Game': 'save.load',
   'Clear Save': 'save.clear',
@@ -402,10 +490,39 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: 'Texture', description: 'Outputs an image texture (feed Base Color or Normal).' };
     case 'material.mix':
       return { label: 'Mix', description: 'Blends two colors by a 0-1 factor.' };
+    case 'material.multiply':
+      return { label: 'Multiply', description: 'Multiplies two numbers/colors, or a color by a scalar.' };
+    case 'material.add':
+      return { label: 'Add', description: 'Adds two numbers or two colors.' };
+    case 'material.clamp':
+      return { label: 'Clamp', description: 'Clamps a number to a min/max range.' };
     case 'action.setMaterialColor':
-      return { label: `Set Color ${data.materialColor || '#ffffff'}`, description: 'Sets the attached object\'s material color at runtime (per-object).' };
+      return {
+        label: `Set ${data.materialColorTarget === 'emissive' ? 'Emissive' : 'Color'} ${data.materialColor || '#ffffff'}`,
+        description: "Sets the attached object's base or emissive color at runtime (per-object).",
+      };
     case 'action.setMaterialProperty':
       return { label: `Set ${data.materialProperty ?? 'metalness'} ${Number(data.numberValue ?? 0)}`, description: 'Sets a numeric material property at runtime (per-object).' };
+    case 'action.getMaterialColor':
+      return { label: 'Get Material Color', description: "Reads this object's current material color at runtime." };
+    case 'action.getMaterialProperty':
+      return { label: `Get ${data.materialProperty ?? 'metalness'}`, description: "Reads this object's current numeric material property at runtime." };
+    case 'animator.setFloat':
+      return { label: `Set Anim Float: ${data.paramName || 'param'}`, description: 'Writes a float into an animator parameter.' };
+    case 'animator.setBool':
+      return { label: `Set Anim Bool: ${data.paramName || 'param'}`, description: 'Writes a boolean into an animator parameter.' };
+    case 'animator.setTrigger':
+      return { label: `Set Anim Trigger: ${data.paramName || 'param'}`, description: 'Fires a one-shot animator trigger.' };
+    case 'input.move':
+      return { label: 'Get Move Input', description: 'WASD / arrows → a world move direction.' };
+    case 'action.move':
+      return { label: 'Move', description: 'Moves + turns the owner along a direction at a speed.' };
+    case 'action.jump':
+      return { label: 'Jump', description: 'Makes the owning character jump.' };
+    case 'query.grounded':
+      return { label: 'Is Grounded', description: 'True when the character is on the ground.' };
+    case 'action.setCamera':
+      return { label: 'Set Camera', description: 'Override follow-camera distance/height at runtime.' };
     case 'action.print':
       return { label: `Print: ${data.message || 'message'}`, description: 'Logs its message to the on-screen console during Play.' };
     default: {
@@ -451,6 +568,13 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
 
   if (nodeKind === 'action.print' && typeof normalized.message !== 'string') {
     normalized.message = 'Hello';
+  }
+
+  if (
+    (nodeKind === 'animator.setFloat' || nodeKind === 'animator.setBool' || nodeKind === 'animator.setTrigger') &&
+    typeof normalized.paramName !== 'string'
+  ) {
+    normalized.paramName = 'Speed';
   }
 
   if (nodeKind === 'logic.compare' && !normalized.compareOp) {
@@ -500,7 +624,11 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
   }
 
   if ((nodeKind === 'material.scalar' || nodeKind === 'material.mix') && typeof normalized.numberValue !== 'number') {
-    normalized.numberValue = nodeKind === 'material.mix' ? 0.5 : 0.5;
+    normalized.numberValue = 0.5;
+  }
+
+  if (nodeKind === 'action.getMaterialProperty' && !normalized.materialProperty) {
+    normalized.materialProperty = 'metalness';
   }
 
   const isPureValueNode =
@@ -514,7 +642,14 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
     nodeKind === 'material.color' ||
     nodeKind === 'material.scalar' ||
     nodeKind === 'material.texture' ||
-    nodeKind === 'material.mix';
+    nodeKind === 'material.mix' ||
+    nodeKind === 'material.multiply' ||
+    nodeKind === 'material.add' ||
+    nodeKind === 'material.clamp' ||
+    nodeKind === 'action.getMaterialColor' ||
+    nodeKind === 'action.getMaterialProperty' ||
+    nodeKind === 'input.move' ||
+    nodeKind === 'query.grounded';
 
   if (isPureValueNode) {
     normalized.hasInput = false;
@@ -801,15 +936,22 @@ interface EditorState {
   scenes: Scene[];
   activeSceneId: string;
   selectedObjectId: string;
+  /** Object whose follow-camera offset is being positioned with the on-screen gizmo (editor UI only). */
+  cameraRigTarget?: string;
   isDirty: boolean;
   assets: AssetItem[];
   folders: ProjectFolder[];
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
+  skeletons: SkeletonAsset[];
+  skeletalMeshes: SkeletalMeshAsset[];
+  animations: AnimationAsset[];
+  animatorControllers: AnimatorController[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   activeBlueprintId: string;
+  activeAnimatorControllerId: string;
   activeMaterialId: string;
   isPlaying: boolean;
   playSnapshot?: {
@@ -822,6 +964,12 @@ interface EditorState {
   runtimePreviousKeys: Record<string, boolean>;
   runtimeEventQueue: string[];
   runtimeVariableValues: Record<string, GraphValue>;
+  /** Per-object animator state machine runtime: active state + live parameter values. Play-only. */
+  runtimeAnimators: Record<string, RuntimeAnimator>;
+  /** Per-object follow-camera overrides written by the Set Camera node. Play-only. */
+  runtimeCameraOverrides: Record<string, { distance: number; height: number }>;
+  /** Character-controller object ids standing on the ground last frame (drives jump + grounded). */
+  runtimeGrounded: string[];
   /** Object ids that started a contact in the previous physics step; drives event.collisionEnter. */
   runtimeCollisions: string[];
   /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
@@ -843,6 +991,7 @@ interface EditorState {
   activeGraph: () => ProjectGraph | undefined;
   selectedGraphNode: () => NodeForgeNode | undefined;
   selectObject: (id: string) => void;
+  setCameraRigTarget: (id?: string) => void;
   createObject: (kind: SceneObjectKind) => void;
   createObjectWithProps: (kind: SceneObjectKind, options?: CreateObjectOptions) => string;
   deleteObject: (id: string) => void;
@@ -858,6 +1007,45 @@ interface EditorState {
   toggleAnimator: (id: string) => void;
   /** Patch an object's animator component (clip, speed, loop). No-op if it has no animator. */
   updateAnimator: (id: string, patch: Partial<AnimatorComponent>) => void;
+  /**
+   * Split an imported model into reusable Skeleton + Skeletal Mesh + Animation assets. Skeletons are
+   * deduped by signature (so rigs sharing a skeleton reuse one), and clips are deduped by
+   * (skeleton, clip name) so re-importing the same animation pack doesn't pile up duplicates.
+   * Returns the skeletal-mesh asset id, or undefined for a non-skinned model.
+   */
+  registerImportedModel: (input: {
+    assetId: string;
+    assetName: string;
+    folderId?: string;
+    inspection: ModelInspection;
+  }) => string | undefined;
+  // --- Animator Controller (state machine) authoring. All AI-friendly: explicit params, return ids. ---
+  createAnimatorController: (name?: string, skeletonId?: string, folderId?: string) => string;
+  updateAnimatorController: (id: string, patch: Partial<Pick<AnimatorController, 'name' | 'defaultStateId' | 'skeletonId'>>) => void;
+  deleteAnimatorController: (id: string) => void;
+  setActiveAnimatorController: (id: string) => void;
+  /** Assign (or clear) the controller driving an object's animator. Seeds the animator component. */
+  setObjectAnimatorController: (objectId: string, controllerId?: string) => void;
+  addAnimatorParameter: (controllerId: string, param: { name: string; type: AnimatorParameter['type']; source?: AnimatorParameter['source']; variableId?: string; defaultValue?: number | boolean }) => string | undefined;
+  updateAnimatorParameter: (controllerId: string, paramId: string, patch: Partial<Omit<AnimatorParameter, 'id'>>) => void;
+  removeAnimatorParameter: (controllerId: string, paramId: string) => void;
+  addAnimatorState: (controllerId: string, state?: { name?: string; animationId?: string; speed?: number; loop?: boolean }) => string | undefined;
+  updateAnimatorState: (controllerId: string, stateId: string, patch: Partial<Omit<AnimatorState, 'id'>>) => void;
+  removeAnimatorState: (controllerId: string, stateId: string) => void;
+  addAnimatorTransition: (controllerId: string, transition: { from: string; to: string; conditions?: AnimatorCondition[]; duration?: number }) => string | undefined;
+  updateAnimatorTransition: (controllerId: string, transitionId: string, patch: Partial<Omit<AnimatorTransition, 'id'>>) => void;
+  removeAnimatorTransition: (controllerId: string, transitionId: string) => void;
+  // --- Built-in character controller ---
+  /** Enable/disable the character controller on an object (seeds defaults when first enabled). */
+  toggleCharacterController: (id: string) => void;
+  /** Patch an object's character controller. No-op if it has none. */
+  updateCharacterController: (id: string, patch: Partial<CharacterControllerComponent>) => void;
+  /**
+   * One-click third-person pawn: from a rigged model asset, create an object that renders it, build a
+   * locomotion Animator Controller (Idle/Walk/Jog/Jump from the skeleton's clips, matched by name) and
+   * attach a character controller. Returns the new object's id, or undefined if the model isn't rigged.
+   */
+  createCharacterPawn: (modelAssetId: string, name?: string) => string | undefined;
   attachScript: (id: string, nextBlueprintId?: string) => void;
   detachScript: (id: string) => void;
   setActiveBlueprint: (id: string) => void;
@@ -994,16 +1182,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   variables: starterVariables,
   dataAssets: starterDataAssets,
   materials: [],
+  skeletons: [],
+  skeletalMeshes: [],
+  animations: [],
+  animatorControllers: [],
   blueprints: starterBlueprints,
   graphs: [{ id: graphId, name: 'Player Controller', nodes: starterNodes, edges: starterEdges }],
   activeBlueprintId: blueprintId,
   activeMaterialId: '',
+  activeAnimatorControllerId: '',
   isPlaying: false,
   runtimeVelocities: {},
   runtimeKeys: {},
   runtimePreviousKeys: {},
   runtimeEventQueue: [],
   runtimeVariableValues: {},
+  runtimeAnimators: {},
+  runtimeCameraOverrides: {},
+  runtimeGrounded: [],
   runtimeCollisions: [],
   runtimeSoundQueue: [],
   runtimeLog: [],
@@ -1060,6 +1256,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
   selectedGraphNode: () => get().activeGraph()?.nodes.find((node) => node.id === get().selectedGraphNodeId),
   selectObject: (id) => set({ selectedObjectId: id }),
+  setCameraRigTarget: (id) => set({ cameraRigTarget: id }),
   createObject: (kind) =>
     set((state) => {
       const defaults = objectDefaults[kind];
@@ -1212,6 +1409,438 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ),
       ),
     ),
+  registerImportedModel: ({ assetId, assetName, folderId, inspection }) => {
+    if (!inspection.skeleton) return undefined; // static model — nothing to split
+    const baseName = assetName.replace(/\.(glb|gltf|fbx)$/i, '');
+    const now = Date.now();
+    let skeletalMeshId: string | undefined;
+
+    set((state) => {
+      // Reuse a skeleton with the same signature, else create one. This is what lets a second
+      // character on the same rig share all of the first's animations.
+      let skeleton = state.skeletons.find((item) => item.signature === inspection.skeleton!.signature);
+      const skeletons = [...state.skeletons];
+      if (!skeleton) {
+        skeleton = {
+          id: makeId('skeleton'),
+          name: `${baseName} Skeleton`,
+          sourceAssetId: assetId,
+          boneNames: inspection.skeleton!.boneNames,
+          signature: inspection.skeleton!.signature,
+          rootBone: inspection.skeleton!.rootBone,
+          folderId,
+          createdAt: now,
+        };
+        skeletons.push(skeleton);
+      }
+
+      const skeletalMesh: SkeletalMeshAsset = {
+        id: makeId('skmesh'),
+        name: baseName,
+        sourceAssetId: assetId,
+        skeletonId: skeleton.id,
+        folderId,
+        createdAt: now,
+      };
+      skeletalMeshId = skeletalMesh.id;
+
+      // Add only clips not already present for this skeleton (dedupe by name).
+      const existingNames = new Set(
+        state.animations.filter((anim) => anim.skeletonId === skeleton!.id).map((anim) => anim.clipName),
+      );
+      const newAnimations: AnimationAsset[] = inspection.clips
+        .filter((clip) => clip.name && !existingNames.has(clip.name))
+        .map((clip) => ({
+          id: makeId('anim'),
+          name: clip.name,
+          sourceAssetId: assetId,
+          clipName: clip.name,
+          skeletonId: skeleton!.id,
+          duration: clip.duration,
+          loop: /(_loop|idle)$/i.test(clip.name),
+          folderId,
+          createdAt: now,
+        }));
+
+      return {
+        skeletons,
+        skeletalMeshes: [...state.skeletalMeshes, skeletalMesh],
+        animations: [...state.animations, ...newAnimations],
+        isDirty: true,
+      };
+    });
+
+    return skeletalMeshId;
+  },
+  createAnimatorController: (name, skeletonId, folderId) => {
+    const id = makeId('animctl');
+    set((state) => ({
+      animatorControllers: [
+        ...state.animatorControllers,
+        {
+          id,
+          name: name ?? `Animator ${state.animatorControllers.length + 1}`,
+          skeletonId,
+          parameters: [],
+          states: [],
+          defaultStateId: undefined,
+          transitions: [],
+          folderId,
+          createdAt: Date.now(),
+        },
+      ],
+      activeAnimatorControllerId: id,
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateAnimatorController: (id, patch) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((controller) =>
+        controller.id === id ? { ...controller, ...patch } : controller,
+      ),
+      isDirty: true,
+    })),
+  deleteAnimatorController: (id) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.filter((controller) => controller.id !== id),
+      activeAnimatorControllerId:
+        state.activeAnimatorControllerId === id
+          ? state.animatorControllers.find((controller) => controller.id !== id)?.id ?? ''
+          : state.activeAnimatorControllerId,
+      isDirty: true,
+    })),
+  setActiveAnimatorController: (id) => set({ activeAnimatorControllerId: id }),
+  setObjectAnimatorController: (objectId, controllerId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId) return object;
+          const animator = object.animator ?? defaultAnimator();
+          return { ...object, animator: { ...animator, enabled: true, controllerId: controllerId || undefined } };
+        }),
+      ),
+    ),
+  addAnimatorParameter: (controllerId, param) => {
+    const controller = get().animatorControllers.find((item) => item.id === controllerId);
+    if (!controller) return undefined;
+    const id = makeId('param');
+    const defaultValue = param.defaultValue ?? (param.type === 'float' ? 0 : false);
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? {
+              ...item,
+              parameters: [
+                ...item.parameters,
+                { id, name: param.name, type: param.type, source: param.source ?? 'manual', variableId: param.variableId, defaultValue },
+              ],
+            }
+          : item,
+      ),
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateAnimatorParameter: (controllerId, paramId, patch) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? { ...item, parameters: item.parameters.map((p) => (p.id === paramId ? { ...p, ...patch } : p)) }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  removeAnimatorParameter: (controllerId, paramId) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? {
+              ...item,
+              parameters: item.parameters.filter((p) => p.id !== paramId),
+              // Drop conditions that referenced the removed parameter.
+              transitions: item.transitions.map((t) => ({ ...t, conditions: t.conditions.filter((c) => c.parameterId !== paramId) })),
+            }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  addAnimatorState: (controllerId, stateInput) => {
+    const controller = get().animatorControllers.find((item) => item.id === controllerId);
+    if (!controller) return undefined;
+    const id = makeId('state');
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? {
+              ...item,
+              states: [
+                ...item.states,
+                {
+                  id,
+                  name: stateInput?.name ?? `State ${item.states.length + 1}`,
+                  animationId: stateInput?.animationId,
+                  speed: stateInput?.speed ?? 1,
+                  loop: stateInput?.loop ?? true,
+                },
+              ],
+              // First state added becomes the default (entry) state.
+              defaultStateId: item.defaultStateId ?? id,
+            }
+          : item,
+      ),
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateAnimatorState: (controllerId, stateId, patch) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? { ...item, states: item.states.map((s) => (s.id === stateId ? { ...s, ...patch } : s)) }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  removeAnimatorState: (controllerId, stateId) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? {
+              ...item,
+              states: item.states.filter((s) => s.id !== stateId),
+              defaultStateId: item.defaultStateId === stateId ? item.states.find((s) => s.id !== stateId)?.id : item.defaultStateId,
+              // Drop transitions touching the removed state.
+              transitions: item.transitions.filter((t) => t.from !== stateId && t.to !== stateId),
+            }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  addAnimatorTransition: (controllerId, transition) => {
+    const controller = get().animatorControllers.find((item) => item.id === controllerId);
+    if (!controller) return undefined;
+    const id = makeId('xition');
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? {
+              ...item,
+              transitions: [
+                ...item.transitions,
+                { id, from: transition.from, to: transition.to, conditions: transition.conditions ?? [], duration: transition.duration ?? 0.2 },
+              ],
+            }
+          : item,
+      ),
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateAnimatorTransition: (controllerId, transitionId, patch) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? { ...item, transitions: item.transitions.map((t) => (t.id === transitionId ? { ...t, ...patch } : t)) }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  removeAnimatorTransition: (controllerId, transitionId) =>
+    set((state) => ({
+      animatorControllers: state.animatorControllers.map((item) =>
+        item.id === controllerId
+          ? { ...item, transitions: item.transitions.filter((t) => t.id !== transitionId) }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  toggleCharacterController: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id) return object;
+          const current = object.character ?? defaultCharacter();
+          return { ...object, character: { ...current, enabled: !current.enabled } };
+        }),
+      ),
+    ),
+  updateCharacterController: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id && object.character ? { ...object, character: { ...object.character, ...patch } } : object,
+        ),
+      ),
+    ),
+  createCharacterPawn: (modelAssetId, name) => {
+    const state = get();
+    const mesh = state.skeletalMeshes.find((item) => item.sourceAssetId === modelAssetId);
+    if (!mesh) return undefined; // not a rigged model
+    const clips = state.animations.filter((anim) => anim.skeletonId === mesh.skeletonId);
+    const pick = (...patterns: RegExp[]) => {
+      for (const pattern of patterns) {
+        const found = clips.find((clip) => pattern.test(clip.name));
+        if (found) return found.id;
+      }
+      return undefined;
+    };
+    const idleId = pick(/idle.*loop/i, /^idle/i, /loop/i);
+    const walkId = pick(/walk.*loop/i, /^walk/i);
+    const runId = pick(/sprint.*loop/i, /jog.*loop/i, /run.*loop/i, /run/i);
+    const jumpId = pick(/jump.*loop/i, /jump/i, /fall/i);
+    const crouchIdleId = pick(/crouch.*idle/i);
+    const crouchWalkId = pick(/crouch.*(fwd|walk)/i, /crouch.*loop/i);
+
+    // Build states for whichever clips exist; the first becomes the default (entry) state.
+    const speedParamId = makeId('param');
+    const vspeedParamId = makeId('param');
+    const crouchParamId = makeId('param');
+    const parameters: AnimatorParameter[] = [
+      { id: speedParamId, name: 'Speed', type: 'float', source: 'speed', defaultValue: 0 },
+      { id: vspeedParamId, name: 'VerticalSpeed', type: 'float', source: 'verticalSpeed', defaultValue: 0 },
+      { id: crouchParamId, name: 'Crouching', type: 'bool', source: 'crouching', defaultValue: false },
+    ];
+    const states: AnimatorState[] = [];
+    const stateId: Record<string, string> = {};
+    const addState = (key: string, name: string, animationId: string | undefined, loop = true) => {
+      if (!animationId) return;
+      const id = makeId('state');
+      stateId[key] = id;
+      states.push({ id, name, animationId, speed: 1, loop });
+    };
+    addState('idle', 'Idle', idleId);
+    addState('walk', 'Walk', walkId);
+    addState('run', 'Run', runId);
+    addState('jump', 'Jump', jumpId, false);
+    addState('crouchIdle', 'Crouch Idle', crouchIdleId);
+    addState('crouchWalk', 'Crouch Walk', crouchWalkId);
+    if (!states.length) return undefined; // no usable clips
+
+    const C = (parameterId: string, op: AnimatorCondition['op'], value: number | boolean): AnimatorCondition => ({ parameterId, op, value });
+    const transitions: AnimatorTransition[] = [];
+    const link = (from: string, to: string, conditions: AnimatorCondition[], duration = 0.18) => {
+      if (stateId[from] && stateId[to]) transitions.push({ id: makeId('xition'), from: stateId[from], to: stateId[to], conditions, duration });
+    };
+    const linkAny = (to: string, conditions: AnimatorCondition[], duration = 0.12) => {
+      if (stateId[to]) transitions.push({ id: makeId('xition'), from: 'any', to: stateId[to], conditions, duration });
+    };
+
+    // Jump first (highest priority), then crouch, then ground locomotion — order = match priority.
+    if (stateId.jump) {
+      linkAny('jump', [C(vspeedParamId, '>', 0.5)], 0.1);
+      link('jump', 'idle', [C(vspeedParamId, '<', 0.1)]);
+    }
+    if (stateId.crouchIdle || stateId.crouchWalk) {
+      linkAny('crouchWalk', [C(crouchParamId, '==', true), C(speedParamId, '>', 0.1)]);
+      linkAny('crouchIdle', [C(crouchParamId, '==', true), C(speedParamId, '<', 0.1)]);
+      link('crouchIdle', 'crouchWalk', [C(speedParamId, '>', 0.1)]);
+      link('crouchWalk', 'crouchIdle', [C(speedParamId, '<', 0.1)]);
+      link('crouchIdle', 'idle', [C(crouchParamId, '==', false)]);
+      link('crouchWalk', 'walk', [C(crouchParamId, '==', false)]);
+    }
+    link('idle', 'walk', [C(speedParamId, '>', 0.1), C(crouchParamId, '==', false)]);
+    link('walk', 'idle', [C(speedParamId, '<', 0.1), C(crouchParamId, '==', false)]);
+    link('walk', 'run', [C(speedParamId, '>', 5), C(crouchParamId, '==', false)]);
+    link('run', 'walk', [C(speedParamId, '<', 5)]);
+    // Fallback when there's no walk clip: idle ↔ run directly.
+    if (!stateId.walk) {
+      link('idle', 'run', [C(speedParamId, '>', 0.1)]);
+      link('run', 'idle', [C(speedParamId, '<', 0.1)]);
+    }
+
+    const controllerId = makeId('animctl');
+    const defaultStateId = stateId.idle ?? states[0].id;
+    const controller: AnimatorController = {
+      id: controllerId,
+      name: `${mesh.name} Locomotion`,
+      skeletonId: mesh.skeletonId,
+      parameters,
+      states,
+      defaultStateId,
+      transitions,
+      createdAt: Date.now(),
+    };
+
+    // Preset, fully-editable controller graph (Unreal Event-Graph style): Update → Move(Get Move Input),
+    // and Space → Jump. The user opens this blueprint to change the logic; the animator reads the
+    // resulting motion automatically. Having an enabled script puts the character in "scripted" mode.
+    const graphId = makeId('graph');
+    const blueprintId = makeId('bp');
+    const node = (nodeId: string, label: string, category: GraphNodeCategory, x: number, y: number, extra: Partial<NodeForgeNodeData> = {}): NodeForgeNode => ({
+      id: nodeId,
+      type: 'nodeforge',
+      position: { x, y },
+      data: makeNodeData(label, category, extra),
+    });
+    const updateNodeId = makeId('node');
+    const inputNodeId = makeId('node');
+    const moveNodeId = makeId('node');
+    const spaceNodeId = makeId('node');
+    const jumpNodeId = makeId('node');
+    const presetNodes: NodeForgeNode[] = [
+      node(updateNodeId, 'Update', 'Events', 40, 60, { hasInput: false }),
+      node(inputNodeId, 'Get Move Input', 'Runtime', 40, 200),
+      node(moveNodeId, 'Move', 'Runtime', 360, 90),
+      node(spaceNodeId, 'Key Down', 'Events', 40, 360, { keyCode: 'Space', hasInput: false }),
+      node(jumpNodeId, 'Jump', 'Runtime', 360, 360),
+    ];
+    const execEdge = (source: string, target: string): Edge => ({
+      id: makeId('edge'),
+      source,
+      target,
+      sourceHandle: 'exec-out',
+      targetHandle: 'exec-in',
+      animated: true,
+      type: 'smoothstep',
+    });
+    const valueEdge = (source: string, target: string, targetHandle: string): Edge => ({
+      id: makeId('edge'),
+      source,
+      target,
+      sourceHandle: 'value-out',
+      targetHandle,
+      type: 'smoothstep',
+      style: { stroke: '#3DD0DC', strokeWidth: 2 },
+    });
+    const presetEdges: Edge[] = [
+      execEdge(updateNodeId, moveNodeId),
+      valueEdge(inputNodeId, moveNodeId, 'vector'),
+      execEdge(spaceNodeId, jumpNodeId),
+    ];
+    const presetGraph: ProjectGraph = { id: graphId, name: `${mesh.name} Controller`, nodes: presetNodes, edges: presetEdges };
+    const blueprint: ScriptBlueprint = {
+      id: blueprintId,
+      name: `${mesh.name} Controller`,
+      description: 'Third-person character logic — edit these nodes to change movement, jump, abilities.',
+      graphId,
+      color: '#5b8cff',
+      createdAt: Date.now(),
+    };
+
+    const objectId = makeId('obj');
+    const pawn: SceneObject = {
+      id: objectId,
+      name: name ?? mesh.name,
+      kind: 'cube',
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      renderer: { ...defaultRenderer('cube'), modelAssetId },
+      animator: { enabled: true, controllerId, speed: 1, loop: true },
+      character: { ...defaultCharacter(), enabled: true },
+      script: { blueprintId, graphId, enabled: true },
+    };
+
+    set((draft) => ({
+      animatorControllers: [...draft.animatorControllers, controller],
+      activeAnimatorControllerId: controllerId,
+      blueprints: [...draft.blueprints, blueprint],
+      graphs: [...draft.graphs, presetGraph],
+      activeBlueprintId: blueprintId,
+      ...mapActiveSceneObjects(draft, (objects) => [...objects, pawn]),
+      selectedObjectId: objectId,
+    }));
+    return objectId;
+  },
   attachScript: (id, nextBlueprintId) =>
     set((state) => {
       const blueprint = state.blueprints.find((item) => item.id === (nextBlueprintId ?? state.activeBlueprintId));
@@ -2012,6 +2641,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimePreviousKeys: {},
           runtimeEventQueue: [],
           runtimeVariableValues: makeRuntimeVariableMap(state.variables),
+          runtimeAnimators: {},
+          runtimeCameraOverrides: {},
+          runtimeGrounded: [],
           runtimeCollisions: [],
           runtimeSoundQueue: [],
           runtimeLog: [],
@@ -2057,6 +2689,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimePreviousKeys: {},
         runtimeEventQueue: [],
         runtimeVariableValues: {},
+        runtimeAnimators: {},
+        runtimeCameraOverrides: {},
+        runtimeGrounded: [],
         runtimeCollisions: [],
         runtimeSoundQueue: [],
         runtimeLog: [],
@@ -2102,6 +2737,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const sounds: string[] = [];
       const spawned: SceneObject[] = [];
       const prints: string[] = [];
+      // Animator parameter writes requested by animator.setX nodes this frame, keyed by object id.
+      const animatorWrites: Record<string, Array<{ name: string; value: number | boolean; trigger?: boolean }>> = {};
+      // Character node requests this frame: object ids that fired a Jump node, and live camera overrides.
+      const characterJumpRequests = new Set<string>();
+      const nextCameraOverrides: Record<string, { distance: number; height: number }> = { ...state.runtimeCameraOverrides };
 
       // Run each object's script graph. Physics-enabled objects are simulated by Rapier
       // in the post-pass below, so here we only collect scripted motion + side effects.
@@ -2146,6 +2786,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (node.data.nodeKind === 'value.boolean') return Boolean(node.data.booleanValue);
             if (node.data.nodeKind === 'value.vector3') return node.data.vectorValue ?? [0, 0, 0];
 
+            if (node.data.nodeKind === 'input.move') {
+              // Move direction from the character's key bindings (falls back to WASD), normalized.
+              // Camera-relative when the character uses mouse-look so "forward" follows the view.
+              const cc = object.character;
+              const fwd = cc?.keyForward ?? 'KeyW';
+              const back = cc?.keyBackward ?? 'KeyS';
+              const left = cc?.keyLeft ?? 'KeyA';
+              const right = cc?.keyRight ?? 'KeyD';
+              let ix = 0;
+              let iz = 0;
+              if (currentKeys[fwd] || currentKeys.ArrowUp) iz += 1;
+              if (currentKeys[back] || currentKeys.ArrowDown) iz -= 1;
+              if (currentKeys[left] || currentKeys.ArrowLeft) ix += 1;
+              if (currentKeys[right] || currentKeys.ArrowRight) ix -= 1;
+              const length = Math.hypot(ix, iz);
+              if (length === 0) return [0, 0, 0] as Vector3Tuple;
+              let dirX = ix / length;
+              let dirZ = iz / length;
+              if (cc?.cameraRelativeMovement && cc.mouseLook) {
+                const yaw = mouseCameraYaw(cc.mouseSensitivity);
+                const cos = Math.cos(yaw);
+                const sin = Math.sin(yaw);
+                [dirX, dirZ] = [dirX * cos + dirZ * sin, -dirX * sin + dirZ * cos];
+              }
+              return [dirX, 0, dirZ] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'query.grounded') {
+              return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
+            }
+
             if (node.data.nodeKind === 'variable.get') {
               const variable = state.variables.find((item) => item.id === node.data.variableId);
               if (!variable) return undefined;
@@ -2188,6 +2859,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'logic.or') {
               return toBoolean(valueInput(node, 'a', false)) || toBoolean(valueInput(node, 'b', false));
+            }
+
+            // Read this object's CURRENT effective material (base + graph + overrides written so far this frame).
+            if (node.data.nodeKind === 'action.getMaterialColor') {
+              return resolveMaterial(nextRenderer, state.materials, state.graphs).color;
+            }
+
+            if (node.data.nodeKind === 'action.getMaterialProperty') {
+              const current = resolveMaterial(nextRenderer, state.materials, state.graphs);
+              return current[node.data.materialProperty ?? 'metalness'];
             }
 
             return undefined;
@@ -2307,9 +2988,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (node.data.nodeKind === 'action.setMaterialColor') {
               if (nextRenderer) {
                 const color = graphValueToString(valueInput(node, 'color', node.data.materialColor ?? '#ffffff'));
+                // Write either the base color or the emissive color, depending on the node's target.
+                const channel = node.data.materialColorTarget === 'emissive' ? 'emissiveColor' : 'color';
                 nextRenderer = {
                   ...nextRenderer,
-                  materialOverrides: { ...nextRenderer.materialOverrides, color },
+                  materialOverrides: { ...nextRenderer.materialOverrides, [channel]: color },
                 };
                 changed = true;
               }
@@ -2329,6 +3012,55 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'action.print') {
               prints.push(`${object.name}: ${graphValueToString(valueInput(node, 'message', node.data.message ?? ''))}`);
+            }
+
+            if (node.data.nodeKind === 'animator.setFloat' && node.data.paramName) {
+              (animatorWrites[object.id] ??= []).push({
+                name: node.data.paramName,
+                value: toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0))),
+              });
+            }
+
+            if (node.data.nodeKind === 'animator.setBool' && node.data.paramName) {
+              (animatorWrites[object.id] ??= []).push({
+                name: node.data.paramName,
+                value: toBoolean(valueInput(node, 'value', Boolean(node.data.booleanValue))),
+              });
+            }
+
+            if (node.data.nodeKind === 'animator.setTrigger' && node.data.paramName) {
+              (animatorWrites[object.id] ??= []).push({ name: node.data.paramName, value: true, trigger: true });
+            }
+
+            if (node.data.nodeKind === 'action.move') {
+              const vector = valueInput(node, 'vector');
+              const cc = object.character;
+              // Apply sprint/crouch from the owner's bindings so node-driven pawns run + crouch too.
+              const speedScale = cc ? (currentKeys[cc.keyCrouch] ? cc.crouchMultiplier : currentKeys[cc.keySprint] ? cc.sprintMultiplier : 1) : 1;
+              const speed = toNumber(valueInput(node, 'speed', Number(node.data.amount ?? cc?.moveSpeed ?? 3.4))) * speedScale;
+              if (Array.isArray(vector)) {
+                position[0] += vector[0] * speed * delta;
+                position[2] += vector[2] * speed * delta;
+                if (vector[0] !== 0 || vector[2] !== 0) {
+                  const turn = object.character?.turnSpeed ?? 10;
+                  const yawOffset = object.character?.modelYawOffset ?? 0;
+                  rotation[1] = lerpAngle(rotation[1], Math.atan2(vector[0], vector[2]) + yawOffset, turn * delta);
+                }
+                changed = true;
+              }
+            }
+
+            if (node.data.nodeKind === 'action.jump') {
+              characterJumpRequests.add(object.id);
+            }
+
+            if (node.data.nodeKind === 'action.setCamera') {
+              const current = nextCameraOverrides[object.id];
+              const offset = object.character?.cameraOffset;
+              nextCameraOverrides[object.id] = {
+                distance: toNumber(valueInput(node, 'distance', current?.distance ?? (offset ? Math.abs(offset[2]) : 6))),
+                height: toNumber(valueInput(node, 'height', current?.height ?? (offset ? offset[1] : 2.6))),
+              };
             }
 
             return true;
@@ -2364,18 +3096,80 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             : object;
       });
 
+      // Character controller pass: turn input into ground movement + jump for character objects.
+      // Runs after scripts, before physics; the motion it produces feeds the animator's speed params.
+      const movedObjects = mappedObjects.map((object) => {
+        if (!object.character?.enabled) return object;
+        // Backfill defaults so characters created before newer fields existed still work.
+        const cc = { ...defaultCharacter(), ...object.character };
+        // Scripted: a blueprint (Move/Jump nodes) drives horizontal motion + jump — Unreal Event-Graph
+        // style. Auto (no blueprint): the built-in WASD/Space drives it. Vertical physics runs either way.
+        const scripted = Boolean(object.script?.enabled);
+        const position = [...object.transform.position] as Vector3Tuple;
+        const rotation = [...object.transform.rotation] as Vector3Tuple;
+
+        if (!scripted) {
+          // Forward = +Z (model forward); right = -X. Camera sits behind, so this reads correctly on screen.
+          let inputX = 0;
+          let inputZ = 0;
+          if (currentKeys[cc.keyForward]) inputZ += 1;
+          if (currentKeys[cc.keyBackward]) inputZ -= 1;
+          if (currentKeys[cc.keyLeft]) inputX += 1;
+          if (currentKeys[cc.keyRight]) inputX -= 1;
+          const length = Math.hypot(inputX, inputZ);
+          const sprinting = Boolean(currentKeys[cc.keySprint]);
+          const crouching = Boolean(currentKeys[cc.keyCrouch]);
+          const speed = cc.moveSpeed * (crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
+          if (length > 0) {
+            let dirX = inputX / length;
+            let dirZ = inputZ / length;
+            // Camera-relative: rotate the input by the mouse-look camera yaw so "forward" follows the view.
+            if (cc.cameraRelativeMovement && cc.mouseLook) {
+              const yaw = mouseCameraYaw(cc.mouseSensitivity);
+              const cos = Math.cos(yaw);
+              const sin = Math.sin(yaw);
+              [dirX, dirZ] = [dirX * cos + dirZ * sin, -dirX * sin + dirZ * cos];
+            }
+            position[0] += dirX * speed * delta;
+            position[2] += dirZ * speed * delta;
+            // Face the movement direction (+ the model's authored forward offset).
+            rotation[1] = lerpAngle(rotation[1], Math.atan2(dirX, dirZ) + cc.modelYawOffset, cc.turnSpeed * delta);
+          }
+        }
+
+        // Vertical motion: gravity + jump. Grounded comes from the physics character controller
+        // (last frame) so the character can stand on real colliders, not just the ground plane.
+        let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
+        const grounded = state.runtimeGrounded.includes(object.id) || position[1] <= cc.groundLevel + 0.001;
+        const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]);
+        if (grounded && verticalVelocity < 0) verticalVelocity = 0;
+        if (grounded && wantsJump) verticalVelocity = cc.jumpStrength;
+        verticalVelocity -= cc.gravity * delta;
+        position[1] += verticalVelocity * delta;
+        if (position[1] <= cc.groundLevel) {
+          position[1] = cc.groundLevel;
+          if (verticalVelocity < 0) verticalVelocity = 0;
+        }
+        nextVelocities[object.id] = [0, verticalVelocity, 0];
+
+        return { ...object, transform: { ...object.transform, position, rotation } };
+      });
+
       // Physics post-pass: step the Rapier world and let it own every physics body's
       // transform (object-to-object collisions, stacking, gravity). Non-physics objects
       // keep whatever their script produced. Contacts are reported one frame later via
       // runtimeCollisions, which drives event.collisionEnter on the next tick.
       let collisions: string[] = [];
-      let resolvedObjects = mappedObjects;
+      let groundedIds: string[] = [];
+      let resolvedObjects = movedObjects;
       const physics = getActivePhysics();
       if (physics) {
-        const result = physics.frame(mappedObjects, prevTransforms, physicsImpulses, delta);
+        const result = physics.frame(movedObjects, prevTransforms, physicsImpulses, delta);
         collisions = result.collisions;
-        resolvedObjects = mappedObjects.map((object) => {
-          if (!object.physics?.enabled) return object;
+        groundedIds = result.grounded;
+        resolvedObjects = movedObjects.map((object) => {
+          // Physics bodies AND character controllers get their post-collision transform written back.
+          if (!object.physics?.enabled && !object.character?.enabled) return object;
           const next = result.transforms.get(object.id);
           if (!next) return object;
           return {
@@ -2390,10 +3184,90 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         scene.id !== state.activeSceneId ? scene : { ...scene, objects: allObjects },
       );
 
+      // --- Animator pass: feed object state into parameters, then run the state machine. ---
+      // Runs after physics so "speed"/"verticalSpeed" reflect the object's final motion this frame.
+      const nextAnimators: Record<string, RuntimeAnimator> = {};
+      for (const object of resolvedObjects) {
+        const controllerId = object.animator?.enabled ? object.animator.controllerId : undefined;
+        if (!controllerId) continue;
+        const controller = state.animatorControllers.find((item) => item.id === controllerId);
+        if (!controller || !controller.states.length) continue;
+
+        // Movement this frame (start-of-tick transform vs. final transform).
+        const before = prevTransforms.get(object.id);
+        const after = object.transform.position;
+        const dt = delta || 1 / 60;
+        let horizontalSpeed = 0;
+        let verticalSpeed = 0;
+        if (before) {
+          const dx = after[0] - before.position[0];
+          const dy = after[1] - before.position[1];
+          const dz = after[2] - before.position[2];
+          horizontalSpeed = Math.hypot(dx, dz) / dt;
+          verticalSpeed = dy / dt;
+        }
+
+        const prev = state.runtimeAnimators[object.id];
+        // Seed parameter values from controller defaults, then carry over the previous frame's values.
+        const params: Record<string, number | boolean> = {};
+        for (const param of controller.parameters) params[param.id] = param.defaultValue;
+        if (prev) for (const [key, value] of Object.entries(prev.params)) if (key in params) params[key] = value;
+
+        // Auto-source parameters (object/world state → animator), then manual script writes.
+        for (const param of controller.parameters) {
+          if (param.source === 'speed') params[param.id] = horizontalSpeed;
+          else if (param.source === 'verticalSpeed') params[param.id] = verticalSpeed;
+          else if (param.source === 'moving') params[param.id] = horizontalSpeed > 0.1;
+          else if (param.source === 'crouching') params[param.id] = Boolean(object.character && currentKeys[object.character.keyCrouch]);
+          else if (param.source === 'variable' && param.variableId !== undefined) {
+            const raw = nextVariableValues[param.variableId];
+            params[param.id] = param.type === 'bool' ? toBoolean(raw) : toNumber(raw);
+          }
+        }
+        const triggered = new Set<string>();
+        for (const write of animatorWrites[object.id] ?? []) {
+          const param = controller.parameters.find((p) => p.name === write.name);
+          if (!param) continue;
+          params[param.id] = write.value;
+          if (write.trigger) triggered.add(param.id);
+        }
+
+        // Evaluate transitions from the current state (plus "any state" transitions).
+        let stateId = prev?.stateId ?? controller.defaultStateId ?? controller.states[0].id;
+        if (!controller.states.some((s) => s.id === stateId)) stateId = controller.states[0].id;
+        let fade = 0;
+        const candidates = controller.transitions.filter((t) => t.from === stateId || t.from === 'any');
+        for (const transition of candidates) {
+          if (transition.to === stateId) continue;
+          if (!controller.states.some((s) => s.id === transition.to)) continue;
+          const pass = transition.conditions.every((condition) => {
+            const param = controller.parameters.find((p) => p.id === condition.parameterId);
+            if (!param) return false;
+            return Boolean(compareValues(params[param.id] as GraphValue, condition.value as GraphValue, condition.op));
+          });
+          if (pass) {
+            stateId = transition.to;
+            fade = transition.duration;
+            break;
+          }
+        }
+
+        // Consume triggers (one-shot) so they don't re-fire next frame.
+        for (const id of triggered) {
+          const param = controller.parameters.find((p) => p.id === id);
+          if (param?.type === 'trigger') params[id] = false;
+        }
+
+        nextAnimators[object.id] = { stateId, params, fade };
+      }
+
       return {
         runtimeTime,
         runtimeVelocities: nextVelocities,
         runtimeVariableValues: nextVariableValues,
+        runtimeAnimators: nextAnimators,
+        runtimeCameraOverrides: nextCameraOverrides,
+        runtimeGrounded: groundedIds,
         runtimeCollisions: collisions,
         runtimePreviousKeys: { ...currentKeys },
         runtimeEventQueue: [],
@@ -2488,17 +3362,50 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       variables: state.variables,
       dataAssets: state.dataAssets,
       materials: state.materials ?? [],
+      skeletons: state.skeletons ?? [],
+      skeletalMeshes: state.skeletalMeshes ?? [],
+      animations: state.animations ?? [],
+      animatorControllers: state.animatorControllers ?? [],
       blueprints: state.blueprints,
       graphs: state.graphs,
     };
   },
   loadProject: (project) =>
     set(() => {
-      const scenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
+      // Backfill character-controller defaults so older saves (pre-cameraOffset/keys) load safely.
+      const rawScenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
+      const scenes = rawScenes.map((scene) => ({
+        ...scene,
+        objects: scene.objects.map((object) =>
+          object.character ? { ...object, character: { ...defaultCharacter(), ...object.character } } : object,
+        ),
+      }));
       const activeSceneId = scenes.some((scene) => scene.id === project.activeSceneId)
         ? project.activeSceneId
         : scenes[0].id;
       const activeScene = scenes.find((scene) => scene.id === activeSceneId)!;
+
+      // Harden the material↔graph round-trip: guarantee every material owns a real graph, and
+      // drop orphan graphs that no blueprint or material references anymore.
+      const graphs = [...(project.graphs ?? [])];
+      const graphIds = new Set(graphs.map((graph) => graph.id));
+      const materials = (project.materials ?? []).map((material) => {
+        if (material.graphId && graphIds.has(material.graphId)) return material;
+        const graphId = material.graphId ?? makeId('graph');
+        if (!graphIds.has(graphId)) {
+          graphs.push(makeMaterialGraph(graphId, material.name));
+          graphIds.add(graphId);
+        }
+        return { ...material, graphId };
+      });
+      const referencedGraphIds = new Set(
+        [
+          ...(project.blueprints ?? []).map((blueprint) => blueprint.graphId),
+          ...materials.map((material) => material.graphId),
+        ].filter(Boolean) as string[],
+      );
+      const normalizedGraphs = graphs.filter((graph) => referencedGraphIds.has(graph.id));
+
       return {
         scenes,
         activeSceneId,
@@ -2507,9 +3414,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         folders: project.folders ?? [],
         variables: project.variables ?? [],
         dataAssets: project.dataAssets ?? [],
-        materials: project.materials ?? [],
+        materials,
+        skeletons: project.skeletons ?? [],
+        skeletalMeshes: project.skeletalMeshes ?? [],
+        animations: project.animations ?? [],
+        animatorControllers: project.animatorControllers ?? [],
         blueprints: project.blueprints,
-        graphs: project.graphs,
+        graphs: normalizedGraphs,
         activeBlueprintId: project.blueprints[0]?.id ?? '',
         activeMaterialId: project.materials?.[0]?.id ?? '',
         selectedGraphNodeId: undefined,

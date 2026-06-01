@@ -1,26 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Bone,
   Box,
   ChevronDown,
   ChevronRight,
+  Film,
   Folder,
   GitBranch,
   Image,
   Music,
   Palette,
+  PersonStanding,
   Search,
   Table2,
   Upload,
+  Workflow,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { getPlatform } from '../platform';
 import { fbxToGlb } from '../three/convertModel';
+import { inspectModel, type ModelInspection } from '../three/inspectModel';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
 import { ASSET_DRAG_TYPE, assetDrag, hasDragType } from './dragShared';
 import { focusWorkspacePanel } from './workspacePanels';
-import type { AssetItem, AssetType, DataAsset, MaterialDefinition, ProjectFolder, ScriptBlueprint } from '../types';
+import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset } from '../types';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -43,12 +48,23 @@ const isAccepted = (name: string) => ACCEPTED_EXT.has(name.split('.').pop()?.toL
 
 const assetGlyph = (type: AssetType) => (type === 'audio' ? Music : type === 'image' ? Image : Box);
 
-type DragItem = { kind: 'asset' | 'blueprint' | 'dataAsset' | 'material'; id: string } | null;
+type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material';
+type DragRef = { items: Array<{ kind: DragKind; id: string }> } | null;
+
+const itemKey = (kind: DragKind, id: string) => `${kind}:${id}`;
+const parseItemKey = (key: string): { kind: DragKind; id: string } => {
+  const idx = key.indexOf(':');
+  return { kind: key.slice(0, idx) as DragKind, id: key.slice(idx + 1) };
+};
 
 export function AssetBrowser() {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const dragRef = useRef<DragItem>(null);
+  const dragRef = useRef<DragRef>(null);
   const importTargetRef = useRef<string | undefined>(undefined);
+  // Spring-loaded folders: hovering a collapsed folder mid-drag auto-expands it after a beat.
+  const springRef = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  // Anchor for shift-range multi-select.
+  const anchorRef = useRef<string | null>(null);
 
   const assets = useEditorStore((state) => state.assets);
   const folders = useEditorStore((state) => state.folders);
@@ -58,6 +74,7 @@ export function AssetBrowser() {
   const assetSearch = useEditorStore((state) => state.assetSearch);
   const setAssetSearch = useEditorStore((state) => state.setAssetSearch);
   const addAssetItems = useEditorStore((state) => state.addAssetItems);
+  const registerImportedModel = useEditorStore((state) => state.registerImportedModel);
   const removeAsset = useEditorStore((state) => state.removeAsset);
   const renameAsset = useEditorStore((state) => state.renameAsset);
   const createFolder = useEditorStore((state) => state.createFolder);
@@ -77,6 +94,14 @@ export function AssetBrowser() {
   const renameMaterial = useEditorStore((state) => state.renameMaterial);
   const deleteMaterial = useEditorStore((state) => state.deleteMaterial);
   const setActiveMaterial = useEditorStore((state) => state.setActiveMaterial);
+  const skeletons = useEditorStore((state) => state.skeletons);
+  const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
+  const animationAssets = useEditorStore((state) => state.animations);
+  const animatorControllers = useEditorStore((state) => state.animatorControllers);
+  const activeAnimatorControllerId = useEditorStore((state) => state.activeAnimatorControllerId);
+  const setActiveAnimatorController = useEditorStore((state) => state.setActiveAnimatorController);
+  const deleteAnimatorController = useEditorStore((state) => state.deleteAnimatorController);
+  const createCharacterPawn = useEditorStore((state) => state.createCharacterPawn);
   const projectDir = useProjectStore((state) => state.projectDir);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -85,6 +110,9 @@ export function AssetBrowser() {
   const [draft, setDraft] = useState('');
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
+  // Multi-select (composite `${kind}:${id}` keys) and the item currently hovered as a drop target.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [dropItemId, setDropItemId] = useState<string | null>(null);
 
   // Safety net: a file dropped anywhere outside our drop zones would otherwise make the browser
   // navigate to it and discard the project. Swallow those stray drops globally.
@@ -114,7 +142,11 @@ export function AssetBrowser() {
     const platform = await getPlatform();
     const dir = projectDir ?? 'web';
     const items: AssetItem[] = [];
+    // Rigged model imports, parsed once here so we can split them into skeleton/mesh/animation
+    // assets after the asset items are registered (registerImportedModel needs the asset id).
+    const rigImports: { assetId: string; assetName: string; inspection: ModelInspection }[] = [];
     let strippedTextures = false;
+    let riggedCount = 0;
     // Drag-and-drop bypasses the picker's `accept`, so filter to supported types here.
     for (const original of all.filter((file) => isAccepted(file.name))) {
       try {
@@ -127,8 +159,9 @@ export function AssetBrowser() {
           if (converted.droppedTextures > 0) strippedTextures = true;
         }
         const { path, url } = await platform.importAsset(dir, file);
+        const assetId = `asset-${crypto.randomUUID()}`;
         items.push({
-          id: `asset-${crypto.randomUUID()}`,
+          id: assetId,
           name: file.name,
           type: detectType(file.name),
           size: file.size,
@@ -137,6 +170,18 @@ export function AssetBrowser() {
           folderId,
           createdAt: Date.now(),
         });
+        // Inspect models for a skeleton + clips. A non-skinned model just yields no skeleton.
+        if (detectType(file.name) === 'model') {
+          try {
+            const inspection = await inspectModel(file);
+            if (inspection.skeleton) {
+              rigImports.push({ assetId, assetName: file.name, inspection });
+              riggedCount += 1;
+            }
+          } catch (inspectError) {
+            console.error(`Couldn't inspect model "${file.name}" for animations:`, inspectError);
+          }
+        }
       } catch (error) {
         // Don't fail the whole batch — log and surface this one file, keep importing the rest.
         console.error(`Import failed for "${original.name}":`, error);
@@ -147,6 +192,22 @@ export function AssetBrowser() {
       }
     }
     if (items.length) addAssetItems(items);
+    // Split rigged models into reusable Skeleton/Skeletal Mesh/Animation assets (skeletons are
+    // deduped by signature, so same-rig characters share one skeleton and all its animations).
+    let newClips = 0;
+    for (const rig of rigImports) {
+      const before = useEditorStore.getState().animations.length;
+      registerImportedModel({ assetId: rig.assetId, assetName: rig.assetName, folderId, inspection: rig.inspection });
+      newClips += useEditorStore.getState().animations.length - before;
+    }
+    if (riggedCount > 0) {
+      useProjectStore.setState({
+        toast: {
+          kind: 'success',
+          message: `Imported ${riggedCount} rigged model${riggedCount > 1 ? 's' : ''}${newClips ? ` with ${newClips} new animation${newClips > 1 ? 's' : ''}` : ' (animations already available)'}.`,
+        },
+      });
+    }
     if (strippedTextures) {
       useProjectStore.setState({
         toast: {
@@ -215,8 +276,34 @@ export function AssetBrowser() {
     setMenu({ x: event.clientX, y: event.clientY, items });
   };
 
+  const clearSpring = () => {
+    if (springRef.current) {
+      clearTimeout(springRef.current.timer);
+      springRef.current = null;
+    }
+  };
+
+  // Hovering a collapsed folder during a drag auto-expands it after a short delay (spring-loading).
+  const scheduleSpring = (folderId: string) => {
+    if (!collapsed.has(folderId) || springRef.current?.id === folderId) return;
+    clearSpring();
+    springRef.current = {
+      id: folderId,
+      timer: setTimeout(() => {
+        setCollapsed((prev) => {
+          const next = new Set(prev);
+          next.delete(folderId);
+          return next;
+        });
+        springRef.current = null;
+      }, 600),
+    };
+  };
+
   const handleDrop = (event: React.DragEvent, folderId?: string) => {
     setDropTarget(null);
+    setDropItemId(null);
+    clearSpring();
     // External files dropped from the OS (Finder/Explorer) → import into this folder.
     const files = event.dataTransfer?.files;
     if (files && files.length > 0) {
@@ -225,11 +312,129 @@ export function AssetBrowser() {
       dragRef.current = null;
       return;
     }
-    // Otherwise it's an internal drag, re-homing an existing asset/blueprint.
+    // Otherwise it's an internal drag, re-homing one or more existing items. Folders are purely
+    // organizational, so this only changes membership — every id reference stays intact.
     const dragged = dragRef.current;
-    if (dragged) moveToFolder(dragged.kind, dragged.id, folderId);
+    if (dragged?.items.length) {
+      event.preventDefault();
+      dragged.items.forEach((item) => moveToFolder(item.kind, item.id, folderId));
+      const dest = folderId ? folders.find((f) => f.id === folderId)?.name ?? 'folder' : 'project root';
+      const count = dragged.items.length;
+      useProjectStore.setState({
+        toast: { kind: 'success', message: `Moved ${count} item${count > 1 ? 's' : ''} to ${dest}.` },
+      });
+    }
     dragRef.current = null;
   };
+
+  // Flat list of draggable item keys in on-screen order — used to resolve shift-click ranges.
+  const buildOrderedKeys = (): string[] => {
+    const out: string[] = [];
+    if (searching && searchMatches) {
+      searchMatches.blueprints.forEach((b) => out.push(itemKey('blueprint', b.id)));
+      searchMatches.dataAssets.forEach((d) => out.push(itemKey('dataAsset', d.id)));
+      searchMatches.materials.forEach((m) => out.push(itemKey('material', m.id)));
+      searchMatches.assets.forEach((a) => out.push(itemKey('asset', a.id)));
+      return out;
+    }
+    const walk = (parentId?: string) => {
+      (childFolders.get(parentId) ?? []).forEach((folder) => {
+        if (!collapsed.has(folder.id)) walk(folder.id);
+      });
+      blueprints.filter((b) => b.folderId === parentId).forEach((b) => out.push(itemKey('blueprint', b.id)));
+      dataAssets.filter((d) => d.folderId === parentId).forEach((d) => out.push(itemKey('dataAsset', d.id)));
+      materials.filter((m) => m.folderId === parentId).forEach((m) => out.push(itemKey('material', m.id)));
+      assets.filter((a) => a.folderId === parentId).forEach((a) => out.push(itemKey('asset', a.id)));
+    };
+    walk(undefined);
+    return out;
+  };
+
+  // Click selection: plain = select + run default (open); Ctrl/Cmd = toggle; Shift = range.
+  const handleItemClick = (event: React.MouseEvent, kind: DragKind, id: string, defaultAction?: () => void) => {
+    const key = itemKey(kind, id);
+    event.stopPropagation();
+    if (event.metaKey || event.ctrlKey) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.has(key) ? next.delete(key) : next.add(key);
+        return next;
+      });
+      anchorRef.current = key;
+      return;
+    }
+    if (event.shiftKey && anchorRef.current) {
+      const order = buildOrderedKeys();
+      const a = order.indexOf(anchorRef.current);
+      const b = order.indexOf(key);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelected(new Set(order.slice(lo, hi + 1)));
+        return;
+      }
+    }
+    setSelected(new Set([key]));
+    anchorRef.current = key;
+    defaultAction?.();
+  };
+
+  const handleItemDragStart = (event: React.DragEvent, kind: DragKind, id: string, label: string) => {
+    const key = itemKey(kind, id);
+    // Drag the whole multi-selection if this item is part of it; otherwise drag just this one.
+    const items =
+      selected.has(key) && selected.size > 1 ? [...selected].map(parseItemKey) : [{ kind, id }];
+    if (!(selected.has(key) && selected.size > 1)) setSelected(new Set([key]));
+    dragRef.current = { items };
+    // Viewport drop still expects a single asset id via the shared holder + dataTransfer.
+    const assetItems = items.filter((item) => item.kind === 'asset');
+    if (assetItems.length === 1) {
+      assetDrag.id = assetItems[0].id;
+      try {
+        event.dataTransfer.setData(ASSET_DRAG_TYPE, assetItems[0].id);
+      } catch {
+        /* some webviews block setData during dragstart — the shared holder covers it */
+      }
+    }
+    event.dataTransfer.effectAllowed = 'move';
+    // A small labelled chip as the drag image.
+    const chip = document.createElement('div');
+    chip.className = 'drag-chip';
+    chip.textContent = items.length > 1 ? `${items.length} items` : label;
+    document.body.appendChild(chip);
+    event.dataTransfer.setDragImage(chip, 12, 12);
+    setTimeout(() => chip.remove(), 0);
+  };
+
+  const handleItemDragEnd = () => {
+    assetDrag.id = null;
+    setDropTarget(null);
+    setDropItemId(null);
+    clearSpring();
+    dragRef.current = null;
+  };
+
+  // Dropping onto ANY item files the dragged items into that item's folder (no need to hit the
+  // thin folder header). Highlights both the destination folder and the hovered row.
+  const handleItemDragOver = (event: React.DragEvent, folderId: string | undefined, id: string) => {
+    if (!dragRef.current) return; // ignore OS file drags here — let the folder/root zones import them
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'move';
+    setDropTarget(folderId ?? 'root');
+    setDropItemId(id);
+  };
+
+  /** Shared props that make an item row draggable, selectable, and a drop target. */
+  const rowDnd = (kind: DragKind, id: string, folderId: string | undefined, label: string) => ({
+    draggable: true as const,
+    onDragStart: (event: React.DragEvent) => handleItemDragStart(event, kind, id, label),
+    onDragEnd: handleItemDragEnd,
+    onDragOver: (event: React.DragEvent) => handleItemDragOver(event, folderId, id),
+    onDragLeave: () => setDropItemId((prev) => (prev === id ? null : prev)),
+    onDrop: (event: React.DragEvent) => handleDrop(event, folderId),
+  });
+  const rowClass = (kind: DragKind, id: string, ...extra: Array<string | false | undefined>) =>
+    clsx('tree-row', selected.has(itemKey(kind, id)) && 'selected', dropItemId === id && 'drop-into', ...extra);
 
   // Context-menu entries to move an item between folders. Membership is purely organizational —
   // scene objects/nodes reference the asset by id, so moving it never breaks those references.
@@ -268,12 +473,11 @@ export function AssetBrowser() {
   const renderBlueprint = (blueprint: ScriptBlueprint, depth: number) => (
     <button
       key={blueprint.id}
-      className={clsx('tree-row', activeBlueprintId === blueprint.id && 'active')}
+      className={rowClass('blueprint', blueprint.id, activeBlueprintId === blueprint.id && 'active')}
       style={{ paddingLeft: 8 + depth * 14 }}
-      draggable
-      onDragStart={() => (dragRef.current = { kind: 'blueprint', id: blueprint.id })}
+      {...rowDnd('blueprint', blueprint.id, blueprint.folderId, blueprint.name)}
       onDoubleClick={() => setActiveBlueprint(blueprint.id)}
-      onClick={() => setActiveBlueprint(blueprint.id)}
+      onClick={(event) => handleItemClick(event, 'blueprint', blueprint.id, () => setActiveBlueprint(blueprint.id))}
       onContextMenu={(event) =>
         openMenu(event, [
           { label: 'Open in Scripting', onClick: () => setActiveBlueprint(blueprint.id) },
@@ -296,10 +500,10 @@ export function AssetBrowser() {
   const renderDataAsset = (dataAsset: DataAsset, depth: number) => (
     <button
       key={dataAsset.id}
-      className="tree-row"
+      className={rowClass('dataAsset', dataAsset.id)}
       style={{ paddingLeft: 8 + depth * 14 }}
-      draggable
-      onDragStart={() => (dragRef.current = { kind: 'dataAsset', id: dataAsset.id })}
+      {...rowDnd('dataAsset', dataAsset.id, dataAsset.folderId, dataAsset.name)}
+      onClick={(event) => handleItemClick(event, 'dataAsset', dataAsset.id)}
       title={`${dataAsset.columns.length} columns · ${dataAsset.rows.length} rows`}
       onContextMenu={(event) =>
         openMenu(event, [
@@ -322,12 +526,11 @@ export function AssetBrowser() {
   const renderMaterial = (material: MaterialDefinition, depth: number) => (
     <button
       key={material.id}
-      className={clsx('tree-row', activeMaterialId === material.id && 'active')}
+      className={rowClass('material', material.id, activeMaterialId === material.id && 'active')}
       style={{ paddingLeft: 8 + depth * 14 }}
-      draggable
-      onDragStart={() => (dragRef.current = { kind: 'material', id: material.id })}
+      {...rowDnd('material', material.id, material.folderId, material.name)}
       onDoubleClick={() => openMaterial(material.id)}
-      onClick={() => openMaterial(material.id)}
+      onClick={(event) => handleItemClick(event, 'material', material.id, () => openMaterial(material.id))}
       title={`material · ${material.color}`}
       onContextMenu={(event) =>
         openMenu(event, [
@@ -348,28 +551,70 @@ export function AssetBrowser() {
     </button>
   );
 
+  const openController = (id: string) => {
+    setActiveAnimatorController(id);
+    focusWorkspacePanel('animator');
+  };
+
+  // Skeleton / Skeletal Mesh / Animation are derived on import — shown read-only (rename/delete via re-import).
+  const renderSkeleton = (skeleton: SkeletonAsset, depth: number) => (
+    <div key={skeleton.id} className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} title={`skeleton · ${skeleton.boneNames.length} bones`}>
+      <Bone size={14} style={{ color: '#C4B5FD' }} aria-hidden />
+      <span className="tree-label">{skeleton.name}</span>
+    </div>
+  );
+
+  const renderSkeletalMesh = (mesh: SkeletalMeshAsset, depth: number) => (
+    <div key={mesh.id} className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} title="skeletal mesh">
+      <PersonStanding size={14} style={{ color: '#7DD3FC' }} aria-hidden />
+      <span className="tree-label">{mesh.name}</span>
+    </div>
+  );
+
+  const renderAnimation = (anim: AnimationAsset, depth: number) => (
+    <div key={anim.id} className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} title={`animation · ${anim.duration.toFixed(2)}s${anim.loop ? ' · loops' : ''}`}>
+      <Film size={14} style={{ color: '#86EFAC' }} aria-hidden />
+      <span className="tree-label">{anim.name}</span>
+    </div>
+  );
+
+  const renderController = (controller: AnimatorController, depth: number) => (
+    <button
+      key={controller.id}
+      className={clsx('tree-row', activeAnimatorControllerId === controller.id && 'active')}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      onClick={() => openController(controller.id)}
+      onDoubleClick={() => openController(controller.id)}
+      title={`animator · ${controller.states.length} states`}
+      onContextMenu={(event) =>
+        openMenu(event, [
+          { label: 'Edit in Animator', onClick: () => openController(controller.id) },
+          'separator',
+          { label: 'Delete controller', danger: true, onClick: () => deleteAnimatorController(controller.id) },
+        ])
+      }
+    >
+      <Workflow size={14} style={{ color: '#F0ABFC' }} aria-hidden />
+      <span className="tree-label">{controller.name}</span>
+    </button>
+  );
+
   const renderAsset = (asset: AssetItem, depth: number) => {
     const Glyph = assetGlyph(asset.type);
     return (
       <button
         key={asset.id}
-        className="tree-row"
+        className={rowClass('asset', asset.id)}
         style={{ paddingLeft: 8 + depth * 14 }}
-        draggable
-        onDragStart={(event) => {
-          dragRef.current = { kind: 'asset', id: asset.id };
-          // Carry the id both ways: dataTransfer for standards, and the shared holder as a
-          // fallback for webviews that strip custom types during dragover (Tauri WKWebView).
-          assetDrag.id = asset.id;
-          event.dataTransfer.setData(ASSET_DRAG_TYPE, asset.id);
-          event.dataTransfer.effectAllowed = 'copyMove';
-        }}
-        onDragEnd={() => {
-          assetDrag.id = null;
-        }}
+        {...rowDnd('asset', asset.id, asset.folderId, asset.name)}
+        onClick={(event) => handleItemClick(event, 'asset', asset.id)}
         title={`${asset.type} · ${formatBytes(asset.size)}${asset.unresolved ? ' · missing file' : ''}`}
         onContextMenu={(event) =>
           openMenu(event, [
+            // Rigged models can spawn a ready-to-play third-person pawn in one click.
+            ...(skeletalMeshes.some((mesh) => mesh.sourceAssetId === asset.id)
+              ? ([{ label: 'Create Character Pawn', onClick: () => createCharacterPawn(asset.id) }, 'separator'] as ContextMenuEntry[])
+              : []),
             { label: 'Rename', onClick: () => startRename('asset', asset.id, asset.name) },
             ...moveEntries('asset', asset.id, asset.folderId),
             'separator',
@@ -408,9 +653,15 @@ export function AssetBrowser() {
           }}
           onDragOver={(event) => {
             event.preventDefault();
+            event.stopPropagation();
             setDropTarget(folder.id);
+            setDropItemId(null);
+            scheduleSpring(folder.id);
           }}
-          onDragLeave={() => setDropTarget((prev) => (prev === folder.id ? null : prev))}
+          onDragLeave={() => {
+            setDropTarget((prev) => (prev === folder.id ? null : prev));
+            clearSpring();
+          }}
           onDrop={(event) => handleDrop(event, folder.id)}
           onContextMenu={(event) =>
             openMenu(event, [
@@ -444,6 +695,10 @@ export function AssetBrowser() {
       {blueprints.filter((bp) => bp.folderId === parentId).map((bp) => renderBlueprint(bp, depth))}
       {dataAssets.filter((asset) => asset.folderId === parentId).map((asset) => renderDataAsset(asset, depth))}
       {materials.filter((material) => material.folderId === parentId).map((material) => renderMaterial(material, depth))}
+      {animatorControllers.filter((controller) => controller.folderId === parentId).map((controller) => renderController(controller, depth))}
+      {skeletons.filter((skeleton) => skeleton.folderId === parentId).map((skeleton) => renderSkeleton(skeleton, depth))}
+      {skeletalMeshes.filter((mesh) => mesh.folderId === parentId).map((mesh) => renderSkeletalMesh(mesh, depth))}
+      {animationAssets.filter((anim) => anim.folderId === parentId).map((anim) => renderAnimation(anim, depth))}
       {assets.filter((asset) => asset.folderId === parentId).map((asset) => renderAsset(asset, depth))}
     </>
   );
@@ -455,6 +710,8 @@ export function AssetBrowser() {
         blueprints: blueprints.filter((bp) => bp.name.toLowerCase().includes(search)),
         dataAssets: dataAssets.filter((asset) => asset.name.toLowerCase().includes(search)),
         materials: materials.filter((material) => material.name.toLowerCase().includes(search)),
+        controllers: animatorControllers.filter((controller) => controller.name.toLowerCase().includes(search)),
+        animations: animationAssets.filter((anim) => anim.name.toLowerCase().includes(search)),
         assets: assets.filter((asset) => asset.name.toLowerCase().includes(search)),
       }
     : null;
@@ -492,10 +749,14 @@ export function AssetBrowser() {
 
       <div
         className={clsx('project-tree', dropTarget === 'root' && 'drop')}
-        onClick={() => setSelectedFolderId(undefined)}
+        onClick={() => {
+          setSelectedFolderId(undefined);
+          setSelected(new Set());
+        }}
         onDragOver={(event) => {
           event.preventDefault();
           setDropTarget('root');
+          setDropItemId(null);
         }}
         onDragLeave={() => setDropTarget((prev) => (prev === 'root' ? null : prev))}
         onDrop={(event) => handleDrop(event, undefined)}

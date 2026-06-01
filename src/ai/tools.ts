@@ -15,6 +15,7 @@ import type {
   Vector3Tuple,
 } from '../types';
 import { buildSceneSnapshot } from './systemPrompt';
+import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 
 const store = () => useEditorStore.getState();
 
@@ -54,6 +55,16 @@ const NODE_LABELS = [
   'Play Sound',
   'Set Material Color',
   'Set Material Property',
+  'Get Material Color',
+  'Get Material Property',
+  'Set Anim Float',
+  'Set Anim Bool',
+  'Set Anim Trigger',
+  'Get Move Input',
+  'Move',
+  'Jump',
+  'Is Grounded',
+  'Set Camera',
   'Save Game',
   'Load Game',
   'Clear Save',
@@ -89,6 +100,16 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Play Sound': 'Audio',
   'Set Material Color': 'Runtime',
   'Set Material Property': 'Runtime',
+  'Get Material Color': 'Runtime',
+  'Get Material Property': 'Runtime',
+  'Set Anim Float': 'Runtime',
+  'Set Anim Bool': 'Runtime',
+  'Set Anim Trigger': 'Runtime',
+  'Get Move Input': 'Runtime',
+  Move: 'Runtime',
+  Jump: 'Runtime',
+  'Is Grounded': 'Runtime',
+  'Set Camera': 'Runtime',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
@@ -114,6 +135,7 @@ const findAsset = (id: string) => store().assets.find((asset) => asset.id === id
 const findVariable = (id: string) => store().variables.find((variable) => variable.id === id);
 const findDataAsset = (id: string) => store().dataAssets.find((table) => table.id === id);
 const findMaterial = (id: string) => store().materials.find((material) => material.id === id);
+const findController = (id: string) => store().animatorControllers.find((controller) => controller.id === id);
 
 export const engineTools = {
   list_scene: tool({
@@ -245,7 +267,7 @@ export const engineTools = {
   }),
 
   set_physics: tool({
-    description: 'Enable/configure physics on an object. Use bodyType "dynamic" for objects that should move or fall, "fixed" for static ground/walls.',
+    description: 'Enable/configure physics (collision) on an object. For a STATIC collision wall/floor/obstacle that blocks the player but never moves or falls, set enabled:true and bodyType:"fixed" — that is the standard "static collider". Use "dynamic" for objects that fall/get pushed, "kinematic" for scripted movers. An object only collides once physics is enabled.',
     inputSchema: z.object({
       id: z.string(),
       enabled: z.boolean().optional(),
@@ -288,6 +310,202 @@ export const engineTools = {
       }
       store().setObjectModel(objectId, assetId || undefined);
       return assetId ? `Assigned model ${assetId} to ${objectId}.` : `Cleared the model on ${objectId}.`;
+    },
+  }),
+
+  set_animator: tool({
+    description:
+      'Play a skeletal animation on an object that renders a rigged model. Enable the animator and set animationId to an Animation asset from the snapshot whose skeletonId matches the object\'s model skeleton (any clip on that skeleton works, even one imported from another character). speed/loop are optional. Pass enabled:false to stop.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      enabled: z.boolean().optional(),
+      animationId: z.string().optional().describe('Animation asset id, or empty to clear (bind pose).'),
+      speed: z.number().optional(),
+      loop: z.boolean().optional(),
+    }),
+    execute: async ({ objectId, enabled, animationId, speed, loop }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (animationId && !store().animations.some((anim) => anim.id === animationId)) {
+        return `No animation asset with id ${animationId}.`;
+      }
+      if (!object.animator) store().toggleAnimator(objectId); // seeds the component (enabled = true)
+      if (enabled === false && object.animator?.enabled) store().toggleAnimator(objectId);
+      else if (enabled === true && object.animator && !object.animator.enabled) store().toggleAnimator(objectId);
+      const patch: Record<string, unknown> = {};
+      if (animationId !== undefined) {
+        patch.animationId = animationId || undefined;
+        patch.clip = undefined;
+      }
+      if (speed !== undefined) patch.speed = speed;
+      if (loop !== undefined) patch.loop = loop;
+      if (Object.keys(patch).length) store().updateAnimator(objectId, patch);
+      return `Updated animator on ${objectId}.`;
+    },
+  }),
+
+  create_animator_controller: tool({
+    description:
+      'Create a reusable Animator Controller (animation state machine). Optionally bind it to a skeletonId so only that skeleton\'s clips are offered. Returns controllerId. Then add parameters, states and transitions, and assign it to an object with set_object_controller.',
+    inputSchema: z.object({ name: z.string().optional(), skeletonId: z.string().optional() }),
+    execute: async ({ name, skeletonId }) => {
+      if (skeletonId && !store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
+      const id = store().createAnimatorController(name, skeletonId);
+      return `Created animator controller "${findController(id)?.name}" with controllerId ${id}.`;
+    },
+  }),
+
+  add_animator_parameter: tool({
+    description:
+      'Add a parameter the state machine reads. type: float | bool | trigger. source: manual (set by scripts/AI), speed (object horizontal speed), verticalSpeed, moving (bool), or variable (mirror a project variable — pass variableId). Use a float "Speed" with source "speed" for locomotion. Returns parameterId.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      name: z.string(),
+      type: z.enum(['float', 'bool', 'trigger']),
+      source: z.enum(['manual', 'speed', 'verticalSpeed', 'moving', 'variable']).optional(),
+      variableId: z.string().optional(),
+    }),
+    execute: async ({ controllerId, name, type, source, variableId }) => {
+      if (!findController(controllerId)) return `No controller with id ${controllerId}.`;
+      const id = store().addAnimatorParameter(controllerId, { name, type, source, variableId });
+      return id ? `Added parameter "${name}" (${id}).` : `Couldn't add parameter.`;
+    },
+  }),
+
+  add_animator_state: tool({
+    description:
+      'Add a state to a controller. Each state plays one Animation asset (animationId) on the controller\'s skeleton. The first state added becomes the default/entry state. Returns stateId.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      name: z.string(),
+      animationId: z.string().optional(),
+      speed: z.number().optional(),
+      loop: z.boolean().optional(),
+    }),
+    execute: async ({ controllerId, name, animationId, speed, loop }) => {
+      if (!findController(controllerId)) return `No controller with id ${controllerId}.`;
+      if (animationId && !store().animations.some((a) => a.id === animationId)) return `No animation asset with id ${animationId}.`;
+      const id = store().addAnimatorState(controllerId, { name, animationId, speed, loop });
+      return id ? `Added state "${name}" (${id}).` : `Couldn't add state.`;
+    },
+  }),
+
+  add_animator_transition: tool({
+    description:
+      'Add a transition between states. from is a stateId or "any". Conditions are ANDed; each compares a parameterId against a value with op (==,!=,>,>=,<,<=). duration is the crossfade seconds. Returns transitionId.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      from: z.string().describe('Source stateId, or "any".'),
+      to: z.string().describe('Target stateId.'),
+      conditions: z
+        .array(
+          z.object({
+            parameterId: z.string(),
+            op: z.enum(['==', '!=', '>', '>=', '<', '<=']),
+            value: z.union([z.number(), z.boolean()]),
+          }),
+        )
+        .optional(),
+      duration: z.number().optional(),
+    }),
+    execute: async ({ controllerId, from, to, conditions, duration }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      if (from !== 'any' && !controller.states.some((s) => s.id === from)) return `No state ${from} in controller.`;
+      if (!controller.states.some((s) => s.id === to)) return `No state ${to} in controller.`;
+      const id = store().addAnimatorTransition(controllerId, { from, to, conditions, duration });
+      return id ? `Added transition ${from} → ${to} (${id}).` : `Couldn't add transition.`;
+    },
+  }),
+
+  set_object_controller: tool({
+    description:
+      'Assign an Animator Controller to an object\'s animator (enables it), or pass empty controllerId to detach. The object must render a rigged model whose skeleton matches the controller.',
+    inputSchema: z.object({ objectId: z.string(), controllerId: z.string().optional() }),
+    execute: async ({ objectId, controllerId }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      if (controllerId && !findController(controllerId)) return `No controller with id ${controllerId}.`;
+      store().setObjectAnimatorController(objectId, controllerId || undefined);
+      return controllerId ? `Assigned controller ${controllerId} to ${objectId}.` : `Detached controller from ${objectId}.`;
+    },
+  }),
+
+  set_character_controller: tool({
+    description:
+      'Add/configure the built-in third-person character controller on an object (WASD move, Shift sprint, Space jump, optional follow camera). The motion it produces auto-drives an animator with speed/verticalSpeed parameters. Pass enabled:false to remove control. All numeric fields optional.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      enabled: z.boolean().optional(),
+      moveSpeed: z.number().optional(),
+      sprintMultiplier: z.number().optional(),
+      crouchMultiplier: z.number().optional(),
+      jumpStrength: z.number().optional(),
+      gravity: z.number().optional(),
+      turnSpeed: z.number().optional(),
+      groundLevel: z.number().optional(),
+      modelYawOffset: z.number().optional().describe('Facing offset in radians; use Math.PI (~3.14159) to flip a model that faces backwards.'),
+      // Key bindings — KeyboardEvent.code strings, e.g. "KeyW", "Space", "ShiftLeft", "ArrowUp".
+      keyForward: z.string().optional(),
+      keyBackward: z.string().optional(),
+      keyLeft: z.string().optional(),
+      keyRight: z.string().optional(),
+      keyJump: z.string().optional(),
+      keySprint: z.string().optional(),
+      keyCrouch: z.string().optional(),
+      // Camera.
+      cameraFollow: z.boolean().optional(),
+      cameraOffset: vec3.optional().describe('Resting camera position relative to the pawn: [side, up, back]. Negative Z is behind a +Z-forward model.'),
+      cameraPitch: z.number().optional().describe('Base camera elevation in radians.'),
+      mouseLook: z.boolean().optional().describe('Orbit the camera with the mouse (click the view to capture).'),
+      mouseSensitivity: z.number().optional(),
+      cameraRelativeMovement: z.boolean().optional().describe('Move relative to the camera facing.'),
+    }),
+    execute: async ({ objectId, enabled, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.character) store().toggleCharacterController(objectId); // seeds defaults (enabled = true)
+      if (enabled === false && store().scenes.flatMap((s) => s.objects).find((o) => o.id === objectId)?.character?.enabled) {
+        store().toggleCharacterController(objectId);
+      } else if (enabled === true) {
+        const current = store().scenes.flatMap((s) => s.objects).find((o) => o.id === objectId)?.character;
+        if (current && !current.enabled) store().toggleCharacterController(objectId);
+      }
+      if (Object.keys(patch).length) {
+        // cameraOffset arrives as number[]; coerce to the [x,y,z] tuple the store expects.
+        const { cameraOffset, ...rest } = patch;
+        store().updateCharacterController(objectId, {
+          ...rest,
+          ...(cameraOffset ? { cameraOffset: asVec3(cameraOffset) } : {}),
+        });
+      }
+      return `Updated character controller on ${objectId}.`;
+    },
+  }),
+
+  create_character_pawn: tool({
+    description:
+      'One-click third-person pawn: from a RIGGED model asset (a "model"-type asset that was split into a skeletalMesh), creates an object rendering it, auto-builds a locomotion Animator Controller (Idle/Walk/Jog/Jump matched from the skeleton\'s clips by name) and attaches a character controller. Returns the new objectId. Use this as the fast path before fine-tuning with the other animator tools.',
+    inputSchema: z.object({ modelAssetId: z.string(), name: z.string().optional() }),
+    execute: async ({ modelAssetId, name }) => {
+      const asset = findAsset(modelAssetId);
+      if (!asset) return `No asset with id ${modelAssetId}.`;
+      if (!store().skeletalMeshes.some((m) => m.sourceAssetId === modelAssetId)) {
+        return `Asset ${modelAssetId} isn't a rigged model (no skeleton was extracted on import).`;
+      }
+      const id = store().createCharacterPawn(modelAssetId, name);
+      return id
+        ? `Created character pawn "${findObject(id)?.name}" (objectId ${id}) with a locomotion controller and character controller. Press Play and use WASD.`
+        : `Couldn't build a pawn — no usable locomotion clips found on that skeleton.`;
+    },
+  }),
+
+  create_third_person_template: tool({
+    description:
+      'Build a complete, ready-to-play third-person scene from the engine\'s BUNDLED Quaternius rig: imports + splits it, adds a ground plane, and spawns a "Player" pawn with an Idle/Walk/Jog/Jump animator, a mouse-look follow camera, and an editable controller blueprint. No asset import needed — use this when the user asks for a third-person character/template from scratch. Returns the pawn objectId.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createThirdPersonTemplate();
+      return id ? `Created third-person template — pawn objectId ${id}. Press Play and use WASD + mouse.` : `Couldn't build the template.`;
     },
   }),
 
@@ -351,12 +569,83 @@ export const engineTools = {
   }),
 
   delete_material: tool({
-    description: 'Delete a reusable material. Objects using it revert to their inline material.',
+    description: 'Delete a reusable material (and its node graph). Objects using it revert to their inline material.',
     inputSchema: z.object({ id: z.string() }),
     execute: async ({ id }) => {
       if (!findMaterial(id)) return `No material with id ${id}.`;
       store().deleteMaterial(id);
       return `Deleted material ${id}.`;
+    },
+  }),
+
+  add_material_node: tool({
+    description:
+      "Add a node to a material's graph. Returns its nodeId. 'Color' sets materialColor; 'Scalar'/'Mix' set numberValue (Mix's = blend factor T); 'Texture' sets assetId (an image asset). 'Multiply'/'Add'/'Clamp' take their inputs from wires (numbers or colors). Then connect_material_nodes from this node's 'value-out' into a Material Output pin (baseColor, metalness, roughness, emissiveColor, emissiveIntensity, normal) — or into another operator's input (a/b/t, value/min/max).",
+    inputSchema: z.object({
+      materialId: z.string(),
+      type: z.enum(['Color', 'Scalar', 'Texture', 'Mix', 'Multiply', 'Add', 'Clamp']),
+      materialColor: z.string().optional().describe('Color/Mix: hex color.'),
+      numberValue: z.number().optional().describe('Scalar value, or Mix blend factor 0-1.'),
+      assetId: z.string().optional().describe('Texture: an "image"-type asset id.'),
+    }),
+    execute: async ({ materialId, type, materialColor, numberValue, assetId }) => {
+      if (!findMaterial(materialId)) return `No material with id ${materialId}.`;
+      if (type === 'Texture' && assetId) {
+        const asset = findAsset(assetId);
+        if (!asset) return `No asset with id ${assetId}.`;
+        if (asset.type !== 'image') return `Asset ${assetId} is a ${asset.type}, not an image.`;
+      }
+      // Material operators reuse names that collide with blueprint math nodes — map to their material labels.
+      const label = type === 'Add' ? 'Add (Material)' : type === 'Clamp' ? 'Clamp (Material)' : type;
+      store().ensureMaterialGraph(materialId);
+      store().setActiveMaterial(materialId);
+      const nodeId = store().addMaterialNode(label, 'Material', { materialColor, numberValue, assetId });
+      return `Added "${type}" node with id ${nodeId} to material ${materialId}.`;
+    },
+  }),
+
+  connect_material_nodes: tool({
+    description:
+      "Wire a material node's output into another node's input pin. sourceHandle defaults to 'value-out'. targetHandle is a Material Output pin (baseColor|metalness|roughness|emissiveColor|emissiveIntensity|normal) or a Mix pin (a|b|t). Texture → baseColor/normal; Color/Mix → baseColor/emissiveColor; Scalar → metalness/roughness/emissiveIntensity.",
+    inputSchema: z.object({
+      materialId: z.string(),
+      sourceId: z.string(),
+      targetId: z.string(),
+      targetHandle: z.string(),
+      sourceHandle: z.string().optional(),
+    }),
+    execute: async ({ materialId, sourceId, targetId, targetHandle, sourceHandle }) => {
+      if (!findMaterial(materialId)) return `No material with id ${materialId}.`;
+      store().setActiveMaterial(materialId);
+      store().connectMaterialNodes(sourceId, targetId, sourceHandle ?? 'value-out', targetHandle);
+      return `Connected ${sourceId} -> ${targetId}:${targetHandle} in material ${materialId}.`;
+    },
+  }),
+
+  update_material_node: tool({
+    description: "Update a material-graph node's value (materialColor, numberValue, or assetId).",
+    inputSchema: z.object({
+      materialId: z.string(),
+      nodeId: z.string(),
+      materialColor: z.string().optional(),
+      numberValue: z.number().optional(),
+      assetId: z.string().optional(),
+    }),
+    execute: async ({ materialId, nodeId, ...patch }) => {
+      if (!findMaterial(materialId)) return `No material with id ${materialId}.`;
+      store().updateGraphNodeData(nodeId, patch);
+      return `Updated material node ${nodeId}.`;
+    },
+  }),
+
+  delete_material_node: tool({
+    description: 'Delete a node from a material graph (the Material Output sink cannot be deleted).',
+    inputSchema: z.object({ materialId: z.string(), nodeId: z.string() }),
+    execute: async ({ materialId, nodeId }) => {
+      if (!findMaterial(materialId)) return `No material with id ${materialId}.`;
+      store().setActiveMaterial(materialId);
+      store().deleteMaterialNode(nodeId);
+      return `Deleted material node ${nodeId}.`;
     },
   }),
 
@@ -542,10 +831,14 @@ export const engineTools = {
       spawnKind: z.enum(['cube', 'sphere', 'capsule', 'plane']).optional().describe('Spawn Object: what to spawn.'),
       message: z.string().optional().describe('Print: the text to log during Play.'),
       materialColor: z.string().optional().describe('Set Material Color: hex color to apply at runtime.'),
+      materialColorTarget: z
+        .enum(['base', 'emissive'])
+        .optional()
+        .describe('Set Material Color: which channel to write (base or emissive). Defaults to base.'),
       materialProperty: z
         .enum(['metalness', 'roughness', 'emissiveIntensity'])
         .optional()
-        .describe('Set Material Property: which numeric property to set (value comes from numberValue).'),
+        .describe('Set/Get Material Property: which numeric property to read or write (Set uses numberValue).'),
     }),
     execute: async ({
       blueprintId,
@@ -569,6 +862,7 @@ export const engineTools = {
       spawnKind,
       message,
       materialColor,
+      materialColorTarget,
       materialProperty,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
@@ -594,6 +888,7 @@ export const engineTools = {
         spawnKind: spawnKind as SceneObjectKind | undefined,
         message,
         materialColor,
+        materialColorTarget,
         materialProperty,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
@@ -643,6 +938,7 @@ export const engineTools = {
       spawnKind: z.enum(['cube', 'sphere', 'capsule', 'plane']).optional(),
       message: z.string().optional(),
       materialColor: z.string().optional(),
+      materialColorTarget: z.enum(['base', 'emissive']).optional(),
       materialProperty: z.enum(['metalness', 'roughness', 'emissiveIntensity']).optional(),
     }),
     execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, ...patch }) => {

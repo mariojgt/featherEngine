@@ -10,7 +10,7 @@
 // events without touching the Viewport / player rendering at all.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import type { Collider, RigidBody, World } from '@dimforge/rapier3d-compat';
+import type { Collider, KinematicCharacterController, RigidBody, World } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
 
@@ -121,6 +121,24 @@ export interface PhysicsFrameResult {
   transforms: Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>;
   /** Object ids that *started* a contact this step (drives event.collisionEnter). */
   collisions: string[];
+  /** Character-controller object ids that are standing on the ground this frame. */
+  grounded: string[];
+}
+
+/** A capsule sized to a (feet-origin) humanoid, scaled by the object. */
+function characterCapsule(object: SceneObject) {
+  const s = object.transform.scale;
+  const radius = 0.3 * Math.max(Math.abs(s[0]), Math.abs(s[2]), 0.1);
+  const halfHeight = 0.6 * Math.max(Math.abs(s[1]), 0.1);
+  const centerY = halfHeight + radius; // origin at the feet → capsule centered above it
+  return { radius, halfHeight, centerY };
+}
+
+interface CharacterEntry {
+  body: RigidBody;
+  collider: Collider;
+  controller: KinematicCharacterController;
+  signature: string;
 }
 
 class PhysicsRuntime {
@@ -128,6 +146,7 @@ class PhysicsRuntime {
   private events = new RAPIER.EventQueue(true);
   private entries = new Map<string, BodyEntry>();
   private handleToId = new Map<number, string>();
+  private charEntries = new Map<string, CharacterEntry>();
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -154,6 +173,52 @@ class PhysicsRuntime {
     this.handleToId.delete(entry.collider.handle);
     this.world.removeRigidBody(entry.body); // also removes attached colliders
     this.entries.delete(id);
+  }
+
+  private characterSignature(object: SceneObject): string {
+    const { radius, halfHeight } = characterCapsule(object);
+    return `${radius.toFixed(3)}|${halfHeight.toFixed(3)}`;
+  }
+
+  private createCharacter(object: SceneObject) {
+    const p = object.transform.position;
+    const { radius, halfHeight, centerY } = characterCapsule(object);
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(p[0], p[1], p[2]));
+    const collider = this.world.createCollider(RAPIER.ColliderDesc.capsule(halfHeight, radius).setTranslation(0, centerY, 0), body);
+    // offset keeps the capsule from jittering against surfaces; slide + autostep + ground snap.
+    const controller = this.world.createCharacterController(0.02);
+    controller.enableAutostep(0.4, 0.2, true);
+    controller.enableSnapToGround(0.4);
+    controller.setApplyImpulsesToDynamicBodies(true);
+    controller.setSlideEnabled(true);
+    this.charEntries.set(object.id, { body, collider, controller, signature: this.characterSignature(object) });
+    this.handleToId.set(collider.handle, object.id);
+  }
+
+  private removeCharacter(id: string) {
+    const entry = this.charEntries.get(id);
+    if (!entry) return;
+    this.handleToId.delete(entry.collider.handle);
+    this.world.removeCharacterController(entry.controller);
+    this.world.removeRigidBody(entry.body);
+    this.charEntries.delete(id);
+  }
+
+  private syncCharacters(objects: SceneObject[]) {
+    const present = new Set<string>();
+    for (const object of objects) {
+      if (!object.character?.enabled) continue;
+      present.add(object.id);
+      const entry = this.charEntries.get(object.id);
+      if (!entry) this.createCharacter(object);
+      else if (entry.signature !== this.characterSignature(object)) {
+        this.removeCharacter(object.id);
+        this.createCharacter(object);
+      }
+    }
+    for (const id of [...this.charEntries.keys()]) {
+      if (!present.has(id)) this.removeCharacter(id);
+    }
   }
 
   /** Create/rebuild/drop bodies so the world matches the current physics-enabled objects. */
@@ -190,6 +255,7 @@ class PhysicsRuntime {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     this.world.timestep = dt;
     this.syncBodies(objects);
+    this.syncCharacters(objects);
 
     for (const object of objects) {
       if (!object.physics?.enabled) continue;
@@ -240,6 +306,25 @@ class PhysicsRuntime {
       }
     }
 
+    // Character controllers: turn each character's desired motion (the delta the controller pass
+    // produced) into a collide-and-slide movement against the rest of the world.
+    const grounded = new Set<string>();
+    for (const object of objects) {
+      if (!object.character?.enabled) continue;
+      const entry = this.charEntries.get(object.id);
+      if (!entry) continue;
+      const cur = object.transform.position;
+      const prev = prevTransforms.get(object.id);
+      const desired = prev
+        ? { x: cur[0] - prev.position[0], y: cur[1] - prev.position[1], z: cur[2] - prev.position[2] }
+        : { x: 0, y: 0, z: 0 };
+      entry.controller.computeColliderMovement(entry.collider, desired);
+      if (entry.controller.computedGrounded()) grounded.add(object.id);
+      const move = entry.controller.computedMovement();
+      const base = prev ? prev.position : cur;
+      entry.body.setNextKinematicTranslation({ x: base[0] + move.x, y: base[1] + move.y, z: base[2] + move.z });
+    }
+
     this.world.step(this.events);
 
     const collided = new Set<string>();
@@ -262,14 +347,22 @@ class PhysicsRuntime {
         rotation: [reuseEuler.x, reuseEuler.y, reuseEuler.z],
       });
     }
+    // Characters: collision resolves position; facing (rotation) stays whatever the controller set.
+    for (const object of objects) {
+      const entry = object.character?.enabled ? this.charEntries.get(object.id) : undefined;
+      if (!entry) continue;
+      const t = entry.body.translation();
+      transforms.set(object.id, { position: [t.x, t.y, t.z], rotation: object.transform.rotation });
+    }
 
-    return { transforms, collisions: [...collided] };
+    return { transforms, collisions: [...collided], grounded: [...grounded] };
   }
 
   dispose() {
     this.events.free();
     this.world.free();
     this.entries.clear();
+    this.charEntries.clear();
     this.handleToId.clear();
   }
 }

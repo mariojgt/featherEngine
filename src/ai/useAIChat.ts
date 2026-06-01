@@ -42,6 +42,24 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.textureAssetId ? 'Applied texture' : 'Updated material';
     case 'set_model':
       return input.assetId ? 'Assigned model' : 'Cleared model';
+    case 'set_animator':
+      return input.enabled === false ? 'Stopped animation' : 'Set animation';
+    case 'create_animator_controller':
+      return `Created controller${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'add_animator_parameter':
+      return `Added param "${String(input.name ?? '')}"`;
+    case 'add_animator_state':
+      return `Added state "${String(input.name ?? '')}"`;
+    case 'add_animator_transition':
+      return 'Added transition';
+    case 'set_object_controller':
+      return input.controllerId ? 'Assigned controller' : 'Detached controller';
+    case 'set_character_controller':
+      return input.enabled === false ? 'Removed character control' : 'Set character controller';
+    case 'create_character_pawn':
+      return 'Created character pawn';
+    case 'create_third_person_template':
+      return 'Built third-person template';
     case 'create_material':
       return `Created material${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'update_material':
@@ -50,6 +68,14 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.materialId ? 'Assigned material' : 'Detached material';
     case 'delete_material':
       return 'Deleted material';
+    case 'add_material_node':
+      return `Added ${String(input.type ?? 'material')} node`;
+    case 'connect_material_nodes':
+      return 'Wired material nodes';
+    case 'update_material_node':
+      return 'Tuned material node';
+    case 'delete_material_node':
+      return 'Removed material node';
     case 'set_physics':
       return 'Configured physics';
     case 'rename_object':

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { AlertTriangle, FolderOpen, Gamepad2, Plus, Sparkles } from 'lucide-react';
+import { AlertTriangle, FolderOpen, Gamepad2, PersonStanding, Plus, Sparkles } from 'lucide-react';
 import { isDesktop } from '../platform';
 import { useProjectStore } from '../store/projectStore';
+import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 
 export function Launcher() {
   const [name, setName] = useState('My Game');
@@ -39,6 +40,22 @@ export function Launcher() {
             <span>{isDesktop ? 'Create project…' : 'New project'}</span>
           </button>
         </section>
+
+        <button
+          className="launcher-primary template-button"
+          disabled={busy || !name.trim()}
+          onClick={async () => {
+            try {
+              await newProject(name.trim());
+              await createThirdPersonTemplate();
+            } catch (error) {
+              useProjectStore.setState({ error: error instanceof Error ? error.message : 'Template failed' });
+            }
+          }}
+        >
+          <PersonStanding size={16} aria-hidden />
+          <span>New third-person template</span>
+        </button>
 
         <div className="launcher-actions">
           <button disabled={busy} onClick={() => void openProject()}>

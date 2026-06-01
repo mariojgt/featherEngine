@@ -48,7 +48,7 @@ const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Fire Event', 'Spawn Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Fire Event', 'Spawn Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Print'],
   },
   {
     title: 'Physics',
@@ -360,7 +360,9 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesVectorValue = node.data.nodeKind === 'value.vector3';
   const updatesSaveSlot = node.data.nodeKind === 'save.write' || node.data.nodeKind === 'save.load' || node.data.nodeKind === 'save.clear';
   const updatesMaterialColor = node.data.nodeKind === 'action.setMaterialColor';
-  const updatesMaterialProperty = node.data.nodeKind === 'action.setMaterialProperty';
+  const updatesMaterialProperty =
+    node.data.nodeKind === 'action.setMaterialProperty' || node.data.nodeKind === 'action.getMaterialProperty';
+  const updatesMaterialColorTarget = node.data.nodeKind === 'action.setMaterialColor';
   const eventName = node.data.eventName || 'CustomEvent';
   const selectedVariable = variables.find((variable) => variable.id === node.data.variableId);
   const selectedTable = dataAssets.find((table) => table.id === node.data.tableId);
@@ -587,6 +589,21 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
           </label>
         )}
 
+        {updatesMaterialColorTarget && (
+          <label className="node-field">
+            <span>Target</span>
+            <select
+              value={node.data.materialColorTarget ?? 'base'}
+              onChange={(event) =>
+                updateGraphNodeData(node.id, { materialColorTarget: event.target.value as 'base' | 'emissive' })
+              }
+            >
+              <option value="base">Base Color</option>
+              <option value="emissive">Emissive Color</option>
+            </select>
+          </label>
+        )}
+
         {updatesMaterialColor && (
           <label className="node-field">
             <span>Color</span>
@@ -615,15 +632,17 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 <option value="emissiveIntensity">Emissive Intensity</option>
               </select>
             </label>
-            <label className="node-field">
-              <span>Value</span>
-              <input
-                type="number"
-                step="0.05"
-                value={node.data.numberValue ?? 1}
-                onChange={(event) => updateGraphNodeData(node.id, { numberValue: Number(event.target.value) })}
-              />
-            </label>
+            {node.data.nodeKind === 'action.setMaterialProperty' && (
+              <label className="node-field">
+                <span>Value</span>
+                <input
+                  type="number"
+                  step="0.05"
+                  value={node.data.numberValue ?? 1}
+                  onChange={(event) => updateGraphNodeData(node.id, { numberValue: Number(event.target.value) })}
+                />
+              </label>
+            )}
           </>
         )}
 

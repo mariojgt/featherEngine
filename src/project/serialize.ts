@@ -27,6 +27,10 @@ export function splitProject(project: NodeForgeProject): {
     variables: project.variables,
     dataAssets: project.dataAssets,
     materials: project.materials,
+    skeletons: project.skeletons,
+    skeletalMeshes: project.skeletalMeshes,
+    animations: project.animations,
+    animatorControllers: project.animatorControllers,
     blueprints: project.blueprints,
     graphs: project.graphs,
   };
@@ -47,6 +51,10 @@ export function joinProject(manifest: ProjectManifest, scenes: Scene[]): NodeFor
     variables: manifest.variables ?? [],
     dataAssets: manifest.dataAssets ?? ((manifest as unknown as { dataTables?: NodeForgeProject['dataAssets'] }).dataTables ?? []),
     materials: manifest.materials ?? [],
+    skeletons: manifest.skeletons ?? [],
+    skeletalMeshes: manifest.skeletalMeshes ?? [],
+    animations: manifest.animations ?? [],
+    animatorControllers: manifest.animatorControllers ?? [],
     blueprints: manifest.blueprints,
     graphs: manifest.graphs,
   };
@@ -76,6 +84,10 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
         (data.dataAssets as NodeForgeProject['dataAssets']) ??
         ((data.dataTables as NodeForgeProject['dataAssets']) ?? []),
       materials: (data.materials as NodeForgeProject['materials']) ?? [],
+      skeletons: (data.skeletons as NodeForgeProject['skeletons']) ?? [],
+      skeletalMeshes: (data.skeletalMeshes as NodeForgeProject['skeletalMeshes']) ?? [],
+      animations: (data.animations as NodeForgeProject['animations']) ?? [],
+      animatorControllers: (data.animatorControllers as NodeForgeProject['animatorControllers']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
     };
@@ -102,6 +114,10 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
         (data.dataAssets as NodeForgeProject['dataAssets']) ??
         ((data.dataTables as NodeForgeProject['dataAssets']) ?? []),
       materials: (data.materials as NodeForgeProject['materials']) ?? [],
+      skeletons: (data.skeletons as NodeForgeProject['skeletons']) ?? [],
+      skeletalMeshes: (data.skeletalMeshes as NodeForgeProject['skeletalMeshes']) ?? [],
+      animations: (data.animations as NodeForgeProject['animations']) ?? [],
+      animatorControllers: (data.animatorControllers as NodeForgeProject['animatorControllers']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
     };
@@ -123,6 +139,10 @@ export function blankProject(name: string): NodeForgeProject {
     variables: [],
     dataAssets: [],
     materials: [],
+    skeletons: [],
+    skeletalMeshes: [],
+    animations: [],
+    animatorControllers: [],
     blueprints: [],
     graphs: [],
   };

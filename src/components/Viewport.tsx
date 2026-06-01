@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
-import { SkinnedModel } from '../three/SkinnedModel';
+import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
+import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, readAssetDragId } from './dragShared';
 import type { SceneObject } from '../types';
@@ -48,19 +49,22 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   const resolved = useResolvedMaterial(renderer);
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
+  const resolvedAnimator = useResolvedAnimator(object);
   // Built-in geometries use the standard (flipped) UV convention; only load when not using a model.
   const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
   const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
 
   // A skinned model with an enabled animator plays its clips; otherwise the model is static.
-  if (usingModel && object.animator?.enabled) {
+  if (object.animator?.enabled && resolvedAnimator.meshUrl) {
     return (
       <Suspense fallback={null}>
         <SkinnedModel
-          url={modelUrl as string}
-          clip={object.animator.clip}
-          speed={object.animator.speed}
-          loop={object.animator.loop}
+          meshUrl={resolvedAnimator.meshUrl}
+          clipSourceUrls={resolvedAnimator.clipSourceUrls}
+          clipName={resolvedAnimator.clipName}
+          speed={resolvedAnimator.speed}
+          loop={resolvedAnimator.loop}
+          fade={resolvedAnimator.fade}
         />
       </Suspense>
     );
@@ -197,12 +201,58 @@ function SceneObjectView({
   );
 }
 
+/** A draggable handle for placing a character's follow-camera offset, with a line back to the pawn. */
+function CameraRigGizmo({ object }: { object: SceneObject }) {
+  const updateCharacterController = useEditorStore((state) => state.updateCharacterController);
+  const [marker, setMarker] = useState<THREE.Mesh | null>(null);
+  const [bx, by, bz] = object.transform.position;
+  const offset = object.character?.cameraOffset ?? [0, 2.6, -6];
+  const worldPos: [number, number, number] = [bx + offset[0], by + offset[1], bz + offset[2]];
+
+  // Keep the marker synced when the offset changes from elsewhere (numeric fields, AI, Set Camera).
+  useEffect(() => {
+    if (marker) marker.position.set(worldPos[0], worldPos[1], worldPos[2]);
+  }, [marker, worldPos[0], worldPos[1], worldPos[2]]);
+
+  const linePoints = useMemo(() => new Float32Array([bx, by, bz, worldPos[0], worldPos[1], worldPos[2]]), [bx, by, bz, worldPos[0], worldPos[1], worldPos[2]]);
+
+  return (
+    <>
+      <line>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[linePoints, 3]} />
+        </bufferGeometry>
+        <lineBasicMaterial color="#3DDC97" />
+      </line>
+      <mesh ref={setMarker} position={worldPos}>
+        <sphereGeometry args={[0.2, 16, 12]} />
+        <meshBasicMaterial color="#3DDC97" />
+      </mesh>
+      {marker && (
+        <TransformControls
+          object={marker}
+          mode="translate"
+          size={0.75}
+          onObjectChange={() =>
+            updateCharacterController(object.id, {
+              cameraOffset: [marker.position.x - bx, marker.position.y - by, marker.position.z - bz],
+            })
+          }
+        />
+      )}
+    </>
+  );
+}
+
 function SceneContent({ transformMode }: { transformMode: TransformMode }) {
   const sceneObjects = useEditorStore(selectActiveObjects);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectObject = useEditorStore((state) => state.selectObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
+  const followTarget = useFollowTarget();
+  const cameraRigObject = cameraRigTarget ? sceneObjects.find((o) => o.id === cameraRigTarget && o.character) : undefined;
   const objectRefs = useRef(new Map<string, THREE.Group>());
   const [selectedTarget, setSelectedTarget] = useState<THREE.Group | null>(null);
 
@@ -255,7 +305,7 @@ function SceneContent({ transformMode }: { transformMode: TransformMode }) {
           />
         ))}
       </group>
-      {selectedTarget && !isPlaying && (
+      {selectedTarget && !isPlaying && !cameraRigObject && (
         <TransformControls
           object={selectedTarget}
           mode={transformMode}
@@ -264,9 +314,16 @@ function SceneContent({ transformMode }: { transformMode: TransformMode }) {
           space="local"
         />
       )}
+      {/* Camera-placement mode: drag a handle to set the follow-camera offset. */}
+      {cameraRigObject && !isPlaying && <CameraRigGizmo object={cameraRigObject} />}
       <gridHelper args={[24, 24, '#30394D', '#202737']} position={[0, 0.01, 0]} />
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
-      <OrbitControls makeDefault enableDamping dampingFactor={0.07} minDistance={2.5} maxDistance={18} />
+      {/* During Play, a character with a follow camera takes over the view; otherwise free-orbit. */}
+      {isPlaying && followTarget ? (
+        <FollowCamera />
+      ) : (
+        <OrbitControls makeDefault enableDamping dampingFactor={0.07} minDistance={2.5} maxDistance={18} />
+      )}
     </>
   );
 }
@@ -318,6 +375,8 @@ export function ViewportPanel() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const followTarget = useFollowTarget();
+  const showMouseHint = isPlaying && Boolean(followTarget?.character?.mouseLook);
 
   // Drag-and-drop a model from the project browser onto the ground under the cursor.
   const dropContextRef = useRef<DropContext | null>(null);
@@ -406,6 +465,7 @@ export function ViewportPanel() {
         ) : (
           <ViewportFallback />
         )}
+        {showMouseHint && <div className="mouse-look-hint">Drag to look · double-click to capture mouse · ESC to release</div>}
       </div>
     </section>
   );

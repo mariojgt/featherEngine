@@ -6,6 +6,7 @@ export const POPPABLE_PANELS: Record<string, string> = {
   inspector: 'Inspector',
   project: 'Project',
   scripting: 'Scripting',
+  materials: 'Material',
 };
 
 const labelFor = (kind: string) => `panel-${kind}`;

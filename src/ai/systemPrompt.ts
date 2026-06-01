@@ -18,6 +18,17 @@ export function buildSceneSnapshot() {
       ? { bodyType: object.physics.bodyType, collider: object.physics.collider }
       : null,
     blueprintId: object.script?.enabled ? object.script.blueprintId : null,
+    animator: object.animator?.enabled
+      ? {
+          controllerId: object.animator.controllerId ?? null,
+          animationId: object.animator.animationId ?? null,
+          clip: object.animator.clip ?? null,
+          loop: object.animator.loop,
+        }
+      : null,
+    character: object.character?.enabled
+      ? { moveSpeed: object.character.moveSpeed, jumpStrength: object.character.jumpStrength, cameraFollow: object.character.cameraFollow }
+      : null,
   }));
 
   const assets = state.assets.map((asset) => ({
@@ -83,17 +94,67 @@ export function buildSceneSnapshot() {
     rows: table.rows.map((row) => ({ id: row.id, key: row.key, values: row.values })),
   }));
 
-  const materials = state.materials.map((material) => ({
-    id: material.id,
-    name: material.name,
-    color: material.color,
-    metalness: material.metalness,
-    roughness: material.roughness,
-    emissiveColor: material.emissiveColor,
-    emissiveIntensity: material.emissiveIntensity,
-    textureAssetId: material.textureAssetId ?? null,
-    normalMapAssetId: material.normalMapAssetId ?? null,
-    folderId: material.folderId ?? null,
+  const materials = state.materials.map((material) => {
+    const graph = material.graphId ? state.graphs.find((item) => item.id === material.graphId) : undefined;
+    return {
+      id: material.id,
+      name: material.name,
+      // Flat fields = the BASE surface (used for any Output pin left unconnected).
+      color: material.color,
+      metalness: material.metalness,
+      roughness: material.roughness,
+      emissiveColor: material.emissiveColor,
+      emissiveIntensity: material.emissiveIntensity,
+      textureAssetId: material.textureAssetId ?? null,
+      normalMapAssetId: material.normalMapAssetId ?? null,
+      folderId: material.folderId ?? null,
+      // The node graph that overrides base fields via its Material Output pins.
+      nodes:
+        graph?.nodes.map((node) => ({
+          id: node.id,
+          label: node.data.label,
+          nodeKind: node.data.nodeKind,
+          materialColor: node.data.materialColor,
+          numberValue: node.data.numberValue,
+          assetId: node.data.assetId,
+        })) ?? [],
+      edges:
+        graph?.edges.map((edge) =>
+          edge.targetHandle
+            ? `${edge.source}:${edge.sourceHandle ?? 'value-out'} -> ${edge.target}:${edge.targetHandle}`
+            : `${edge.source} -> ${edge.target}`,
+        ) ?? [],
+    };
+  });
+
+  // Skeletal-animation assets. Importing a rigged model splits it into a skeleton, a skeletal mesh,
+  // and one animation per clip; animations whose skeletonId matches a mesh's skeletonId play on it.
+  const skeletalMeshes = state.skeletalMeshes.map((mesh) => ({
+    id: mesh.id,
+    name: mesh.name,
+    skeletonId: mesh.skeletonId,
+    sourceAssetId: mesh.sourceAssetId,
+  }));
+  const animations = state.animations.map((anim) => ({
+    id: anim.id,
+    name: anim.name,
+    skeletonId: anim.skeletonId,
+    loop: anim.loop,
+  }));
+  const animatorControllers = state.animatorControllers.map((controller) => ({
+    id: controller.id,
+    name: controller.name,
+    skeletonId: controller.skeletonId ?? null,
+    defaultStateId: controller.defaultStateId ?? null,
+    parameters: controller.parameters.map((p) => ({ id: p.id, name: p.name, type: p.type, source: p.source })),
+    states: controller.states.map((s) => ({ id: s.id, name: s.name, animationId: s.animationId ?? null })),
+    transitions: controller.transitions.map((t) => ({
+      id: t.id,
+      from: t.from,
+      to: t.to,
+      duration: t.duration,
+      conditions: t.conditions.map((c) => ({ parameterId: c.parameterId, op: c.op, value: c.value })),
+    })),
   }));
 
   return {
@@ -106,6 +167,9 @@ export function buildSceneSnapshot() {
     variables,
     dataAssets,
     materials,
+    skeletalMeshes,
+    animations,
+    animatorControllers,
     // `objects` below are the ACTIVE scene's objects — the ones your tools edit.
     objects,
     blueprints,
@@ -127,6 +191,7 @@ You help the user build their game by calling tools that directly modify their s
 - For solid object-to-object collisions, give each object physics (enabled:true) with a fitting bodyType and collider. Two "dynamic" objects bounce/push apart; a "dynamic" object cannot pass through a "fixed" or "kinematic" one. Objects with physics disabled are visual only and do not collide.
 - The "On Collision" event node (event.collisionEnter) fires on a scripted object the frame after it starts touching another collider — use it for pickups, damage, triggers, etc.
 - A "fixed" "plane" acts as the ground floor. +Y is up. The ground plane is typically at y=0, so spawn dynamic objects a little above it.
+- **Static collision (walls/obstacles):** to make a wall or obstacle the character/objects collide with but that never moves, create the object and set_physics enabled:true, bodyType:"fixed". The character controller only collides with objects that have physics enabled — a visual-only object (no physics) is passed straight through.
 
 ## Assets (models, audio)
 - Imported assets appear in the snapshot's \`assets\` list (id, name, type: model | image | audio).
@@ -134,12 +199,23 @@ You help the user build their game by calling tools that directly modify their s
 - **Models:** assign a "model"-type asset to an object with set_model — the object then renders that glTF/GLB instead of its built-in mesh (its transform/physics still apply). Pass an empty/no assetId to revert to the built-in mesh. \`modelAssetId\` on a snapshot object shows the current model.
 - **Textures & materials:** use update_renderer to set color/metalness/roughness and/or a base-color texture (\`textureAssetId\` — an "image"-type asset). A texture applies to both built-in meshes and models. For an object using a **model**, the model keeps its own baked materials by default; color/metalness/roughness only take effect when you also set \`overrideMaterial: true\` (a texture applies either way). \`textureAssetId\` on a snapshot object shows the current texture; pass an empty string to remove it.
 - **Audio:** the "Play Sound" node plays an audio asset — set its \`assetId\` to an audio asset's id.
+- **Skeletal animation:** importing a *rigged* model auto-splits it into a skeleton + a skeletal mesh (in \`skeletalMeshes\`) + one animation per clip (in \`animations\`). To play ONE clip: assign the model with set_model, then set_animator with an \`animationId\` whose \`skeletonId\` matches that model's skeletal mesh. Clips bind by skeleton, so an animation from one character plays on ANY mesh sharing its \`skeletonId\` — that's the reuse story. Set \`loop:false\` for one-shots.
+- **Animator Controller (state machine):** for real characters, build a controller instead of a single clip. Recipe: (1) create_animator_controller with the mesh's skeletonId; (2) add_animator_parameter — e.g. a float "Speed" with source "speed" (auto-filled from the object's movement each frame — no scripting needed), or source "variable" to mirror a project variable, or "manual" for script/AI-set values; (3) add_animator_state for each clip (Idle/Walk/Jog…); first state is the default; (4) add_animator_transition between states with conditions (e.g. Speed > 0.1 to leave Idle, Speed < 0.1 to return); use from:"any" for global transitions; (5) set_object_controller to attach it. Controllers appear in \`animatorControllers\` with their parameters/states/transitions and ids.
+- **Scripting ↔ animation:** the "Set Anim Float/Bool/Trigger" nodes write an animator parameter by name from a blueprint (e.g. a Set Anim Trigger "Jump" on a key press), so visual scripts drive the state machine. Combined with source "speed"/"variable" parameters, the animator can read object motion and project variables directly — prefer those auto-sources over scripting when you just need locomotion.
+- **Character controller:** set_character_controller adds the built-in third-person controller component. It **collides** with other objects' colliders (a Rapier kinematic character controller — slides along walls, stands on platforms, pushes dynamic bodies), supports **sprint** (keySprint, default Shift → faster, drives a Run state) and **crouch** (keyCrouch, default C → slower, drives a "crouching" animator parameter). Animator parameter sources include speed / verticalSpeed / moving / crouching / variable. Configurable: move/sprint/jump/gravity/turn; **rebindable keys** (keyForward/Backward/Left/Right/Jump/Sprint as KeyboardEvent.code, e.g. "KeyW"/"Space"/"ShiftLeft"); and a **mouse-look follow camera** (cameraFollow, cameraDistance, cameraHeight, cameraPitch, mouseLook, mouseSensitivity, cameraRelativeMovement). With mouseLook on, the player clicks the view to capture the pointer and orbits the camera; cameraRelativeMovement makes "forward" follow the camera. Two modes, auto-detected: with NO attached blueprint it self-drives from the bound keys (auto); WITH an attached blueprint the controller is "scripted" — movement/jump come from nodes while the component still supplies gravity/jump-height/camera. Either way the motion auto-feeds an animator's speed/verticalSpeed.
+- **Character logic nodes (editable controller):** "Get Move Input" (→ Vector3 from WASD), "Move" (move+turn the owner by a direction at a speed), "Jump", "Is Grounded" (→ bool), "Set Camera" (override follow distance/height). Wire these in a blueprint to fully customize the character: e.g. Update → Move(Get Move Input). This is how the user changes movement/camera/abilities — preset, then tweak.
+- **Fastest path — bundled template:** if the user wants a third-person character/game from scratch (no model imported yet), call create_third_person_template — it uses the engine's built-in Quaternius rig to make a ground + animated "Player" pawn with a mouse-look follow camera, ready to Play.
+- **Camera & facing:** the follow camera is placed by cameraOffset [side, up, back] (negative back = behind a +Z-forward model); mouseLook orbits it, cameraPitch sets elevation. If a character faces the wrong way (moonwalks / camera shows the front), set modelYawOffset to Math.PI to flip it. Users can also drag a 3D gizmo in the viewport to place the camera.
+- **Fast path — third-person pawn (own model):** call create_character_pawn with a rigged model's assetId. It creates the object, auto-builds an Idle/Walk/Jog/Jump Animator Controller from the skeleton's clips, attaches the character controller, AND attaches a preset, editable controller blueprint (Update→Move + Space→Jump). Press Play to use it; then edit the blueprint nodes (movement/camera/abilities), the Animator Controller (which clips), or set_character_controller (tuning) to change "just what you need". Prefer this over hand-wiring unless the user wants something custom.
 
 ## Materials (reusable)
 - A **material** is a reusable PBR surface (base color, metalness, roughness, emissive color + intensity, optional base-color and normal-map image textures) authored once and shared by many objects. They appear in the snapshot's \`materials\` list and in the Project browser; the Material panel edits them.
 - Create with create_material (returns a materialId), edit with update_material (every object using it updates live), delete with delete_material.
 - Assign to an object with set_object_material (\`materialId\` on a snapshot object shows the current one; pass empty to detach). An assigned material drives the whole surface — it overrides the object's inline color/texture AND a model's baked materials. Prefer a shared material over per-object update_renderer when several objects should look the same.
-- **Runtime control (per-object):** the "Set Material Color" node (set \`materialColor\`) and "Set Material Property" node (set \`materialProperty\` to metalness|roughness|emissiveIntensity and \`numberValue\`) tweak ONLY the owning object at runtime — like an Unreal dynamic material instance — so other objects sharing the material are unaffected. Changes reset when Play stops. Wire them to a one-shot event (e.g. a Key/Collision/Custom event) to "flash" an object.
+- **Material node graph (React Flow, like Blueprints):** each material owns a small node graph shown in the snapshot's material \`nodes\`/\`edges\`. It always has a **Material Output** node whose input pins are \`baseColor\`, \`metalness\`, \`roughness\`, \`emissiveColor\`, \`emissiveIntensity\`, \`normal\`. The material's flat fields (update_material) are the BASE used for any pin left unconnected; wiring a node into a pin overrides that channel. For a simple flat material just use update_material; for a procedural look, build the graph.
+  - Node types: **Color** (constant color), **Scalar** (constant 0-1 number), **Texture** (an image asset), **Mix** (blend colors \`a\`/\`b\` by factor \`t\`), **Multiply**/**Add** (combine two numbers or two colors via \`a\`/\`b\`, or a color×scalar), **Clamp** (limit a number via \`value\`/\`min\`/\`max\`). Add them with add_material_node, then connect_material_nodes from the node's \`value-out\` into an Output pin (or another operator's input pin). Texture → \`baseColor\`/\`normal\`; Color/Mix → \`baseColor\`/\`emissiveColor\`; Scalar/Multiply/Add/Clamp → \`metalness\`/\`roughness\`/\`emissiveIntensity\`. Evaluated to constant values (no per-pixel shading). Tweak with update_material_node; remove with delete_material_node.
+  - Example "glowing red metal": create_material → update_material(color #aa0000, metalness 0.9, roughness 0.3) → add_material_node(Color #ff3030) + connect to \`emissiveColor\` → add_material_node(Scalar 2) + connect to \`emissiveIntensity\`.
+- **Scripting an object's material (self):** blueprint nodes act on the script's OWN object. Write with "Set Material Color" (\`materialColor\`, and \`materialColorTarget\`: base|emissive) and "Set Material Property" (\`materialProperty\` + \`numberValue\`). Read the object's CURRENT values with "Get Material Color" and "Get Material Property" (value-producer nodes; wire their \`value-out\` into math/Set inputs). All are per-object (like an Unreal dynamic material instance) and reset when Play stops. Read-modify-write example (pulse glow): Update → Get Material Property(emissiveIntensity) → Add(+0.05) → Set Material Property(emissiveIntensity). Wire one-shot writes to a Key/Collision/Custom event to "flash" an object.
 - On export, asset bytes are embedded into the game bundle so the exported game is fully self-contained.
 
 ## Project browser (folders)

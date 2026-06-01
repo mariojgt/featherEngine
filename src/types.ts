@@ -71,11 +71,24 @@ export type GraphNodeKind =
   | 'action.playSound'
   | 'action.setMaterialColor'
   | 'action.setMaterialProperty'
+  | 'action.getMaterialColor'
+  | 'action.getMaterialProperty'
+  | 'animator.setFloat'
+  | 'animator.setBool'
+  | 'animator.setTrigger'
+  | 'input.move'
+  | 'query.grounded'
+  | 'action.move'
+  | 'action.jump'
+  | 'action.setCamera'
   | 'material.output'
   | 'material.color'
   | 'material.scalar'
   | 'material.texture'
   | 'material.mix'
+  | 'material.multiply'
+  | 'material.add'
+  | 'material.clamp'
   | 'save.write'
   | 'save.load'
   | 'save.clear'
@@ -104,7 +117,9 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   saveSlot?: string;
   /** action.setMaterialColor: hex color to apply to the owner's material at runtime. */
   materialColor?: string;
-  /** action.setMaterialProperty: which numeric material property to set (uses numberValue). */
+  /** action.setMaterialColor: which color channel to write (base color vs emissive). Defaults to base. */
+  materialColorTarget?: 'base' | 'emissive';
+  /** action.set/getMaterialProperty: which numeric material property to read/write. */
   materialProperty?: 'metalness' | 'roughness' | 'emissiveIntensity';
   /** action.playSound: id of the audio asset to play. */
   assetId?: string;
@@ -112,6 +127,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   spawnKind?: SceneObjectKind;
   /** action.print: message to log to the runtime console. */
   message?: string;
+  /** animator.setFloat/setBool/setTrigger: name of the animator parameter to write. */
+  paramName?: string;
   hasInput?: boolean;
   hasOutput?: boolean;
 }
@@ -181,12 +198,192 @@ export interface MaterialDefinition {
  */
 export interface AnimatorComponent {
   enabled: boolean;
-  /** Name of the animation clip to play (must exist in the model's GLB). */
+  /**
+   * Animator Controller (state machine) that decides which clip plays based on parameters. When set
+   * it takes priority over `animationId`/`clip` — those remain the "play one clip" fallback.
+   */
+  controllerId?: string;
+  /**
+   * Animation asset (in `project.animations`) to play. It may live in a different GLB than the
+   * rendered mesh — the clip is rebound to the mesh's bones by name, which is how a skeleton's
+   * clips are reused across compatible meshes.
+   */
+  animationId?: string;
+  /** Skeletal Mesh asset to render. Falls back to the renderer's `modelAssetId` GLB when unset. */
+  skeletalMeshId?: string;
+  /** Legacy/fallback: raw clip name played from the renderer's GLB when no Animation asset is set. */
   clip?: string;
   /** Playback speed multiplier (1 = authored speed). */
   speed: number;
   /** Loop the clip, or play once and hold the final frame. */
   loop: boolean;
+}
+
+/**
+ * A reusable skeleton identity (Unreal-style). Two rigs whose bone hierarchy matches share the same
+ * `signature`, so the importer reuses one Skeleton asset for both — and every Animation targeting that
+ * skeleton becomes playable on every Skeletal Mesh bound to it.
+ */
+export interface SkeletonAsset {
+  id: string;
+  name: string;
+  /** GLB asset id the skeleton was first derived from. */
+  sourceAssetId: string;
+  /** Bone node names in hierarchy order. */
+  boneNames: string[];
+  /** Stable hash of the bone hierarchy — the compatibility key. */
+  signature: string;
+  rootBone: string;
+  /** Containing folder id, or undefined for the project root. */
+  folderId?: string;
+  createdAt: number;
+}
+
+/** A skinned mesh bound to a Skeleton. The geometry lives in `sourceAssetId`'s GLB. */
+export interface SkeletalMeshAsset {
+  id: string;
+  name: string;
+  sourceAssetId: string;
+  skeletonId: string;
+  folderId?: string;
+  createdAt: number;
+}
+
+/** A single animation clip targeting a Skeleton (Unreal "Animation Sequence"). */
+export interface AnimationAsset {
+  id: string;
+  name: string;
+  /** GLB asset id the clip lives in. */
+  sourceAssetId: string;
+  /** Clip name within that GLB. */
+  clipName: string;
+  skeletonId: string;
+  duration: number;
+  /** Default loop hint (true for clips authored to loop, e.g. names ending in "_Loop"). */
+  loop: boolean;
+  folderId?: string;
+  createdAt: number;
+}
+
+export type AnimatorParamType = 'float' | 'bool' | 'trigger';
+
+/**
+ * Where a parameter's value comes from each frame:
+ * - `manual`: set by scripts (animator.setX nodes) or the AI — the engine never touches it.
+ * - `speed`: the object's horizontal movement speed (units/sec) this frame.
+ * - `verticalSpeed`: the object's vertical velocity (units/sec) — use for jump/fall states.
+ * - `moving`: boolean, true when horizontal speed exceeds a small threshold.
+ * - `variable`: mirrors a project variable (`variableId`), so existing scripts drive animation for free.
+ */
+export type AnimatorParamSource = 'manual' | 'speed' | 'verticalSpeed' | 'moving' | 'crouching' | 'variable';
+
+export interface AnimatorParameter {
+  id: string;
+  name: string;
+  type: AnimatorParamType;
+  defaultValue: number | boolean;
+  source: AnimatorParamSource;
+  /** For `source: 'variable'` — the project variable whose value this parameter tracks. */
+  variableId?: string;
+}
+
+/** One condition guarding a transition: a parameter compared against a constant. */
+export interface AnimatorCondition {
+  parameterId: string;
+  op: CompareOperator;
+  value: number | boolean;
+}
+
+/** A node in the state machine — plays one animation while active. */
+export interface AnimatorState {
+  id: string;
+  name: string;
+  /** Animation asset to play (AnimationAsset id). */
+  animationId?: string;
+  speed: number;
+  loop: boolean;
+}
+
+/** A directed edge between states; taken when all conditions pass. */
+export interface AnimatorTransition {
+  id: string;
+  /** Source state id, or 'any' to allow leaving from any state. */
+  from: string | 'any';
+  to: string;
+  conditions: AnimatorCondition[];
+  /** Crossfade duration in seconds. */
+  duration: number;
+}
+
+/** A reusable animation state machine (Unreal Animation Blueprint / Unity Animator Controller). */
+export interface AnimatorController {
+  id: string;
+  name: string;
+  /** Skeleton this controller is authored against; its states' animations should target it. */
+  skeletonId?: string;
+  parameters: AnimatorParameter[];
+  states: AnimatorState[];
+  defaultStateId?: string;
+  transitions: AnimatorTransition[];
+  folderId?: string;
+  createdAt: number;
+}
+
+/**
+ * A built-in third-person character controller. During Play it reads WASD/arrows (Shift = sprint,
+ * Space = jump), moves the object on the ground plane, applies gravity/jump, and yaws the mesh toward
+ * its movement. The motion it produces is what feeds an Animator's `speed`/`verticalSpeed`/`moving`
+ * parameters — so a locomotion controller animates with no extra wiring. An optional follow camera
+ * trails the character in the game view / exported game.
+ */
+export interface CharacterControllerComponent {
+  enabled: boolean;
+  /** Ground move speed (units/sec). */
+  moveSpeed: number;
+  /** Speed multiplier while the sprint key (Shift) is held. */
+  sprintMultiplier: number;
+  /** Speed multiplier while the crouch key is held (also drives a "crouching" animator parameter). */
+  crouchMultiplier: number;
+  /** Initial upward velocity of a jump (units/sec). */
+  jumpStrength: number;
+  /** Downward acceleration (units/sec²). */
+  gravity: number;
+  /** How fast (radians/sec) the mesh turns to face its movement direction. */
+  turnSpeed: number;
+  /**
+   * Extra yaw (radians) added when facing movement, to match the model's authored forward axis.
+   * 0 for models whose forward is +Z (e.g. Quaternius); Math.PI for -Z-forward models.
+   */
+  modelYawOffset: number;
+  /** Y the character's origin rests at when grounded. */
+  groundLevel: number;
+  // --- Input bindings (KeyboardEvent.code). Used by auto-mode and the Get Move Input node. ---
+  keyForward: string;
+  keyBackward: string;
+  keyLeft: string;
+  keyRight: string;
+  keyJump: string;
+  keySprint: string;
+  keyCrouch: string;
+  // --- Camera ---
+  /** Trail a third-person camera behind the character (game view / export). */
+  cameraFollow: boolean;
+  /**
+   * Resting camera position relative to the character, as a local offset [side, up, back].
+   * Negative Z sits behind a +Z-forward model. Positioned with the on-screen camera gizmo.
+   */
+  cameraOffset: Vector3Tuple;
+  /** Orbit the follow camera with the mouse (click the view to capture the pointer). */
+  mouseLook: boolean;
+  /** Radians of camera rotation per pixel of mouse movement. */
+  mouseSensitivity: number;
+  /** Base camera elevation (radians) before mouse pitch is added. */
+  cameraPitch: number;
+  /** Pitch clamps (radians). */
+  cameraMinPitch: number;
+  cameraMaxPitch: number;
+  /** Move relative to where the camera faces (third-person feel) vs. fixed world axes. */
+  cameraRelativeMovement: boolean;
 }
 
 export interface PhysicsComponent {
@@ -216,6 +413,7 @@ export interface SceneObject {
   physics?: PhysicsComponent;
   script?: ScriptGraphComponent;
   animator?: AnimatorComponent;
+  character?: CharacterControllerComponent;
 }
 
 /** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */
@@ -301,7 +499,7 @@ export interface ProjectGraph {
 }
 
 /** Current project file format version. */
-export const PROJECT_VERSION = '0.4.0';
+export const PROJECT_VERSION = '0.6.0';
 
 /** Scene entry in the project manifest (project.json), pointing at its scene file. */
 export interface SceneRef {
@@ -327,6 +525,10 @@ export interface NodeForgeProject {
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
+  skeletons: SkeletonAsset[];
+  skeletalMeshes: SkeletalMeshAsset[];
+  animations: AnimationAsset[];
+  animatorControllers: AnimatorController[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
 }
@@ -343,6 +545,10 @@ export interface ProjectManifest {
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
+  skeletons: SkeletonAsset[];
+  skeletalMeshes: SkeletalMeshAsset[];
+  animations: AnimationAsset[];
+  animatorControllers: AnimatorController[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
 }

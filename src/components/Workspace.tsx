@@ -14,12 +14,13 @@ import { InspectorPanel } from './InspectorPanel';
 import { AssetBrowser } from './AssetBrowser';
 import { VisualScriptingPanel } from './VisualScriptingPanel';
 import { MaterialEditorPanel } from './MaterialEditorPanel';
+import { AnimatorEditorPanel } from './AnimatorEditorPanel';
 import { getWorkspaceApi, setWorkspaceApi } from './workspacePanels';
 import { onPanelClosed } from '../sync/storeSync';
 import { POPPABLE_PANELS, openPanelWindow } from '../sync/popoutWindow';
 
 const LAYOUT_KEY = 'nodeforge.layout';
-const LAYOUT_VERSION = 3;
+const LAYOUT_VERSION = 4;
 
 // Where each panel sits when (re)added to the dock — used to restore a panel after
 // its popped-out window closes.
@@ -32,6 +33,7 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   scripting: { component: 'scripting', title: 'Scripting', ref: 'viewport', direction: 'below' },
   project: { component: 'project', title: 'Project', ref: 'hierarchy', direction: 'below' },
   materials: { component: 'materials', title: 'Material', ref: 'inspector', direction: 'below' },
+  animator: { component: 'animator', title: 'Animator', ref: 'inspector', direction: 'below' },
 };
 
 // Each Dockview panel just renders the existing panel component (they read stores directly).
@@ -42,6 +44,7 @@ const components = {
   project: () => <AssetBrowser />,
   scripting: () => <VisualScriptingPanel />,
   materials: () => <MaterialEditorPanel />,
+  animator: () => <AnimatorEditorPanel />,
 };
 
 /** Re-add a panel to the dock (after its popped-out window closes), avoiding duplicates. */
@@ -107,6 +110,8 @@ function buildDefaultLayout(api: DockviewApi) {
   api.addPanel({ id: 'scripting', component: 'scripting', title: 'Scripting', position: { referencePanel: 'viewport', direction: 'below' } });
   api.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'hierarchy', direction: 'below' } });
   api.addPanel({ id: 'materials', component: 'materials', title: 'Material', position: { referencePanel: 'inspector', direction: 'below' } });
+  // Animator shares the Material group as a tab (both author reusable assets next to the Inspector).
+  api.addPanel({ id: 'animator', component: 'animator', title: 'Animator', position: { referencePanel: 'materials', direction: 'within' } });
 }
 
 /** Rebuild the default layout (wired to the toolbar's View → Reset Layout). */

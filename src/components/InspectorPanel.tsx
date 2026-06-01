@@ -1,10 +1,10 @@
 import { Link2, Palette, Settings2, Unlink } from 'lucide-react';
-import { Suspense, useMemo } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { useEditorStore } from '../store/editorStore';
+import { defaultCharacter, useEditorStore } from '../store/editorStore';
 import { useAssetUrl } from '../three/ModelAsset';
 import { focusWorkspacePanel } from './workspacePanels';
-import type { AnimatorComponent, AssetItem, MaterialDefinition, MeshRendererComponent, PhysicsComponent, TransformComponent, Vector3Tuple } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, MaterialDefinition, MeshRendererComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
 
 const axes = ['X', 'Y', 'Z'] as const;
 
@@ -250,14 +250,31 @@ function ClipOptions({ url }: { url: string }) {
 function AnimatorSection({
   animator,
   modelUrl,
+  meshAsset,
+  compatibleAnimations,
+  controllers,
+  liveStateName,
   onToggle,
   onChange,
+  onControllerChange,
+  onEditController,
 }: {
   animator: AnimatorComponent | undefined;
   modelUrl?: string;
+  /** The Skeletal Mesh asset for the assigned model, if it was split on import. */
+  meshAsset?: SkeletalMeshAsset;
+  /** Animation assets that share this mesh's skeleton — including ones from other characters. */
+  compatibleAnimations: AnimationAsset[];
+  /** Animator Controllers compatible with this mesh's skeleton. */
+  controllers: AnimatorController[];
+  /** Name of the controller's currently-active state during Play (live readout). */
+  liveStateName?: string;
   onToggle: () => void;
   onChange: (patch: Partial<AnimatorComponent>) => void;
+  onControllerChange: (controllerId?: string) => void;
+  onEditController: () => void;
 }) {
+  const usingController = Boolean(animator?.controllerId && controllers.some((c) => c.id === animator?.controllerId));
   return (
     <section className="inspector-section">
       <h3>Animation</h3>
@@ -269,22 +286,216 @@ function AnimatorSection({
             <span>Enabled</span>
             <input type="checkbox" checked={animator?.enabled ?? false} onChange={onToggle} />
           </label>
-          {animator?.enabled && (
+
+          {animator?.enabled && meshAsset && (
+            // A controller (state machine) drives the clip automatically. "None" = play one clip manually.
+            <label className="field-row">
+              <span>Controller</span>
+              <select value={animator.controllerId ?? ''} onChange={(event) => onControllerChange(event.target.value || undefined)}>
+                <option value="">None (single clip)</option>
+                {controllers.map((controller) => (
+                  <option key={controller.id} value={controller.id}>
+                    {controller.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {animator?.enabled && usingController ? (
+            <div className="script-card">
+              <div>
+                <Link2 size={14} aria-hidden />
+                <span>{controllers.find((c) => c.id === animator?.controllerId)?.name}</span>
+              </div>
+              <p>State machine drives the animation.{liveStateName ? ` Now: ${liveStateName}` : ''}</p>
+              <div className="script-actions">
+                <button onClick={onEditController}>Edit</button>
+              </div>
+            </div>
+          ) : animator?.enabled ? (
             <>
-              <label className="field-row">
-                <span>Clip</span>
-                <select value={animator.clip ?? ''} onChange={(event) => onChange({ clip: event.target.value || undefined })}>
-                  <option value="">None (bind pose)</option>
-                  <Suspense fallback={null}>
-                    <ClipOptions url={modelUrl} />
-                  </Suspense>
-                </select>
-              </label>
+              {meshAsset ? (
+                // Rigged model: pick from animations compatible with this mesh's skeleton — clips from
+                // other characters on the same skeleton appear here too (the reuse story).
+                <>
+                  <label className="field-row">
+                    <span>Animation</span>
+                    <select
+                      value={animator.animationId ?? ''}
+                      onChange={(event) => onChange({ animationId: event.target.value || undefined, clip: undefined })}
+                    >
+                      <option value="">None (bind pose)</option>
+                      {compatibleAnimations.map((anim) => (
+                        <option key={anim.id} value={anim.id}>
+                          {anim.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="field-hint">
+                    {compatibleAnimations.length} clip{compatibleAnimations.length === 1 ? '' : 's'} on “{meshAsset.name}”’s skeleton.
+                  </p>
+                </>
+              ) : (
+                // Un-split / legacy model: play a raw clip straight from its GLB.
+                <label className="field-row">
+                  <span>Clip</span>
+                  <select value={animator.clip ?? ''} onChange={(event) => onChange({ clip: event.target.value || undefined })}>
+                    <option value="">None (bind pose)</option>
+                    <Suspense fallback={null}>
+                      <ClipOptions url={modelUrl} />
+                    </Suspense>
+                  </select>
+                </label>
+              )}
               <RangeField label="Speed" value={animator.speed} min={0} max={3} step={0.05} onChange={(speed) => onChange({ speed })} />
               <label className="field-row">
                 <span>Loop</span>
                 <input type="checkbox" checked={animator.loop} onChange={(event) => onChange({ loop: event.target.checked })} />
               </label>
+            </>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Click, then press a key to rebind. Stores the KeyboardEvent.code (e.g. "KeyW", "Space"). */
+function KeyBinding({ label, value, onChange }: { label: string; value: string; onChange: (code: string) => void }) {
+  const [listening, setListening] = useState(false);
+  return (
+    <label className="field-row">
+      <span>{label}</span>
+      <button
+        type="button"
+        className={listening ? 'key-capture listening' : 'key-capture'}
+        onClick={() => setListening(true)}
+        onKeyDown={(event) => {
+          if (!listening) return;
+          event.preventDefault();
+          if (event.code !== 'Escape') onChange(event.code);
+          setListening(false);
+        }}
+        onBlur={() => setListening(false)}
+      >
+        {listening ? 'Press a key…' : value}
+      </button>
+    </label>
+  );
+}
+
+function CharacterSection({
+  objectId,
+  character,
+  onToggle,
+  onChange,
+}: {
+  objectId: string;
+  character: CharacterControllerComponent | undefined;
+  onToggle: () => void;
+  onChange: (patch: Partial<CharacterControllerComponent>) => void;
+}) {
+  const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
+  const setCameraRigTarget = useEditorStore((state) => state.setCameraRigTarget);
+  const rigging = cameraRigTarget === objectId;
+  // Backfill defaults so a controller created before newer fields existed renders without crashing.
+  const cc = character ? { ...defaultCharacter(), ...character } : undefined;
+  const setOffset = (index: number, value: number) => {
+    const next = [...(cc?.cameraOffset ?? [0, 2.6, -6])] as [number, number, number];
+    next[index] = value;
+    onChange({ cameraOffset: next });
+  };
+  const num = (label: string, key: keyof CharacterControllerComponent, step = 0.1) => (
+    <label className="field-row">
+      <span>{label}</span>
+      <input
+        type="number"
+        step={step}
+        value={Number(cc?.[key] ?? 0)}
+        onChange={(event) => onChange({ [key]: Number(event.target.value) } as Partial<CharacterControllerComponent>)}
+      />
+    </label>
+  );
+  return (
+    <section className="inspector-section">
+      <h3>Character Controller</h3>
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={cc?.enabled ?? false} onChange={onToggle} />
+      </label>
+      {cc && cc.enabled && (
+        <>
+          <p className="field-hint">Feeds the animator’s Speed / VerticalSpeed. Click the view in Play to capture the mouse.</p>
+          {num('Move Speed', 'moveSpeed')}
+          {num('Sprint ×', 'sprintMultiplier')}
+          {num('Crouch ×', 'crouchMultiplier')}
+          {num('Jump', 'jumpStrength')}
+          {num('Gravity', 'gravity')}
+          {num('Turn Speed', 'turnSpeed')}
+          {num('Ground Y', 'groundLevel')}
+          <label className="field-row">
+            <span>Flip Facing 180°</span>
+            <input
+              type="checkbox"
+              checked={Math.abs(cc.modelYawOffset) > 0.01}
+              onChange={(event) => onChange({ modelYawOffset: event.target.checked ? Math.PI : 0 })}
+            />
+          </label>
+
+          <h4 className="inspector-subhead">Controls</h4>
+          <KeyBinding label="Forward" value={cc.keyForward} onChange={(keyForward) => onChange({ keyForward })} />
+          <KeyBinding label="Back" value={cc.keyBackward} onChange={(keyBackward) => onChange({ keyBackward })} />
+          <KeyBinding label="Left" value={cc.keyLeft} onChange={(keyLeft) => onChange({ keyLeft })} />
+          <KeyBinding label="Right" value={cc.keyRight} onChange={(keyRight) => onChange({ keyRight })} />
+          <KeyBinding label="Jump" value={cc.keyJump} onChange={(keyJump) => onChange({ keyJump })} />
+          <KeyBinding label="Sprint" value={cc.keySprint} onChange={(keySprint) => onChange({ keySprint })} />
+          <KeyBinding label="Crouch" value={cc.keyCrouch} onChange={(keyCrouch) => onChange({ keyCrouch })} />
+
+          <h4 className="inspector-subhead">Camera</h4>
+          <label className="field-row">
+            <span>Follow Camera</span>
+            <input type="checkbox" checked={cc.cameraFollow} onChange={(event) => onChange({ cameraFollow: event.target.checked })} />
+          </label>
+          {cc.cameraFollow && (
+            <>
+              <button
+                className={rigging ? 'full-button active' : 'full-button'}
+                onClick={() => setCameraRigTarget(rigging ? undefined : objectId)}
+              >
+                {rigging ? 'Done positioning' : 'Position Camera (gizmo)'}
+              </button>
+              <label className="field-row">
+                <span>Side</span>
+                <input type="number" step={0.1} value={cc.cameraOffset[0]} onChange={(event) => setOffset(0, Number(event.target.value))} />
+              </label>
+              <label className="field-row">
+                <span>Up</span>
+                <input type="number" step={0.1} value={cc.cameraOffset[1]} onChange={(event) => setOffset(1, Number(event.target.value))} />
+              </label>
+              <label className="field-row">
+                <span>Back</span>
+                <input type="number" step={0.1} value={cc.cameraOffset[2]} onChange={(event) => setOffset(2, Number(event.target.value))} />
+              </label>
+              {num('Pitch', 'cameraPitch', 0.05)}
+              <label className="field-row">
+                <span>Mouse Look</span>
+                <input type="checkbox" checked={cc.mouseLook} onChange={(event) => onChange({ mouseLook: event.target.checked })} />
+              </label>
+              {cc.mouseLook && (
+                <>
+                  {num('Sensitivity', 'mouseSensitivity', 0.0005)}
+                  <label className="field-row">
+                    <span>Camera-Relative Move</span>
+                    <input
+                      type="checkbox"
+                      checked={cc.cameraRelativeMovement}
+                      onChange={(event) => onChange({ cameraRelativeMovement: event.target.checked })}
+                    />
+                  </label>
+                </>
+              )}
             </>
           )}
         </>
@@ -308,11 +519,11 @@ function PhysicsSection({
         <input type="checkbox" checked={physics.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
       </label>
       <label className="field-row">
-        <span>RigidBody</span>
+        <span>Body</span>
         <select value={physics.bodyType} onChange={(event) => onChange({ bodyType: event.target.value as PhysicsComponent['bodyType'] })}>
-          <option value="dynamic">Dynamic</option>
-          <option value="fixed">Fixed</option>
-          <option value="kinematic">Kinematic</option>
+          <option value="fixed">Static (wall / floor)</option>
+          <option value="dynamic">Dynamic (falls / moves)</option>
+          <option value="kinematic">Kinematic (scripted mover)</option>
         </select>
       </label>
       <label className="field-row">
@@ -350,6 +561,14 @@ export function InspectorPanel() {
   const togglePhysics = useEditorStore((state) => state.togglePhysics);
   const toggleAnimator = useEditorStore((state) => state.toggleAnimator);
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
+  const toggleCharacterController = useEditorStore((state) => state.toggleCharacterController);
+  const updateCharacterController = useEditorStore((state) => state.updateCharacterController);
+  const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
+  const animations = useEditorStore((state) => state.animations);
+  const animatorControllers = useEditorStore((state) => state.animatorControllers);
+  const setObjectAnimatorController = useEditorStore((state) => state.setObjectAnimatorController);
+  const setActiveAnimatorController = useEditorStore((state) => state.setActiveAnimatorController);
+  const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
   const attachScript = useEditorStore((state) => state.attachScript);
   const detachScript = useEditorStore((state) => state.detachScript);
   const blueprints = useEditorStore((state) => state.blueprints);
@@ -358,6 +577,33 @@ export function InspectorPanel() {
   const modelAssets = useMemo(() => assets.filter((asset) => asset.type === 'model'), [assets]);
   const imageAssets = useMemo(() => assets.filter((asset) => asset.type === 'image'), [assets]);
   const animatorModelUrl = useAssetUrl(object?.renderer?.modelAssetId);
+  // The Skeletal Mesh asset (if any) for the assigned model, and the clips compatible with its skeleton.
+  const animatorMeshAsset = useMemo(
+    () =>
+      object?.renderer?.modelAssetId
+        ? skeletalMeshes.find((mesh) => mesh.sourceAssetId === object.renderer!.modelAssetId)
+        : undefined,
+    [skeletalMeshes, object?.renderer?.modelAssetId],
+  );
+  const compatibleAnimations = useMemo(
+    () => (animatorMeshAsset ? animations.filter((anim) => anim.skeletonId === animatorMeshAsset.skeletonId) : []),
+    [animations, animatorMeshAsset],
+  );
+  // Controllers usable on this mesh: skeleton-matched, or skeleton-agnostic (no skeletonId set).
+  const compatibleControllers = useMemo(
+    () =>
+      animatorMeshAsset
+        ? animatorControllers.filter((c) => !c.skeletonId || c.skeletonId === animatorMeshAsset.skeletonId)
+        : [],
+    [animatorControllers, animatorMeshAsset],
+  );
+  // Live state name for the selected object's running controller (Play-mode readout).
+  const liveStateName = useMemo(() => {
+    if (!object?.animator?.controllerId) return undefined;
+    const controller = animatorControllers.find((c) => c.id === object.animator!.controllerId);
+    const stateId = runtimeAnimators[object.id]?.stateId;
+    return controller?.states.find((s) => s.id === stateId)?.name;
+  }, [object, animatorControllers, runtimeAnimators]);
 
   const transformValues = useMemo(
     () =>
@@ -423,18 +669,50 @@ export function InspectorPanel() {
             <AnimatorSection
               animator={object.animator}
               modelUrl={animatorModelUrl}
+              meshAsset={animatorMeshAsset}
+              compatibleAnimations={compatibleAnimations}
+              controllers={compatibleControllers}
+              liveStateName={liveStateName}
               onToggle={() => toggleAnimator(object.id)}
               onChange={(patch) => updateAnimator(object.id, patch)}
+              onControllerChange={(controllerId) => setObjectAnimatorController(object.id, controllerId)}
+              onEditController={() => {
+                if (object.animator?.controllerId) setActiveAnimatorController(object.animator.controllerId);
+                focusWorkspacePanel('animator');
+              }}
             />
           )}
+
+          <CharacterSection
+            objectId={object.id}
+            character={object.character}
+            onToggle={() => toggleCharacterController(object.id)}
+            onChange={(patch) => updateCharacterController(object.id, patch)}
+          />
 
           {object.physics ? (
             <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />
           ) : (
             <section className="inspector-section">
               <h3>Physics</h3>
-              <button className="full-button" onClick={() => togglePhysics(object.id)}>
-                Add RigidBody
+              <p className="field-hint">Static = an immovable wall/floor with collision (doesn’t fall). Dynamic = simulated (falls, gets pushed).</p>
+              <button
+                className="full-button"
+                onClick={() => {
+                  togglePhysics(object.id);
+                  updatePhysics(object.id, { bodyType: 'fixed' });
+                }}
+              >
+                Add Static Collision
+              </button>
+              <button
+                className="full-button"
+                onClick={() => {
+                  togglePhysics(object.id);
+                  updatePhysics(object.id, { bodyType: 'dynamic' });
+                }}
+              >
+                Add Dynamic Body
               </button>
             </section>
           )}

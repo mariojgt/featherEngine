@@ -92,11 +92,24 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.playSound': Volume2,
   'action.setMaterialColor': Palette,
   'action.setMaterialProperty': SlidersHorizontal,
+  'animator.setFloat': Hash,
+  'animator.setBool': ToggleLeft,
+  'animator.setTrigger': Zap,
+  'input.move': Keyboard,
+  'query.grounded': Crosshair,
+  'action.move': Move,
+  'action.jump': Wind,
+  'action.setCamera': Crosshair,
   'material.output': SlidersHorizontal,
   'material.color': Palette,
   'material.scalar': Hash,
   'material.texture': Image,
   'material.mix': GitMerge,
+  'material.multiply': Plus,
+  'material.add': Plus,
+  'material.clamp': ArrowLeftRight,
+  'action.getMaterialColor': Palette,
+  'action.getMaterialProperty': SlidersHorizontal,
   'save.write': Save,
   'save.load': Database,
   'save.clear': Trash2,
@@ -120,6 +133,13 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'material.scalar',
   'material.texture',
   'material.mix',
+  'material.multiply',
+  'material.add',
+  'material.clamp',
+  'action.getMaterialColor',
+  'action.getMaterialProperty',
+  'input.move',
+  'query.grounded',
 ]);
 
 const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string }> => {
@@ -164,6 +184,19 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       ];
     case 'action.print':
       return [{ id: 'message', label: 'Message' }];
+    case 'animator.setFloat':
+    case 'animator.setBool':
+      return [{ id: 'value', label: 'Value' }];
+    case 'action.move':
+      return [
+        { id: 'vector', label: 'Direction' },
+        { id: 'speed', label: 'Speed' },
+      ];
+    case 'action.setCamera':
+      return [
+        { id: 'distance', label: 'Distance' },
+        { id: 'height', label: 'Height' },
+      ];
     case 'material.output':
       return [
         { id: 'baseColor', label: 'Base Color' },
@@ -178,6 +211,18 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'a', label: 'A' },
         { id: 'b', label: 'B' },
         { id: 't', label: 'T' },
+      ];
+    case 'material.multiply':
+    case 'material.add':
+      return [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+      ];
+    case 'material.clamp':
+      return [
+        { id: 'value', label: 'Value' },
+        { id: 'min', label: 'Min' },
+        { id: 'max', label: 'Max' },
       ];
     default:
       return [];

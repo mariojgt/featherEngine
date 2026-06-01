@@ -4,6 +4,8 @@ import { Suspense, useLayoutEffect, useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
+import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
+import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import type { SceneObject, Vector3Tuple } from '../types';
 
@@ -13,6 +15,7 @@ function GameMesh({ object }: { object: SceneObject }) {
   const resolved = useResolvedMaterial(renderer);
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
+  const resolvedAnimator = useResolvedAnimator(object);
   const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
   const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
 
@@ -23,6 +26,22 @@ function GameMesh({ object }: { object: SceneObject }) {
   // Cameras and empties are invisible scaffolding at runtime.
   if (object.kind === 'camera' || object.kind === 'empty' || !renderer || !renderer.enabled) {
     return null;
+  }
+
+  // A skinned model with an enabled animator plays its clips (state machine or single clip).
+  if (object.animator?.enabled && resolvedAnimator.meshUrl) {
+    return (
+      <Suspense fallback={null}>
+        <SkinnedModel
+          meshUrl={resolvedAnimator.meshUrl}
+          clipSourceUrls={resolvedAnimator.clipSourceUrls}
+          clipName={resolvedAnimator.clipName}
+          speed={resolvedAnimator.speed}
+          loop={resolvedAnimator.loop}
+          fade={resolvedAnimator.fade}
+        />
+      </Suspense>
+    );
   }
 
   // An imported model replaces the built-in mesh when one is assigned and resolvable.
@@ -105,7 +124,8 @@ function CameraTarget({ target }: { target: Vector3Tuple }) {
 function GameScene() {
   const objects = useEditorStore(selectActiveObjects);
 
-  // Use the first authored camera object as the game view; otherwise allow free-orbit.
+  // Camera priority: a character's follow camera, then an authored camera object, then free-orbit.
+  const followTarget = useFollowTarget();
   const cameraObject = useMemo(() => objects.find((object) => object.kind === 'camera'), [objects]);
   const cameraPosition = cameraObject?.transform.position ?? ([6, 4.2, 7] as Vector3Tuple);
 
@@ -122,7 +142,9 @@ function GameScene() {
         <Lightformer intensity={0.5} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
       </Environment>
 
-      {cameraObject ? (
+      {followTarget ? (
+        <FollowCamera />
+      ) : cameraObject ? (
         <>
           <PerspectiveCamera makeDefault fov={50} position={cameraPosition} />
           <CameraTarget target={[0, 0, 0]} />
