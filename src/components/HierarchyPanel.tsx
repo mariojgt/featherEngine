@@ -1,6 +1,6 @@
 import { Box, Camera, Circle, FilePlus2, LampDesk, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
-import { useEditorStore } from '../store/editorStore';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type { SceneObject, SceneObjectKind } from '../types';
 
 const objectIcon: Record<SceneObjectKind, typeof Box> = {
@@ -31,7 +31,8 @@ function HierarchyRow({ object }: { object: SceneObject }) {
 }
 
 export function HierarchyPanel() {
-  const sceneObjects = useEditorStore((state) => state.sceneObjects);
+  const sceneObjects = useEditorStore(selectActiveObjects);
+  const activeSceneName = useEditorStore((state) => state.activeScene()?.name ?? 'Scene');
   const createObject = useEditorStore((state) => state.createObject);
   const deleteSelectedObject = useEditorStore((state) => state.deleteSelectedObject);
 
@@ -54,7 +55,7 @@ export function HierarchyPanel() {
 
       <div className="scene-root">
         <span className="root-dot" />
-        <strong>Scene</strong>
+        <strong>{activeSceneName}</strong>
         <small>{sceneObjects.length} objects</small>
       </div>
 

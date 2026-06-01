@@ -94,12 +94,24 @@ export interface SceneObject {
   script?: ScriptGraphComponent;
 }
 
+/** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */
+export interface Scene {
+  id: string;
+  name: string;
+  objects: SceneObject[];
+}
+
 export interface AssetItem {
   id: string;
   name: string;
   type: AssetType;
   size: number;
+  /** Relative path inside the project folder, e.g. "assets/hero.glb". Serialized. */
+  path?: string;
+  /** Runtime-only URL for rendering (blob: on web, asset:// on desktop). NOT serialized. */
   url?: string;
+  /** True when the asset was loaded from a project that had no bytes on disk (e.g. migrated). */
+  unresolved?: boolean;
   createdAt: number;
 }
 
@@ -119,12 +131,50 @@ export interface ProjectGraph {
   edges: Edge[];
 }
 
+/** Current project file format version. */
+export const PROJECT_VERSION = '0.2.0';
+
+/** Scene entry in the project manifest (project.json), pointing at its scene file. */
+export interface SceneRef {
+  id: string;
+  name: string;
+  file: string;
+}
+
+/**
+ * The canonical, fully-loaded project bundle.
+ * - Web export writes this as a single JSON file.
+ * - Desktop writes it split into `project.json` (manifest) + `scenes/<id>.scene.json`.
+ * Both read back into this shape.
+ */
 export interface NodeForgeProject {
   version: string;
-  savedAt: string;
-  scene: {
-    objects: SceneObject[];
-  };
+  name: string;
+  savedAt?: string;
+  activeSceneId: string;
+  scenes: Scene[];
+  assets: AssetItem[];
+  blueprints: ScriptBlueprint[];
+  graphs: ProjectGraph[];
+}
+
+/** Contents of `project.json` — everything except scene objects (which live in scene files). */
+export interface ProjectManifest {
+  version: string;
+  name: string;
+  savedAt?: string;
+  activeSceneId: string;
+  scenes: SceneRef[];
+  assets: AssetItem[];
+  blueprints: ScriptBlueprint[];
+  graphs: ProjectGraph[];
+}
+
+/** The legacy single-scene format (v0.1.0) — migrated on load. */
+export interface LegacyNodeForgeProject {
+  version: string;
+  savedAt?: string;
+  scene: { objects: SceneObject[] };
   assets: AssetItem[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];

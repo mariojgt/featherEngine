@@ -2,7 +2,9 @@ import { Box, Image, Music, Search, Upload, X } from 'lucide-react';
 import clsx from 'clsx';
 import { useRef, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
-import type { AssetItem } from '../types';
+import { useProjectStore } from '../store/projectStore';
+import { getPlatform } from '../platform';
+import type { AssetItem, AssetType } from '../types';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -11,14 +13,22 @@ const formatBytes = (bytes: number) => {
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 };
 
+const detectType = (name: string): AssetType => {
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (ext === 'glb' || ext === 'gltf') return 'model';
+  if (['png', 'jpg', 'jpeg'].includes(ext ?? '')) return 'image';
+  if (['mp3', 'wav'].includes(ext ?? '')) return 'audio';
+  return 'unknown';
+};
+
 function AssetPreview({ asset }: { asset: AssetItem }) {
-  if (asset.type === 'image' && asset.url) {
+  if (asset.type === 'image' && asset.url && !asset.unresolved) {
     return <img src={asset.url} alt="" />;
   }
 
   const Icon = asset.type === 'audio' ? Music : Box;
   return (
-    <div className={clsx('asset-icon-preview', asset.type)}>
+    <div className={clsx('asset-icon-preview', asset.type, asset.unresolved && 'unresolved')}>
       <Icon size={24} aria-hidden />
     </div>
   );
@@ -29,9 +39,33 @@ export function AssetBrowser() {
   const [dragging, setDragging] = useState(false);
   const assets = useEditorStore((state) => state.assets);
   const assetSearch = useEditorStore((state) => state.assetSearch);
-  const addAssets = useEditorStore((state) => state.addAssets);
+  const addAssetItems = useEditorStore((state) => state.addAssetItems);
   const setAssetSearch = useEditorStore((state) => state.setAssetSearch);
   const removeAsset = useEditorStore((state) => state.removeAsset);
+  const projectDir = useProjectStore((state) => state.projectDir);
+
+  const importFiles = async (files: FileList | File[]) => {
+    const platform = await getPlatform();
+    const dir = projectDir ?? 'web';
+    const items: AssetItem[] = [];
+    for (const file of Array.from(files)) {
+      try {
+        const { path, url } = await platform.importAsset(dir, file);
+        items.push({
+          id: `asset-${crypto.randomUUID()}`,
+          name: file.name,
+          type: detectType(file.name),
+          size: file.size,
+          path,
+          url,
+          createdAt: Date.now(),
+        });
+      } catch {
+        // Skip files that fail to import (e.g. permission); other files still load.
+      }
+    }
+    if (items.length) addAssetItems(items);
+  };
 
   const filteredAssets = assets.filter((asset) => asset.name.toLowerCase().includes(assetSearch.toLowerCase()));
 
@@ -46,7 +80,7 @@ export function AssetBrowser() {
       onDrop={(event) => {
         event.preventDefault();
         setDragging(false);
-        addAssets(event.dataTransfer.files);
+        void importFiles(event.dataTransfer.files);
       }}
     >
       <div className="panel-header">
@@ -63,7 +97,7 @@ export function AssetBrowser() {
           hidden
           multiple
           accept=".glb,.gltf,.png,.jpg,.jpeg,.mp3,.wav"
-          onChange={(event) => event.target.files && addAssets(event.target.files)}
+          onChange={(event) => event.target.files && void importFiles(event.target.files)}
         />
       </div>
 

@@ -1,5 +1,8 @@
 import { useEffect } from 'react';
+import { AIChatWidget } from './components/AIChatWidget';
 import { AssetBrowser } from './components/AssetBrowser';
+import { Launcher } from './components/Launcher';
+import { useProjectStore } from './store/projectStore';
 import { HierarchyPanel } from './components/HierarchyPanel';
 import { InspectorPanel } from './components/InspectorPanel';
 import { Toolbar } from './components/Toolbar';
@@ -50,6 +53,12 @@ function RuntimePreviewLoop() {
 }
 
 export default function App() {
+  const hasProject = useProjectStore((state) => state.hasProject);
+
+  if (!hasProject) {
+    return <Launcher />;
+  }
+
   return (
     <div className="editor-shell">
       <RuntimePreviewLoop />
@@ -61,6 +70,7 @@ export default function App() {
         <AssetBrowser />
         <VisualScriptingPanel />
       </main>
+      <AIChatWidget />
     </div>
   );
 }

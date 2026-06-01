@@ -1,9 +1,9 @@
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
-import { ContactShadows, Edges, Environment, OrbitControls, TransformControls } from '@react-three/drei';
+import { ContactShadows, Edges, Environment, Lightformer, OrbitControls, TransformControls } from '@react-three/drei';
 import { Move3D, Rotate3D, Scaling, View } from 'lucide-react';
-import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type * as THREE from 'three';
-import { useEditorStore } from '../store/editorStore';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type { SceneObject } from '../types';
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
@@ -147,7 +147,7 @@ function SceneObjectView({
 }
 
 function SceneContent({ transformMode }: { transformMode: TransformMode }) {
-  const sceneObjects = useEditorStore((state) => state.sceneObjects);
+  const sceneObjects = useEditorStore(selectActiveObjects);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectObject = useEditorStore((state) => state.selectObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
@@ -187,9 +187,13 @@ function SceneContent({ transformMode }: { transformMode: TransformMode }) {
       <color attach="background" args={['#0F1117']} />
       <fog attach="fog" args={['#0F1117', 14, 28]} />
       <ambientLight intensity={0.62} />
-      <Suspense fallback={null}>
-        <Environment preset="city" />
-      </Suspense>
+      <directionalLight position={[6, 9, 4]} intensity={1.1} />
+      {/* Self-contained environment (no external HDRI fetch) so it works offline and under the desktop CSP. */}
+      <Environment resolution={256}>
+        <Lightformer intensity={1.2} position={[0, 6, 0]} scale={[10, 10, 1]} />
+        <Lightformer intensity={0.7} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
+        <Lightformer intensity={0.5} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
+      </Environment>
       <group onPointerMissed={() => selectObject('')}>
         {sceneObjects.map((object) => (
           <SceneObjectView
@@ -217,7 +221,7 @@ function SceneContent({ transformMode }: { transformMode: TransformMode }) {
 }
 
 function ViewportFallback() {
-  const sceneObjects = useEditorStore((state) => state.sceneObjects);
+  const sceneObjects = useEditorStore(selectActiveObjects);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectObject = useEditorStore((state) => state.selectObject);
 

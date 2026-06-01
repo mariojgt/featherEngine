@@ -1,6 +1,6 @@
 import { Background, Controls, MiniMap, ReactFlow, type NodeTypes } from '@xyflow/react';
-import { Boxes, GitBranch, MousePointer2, Plus, Send, Sigma, Waypoints, Zap } from 'lucide-react';
-import { useEditorStore } from '../store/editorStore';
+import { Boxes, GitBranch, LayoutGrid, MousePointer2, Plus, Send, Sigma, Waypoints, Zap } from 'lucide-react';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import type { GraphNodeCategory, NodeForgeNode } from '../types';
 
@@ -155,13 +155,14 @@ export function VisualScriptingPanel() {
   const blueprints = useEditorStore((state) => state.blueprints);
   const activeBlueprint = useEditorStore((state) => state.activeBlueprint());
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
-  const sceneObjects = useEditorStore((state) => state.sceneObjects);
+  const sceneObjects = useEditorStore(selectActiveObjects);
   const setActiveBlueprint = useEditorStore((state) => state.setActiveBlueprint);
   const createBlueprint = useEditorStore((state) => state.createBlueprint);
   const onNodesChange = useEditorStore((state) => state.onNodesChange);
   const onEdgesChange = useEditorStore((state) => state.onEdgesChange);
   const onConnect = useEditorStore((state) => state.onConnect);
   const addGraphNode = useEditorStore((state) => state.addGraphNode);
+  const autoLayoutActiveGraph = useEditorStore((state) => state.autoLayoutActiveGraph);
   const selectedGraphNode = useEditorStore((state) => state.selectedGraphNode());
   const selectGraphNode = useEditorStore((state) => state.selectGraphNode);
   const instanceCount = sceneObjects.filter((object) => object.script?.blueprintId === activeBlueprintId).length;
@@ -198,6 +199,13 @@ export function VisualScriptingPanel() {
               </option>
             ))}
           </select>
+          <button
+            className="icon-button compact"
+            title="Auto-arrange nodes on a grid"
+            onClick={autoLayoutActiveGraph}
+          >
+            <LayoutGrid size={15} aria-hidden />
+          </button>
           <button className="icon-button compact" title="Create reusable Blueprint" onClick={createBlueprint}>
             <Plus size={15} aria-hidden />
           </button>
@@ -240,6 +248,8 @@ export function VisualScriptingPanel() {
             onPaneClick={() => selectGraphNode(undefined)}
             defaultEdgeOptions={{ animated: true, type: 'smoothstep' }}
             connectionLineStyle={{ stroke: '#5B8CFF', strokeWidth: 2 }}
+            snapToGrid
+            snapGrid={[24, 24]}
             fitView
           >
             <MiniMap pannable zoomable nodeStrokeWidth={3} />

@@ -12,7 +12,9 @@ A browser-based 3D game engine editor with a node-based visual scripting system.
 - **Scene Hierarchy & Inspector** — Manage scene objects (cubes, spheres, capsules, planes, lights, cameras) with editable transform, mesh renderer, and physics components.
 - **Asset Browser** — Import and organize models, images, and audio.
 - **Live Runtime Preview** — Hit play to run your graph in real time with keyboard input, per-frame ticks, and event dispatch.
-- **Project Save/Load** — Serialize the full scene, assets, blueprints, and graphs as a portable project file.
+- **Desktop App (Tauri)** — Runs as a native macOS/Windows/Linux app, with real project folders on disk.
+- **Multiple Scenes** — Unity-style scenes per project; switch the active scene, add/duplicate/rename scenes.
+- **Projects on Disk** — New / Open / Save projects as a folder (`project.json` + `scenes/` + `assets/`), with a project launcher. The web build still exports a portable `.nforge` file.
 
 ## Visual Scripting Nodes
 
@@ -59,9 +61,20 @@ Start the dev server (accessible on your local network):
 npm run dev
 ```
 
-Then open the URL printed in the terminal (default [http://localhost:5173](http://localhost:5173)).
+Then open the URL printed in the terminal (default [http://localhost:1420](http://localhost:1420)).
 
-### Build
+### Desktop app (Tauri)
+
+Requires the [Rust toolchain](https://rustup.rs/) and platform build tools (Xcode Command Line Tools on macOS).
+
+```bash
+npm run tauri:dev    # run the native desktop app with live reload
+npm run tauri:build  # package a .app/.dmg (macOS)
+```
+
+In the desktop app, **New Project** scaffolds a folder with `project.json`, a `scenes/` directory, and an `assets/` directory; imported assets are copied into `assets/` and loaded via Tauri's `asset://` protocol.
+
+### Build (web)
 
 ```bash
 npm run build    # type-check + production build into dist/
@@ -86,6 +99,13 @@ src/
     ├── VisualScriptingPanel.tsx     # Node graph editor
     └── NodeForgeGraphNode.tsx       # Custom graph node renderer
 ```
+
+## Contributing
+
+This project ships an **agentic AI chat assistant** that drives the editor through tools.
+Whenever you add a user-facing capability, you must also teach the assistant about it — see
+[docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md) for the checklist. A feature isn't done until the
+AI chat can use it.
 
 ## Status
 

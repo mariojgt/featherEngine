@@ -1,0 +1,83 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { join } from '@tauri-apps/api/path';
+import { open } from '@tauri-apps/plugin-dialog';
+import { exists, mkdir, readTextFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import type { NodeForgeProject, ProjectManifest, Scene } from '../types';
+import { ASSETS_DIR, SCENES_DIR, blankProject, joinProject, splitProject } from '../project/serialize';
+import type { OpenedProject, Platform } from './types';
+
+const MANIFEST = 'project.json';
+
+async function writeProjectFiles(dir: string, project: NodeForgeProject) {
+  const { manifest, sceneFiles } = splitProject(project);
+  await mkdir(await join(dir, SCENES_DIR), { recursive: true });
+  await mkdir(await join(dir, ASSETS_DIR), { recursive: true });
+  await writeTextFile(await join(dir, MANIFEST), JSON.stringify(manifest, null, 2));
+  for (const { scene } of sceneFiles) {
+    await writeTextFile(await join(dir, SCENES_DIR, `${scene.id}.scene.json`), JSON.stringify(scene, null, 2));
+  }
+}
+
+async function readProjectDir(dir: string): Promise<OpenedProject> {
+  const manifest = JSON.parse(await readTextFile(await join(dir, MANIFEST))) as ProjectManifest;
+  const scenes: Scene[] = [];
+  for (const ref of manifest.scenes) {
+    const raw = await readTextFile(await join(dir, ref.file));
+    scenes.push(JSON.parse(raw) as Scene);
+  }
+  const project = joinProject(manifest, scenes);
+  // Resolve asset urls from disk.
+  project.assets = await Promise.all(
+    project.assets.map(async (asset) =>
+      asset.path
+        ? { ...asset, url: convertFileSrc(await join(dir, asset.path)) }
+        : { ...asset, unresolved: true },
+    ),
+  );
+  return { dir, name: manifest.name, project };
+}
+
+export const tauriPlatform: Platform = {
+  isDesktop: true,
+
+  async createProject(name, scaffold) {
+    const parent = await open({ directory: true, multiple: false, title: 'Choose where to create the project' });
+    if (typeof parent !== 'string') return null;
+    const dir = await join(parent, name);
+    await mkdir(dir, { recursive: true });
+    const project = { ...blankProject(name), ...scaffold, name };
+    await writeProjectFiles(dir, project);
+    return { dir, name, project };
+  },
+
+  async openProject() {
+    const dir = await open({ directory: true, multiple: false, title: 'Open NodeForge project' });
+    if (typeof dir !== 'string') return null;
+    return this.openProjectAt(dir);
+  },
+
+  async openProjectAt(dir) {
+    if (!(await exists(await join(dir, MANIFEST)))) {
+      throw new Error('No project.json found in that folder.');
+    }
+    return readProjectDir(dir);
+  },
+
+  async saveProject(dir, project) {
+    await writeProjectFiles(dir, project);
+  },
+
+  async importAsset(dir, file) {
+    const assetsDir = await join(dir, ASSETS_DIR);
+    await mkdir(assetsDir, { recursive: true });
+    const safeName = file.name.replace(/[^\w.\-]+/g, '_');
+    const abs = await join(assetsDir, safeName);
+    await writeFile(abs, new Uint8Array(await file.arrayBuffer()));
+    return { path: `${ASSETS_DIR}/${safeName}`, url: convertFileSrc(abs) };
+  },
+
+  resolveAssetUrl(_dir, path) {
+    // Assets are resolved to absolute urls at load time (readProjectDir); this is a fallback.
+    return convertFileSrc(path);
+  },
+};

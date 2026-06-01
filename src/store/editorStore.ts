@@ -1,28 +1,39 @@
 import type { Edge, OnConnect, OnEdgesChange, OnNodesChange } from '@xyflow/react';
 import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
 import { create } from 'zustand';
-import type {
-  AssetItem,
-  AssetType,
-  ColliderType,
-  GraphNodeCategory,
-  GraphNodeKind,
-  GraphNodeTone,
-  MeshRendererComponent,
-  NodeForgeProject,
-  NodeForgeNode,
-  NodeForgeNodeData,
-  PhysicsComponent,
-  ProjectGraph,
-  RigidBodyType,
-  SceneObject,
-  SceneObjectKind,
-  ScriptBlueprint,
-  TransformComponent,
-  Vector3Tuple,
+import {
+  PROJECT_VERSION,
+  type AssetItem,
+  type AssetType,
+  type ColliderType,
+  type GraphNodeCategory,
+  type GraphNodeKind,
+  type GraphNodeTone,
+  type MeshRendererComponent,
+  type NodeForgeProject,
+  type NodeForgeNode,
+  type NodeForgeNodeData,
+  type PhysicsComponent,
+  type ProjectGraph,
+  type RigidBodyType,
+  type Scene,
+  type SceneObject,
+  type SceneObjectKind,
+  type ScriptBlueprint,
+  type TransformComponent,
+  type Vector3Tuple,
 } from '../types';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+export interface CreateObjectOptions {
+  name?: string;
+  position?: Vector3Tuple;
+  color?: string;
+  physics?: Partial<PhysicsComponent>;
+}
+
+const titleCase = (value: string) => `${value[0].toUpperCase()}${value.slice(1)}`;
 
 const defaultTransform = (position: Vector3Tuple = [0, 0, 0]): TransformComponent => ({
   position,
@@ -94,6 +105,10 @@ const starterObjects: SceneObject[] = [
     transform: defaultTransform([4, 3, 6]),
   },
 ];
+
+const starterSceneId = 'scene-main';
+
+const starterScenes: Scene[] = [{ id: starterSceneId, name: 'Main', objects: starterObjects }];
 
 const nodeToneByCategory: Record<GraphNodeCategory, GraphNodeTone> = {
   Events: 'event',
@@ -340,6 +355,60 @@ const axisIndex = (axis: NodeForgeNodeData['axis']) => {
   return 2;
 };
 
+const LAYOUT_COL = 264;
+const LAYOUT_ROW = 152;
+const LAYOUT_X0 = 48;
+const LAYOUT_Y0 = 48;
+const LAYOUT_GRID = 24;
+
+/** Layered left-to-right layout that follows execution flow and snaps to a grid. */
+const layoutGraphNodes = (nodes: NodeForgeNode[], edges: Edge[]): NodeForgeNode[] => {
+  if (nodes.length === 0) return nodes;
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+  const adjacency = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  edges.forEach((edge) => {
+    if (adjacency.has(edge.source) && indegree.has(edge.target)) {
+      adjacency.get(edge.source)!.push(edge.target);
+      indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+    }
+  });
+
+  // Longest-path layering (Kahn's algorithm); nodes left in a cycle stay in column 0.
+  const layer = new Map(nodes.map((node) => [node.id, 0]));
+  const remaining = new Map(indegree);
+  const queue = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0).map((node) => node.id);
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const current = layer.get(id) ?? 0;
+    (adjacency.get(id) ?? []).forEach((target) => {
+      layer.set(target, Math.max(layer.get(target) ?? 0, current + 1));
+      const next = (remaining.get(target) ?? 0) - 1;
+      remaining.set(target, next);
+      if (next === 0) queue.push(target);
+    });
+  }
+
+  const byLayer = new Map<number, string[]>();
+  nodes.forEach((node) => {
+    const column = layer.get(node.id) ?? 0;
+    byLayer.set(column, [...(byLayer.get(column) ?? []), node.id]);
+  });
+
+  const snap = (value: number) => Math.round(value / LAYOUT_GRID) * LAYOUT_GRID;
+  const orderY = new Map(nodes.map((node) => [node.id, node.position.y]));
+  const positions = new Map<string, { x: number; y: number }>();
+  [...byLayer.keys()]
+    .sort((a, b) => a - b)
+    .forEach((column) => {
+      const ids = byLayer.get(column)!.sort((a, b) => (orderY.get(a) ?? 0) - (orderY.get(b) ?? 0));
+      ids.forEach((id, index) => {
+        positions.set(id, { x: snap(LAYOUT_X0 + column * LAYOUT_COL), y: snap(LAYOUT_Y0 + index * LAYOUT_ROW) });
+      });
+    });
+
+  return nodes.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position }));
+};
+
 const buildGraphRuntime = (graph: ProjectGraph) => {
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, string[]>();
@@ -351,14 +420,16 @@ const buildGraphRuntime = (graph: ProjectGraph) => {
 };
 
 interface EditorState {
-  sceneObjects: SceneObject[];
+  scenes: Scene[];
+  activeSceneId: string;
   selectedObjectId: string;
+  isDirty: boolean;
   assets: AssetItem[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   activeBlueprintId: string;
   isPlaying: boolean;
-  playSnapshot?: Record<string, TransformComponent>;
+  playSnapshot?: { sceneId: string; transforms: Record<string, TransformComponent> };
   runtimeVelocities: Record<string, Vector3Tuple>;
   runtimeKeys: Record<string, boolean>;
   runtimePreviousKeys: Record<string, boolean>;
@@ -367,12 +438,20 @@ interface EditorState {
   runtimeTime: number;
   assetSearch: string;
   selectedGraphNodeId?: string;
+  activeScene: () => Scene | undefined;
   selectedObject: () => SceneObject | undefined;
+  createScene: (name?: string) => string;
+  renameScene: (id: string, name: string) => void;
+  deleteScene: (id: string) => void;
+  setActiveScene: (id: string) => void;
+  duplicateScene: (id: string) => void;
   activeBlueprint: () => ScriptBlueprint | undefined;
   activeGraph: () => ProjectGraph | undefined;
   selectedGraphNode: () => NodeForgeNode | undefined;
   selectObject: (id: string) => void;
   createObject: (kind: SceneObjectKind) => void;
+  createObjectWithProps: (kind: SceneObjectKind, options?: CreateObjectOptions) => string;
+  deleteObject: (id: string) => void;
   deleteSelectedObject: () => void;
   duplicateSelectedObject: () => void;
   renameObject: (id: string, name: string) => void;
@@ -384,10 +463,21 @@ interface EditorState {
   detachScript: (id: string) => void;
   setActiveBlueprint: (id: string) => void;
   createBlueprint: () => void;
+  createBlueprintNamed: (name?: string, description?: string) => { blueprintId: string; graphId: string };
+  addGraphNodeToBlueprint: (
+    blueprintId: string,
+    label: string,
+    category: GraphNodeCategory,
+    data?: Partial<NodeForgeNodeData>,
+    position?: { x: number; y: number },
+  ) => string;
+  connectGraphNodes: (blueprintId: string, sourceId: string, targetId: string) => void;
+  autoLayoutActiveGraph: () => void;
   selectGraphNode: (id?: string) => void;
   updateGraphNodeData: (id: string, patch: Partial<NodeForgeNodeData>) => void;
   fireCustomEvent: (eventName: string) => void;
   addAssets: (files: FileList | File[]) => void;
+  addAssetItems: (items: AssetItem[]) => void;
   setAssetSearch: (value: string) => void;
   removeAsset: (id: string) => void;
   setPlaying: (value: boolean) => void;
@@ -398,6 +488,8 @@ interface EditorState {
   onConnect: OnConnect;
   addGraphNode: (label: string, category: GraphNodeCategory) => void;
   exportProject: () => NodeForgeProject;
+  loadProject: (project: NodeForgeProject) => void;
+  markClean: () => void;
 }
 
 const deleteWithChildren = (objects: SceneObject[], id: string) => {
@@ -417,9 +509,30 @@ const deleteWithChildren = (objects: SceneObject[], id: string) => {
   return objects.filter((object) => !ids.has(object.id));
 };
 
+/** Stable selector for the active scene's objects. Use this in components, not an inline arrow. */
+export const selectActiveObjects = (state: EditorState): SceneObject[] =>
+  state.scenes.find((scene) => scene.id === state.activeSceneId)?.objects ?? [];
+
+/**
+ * Apply `fn` to the active scene's objects and mark the project dirty.
+ * Non-active scenes keep their identity so scene-list consumers don't thrash.
+ * NOTE: do NOT use this in tickRuntime/setPlaying — those must not set isDirty.
+ */
+const mapActiveSceneObjects = (
+  state: EditorState,
+  fn: (objects: SceneObject[]) => SceneObject[],
+): Partial<EditorState> => ({
+  scenes: state.scenes.map((scene) =>
+    scene.id === state.activeSceneId ? { ...scene, objects: fn(scene.objects) } : scene,
+  ),
+  isDirty: true,
+});
+
 export const useEditorStore = create<EditorState>((set, get) => ({
-  sceneObjects: starterObjects,
+  scenes: starterScenes,
+  activeSceneId: starterSceneId,
   selectedObjectId: 'obj-player',
+  isDirty: false,
   assets: [],
   blueprints: starterBlueprints,
   graphs: [{ id: graphId, name: 'Player Controller', nodes: starterNodes, edges: starterEdges }],
@@ -432,7 +545,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeStarted: false,
   runtimeTime: 0,
   assetSearch: '',
-  selectedObject: () => get().sceneObjects.find((object) => object.id === get().selectedObjectId),
+  activeScene: () => get().scenes.find((scene) => scene.id === get().activeSceneId),
+  selectedObject: () => selectActiveObjects(get()).find((object) => object.id === get().selectedObjectId),
+  createScene: (name) => {
+    const id = makeId('scene');
+    set((state) => ({
+      scenes: [...state.scenes, { id, name: name ?? `Scene ${state.scenes.length + 1}`, objects: [] }],
+      isDirty: true,
+    }));
+    return id;
+  },
+  renameScene: (id, name) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => (scene.id === id ? { ...scene, name } : scene)),
+      isDirty: true,
+    })),
+  deleteScene: (id) =>
+    set((state) => {
+      if (state.isPlaying || state.scenes.length <= 1) return state;
+      const remaining = state.scenes.filter((scene) => scene.id !== id);
+      const activeSceneId = state.activeSceneId === id ? remaining[0].id : state.activeSceneId;
+      const selectedObjectId =
+        state.activeSceneId === id ? remaining[0].objects[0]?.id ?? '' : state.selectedObjectId;
+      return { scenes: remaining, activeSceneId, selectedObjectId, isDirty: true };
+    }),
+  setActiveScene: (id) =>
+    set((state) => {
+      if (state.isPlaying || id === state.activeSceneId) return state;
+      const scene = state.scenes.find((item) => item.id === id);
+      if (!scene) return state;
+      return { activeSceneId: id, selectedObjectId: scene.objects[0]?.id ?? '' };
+    }),
+  duplicateScene: (id) => {
+    const newId = makeId('scene');
+    set((state) => {
+      const source = state.scenes.find((scene) => scene.id === id);
+      if (!source) return state;
+      // Keep object ids: they only need to be unique within a scene, and preserving them
+      // keeps parentId links intact. Scenes run independently, so cross-scene id reuse is fine.
+      const copy: Scene = { id: newId, name: `${source.name} Copy`, objects: structuredClone(source.objects) };
+      return { scenes: [...state.scenes, copy], isDirty: true };
+    });
+    return newId;
+  },
   activeBlueprint: () => get().blueprints.find((blueprint) => blueprint.id === get().activeBlueprintId),
   activeGraph: () => {
     const activeBlueprint = get().activeBlueprint();
@@ -452,23 +607,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...defaults,
       } as SceneObject;
 
-      return {
-        sceneObjects: [...state.sceneObjects, next],
-        selectedObjectId: id,
-      };
+      return { ...mapActiveSceneObjects(state, (objects) => [...objects, next]), selectedObjectId: id };
+    }),
+  createObjectWithProps: (kind, options = {}) => {
+    const id = makeId('obj');
+    set((state) => {
+      const defaults = objectDefaults[kind];
+      const next: SceneObject = {
+        id,
+        name: options.name ?? (kind === 'empty' ? 'Empty Object' : titleCase(kind)),
+        kind,
+        transform: defaultTransform(options.position ?? [0, kind === 'plane' ? 0 : 2, 0]),
+        ...defaults,
+      } as SceneObject;
+
+      if (options.color && next.renderer) {
+        next.renderer = { ...next.renderer, color: options.color };
+      }
+      if (options.physics) {
+        next.physics = { ...(next.physics ?? defaultPhysics()), ...options.physics };
+      }
+
+      return { ...mapActiveSceneObjects(state, (objects) => [...objects, next]), selectedObjectId: id };
+    });
+    return id;
+  },
+  deleteObject: (id) =>
+    set((state) => {
+      const objects = selectActiveObjects(state);
+      const remaining = deleteWithChildren(objects, id);
+      const selectedObjectId = remaining.some((object) => object.id === state.selectedObjectId)
+        ? state.selectedObjectId
+        : remaining[0]?.id ?? '';
+      return { ...mapActiveSceneObjects(state, () => remaining), selectedObjectId };
     }),
   deleteSelectedObject: () =>
     set((state) => {
-      if (state.sceneObjects.length <= 1) return state;
-      const remaining = deleteWithChildren(state.sceneObjects, state.selectedObjectId);
-      return {
-        sceneObjects: remaining,
-        selectedObjectId: remaining[0]?.id ?? '',
-      };
+      const objects = selectActiveObjects(state);
+      const remaining = deleteWithChildren(objects, state.selectedObjectId);
+      return { ...mapActiveSceneObjects(state, () => remaining), selectedObjectId: remaining[0]?.id ?? '' };
     }),
   duplicateSelectedObject: () =>
     set((state) => {
-      const selected = state.sceneObjects.find((object) => object.id === state.selectedObjectId);
+      const selected = selectActiveObjects(state).find((object) => object.id === state.selectedObjectId);
       if (!selected) return state;
       const id = makeId('obj');
       const copy: SceneObject = {
@@ -484,62 +665,69 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           ],
         },
       };
-      return {
-        sceneObjects: [...state.sceneObjects, copy],
-        selectedObjectId: id,
-      };
+      return { ...mapActiveSceneObjects(state, (objects) => [...objects, copy]), selectedObjectId: id };
     }),
   renameObject: (id, name) =>
-    set((state) => ({
-      sceneObjects: state.sceneObjects.map((object) => (object.id === id ? { ...object, name } : object)),
-    })),
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id ? { ...object, name } : object)),
+      ),
+    ),
   updateTransform: (id, field, value) =>
-    set((state) => ({
-      sceneObjects: state.sceneObjects.map((object) =>
-        object.id === id ? { ...object, transform: { ...object.transform, [field]: value } } : object,
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id ? { ...object, transform: { ...object.transform, [field]: value } } : object,
+        ),
       ),
-    })),
+    ),
   updateRenderer: (id, patch) =>
-    set((state) => ({
-      sceneObjects: state.sceneObjects.map((object) =>
-        object.id === id && object.renderer
-          ? { ...object, renderer: { ...object.renderer, ...patch } }
-          : object,
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id && object.renderer ? { ...object, renderer: { ...object.renderer, ...patch } } : object,
+        ),
       ),
-    })),
+    ),
   updatePhysics: (id, patch) =>
-    set((state) => ({
-      sceneObjects: state.sceneObjects.map((object) =>
-        object.id === id && object.physics ? { ...object, physics: { ...object.physics, ...patch } } : object,
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id && object.physics ? { ...object, physics: { ...object.physics, ...patch } } : object,
+        ),
       ),
-    })),
+    ),
   togglePhysics: (id) =>
-    set((state) => ({
-      sceneObjects: state.sceneObjects.map((object) => {
-        if (object.id !== id) return object;
-        const current = object.physics ?? defaultPhysics();
-        return { ...object, physics: { ...current, enabled: !current.enabled } };
-      }),
-    })),
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id) return object;
+          const current = object.physics ?? defaultPhysics();
+          return { ...object, physics: { ...current, enabled: !current.enabled } };
+        }),
+      ),
+    ),
   attachScript: (id, nextBlueprintId) =>
     set((state) => {
       const blueprint = state.blueprints.find((item) => item.id === (nextBlueprintId ?? state.activeBlueprintId));
       if (!blueprint) return state;
       return {
-        activeBlueprintId: blueprint.id,
-        sceneObjects: state.sceneObjects.map((object) =>
-          object.id === id
-            ? { ...object, script: { blueprintId: blueprint.id, graphId: blueprint.graphId, enabled: true } }
-            : object,
+        ...mapActiveSceneObjects(state, (objects) =>
+          objects.map((object) =>
+            object.id === id
+              ? { ...object, script: { blueprintId: blueprint.id, graphId: blueprint.graphId, enabled: true } }
+              : object,
+          ),
         ),
+        activeBlueprintId: blueprint.id,
       };
     }),
   detachScript: (id) =>
-    set((state) => ({
-      sceneObjects: state.sceneObjects.map((object) =>
-        object.id === id ? { ...object, script: undefined } : object,
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id ? { ...object, script: undefined } : object)),
       ),
-    })),
+    ),
   setActiveBlueprint: (activeBlueprintId) => set({ activeBlueprintId, selectedGraphNodeId: undefined }),
   createBlueprint: () =>
     set((state) => {
@@ -579,6 +767,103 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         graphs: [...state.graphs, graph],
         activeBlueprintId: newBlueprintId,
         selectedGraphNodeId: graph.nodes[0]?.id,
+        isDirty: true,
+      };
+    }),
+  createBlueprintNamed: (name, description) => {
+    const newGraphId = makeId('graph');
+    const newBlueprintId = makeId('blueprint');
+    set((state) => {
+      const blueprint: ScriptBlueprint = {
+        id: newBlueprintId,
+        name: name ?? `Blueprint ${state.blueprints.length + 1}`,
+        description: description ?? 'Reusable Blueprint asset.',
+        graphId: newGraphId,
+        color: '#3DDC97',
+        createdAt: Date.now(),
+      };
+      const graph: ProjectGraph = {
+        id: newGraphId,
+        name: blueprint.name,
+        nodes: [
+          {
+            id: makeId('node'),
+            type: 'nodeforge',
+            position: { x: 80, y: 80 },
+            data: makeNodeData('Start', 'Events', { hasInput: false }),
+          },
+          {
+            id: makeId('node'),
+            type: 'nodeforge',
+            position: { x: 280, y: 80 },
+            data: makeNodeData('Update', 'Events'),
+          },
+        ],
+        edges: [],
+      };
+
+      return {
+        blueprints: [...state.blueprints, blueprint],
+        graphs: [...state.graphs, graph],
+        activeBlueprintId: newBlueprintId,
+        selectedGraphNodeId: undefined,
+        isDirty: true,
+      };
+    });
+    return { blueprintId: newBlueprintId, graphId: newGraphId };
+  },
+  addGraphNodeToBlueprint: (blueprintId, label, category, data, position) => {
+    const nodeId = makeId('node');
+    set((state) => {
+      const blueprint = state.blueprints.find((item) => item.id === blueprintId);
+      if (!blueprint) return state;
+      return {
+        graphs: state.graphs.map((graph) => {
+          if (graph.id !== blueprint.graphId) return graph;
+          const offset = graph.nodes.length * 38;
+          const node: NodeForgeNode = {
+            id: nodeId,
+            type: 'nodeforge',
+            position: position ?? { x: 80 + (offset % 560), y: 220 + Math.floor(offset / 560) * 112 },
+            data: makeNodeData(label, category, data),
+          };
+          return { ...graph, nodes: [...graph.nodes, node] };
+        }),
+        isDirty: true,
+      };
+    });
+    return nodeId;
+  },
+  connectGraphNodes: (blueprintId, sourceId, targetId) =>
+    set((state) => {
+      const blueprint = state.blueprints.find((item) => item.id === blueprintId);
+      if (!blueprint) return state;
+      return {
+        graphs: state.graphs.map((graph) =>
+          graph.id === blueprint.graphId
+            ? {
+                ...graph,
+                edges: addEdge(
+                  { id: makeId('edge'), source: sourceId, target: targetId, animated: true, type: 'smoothstep' },
+                  graph.edges,
+                ),
+              }
+            : graph,
+        ),
+        isDirty: true,
+      };
+    }),
+  autoLayoutActiveGraph: () =>
+    set((state) => {
+      const blueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
+      if (!blueprint) return state;
+      return {
+        graphs: state.graphs.map((graph) =>
+          graph.id === blueprint.graphId
+            ? { ...graph, nodes: layoutGraphNodes(graph.nodes, graph.edges) }
+            : graph,
+        ),
+        isDirty: true,
       };
     }),
   selectGraphNode: (selectedGraphNodeId) => set({ selectedGraphNodeId }),
@@ -598,6 +883,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
             : graph,
         ),
+        isDirty: true,
       };
     }),
   fireCustomEvent: (eventName) =>
@@ -617,31 +903,52 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           createdAt: Date.now(),
         })),
       ],
+      isDirty: true,
     })),
+  addAssetItems: (items) =>
+    set((state) => ({ assets: [...state.assets, ...items], isDirty: true })),
   setAssetSearch: (assetSearch) => set({ assetSearch }),
   removeAsset: (id) =>
     set((state) => {
       const asset = state.assets.find((item) => item.id === id);
       if (asset?.url) URL.revokeObjectURL(asset.url);
-      return { assets: state.assets.filter((item) => item.id !== id) };
+      return { assets: state.assets.filter((item) => item.id !== id), isDirty: true };
     }),
   setPlaying: (isPlaying) =>
     set((state) => {
       if (isPlaying === state.isPlaying) return state;
       if (isPlaying) {
+        const objects = selectActiveObjects(state);
         return {
           isPlaying,
           runtimeTime: 0,
-          runtimeVelocities: makeRuntimeVelocityMap(state.sceneObjects),
+          runtimeVelocities: makeRuntimeVelocityMap(objects),
           runtimeKeys: {},
           runtimePreviousKeys: {},
           runtimeEventQueue: [],
           runtimeStarted: false,
-          playSnapshot: Object.fromEntries(
-            state.sceneObjects.map((object) => [object.id, structuredClone(object.transform)]),
-          ),
+          playSnapshot: {
+            sceneId: state.activeSceneId,
+            transforms: Object.fromEntries(objects.map((object) => [object.id, structuredClone(object.transform)])),
+          },
         };
       }
+
+      // Restore the snapshot into the scene it was taken from (does NOT mark dirty).
+      const snapshot = state.playSnapshot;
+      const scenes = snapshot
+        ? state.scenes.map((scene) =>
+            scene.id === snapshot.sceneId
+              ? {
+                  ...scene,
+                  objects: scene.objects.map((object) => ({
+                    ...object,
+                    transform: snapshot.transforms[object.id] ?? object.transform,
+                  })),
+                }
+              : scene,
+          )
+        : state.scenes;
 
       return {
         isPlaying,
@@ -651,10 +958,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimePreviousKeys: {},
         runtimeEventQueue: [],
         runtimeStarted: false,
-        sceneObjects: state.sceneObjects.map((object) => ({
-          ...object,
-          transform: state.playSnapshot?.[object.id] ?? object.transform,
-        })),
+        scenes,
         playSnapshot: undefined,
       };
     }),
@@ -666,11 +970,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tickRuntime: (delta) =>
     set((state) => {
       if (!state.isPlaying) return state;
+      const activeObjects = selectActiveObjects(state);
       const graphRuntimes = new Map(
         state.graphs.map((graph) => [graph.id, { graph, ...buildGraphRuntime(graph) }]),
       );
       const runtimeTime = state.runtimeTime + delta;
-      const groundHeight = getGroundHeight(state.sceneObjects);
+      const groundHeight = getGroundHeight(activeObjects);
       const nextVelocities = { ...state.runtimeVelocities };
       const firedEvents = new Set(state.runtimeEventQueue.map((eventName) => eventName.toLowerCase()));
       const currentKeys = state.runtimeKeys;
@@ -682,7 +987,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimePreviousKeys: { ...currentKeys },
         runtimeEventQueue: [],
         runtimeStarted: true,
-        sceneObjects: state.sceneObjects.map((object) => {
+        scenes: state.scenes.map((scene) =>
+          scene.id !== state.activeSceneId
+            ? scene
+            : {
+                ...scene,
+                objects: activeObjects.map((object) => {
           const position = [...object.transform.position] as Vector3Tuple;
           const rotation = [...object.transform.rotation] as Vector3Tuple;
           const scale = [...object.transform.scale] as Vector3Tuple;
@@ -776,27 +1086,34 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             transform: { position, rotation, scale },
               }
             : object;
-        }),
+                }),
+              },
+        ),
       };
     }),
   onNodesChange: (changes) =>
     set((state) => {
       const activeBlueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
       if (!activeBlueprint) return state;
+      // Pure selection/dimension changes shouldn't mark the project dirty.
+      const dirtied = changes.some((change) => change.type !== 'select' && change.type !== 'dimensions');
       return {
         graphs: state.graphs.map((graph) =>
           graph.id === activeBlueprint.graphId ? { ...graph, nodes: applyNodeChanges(changes, graph.nodes) } : graph,
         ),
+        ...(dirtied ? { isDirty: true } : {}),
       };
     }),
   onEdgesChange: (changes) =>
     set((state) => {
       const activeBlueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
       if (!activeBlueprint) return state;
+      const dirtied = changes.some((change) => change.type !== 'select');
       return {
         graphs: state.graphs.map((graph) =>
           graph.id === activeBlueprint.graphId ? { ...graph, edges: applyEdgeChanges(changes, graph.edges) } : graph,
         ),
+        ...(dirtied ? { isDirty: true } : {}),
       };
     }),
   onConnect: (connection) =>
@@ -809,6 +1126,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ? { ...graph, edges: addEdge({ ...connection, animated: true, type: 'smoothstep' }, graph.edges) }
             : graph,
         ),
+        isDirty: true,
       };
     }),
   addGraphNode: (label, category) =>
@@ -830,16 +1148,48 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           return { ...graph, nodes: [...graph.nodes, node] };
         }),
         selectedGraphNodeId,
+        isDirty: true,
       };
     }),
-  exportProject: () => ({
-    version: '0.1.0',
-    savedAt: new Date().toISOString(),
-    scene: {
-      objects: get().sceneObjects,
-    },
-    assets: get().assets.map(({ url: _url, ...asset }) => asset),
-    blueprints: get().blueprints,
-    graphs: get().graphs,
-  }),
+  exportProject: () => {
+    const state = get();
+    return {
+      version: PROJECT_VERSION,
+      name: 'Untitled Project',
+      savedAt: new Date().toISOString(),
+      activeSceneId: state.activeSceneId,
+      scenes: state.scenes,
+      assets: state.assets.map(({ url: _url, ...asset }) => asset),
+      blueprints: state.blueprints,
+      graphs: state.graphs,
+    };
+  },
+  loadProject: (project) =>
+    set(() => {
+      const scenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
+      const activeSceneId = scenes.some((scene) => scene.id === project.activeSceneId)
+        ? project.activeSceneId
+        : scenes[0].id;
+      const activeScene = scenes.find((scene) => scene.id === activeSceneId)!;
+      return {
+        scenes,
+        activeSceneId,
+        selectedObjectId: activeScene.objects[0]?.id ?? '',
+        assets: project.assets,
+        blueprints: project.blueprints,
+        graphs: project.graphs,
+        activeBlueprintId: project.blueprints[0]?.id ?? '',
+        selectedGraphNodeId: undefined,
+        isPlaying: false,
+        playSnapshot: undefined,
+        runtimeVelocities: {},
+        runtimeKeys: {},
+        runtimePreviousKeys: {},
+        runtimeEventQueue: [],
+        runtimeStarted: false,
+        runtimeTime: 0,
+        isDirty: false,
+      };
+    }),
+  markClean: () => set({ isDirty: false }),
 }));
