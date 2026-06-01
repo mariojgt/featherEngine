@@ -29,6 +29,9 @@ export function buildSceneSnapshot() {
     character: object.character?.enabled
       ? { moveSpeed: object.character.moveSpeed, jumpStrength: object.character.jumpStrength, cameraFollow: object.character.cameraFollow }
       : null,
+    attachment: object.attachment
+      ? { targetObjectId: object.attachment.targetObjectId, boneName: object.attachment.boneName, socketName: object.attachment.socketName ?? null }
+      : null,
   }));
 
   const assets = state.assets.map((asset) => ({
@@ -129,6 +132,13 @@ export function buildSceneSnapshot() {
 
   // Skeletal-animation assets. Importing a rigged model splits it into a skeleton, a skeletal mesh,
   // and one animation per clip; animations whose skeletonId matches a mesh's skeletonId play on it.
+  // Bone names are omitted to keep the snapshot lean — use the list_bones tool to fetch them on demand.
+  const skeletons = state.skeletons.map((skeleton) => ({
+    id: skeleton.id,
+    name: skeleton.name,
+    boneCount: skeleton.boneNames.length,
+    sockets: (skeleton.sockets ?? []).map((socket) => ({ name: socket.name, boneName: socket.boneName })),
+  }));
   const skeletalMeshes = state.skeletalMeshes.map((mesh) => ({
     id: mesh.id,
     name: mesh.name,
@@ -167,6 +177,7 @@ export function buildSceneSnapshot() {
     variables,
     dataAssets,
     materials,
+    skeletons,
     skeletalMeshes,
     animations,
     animatorControllers,
