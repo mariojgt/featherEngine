@@ -23,6 +23,7 @@ import { getPlatform } from '../platform';
 import { fbxToGlb } from '../three/convertModel';
 import { inspectModel, type ModelInspection } from '../three/inspectModel';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
+import { SkeletonEditorModal } from './SkeletonEditorModal';
 import { ASSET_DRAG_TYPE, assetDrag, hasDragType } from './dragShared';
 import { focusWorkspacePanel } from './workspacePanels';
 import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset } from '../types';
@@ -110,6 +111,7 @@ export function AssetBrowser() {
   const [draft, setDraft] = useState('');
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
+  const [editSkeletonId, setEditSkeletonId] = useState<string | undefined>(undefined);
   // Multi-select (composite `${kind}:${id}` keys) and the item currently hovered as a drop target.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dropItemId, setDropItemId] = useState<string | null>(null);
@@ -558,10 +560,16 @@ export function AssetBrowser() {
 
   // Skeleton / Skeletal Mesh / Animation are derived on import — shown read-only (rename/delete via re-import).
   const renderSkeleton = (skeleton: SkeletonAsset, depth: number) => (
-    <div key={skeleton.id} className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} title={`skeleton · ${skeleton.boneNames.length} bones`}>
+    <button
+      key={skeleton.id}
+      className="tree-row"
+      style={{ paddingLeft: 8 + depth * 14 }}
+      title={`skeleton · ${skeleton.boneNames.length} bones · ${skeleton.sockets?.length ?? 0} sockets — open editor`}
+      onClick={() => setEditSkeletonId(skeleton.id)}
+    >
       <Bone size={14} style={{ color: '#C4B5FD' }} aria-hidden />
       <span className="tree-label">{skeleton.name}</span>
-    </div>
+    </button>
   );
 
   const renderSkeletalMesh = (mesh: SkeletalMeshAsset, depth: number) => (
@@ -792,6 +800,7 @@ export function AssetBrowser() {
       </div>
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
+      {editSkeletonId && <SkeletonEditorModal skeletonId={editSkeletonId} onClose={() => setEditSkeletonId(undefined)} />}
     </section>
   );
 }

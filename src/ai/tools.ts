@@ -60,6 +60,8 @@ const NODE_LABELS = [
   'Set Anim Float',
   'Set Anim Bool',
   'Set Anim Trigger',
+  'Get Anim Param',
+  'Get Anim State',
   'Get Move Input',
   'Move',
   'Jump',
@@ -105,6 +107,8 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Set Anim Float': 'Runtime',
   'Set Anim Bool': 'Runtime',
   'Set Anim Trigger': 'Runtime',
+  'Get Anim Param': 'Runtime',
+  'Get Anim State': 'Runtime',
   'Get Move Input': 'Runtime',
   Move: 'Runtime',
   Jump: 'Runtime',
@@ -362,7 +366,9 @@ export const engineTools = {
       controllerId: z.string(),
       name: z.string(),
       type: z.enum(['float', 'bool', 'trigger']),
-      source: z.enum(['manual', 'speed', 'verticalSpeed', 'moving', 'variable']).optional(),
+      source: z
+        .enum(['manual', 'speed', 'verticalSpeed', 'moving', 'crouching', 'grounded', 'rolling', 'attacking', 'weaponEquipped', 'variable'])
+        .optional(),
       variableId: z.string().optional(),
     }),
     execute: async ({ controllerId, name, type, source, variableId }) => {
@@ -390,9 +396,32 @@ export const engineTools = {
     },
   }),
 
+  update_animator_state: tool({
+    description:
+      'Edit an existing animator state: change its clip (animationId), name, speed, loop, and/or make it the default (entry) state with makeDefault:true.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      stateId: z.string(),
+      name: z.string().optional(),
+      animationId: z.string().optional(),
+      speed: z.number().optional(),
+      loop: z.boolean().optional(),
+      makeDefault: z.boolean().optional(),
+    }),
+    execute: async ({ controllerId, stateId, makeDefault, ...patch }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      if (!controller.states.some((s) => s.id === stateId)) return `No state ${stateId} in controller.`;
+      if (patch.animationId && !store().animations.some((a) => a.id === patch.animationId)) return `No animation asset with id ${patch.animationId}.`;
+      if (Object.keys(patch).length) store().updateAnimatorState(controllerId, stateId, patch);
+      if (makeDefault) store().updateAnimatorController(controllerId, { defaultStateId: stateId });
+      return `Updated state ${stateId}.`;
+    },
+  }),
+
   add_animator_transition: tool({
     description:
-      'Add a transition between states. from is a stateId or "any". Conditions are ANDed; each compares a parameterId against a value with op (==,!=,>,>=,<,<=). duration is the crossfade seconds. Returns transitionId.',
+      'Add a transition between states. from is a stateId or "any". Conditions are ANDed; each compares a parameterId against a value with op (==,!=,>,>=,<,<=). duration is the crossfade seconds. Set hasExitTime:true for one-shot states (e.g. Jump Start/Land) so the transition only fires after the clip finishes. Returns transitionId.',
     inputSchema: z.object({
       controllerId: z.string(),
       from: z.string().describe('Source stateId, or "any".'),
@@ -407,13 +436,15 @@ export const engineTools = {
         )
         .optional(),
       duration: z.number().optional(),
+      hasExitTime: z.boolean().optional(),
+      exitTime: z.number().optional().describe('Fraction 0–1 of the clip that must play before leaving (default 1 = clip end).'),
     }),
-    execute: async ({ controllerId, from, to, conditions, duration }) => {
+    execute: async ({ controllerId, from, to, conditions, duration, hasExitTime, exitTime }) => {
       const controller = findController(controllerId);
       if (!controller) return `No controller with id ${controllerId}.`;
       if (from !== 'any' && !controller.states.some((s) => s.id === from)) return `No state ${from} in controller.`;
       if (!controller.states.some((s) => s.id === to)) return `No state ${to} in controller.`;
-      const id = store().addAnimatorTransition(controllerId, { from, to, conditions, duration });
+      const id = store().addAnimatorTransition(controllerId, { from, to, conditions, duration, hasExitTime, exitTime });
       return id ? `Added transition ${from} → ${to} (${id}).` : `Couldn't add transition.`;
     },
   }),
@@ -452,6 +483,10 @@ export const engineTools = {
       keyJump: z.string().optional(),
       keySprint: z.string().optional(),
       keyCrouch: z.string().optional(),
+      keyRoll: z.string().optional(),
+      rollSpeed: z.number().optional(),
+      rollDuration: z.number().optional(),
+      keyAttack: z.string().optional(),
       // Camera.
       cameraFollow: z.boolean().optional(),
       cameraOffset: vec3.optional().describe('Resting camera position relative to the pawn: [side, up, back]. Negative Z is behind a +Z-forward model.'),
@@ -496,6 +531,77 @@ export const engineTools = {
       return id
         ? `Created character pawn "${findObject(id)?.name}" (objectId ${id}) with a locomotion controller and character controller. Press Play and use WASD.`
         : `Couldn't build a pawn — no usable locomotion clips found on that skeleton.`;
+    },
+  }),
+
+  list_bones: tool({
+    description: 'List the bone (socket) names of a rigged character object\'s skeleton, so you can attach items to one. Pass the objectId of an object that renders a skinned model.',
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      const mesh = store().skeletalMeshes.find((m) => m.sourceAssetId === object.renderer?.modelAssetId);
+      const skeleton = mesh ? store().skeletons.find((s) => s.id === mesh.skeletonId) : undefined;
+      if (!skeleton) return `Object ${objectId} doesn't render a rigged model (no skeleton).`;
+      return JSON.stringify(skeleton.boneNames);
+    },
+  }),
+
+  attach_to_bone: tool({
+    description:
+      'Attach an object to a bone "socket" of a character\'s animated skeleton (e.g. a sword to "hand_r"), so it follows the bone. The object\'s transform becomes the offset from the bone — use update_transform to fine-tune position/rotation. Pass no targetObjectId to detach. Use list_bones to find bone names.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      targetObjectId: z.string().optional().describe('The character to attach to, or omit/empty to detach.'),
+      boneName: z.string().optional(),
+    }),
+    execute: async ({ objectId, targetObjectId, boneName }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      if (!targetObjectId) {
+        store().setAttachment(objectId, undefined);
+        return `Detached ${objectId}.`;
+      }
+      const target = findObject(targetObjectId);
+      if (!target) return `No target object with id ${targetObjectId}.`;
+      const mesh = store().skeletalMeshes.find((m) => m.sourceAssetId === target.renderer?.modelAssetId);
+      const skeleton = mesh ? store().skeletons.find((s) => s.id === mesh.skeletonId) : undefined;
+      if (!skeleton) return `Target ${targetObjectId} isn't a rigged character.`;
+      const bone = boneName && skeleton.boneNames.includes(boneName) ? boneName : skeleton.boneNames[0];
+      store().setAttachment(objectId, { targetObjectId, boneName: bone });
+      return `Attached ${objectId} to ${targetObjectId} bone "${bone}".`;
+    },
+  }),
+
+  add_skeleton_socket: tool({
+    description:
+      'Add a reusable named socket (a bone + offset) to a Skeleton asset, Unreal-style. Attachments can then target it by name with attach_to_socket, and editing the socket moves everything attached to it. Returns the socketId. skeletonId comes from the snapshot\'s skeletalMeshes[].skeletonId; use list_bones on a character to find bone names.',
+    inputSchema: z.object({ skeletonId: z.string(), name: z.string(), boneName: z.string() }),
+    execute: async ({ skeletonId, name, boneName }) => {
+      const skeleton = store().skeletons.find((s) => s.id === skeletonId);
+      if (!skeleton) return `No skeleton with id ${skeletonId}.`;
+      if (!skeleton.boneNames.includes(boneName)) return `Bone "${boneName}" not on this skeleton.`;
+      const id = store().addSkeletonSocket(skeletonId, { name, boneName });
+      return id ? `Added socket "${name}" on ${boneName}.` : `Couldn't add socket.`;
+    },
+  }),
+
+  attach_to_socket: tool({
+    description:
+      'Attach an object to a named skeleton socket on a character (created with add_skeleton_socket). Like attach_to_bone but references the reusable socket by name so its offset is shared. Pass no socketName to detach.',
+    inputSchema: z.object({ objectId: z.string(), targetObjectId: z.string().optional(), socketName: z.string().optional() }),
+    execute: async ({ objectId, targetObjectId, socketName }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      if (!targetObjectId || !socketName) {
+        store().setAttachment(objectId, undefined);
+        return `Detached ${objectId}.`;
+      }
+      const target = findObject(targetObjectId);
+      const mesh = target && store().skeletalMeshes.find((m) => m.sourceAssetId === target.renderer?.modelAssetId);
+      const skeleton = mesh ? store().skeletons.find((s) => s.id === mesh.skeletonId) : undefined;
+      const socket = skeleton?.sockets?.find((s) => s.name === socketName);
+      if (!socket) return `No socket "${socketName}" on ${targetObjectId}'s skeleton.`;
+      store().setAttachment(objectId, { targetObjectId, boneName: socket.boneName, socketName });
+      return `Attached ${objectId} to socket "${socketName}".`;
     },
   }),
 

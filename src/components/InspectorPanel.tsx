@@ -1,9 +1,10 @@
 import { Link2, Palette, Settings2, Unlink } from 'lucide-react';
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { defaultCharacter, useEditorStore } from '../store/editorStore';
+import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useAssetUrl } from '../three/ModelAsset';
 import { focusWorkspacePanel } from './workspacePanels';
+import { SocketPickerModal } from './SocketPickerModal';
 import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, MaterialDefinition, MeshRendererComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
 
 const axes = ['X', 'Y', 'Z'] as const;
@@ -362,25 +363,146 @@ function AnimatorSection({
   );
 }
 
-/** Click, then press a key to rebind. Stores the KeyboardEvent.code (e.g. "KeyW", "Space"). */
+/** Attach this object to a bone "socket" of a skinned character — its Transform becomes the offset. */
+function AttachmentSection({ objectId }: { objectId: string }) {
+  const sceneObjects = useEditorStore(selectActiveObjects);
+  const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
+  const skeletons = useEditorStore((state) => state.skeletons);
+  const setAttachment = useEditorStore((state) => state.setAttachment);
+  const [picking, setPicking] = useState(false);
+  const object = sceneObjects.find((o) => o.id === objectId);
+  const attachment = object?.attachment;
+
+  // Candidate targets: other objects that render a skinned (rigged) mesh, so they expose bones.
+  const targets = sceneObjects.filter(
+    (o) => o.id !== objectId && o.renderer?.modelAssetId && skeletalMeshes.some((m) => m.sourceAssetId === o.renderer!.modelAssetId),
+  );
+  const targetMesh = attachment ? skeletalMeshes.find((m) => m.sourceAssetId === sceneObjects.find((o) => o.id === attachment.targetObjectId)?.renderer?.modelAssetId) : undefined;
+  const targetSkeleton = targetMesh ? skeletons.find((s) => s.id === targetMesh.skeletonId) : undefined;
+  const bones = targetSkeleton?.boneNames ?? [];
+  const sockets = targetSkeleton?.sockets ?? [];
+
+  return (
+    <section className="inspector-section">
+      <h3>Attachment (bone socket)</h3>
+      {targets.length === 0 && !attachment ? (
+        <p className="field-hint">Add a rigged character to the scene to attach this object to one of its bones.</p>
+      ) : (
+        <>
+          <label className="field-row">
+            <span>Attach to</span>
+            <select
+              value={attachment?.targetObjectId ?? ''}
+              onChange={(event) => {
+                const targetObjectId = event.target.value;
+                if (!targetObjectId) return setAttachment(objectId, undefined);
+                const mesh = skeletalMeshes.find((m) => m.sourceAssetId === sceneObjects.find((o) => o.id === targetObjectId)?.renderer?.modelAssetId);
+                const firstBone = mesh ? skeletons.find((s) => s.id === mesh.skeletonId)?.boneNames[0] : undefined;
+                setAttachment(objectId, { targetObjectId, boneName: attachment?.boneName ?? firstBone ?? '' });
+              }}
+            >
+              <option value="">None</option>
+              {targets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {attachment && (
+            <>
+              {sockets.length > 0 && (
+                <label className="field-row">
+                  <span>Socket</span>
+                  <select
+                    value={attachment.socketName ?? ''}
+                    onChange={(event) => setAttachment(objectId, { ...attachment, socketName: event.target.value || undefined })}
+                  >
+                    <option value="">None (raw bone)</option>
+                    {sockets.map((socket) => (
+                      <option key={socket.id} value={socket.name}>
+                        {socket.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="field-row">
+                <span>Bone</span>
+                <select value={attachment.boneName} onChange={(event) => setAttachment(objectId, { ...attachment, boneName: event.target.value })}>
+                  {bones.map((bone) => (
+                    <option key={bone} value={bone}>
+                      {bone}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="full-button" onClick={() => setPicking(true)}>
+                Pick on skeleton…
+              </button>
+              <p className="field-hint">The Transform above is the offset from the bone. {bones.length} bones available.</p>
+            </>
+          )}
+        </>
+      )}
+      {picking && attachment && (
+        <SocketPickerModal
+          targetObjectId={attachment.targetObjectId}
+          value={attachment.boneName}
+          onPick={(boneName) => {
+            setAttachment(objectId, { ...attachment, boneName });
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
+    </section>
+  );
+}
+
+/** A friendly label for a key/mouse binding code. */
+function bindingLabel(code: string): string {
+  if (code === 'Mouse0') return 'Left Click';
+  if (code === 'Mouse1') return 'Middle Click';
+  if (code === 'Mouse2') return 'Right Click';
+  return code;
+}
+
+/** Click, then press a key OR mouse button to rebind. Stores the code (e.g. "KeyW", "Space", "Mouse0"). */
 function KeyBinding({ label, value, onChange }: { label: string; value: string; onChange: (code: string) => void }) {
   const [listening, setListening] = useState(false);
+
+  useEffect(() => {
+    if (!listening) return;
+    const onKey = (event: KeyboardEvent) => {
+      event.preventDefault();
+      if (event.code !== 'Escape') onChange(event.code);
+      setListening(false);
+    };
+    const onMouse = (event: MouseEvent) => {
+      event.preventDefault();
+      onChange(`Mouse${event.button}`);
+      setListening(false);
+    };
+    // Defer attaching mouse capture so the click that started listening isn't captured itself.
+    const id = window.setTimeout(() => {
+      window.addEventListener('keydown', onKey);
+      window.addEventListener('mousedown', onMouse);
+      window.addEventListener('contextmenu', onMouse);
+    }, 0);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onMouse);
+      window.removeEventListener('contextmenu', onMouse);
+    };
+  }, [listening, onChange]);
+
   return (
     <label className="field-row">
       <span>{label}</span>
-      <button
-        type="button"
-        className={listening ? 'key-capture listening' : 'key-capture'}
-        onClick={() => setListening(true)}
-        onKeyDown={(event) => {
-          if (!listening) return;
-          event.preventDefault();
-          if (event.code !== 'Escape') onChange(event.code);
-          setListening(false);
-        }}
-        onBlur={() => setListening(false)}
-      >
-        {listening ? 'Press a key…' : value}
+      <button type="button" className={listening ? 'key-capture listening' : 'key-capture'} onClick={() => setListening(true)}>
+        {listening ? 'Press key / click…' : bindingLabel(value)}
       </button>
     </label>
   );
@@ -431,6 +553,7 @@ function CharacterSection({
           {num('Move Speed', 'moveSpeed')}
           {num('Sprint ×', 'sprintMultiplier')}
           {num('Crouch ×', 'crouchMultiplier')}
+          {num('Roll Speed', 'rollSpeed')}
           {num('Jump', 'jumpStrength')}
           {num('Gravity', 'gravity')}
           {num('Turn Speed', 'turnSpeed')}
@@ -452,6 +575,8 @@ function CharacterSection({
           <KeyBinding label="Jump" value={cc.keyJump} onChange={(keyJump) => onChange({ keyJump })} />
           <KeyBinding label="Sprint" value={cc.keySprint} onChange={(keySprint) => onChange({ keySprint })} />
           <KeyBinding label="Crouch" value={cc.keyCrouch} onChange={(keyCrouch) => onChange({ keyCrouch })} />
+          <KeyBinding label="Roll" value={cc.keyRoll} onChange={(keyRoll) => onChange({ keyRoll })} />
+          <KeyBinding label="Attack" value={cc.keyAttack} onChange={(keyAttack) => onChange({ keyAttack })} />
 
           <h4 className="inspector-subhead">Camera</h4>
           <label className="field-row">
@@ -689,6 +814,8 @@ export function InspectorPanel() {
             onToggle={() => toggleCharacterController(object.id)}
             onChange={(patch) => updateCharacterController(object.id, patch)}
           />
+
+          <AttachmentSection objectId={object.id} />
 
           {object.physics ? (
             <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />

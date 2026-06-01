@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { useEditorStore } from '../store/editorStore';
+import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
 import type { SceneObject } from '../types';
 
 /**
@@ -22,6 +23,7 @@ export function SkinnedModel({
   speed = 1,
   loop = true,
   fade = 0.2,
+  registerId,
 }: {
   meshUrl: string;
   /** Distinct GLB urls whose clips should be available on the mixer (all the controller's states). */
@@ -31,6 +33,8 @@ export function SkinnedModel({
   loop?: boolean;
   /** Crossfade seconds when the clip changes (state-machine transition duration). */
   fade?: number;
+  /** Object id to register this clone under, so bone-socket attachments can follow its bones. */
+  registerId?: string;
 }) {
   const { scene } = useGLTF(meshUrl);
   // Load every clip source. A stable, de-duped list keeps the loader from re-suspending each frame.
@@ -69,6 +73,13 @@ export function SkinnedModel({
   useEffect(() => {
     mixer.timeScale = speed;
   }, [mixer, speed]);
+
+  // Publish this clone's bones so socket attachments (sword, etc.) can follow them.
+  useEffect(() => {
+    if (!registerId) return;
+    registerSkinnedRoot(registerId, model);
+    return () => unregisterSkinnedRoot(registerId, model);
+  }, [registerId, model]);
 
   return <primitive object={model} />;
 }

@@ -31,6 +31,7 @@ import {
   type SceneObjectKind,
   type ScriptBlueprint,
   type SkeletonAsset,
+  type SkeletonSocket,
   type SkeletalMeshAsset,
   type AnimationAsset,
   type AnimatorController,
@@ -57,6 +58,8 @@ export interface RuntimeAnimator {
   params: Record<string, number | boolean>;
   /** Crossfade seconds for the transition that produced the current state (read by SkinnedModel). */
   fade: number;
+  /** Seconds elapsed in the current state — drives exit-time transitions (one-shot clips). */
+  time: number;
 }
 
 /** A factory for a fresh default animator component (used when one is first enabled). */
@@ -88,6 +91,10 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   keyJump: 'Space',
   keySprint: 'ShiftLeft',
   keyCrouch: 'KeyC',
+  keyRoll: 'KeyQ',
+  rollSpeed: 7,
+  rollDuration: 0.7,
+  keyAttack: 'Mouse0',
   cameraFollow: true,
   // Behind (-Z) and above a +Z-forward character.
   cameraOffset: [0, 2.6, -6],
@@ -339,6 +346,8 @@ const nodeDescriptions: Record<string, string> = {
   'Set Anim Float': 'Writes a float into the object\'s animator parameter (e.g. Speed) to drive its state machine.',
   'Set Anim Bool': 'Writes a true/false into the object\'s animator parameter.',
   'Set Anim Trigger': 'Fires a one-shot animator trigger (e.g. Jump, Attack) consumed by a transition.',
+  'Get Anim Param': 'Reads the current value of an animator parameter (float/bool) back into the blueprint.',
+  'Get Anim State': 'Outputs the name of the animator\'s currently-active state, for the blueprint to react to.',
   'Get Move Input': 'Outputs a world-space move direction (Vector3) from WASD / arrow keys.',
   Move: 'Moves the owner along the ground by a direction vector at a speed, turning it to face travel.',
   Jump: 'Makes the owning character jump (needs a Character Controller for height/gravity).',
@@ -397,6 +406,8 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set Anim Float': 'animator.setFloat',
   'Set Anim Bool': 'animator.setBool',
   'Set Anim Trigger': 'animator.setTrigger',
+  'Get Anim Param': 'animator.getParam',
+  'Get Anim State': 'animator.getState',
   'Get Move Input': 'input.move',
   Move: 'action.move',
   Jump: 'action.jump',
@@ -513,6 +524,10 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: `Set Anim Bool: ${data.paramName || 'param'}`, description: 'Writes a boolean into an animator parameter.' };
     case 'animator.setTrigger':
       return { label: `Set Anim Trigger: ${data.paramName || 'param'}`, description: 'Fires a one-shot animator trigger.' };
+    case 'animator.getParam':
+      return { label: `Get Anim Param: ${data.paramName || 'param'}`, description: 'Reads an animator parameter value.' };
+    case 'animator.getState':
+      return { label: 'Get Anim State', description: 'Outputs the active animator state name.' };
     case 'input.move':
       return { label: 'Get Move Input', description: 'WASD / arrows → a world move direction.' };
     case 'action.move':
@@ -571,7 +586,10 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
   }
 
   if (
-    (nodeKind === 'animator.setFloat' || nodeKind === 'animator.setBool' || nodeKind === 'animator.setTrigger') &&
+    (nodeKind === 'animator.setFloat' ||
+      nodeKind === 'animator.setBool' ||
+      nodeKind === 'animator.setTrigger' ||
+      nodeKind === 'animator.getParam') &&
     typeof normalized.paramName !== 'string'
   ) {
     normalized.paramName = 'Speed';
@@ -649,7 +667,9 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
     nodeKind === 'action.getMaterialColor' ||
     nodeKind === 'action.getMaterialProperty' ||
     nodeKind === 'input.move' ||
-    nodeKind === 'query.grounded';
+    nodeKind === 'query.grounded' ||
+    nodeKind === 'animator.getParam' ||
+    nodeKind === 'animator.getState';
 
   if (isPureValueNode) {
     normalized.hasInput = false;
@@ -970,6 +990,10 @@ interface EditorState {
   runtimeCameraOverrides: Record<string, { distance: number; height: number }>;
   /** Character-controller object ids standing on the ground last frame (drives jump + grounded). */
   runtimeGrounded: string[];
+  /** Remaining roll/dodge time (seconds) per object — drives the forward dash + "rolling" param. */
+  runtimeRoll: Record<string, number>;
+  /** Remaining attack time (seconds) per object — drives the "attacking" param. */
+  runtimeAttack: Record<string, number>;
   /** Object ids that started a contact in the previous physics step; drives event.collisionEnter. */
   runtimeCollisions: string[];
   /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
@@ -1029,10 +1053,10 @@ interface EditorState {
   addAnimatorParameter: (controllerId: string, param: { name: string; type: AnimatorParameter['type']; source?: AnimatorParameter['source']; variableId?: string; defaultValue?: number | boolean }) => string | undefined;
   updateAnimatorParameter: (controllerId: string, paramId: string, patch: Partial<Omit<AnimatorParameter, 'id'>>) => void;
   removeAnimatorParameter: (controllerId: string, paramId: string) => void;
-  addAnimatorState: (controllerId: string, state?: { name?: string; animationId?: string; speed?: number; loop?: boolean }) => string | undefined;
+  addAnimatorState: (controllerId: string, state?: { name?: string; animationId?: string; speed?: number; loop?: boolean; position?: { x: number; y: number } }) => string | undefined;
   updateAnimatorState: (controllerId: string, stateId: string, patch: Partial<Omit<AnimatorState, 'id'>>) => void;
   removeAnimatorState: (controllerId: string, stateId: string) => void;
-  addAnimatorTransition: (controllerId: string, transition: { from: string; to: string; conditions?: AnimatorCondition[]; duration?: number }) => string | undefined;
+  addAnimatorTransition: (controllerId: string, transition: { from: string; to: string; conditions?: AnimatorCondition[]; duration?: number; hasExitTime?: boolean; exitTime?: number }) => string | undefined;
   updateAnimatorTransition: (controllerId: string, transitionId: string, patch: Partial<Omit<AnimatorTransition, 'id'>>) => void;
   removeAnimatorTransition: (controllerId: string, transitionId: string) => void;
   // --- Built-in character controller ---
@@ -1040,6 +1064,12 @@ interface EditorState {
   toggleCharacterController: (id: string) => void;
   /** Patch an object's character controller. No-op if it has none. */
   updateCharacterController: (id: string, patch: Partial<CharacterControllerComponent>) => void;
+  /** Attach an object to a character's bone socket (or pass undefined target to detach). */
+  setAttachment: (objectId: string, attachment?: { targetObjectId: string; boneName: string; socketName?: string }) => void;
+  /** Add a named socket (bone + offset) to a Skeleton asset. Returns the socket id. */
+  addSkeletonSocket: (skeletonId: string, socket: { name?: string; boneName: string }) => string | undefined;
+  updateSkeletonSocket: (skeletonId: string, socketId: string, patch: Partial<Omit<SkeletonSocket, 'id'>>) => void;
+  removeSkeletonSocket: (skeletonId: string, socketId: string) => void;
   /**
    * One-click third-person pawn: from a rigged model asset, create an object that renders it, build a
    * locomotion Animator Controller (Idle/Walk/Jog/Jump from the skeleton's clips, matched by name) and
@@ -1200,6 +1230,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeAnimators: {},
   runtimeCameraOverrides: {},
   runtimeGrounded: [],
+  runtimeRoll: {},
+  runtimeAttack: {},
   runtimeCollisions: [],
   runtimeSoundQueue: [],
   runtimeLog: [],
@@ -1582,6 +1614,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   animationId: stateInput?.animationId,
                   speed: stateInput?.speed ?? 1,
                   loop: stateInput?.loop ?? true,
+                  // Stagger new states down a column so they don't stack on the graph canvas.
+                  position: stateInput?.position ?? { x: 80, y: 40 + item.states.length * 90 },
                 },
               ],
               // First state added becomes the default (entry) state.
@@ -1628,7 +1662,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               ...item,
               transitions: [
                 ...item.transitions,
-                { id, from: transition.from, to: transition.to, conditions: transition.conditions ?? [], duration: transition.duration ?? 0.2 },
+                { id, from: transition.from, to: transition.to, conditions: transition.conditions ?? [], duration: transition.duration ?? 0.2, hasExitTime: transition.hasExitTime, exitTime: transition.exitTime },
               ],
             }
           : item,
@@ -1673,6 +1707,54 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ),
       ),
     ),
+  setAttachment: (objectId, attachment) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId) return object;
+          const next = { ...object };
+          if (attachment) next.attachment = attachment;
+          else delete next.attachment;
+          return next;
+        }),
+      ),
+    ),
+  addSkeletonSocket: (skeletonId, socket) => {
+    const skeleton = get().skeletons.find((item) => item.id === skeletonId);
+    if (!skeleton) return undefined;
+    const id = makeId('socket');
+    set((state) => ({
+      skeletons: state.skeletons.map((item) =>
+        item.id === skeletonId
+          ? {
+              ...item,
+              sockets: [
+                ...(item.sockets ?? []),
+                { id, name: socket.name ?? `Socket ${(item.sockets?.length ?? 0) + 1}`, boneName: socket.boneName, position: [0, 0, 0], rotation: [0, 0, 0] },
+              ],
+            }
+          : item,
+      ),
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateSkeletonSocket: (skeletonId, socketId, patch) =>
+    set((state) => ({
+      skeletons: state.skeletons.map((item) =>
+        item.id === skeletonId
+          ? { ...item, sockets: (item.sockets ?? []).map((s) => (s.id === socketId ? { ...s, ...patch } : s)) }
+          : item,
+      ),
+      isDirty: true,
+    })),
+  removeSkeletonSocket: (skeletonId, socketId) =>
+    set((state) => ({
+      skeletons: state.skeletons.map((item) =>
+        item.id === skeletonId ? { ...item, sockets: (item.sockets ?? []).filter((s) => s.id !== socketId) } : item,
+      ),
+      isDirty: true,
+    })),
   createCharacterPawn: (modelAssetId, name) => {
     const state = get();
     const mesh = state.skeletalMeshes.find((item) => item.sourceAssetId === modelAssetId);
@@ -1688,33 +1770,74 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const idleId = pick(/idle.*loop/i, /^idle/i, /loop/i);
     const walkId = pick(/walk.*loop/i, /^walk/i);
     const runId = pick(/sprint.*loop/i, /jog.*loop/i, /run.*loop/i, /run/i);
-    const jumpId = pick(/jump.*loop/i, /jump/i, /fall/i);
+    // Full jump sequence: take-off, airborne loop, landing. Falls back to a single jump clip.
+    const jumpStartId = pick(/jump.*start/i, /jump.*up/i);
+    const jumpLoopId = pick(/jump.*loop/i, /jump.*air/i, /^falling/i, /in.?air/i);
+    const jumpLandId = pick(/jump.*land/i, /land/i);
+    const jumpId = !jumpStartId && !jumpLoopId ? pick(/^jump$/i, /jump/i, /fall/i) : undefined;
     const crouchIdleId = pick(/crouch.*idle/i);
     const crouchWalkId = pick(/crouch.*(fwd|walk)/i, /crouch.*loop/i);
+    // In-place roll (we drive the dash in code) — avoid the root-motion "_RM" variant.
+    const rollId = pick(/^roll$/i, /^dodge/i, /roll_loop/i);
+    const rollClip = state.animations.find((a) => a.id === rollId);
+    const rollDuration = rollClip?.duration ?? 0.7;
+    // Match the dash distance to the rig's root-motion roll (~5 units) so the slide aligns with the clip.
+    const rollSpeed = Math.round((5 / Math.max(rollDuration, 0.2)) * 10) / 10;
+    // Attack clips: a sword swing when armed, a punch when not (avoid the _RM root-motion variant).
+    const swordAttackId = pick(/sword.*attack(?!.*rm)/i, /sword.*slash/i, /weapon.*attack/i);
+    const punchId = pick(/punch.*cross/i, /punch.*jab/i, /punch/i, /attack(?!.*rm)/i, /kick/i);
 
     // Build states for whichever clips exist; the first becomes the default (entry) state.
     const speedParamId = makeId('param');
     const vspeedParamId = makeId('param');
     const crouchParamId = makeId('param');
+    const groundedParamId = makeId('param');
+    const rollParamId = makeId('param');
     const parameters: AnimatorParameter[] = [
       { id: speedParamId, name: 'Speed', type: 'float', source: 'speed', defaultValue: 0 },
       { id: vspeedParamId, name: 'VerticalSpeed', type: 'float', source: 'verticalSpeed', defaultValue: 0 },
       { id: crouchParamId, name: 'Crouching', type: 'bool', source: 'crouching', defaultValue: false },
+      { id: groundedParamId, name: 'Grounded', type: 'bool', source: 'grounded', defaultValue: true },
+      { id: rollParamId, name: 'Rolling', type: 'bool', source: 'rolling', defaultValue: false },
+      { id: makeId('param'), name: 'Attacking', type: 'bool', source: 'attacking', defaultValue: false },
+      { id: makeId('param'), name: 'WeaponEquipped', type: 'bool', source: 'weaponEquipped', defaultValue: false },
     ];
+    const attackParamId = parameters[parameters.length - 2].id;
+    const weaponParamId = parameters[parameters.length - 1].id;
     const states: AnimatorState[] = [];
     const stateId: Record<string, string> = {};
+    const layout: Record<string, { x: number; y: number }> = {
+      idle: { x: 60, y: 40 },
+      walk: { x: 320, y: 40 },
+      run: { x: 580, y: 40 },
+      jumpStart: { x: 320, y: 220 },
+      jumpLoop: { x: 540, y: 220 },
+      jumpLand: { x: 760, y: 220 },
+      jump: { x: 320, y: 220 },
+      crouchIdle: { x: 60, y: 380 },
+      crouchWalk: { x: 320, y: 380 },
+      roll: { x: 580, y: 380 },
+      punch: { x: 60, y: 540 },
+      swordAttack: { x: 320, y: 540 },
+    };
     const addState = (key: string, name: string, animationId: string | undefined, loop = true) => {
       if (!animationId) return;
       const id = makeId('state');
       stateId[key] = id;
-      states.push({ id, name, animationId, speed: 1, loop });
+      states.push({ id, name, animationId, speed: 1, loop, position: layout[key] ?? { x: 60, y: 40 + states.length * 90 } });
     };
     addState('idle', 'Idle', idleId);
     addState('walk', 'Walk', walkId);
     addState('run', 'Run', runId);
+    addState('jumpStart', 'Jump Start', jumpStartId, false);
+    addState('jumpLoop', 'Jump Loop', jumpLoopId, true);
+    addState('jumpLand', 'Jump Land', jumpLandId, false);
     addState('jump', 'Jump', jumpId, false);
     addState('crouchIdle', 'Crouch Idle', crouchIdleId);
     addState('crouchWalk', 'Crouch Walk', crouchWalkId);
+    addState('roll', 'Roll', rollId, false);
+    addState('punch', 'Punch', punchId, false);
+    addState('swordAttack', 'Sword Attack', swordAttackId, false);
     if (!states.length) return undefined; // no usable clips
 
     const C = (parameterId: string, op: AnimatorCondition['op'], value: number | boolean): AnimatorCondition => ({ parameterId, op, value });
@@ -1725,11 +1848,47 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const linkAny = (to: string, conditions: AnimatorCondition[], duration = 0.12) => {
       if (stateId[to]) transitions.push({ id: makeId('xition'), from: 'any', to: stateId[to], conditions, duration });
     };
+    /** Transition that waits for the source clip to play to `exitTime` (one-shots like Jump Start/Land). */
+    const linkExit = (from: string, to: string, conditions: AnimatorCondition[] = [], duration = 0.12, exitTime = 1) => {
+      if (stateId[from] && stateId[to]) transitions.push({ id: makeId('xition'), from: stateId[from], to: stateId[to], conditions, duration, hasExitTime: true, exitTime });
+    };
 
-    // Jump first (highest priority), then crouch, then ground locomotion — order = match priority.
-    if (stateId.jump) {
-      linkAny('jump', [C(vspeedParamId, '>', 0.5)], 0.1);
-      link('jump', 'idle', [C(vspeedParamId, '<', 0.1)]);
+    // --- Jump (highest priority). Take off → airborne loop → land, detecting the ground via Grounded. ---
+    const groundStates = ['idle', 'walk', 'run', 'crouchIdle', 'crouchWalk'];
+    const airKey = stateId.jumpLoop ? 'jumpLoop' : stateId.jumpStart ? 'jumpStart' : undefined;
+    if (stateId.jumpStart || stateId.jumpLoop) {
+      // Take-off only from grounded states (not "any") so the airborne loop never bounces back to Start.
+      const entry = stateId.jumpStart ? 'jumpStart' : 'jumpLoop';
+      groundStates.forEach((from) => link(from, entry, [C(vspeedParamId, '>', 1)], 0.08));
+      // Start clip plays out, then the airborne loop.
+      // Blend to the airborne loop partway through the launch clip so it doesn't wait the full wind-up.
+      if (stateId.jumpStart && stateId.jumpLoop) linkExit('jumpStart', 'jumpLoop', [], 0.12, 0.5);
+      // Short hop: if we land while still in the start clip, recover instead of waiting.
+      if (stateId.jumpStart) link('jumpStart', stateId.jumpLand ? 'jumpLand' : 'idle', [C(groundedParamId, '==', true)], 0.1);
+      // Land when we touch ground again.
+      if (stateId.jumpLand && airKey) link(airKey, 'jumpLand', [C(groundedParamId, '==', true)], 0.1);
+      // Land clip plays out, then back to idle. If there's no land clip, return on grounded.
+      if (stateId.jumpLand) linkExit('jumpLand', 'idle');
+      else if (airKey) link(airKey, 'idle', [C(groundedParamId, '==', true)]);
+    } else if (stateId.jump) {
+      groundStates.forEach((from) => link(from, 'jump', [C(vspeedParamId, '>', 1)], 0.1));
+      link('jump', 'idle', [C(groundedParamId, '==', true)]);
+    }
+    // --- Roll/dodge: enter from grounded states while Rolling, return to idle when it ends. ---
+    if (stateId.roll) {
+      groundStates.forEach((from) => link(from, 'roll', [C(rollParamId, '==', true)], 0.08));
+      link('roll', 'idle', [C(rollParamId, '==', false)]);
+    }
+    // --- Attack: sword swing when a weapon is equipped, otherwise a punch; clip plays out, then idle. ---
+    if (stateId.swordAttack) {
+      groundStates.forEach((from) => link(from, 'swordAttack', [C(attackParamId, '==', true), C(weaponParamId, '==', true)], 0.08));
+      linkExit('swordAttack', 'idle');
+    }
+    if (stateId.punch) {
+      // Without a sword state, punch covers both; otherwise only when unarmed.
+      const conds = stateId.swordAttack ? [C(attackParamId, '==', true), C(weaponParamId, '==', false)] : [C(attackParamId, '==', true)];
+      groundStates.forEach((from) => link(from, 'punch', conds, 0.08));
+      linkExit('punch', 'idle');
     }
     if (stateId.crouchIdle || stateId.crouchWalk) {
       linkAny('crouchWalk', [C(crouchParamId, '==', true), C(speedParamId, '>', 0.1)]);
@@ -1826,7 +1985,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
       renderer: { ...defaultRenderer('cube'), modelAssetId },
       animator: { enabled: true, controllerId, speed: 1, loop: true },
-      character: { ...defaultCharacter(), enabled: true },
+      character: { ...defaultCharacter(), enabled: true, rollDuration, rollSpeed, jumpStrength: 6 },
       script: { blueprintId, graphId, enabled: true },
     };
 
@@ -2644,6 +2803,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeAnimators: {},
           runtimeCameraOverrides: {},
           runtimeGrounded: [],
+          runtimeRoll: {},
+          runtimeAttack: {},
           runtimeCollisions: [],
           runtimeSoundQueue: [],
           runtimeLog: [],
@@ -2692,6 +2853,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeAnimators: {},
         runtimeCameraOverrides: {},
         runtimeGrounded: [],
+        runtimeRoll: {},
+        runtimeAttack: {},
         runtimeCollisions: [],
         runtimeSoundQueue: [],
         runtimeLog: [],
@@ -2742,6 +2905,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Character node requests this frame: object ids that fired a Jump node, and live camera overrides.
       const characterJumpRequests = new Set<string>();
       const nextCameraOverrides: Record<string, { distance: number; height: number }> = { ...state.runtimeCameraOverrides };
+      // Roll/dodge + attack timers carried frame-to-frame (started on their key, counted down here).
+      const nextRoll: Record<string, number> = {};
+      const nextAttack: Record<string, number> = {};
 
       // Run each object's script graph. Physics-enabled objects are simulated by Rapier
       // in the post-pass below, so here we only collect scripted motion + side effects.
@@ -2815,6 +2981,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'query.grounded') {
               return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
+            }
+
+            if (node.data.nodeKind === 'animator.getParam') {
+              // Read the live animator parameter (previous frame) so the blueprint can react to it.
+              const controller = state.animatorControllers.find((c) => c.id === object.animator?.controllerId);
+              const param = controller?.parameters.find((p) => p.name === node.data.paramName);
+              const live = state.runtimeAnimators[object.id];
+              if (param) return (live?.params[param.id] ?? param.defaultValue) as GraphValue;
+              return 0;
+            }
+
+            if (node.data.nodeKind === 'animator.getState') {
+              const controller = state.animatorControllers.find((c) => c.id === object.animator?.controllerId);
+              const stateId = state.runtimeAnimators[object.id]?.stateId ?? controller?.defaultStateId;
+              return controller?.states.find((s) => s.id === stateId)?.name ?? '';
             }
 
             if (node.data.nodeKind === 'variable.get') {
@@ -3107,8 +3288,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const scripted = Boolean(object.script?.enabled);
         const position = [...object.transform.position] as Vector3Tuple;
         const rotation = [...object.transform.rotation] as Vector3Tuple;
+        const grounded = state.runtimeGrounded.includes(object.id) || position[1] <= cc.groundLevel + 0.001;
 
-        if (!scripted) {
+        // Roll/dodge: started on the roll key while grounded, dashes forward for rollDuration.
+        let rollRemaining = state.runtimeRoll[object.id] ?? 0;
+        if (rollRemaining <= 0 && grounded && currentKeys[cc.keyRoll]) rollRemaining = cc.rollDuration;
+        const rolling = rollRemaining > 0;
+
+        if (!scripted && !rolling) {
           // Forward = +Z (model forward); right = -X. Camera sits behind, so this reads correctly on screen.
           let inputX = 0;
           let inputZ = 0;
@@ -3137,10 +3324,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
         }
 
+        // Roll dash: travel forward (the character's facing) regardless of input mode.
+        if (rolling) {
+          const facing = rotation[1] - cc.modelYawOffset;
+          position[0] += Math.sin(facing) * cc.rollSpeed * delta;
+          position[2] += Math.cos(facing) * cc.rollSpeed * delta;
+          rollRemaining = Math.max(0, rollRemaining - delta);
+        }
+        if (rollRemaining > 0) nextRoll[object.id] = rollRemaining;
+
+        // Attack: a short pulse on the attack key that the animator turns into a punch / weapon swing.
+        let attackRemaining = state.runtimeAttack[object.id] ?? 0;
+        if (attackRemaining <= 0 && currentKeys[cc.keyAttack]) attackRemaining = 0.18;
+        else if (attackRemaining > 0) attackRemaining = Math.max(0, attackRemaining - delta);
+        if (attackRemaining > 0) nextAttack[object.id] = attackRemaining;
+
         // Vertical motion: gravity + jump. Grounded comes from the physics character controller
         // (last frame) so the character can stand on real colliders, not just the ground plane.
         let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
-        const grounded = state.runtimeGrounded.includes(object.id) || position[1] <= cc.groundLevel + 0.001;
         const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]);
         if (grounded && verticalVelocity < 0) verticalVelocity = 0;
         if (grounded && wantsJump) verticalVelocity = cc.jumpStrength;
@@ -3219,6 +3420,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           else if (param.source === 'verticalSpeed') params[param.id] = verticalSpeed;
           else if (param.source === 'moving') params[param.id] = horizontalSpeed > 0.1;
           else if (param.source === 'crouching') params[param.id] = Boolean(object.character && currentKeys[object.character.keyCrouch]);
+          else if (param.source === 'grounded') params[param.id] = groundedIds.includes(object.id);
+          else if (param.source === 'rolling') params[param.id] = (nextRoll[object.id] ?? 0) > 0;
+          else if (param.source === 'attacking') params[param.id] = (nextAttack[object.id] ?? 0) > 0;
+          else if (param.source === 'weaponEquipped') params[param.id] = resolvedObjects.some((o) => o.attachment?.targetObjectId === object.id);
           else if (param.source === 'variable' && param.variableId !== undefined) {
             const raw = nextVariableValues[param.variableId];
             params[param.id] = param.type === 'bool' ? toBoolean(raw) : toNumber(raw);
@@ -3232,21 +3437,30 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (write.trigger) triggered.add(param.id);
         }
 
+        // Current state + how long we've been in it (drives exit-time / one-shot clips like Jump Land).
+        let fromStateId = prev?.stateId ?? controller.defaultStateId ?? controller.states[0].id;
+        if (!controller.states.some((s) => s.id === fromStateId)) fromStateId = controller.states[0].id;
+        const fromState = controller.states.find((s) => s.id === fromStateId);
+        const fromAnim = fromState?.animationId ? state.animations.find((a) => a.id === fromState.animationId) : undefined;
+        const clipDuration = fromAnim ? fromAnim.duration / Math.max(fromState?.speed ?? 1, 0.01) : 0;
+        const timeInState = (prev?.stateId === fromStateId ? prev.time : 0) + dt;
+
         // Evaluate transitions from the current state (plus "any state" transitions).
-        let stateId = prev?.stateId ?? controller.defaultStateId ?? controller.states[0].id;
-        if (!controller.states.some((s) => s.id === stateId)) stateId = controller.states[0].id;
+        let nextStateId = fromStateId;
         let fade = 0;
-        const candidates = controller.transitions.filter((t) => t.from === stateId || t.from === 'any');
+        const candidates = controller.transitions.filter((t) => t.from === fromStateId || t.from === 'any');
         for (const transition of candidates) {
-          if (transition.to === stateId) continue;
+          if (transition.to === fromStateId) continue;
           if (!controller.states.some((s) => s.id === transition.to)) continue;
+          // Exit time: wait until the current clip has played far enough before leaving.
+          if (transition.hasExitTime && timeInState < clipDuration * (transition.exitTime ?? 1)) continue;
           const pass = transition.conditions.every((condition) => {
             const param = controller.parameters.find((p) => p.id === condition.parameterId);
             if (!param) return false;
             return Boolean(compareValues(params[param.id] as GraphValue, condition.value as GraphValue, condition.op));
           });
           if (pass) {
-            stateId = transition.to;
+            nextStateId = transition.to;
             fade = transition.duration;
             break;
           }
@@ -3258,7 +3472,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (param?.type === 'trigger') params[id] = false;
         }
 
-        nextAnimators[object.id] = { stateId, params, fade };
+        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: nextStateId === fromStateId ? timeInState : 0 };
       }
 
       return {
@@ -3268,6 +3482,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeAnimators: nextAnimators,
         runtimeCameraOverrides: nextCameraOverrides,
         runtimeGrounded: groundedIds,
+        runtimeRoll: nextRoll,
+        runtimeAttack: nextAttack,
         runtimeCollisions: collisions,
         runtimePreviousKeys: { ...currentKeys },
         runtimeEventQueue: [],

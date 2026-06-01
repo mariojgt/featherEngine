@@ -50,6 +50,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Added param "${String(input.name ?? '')}"`;
     case 'add_animator_state':
       return `Added state "${String(input.name ?? '')}"`;
+    case 'update_animator_state':
+      return 'Updated state';
     case 'add_animator_transition':
       return 'Added transition';
     case 'set_object_controller':
@@ -60,6 +62,14 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Created character pawn';
     case 'create_third_person_template':
       return 'Built third-person template';
+    case 'list_bones':
+      return 'Listed bones';
+    case 'attach_to_bone':
+      return input.targetObjectId ? 'Attached to bone' : 'Detached';
+    case 'add_skeleton_socket':
+      return `Added socket "${String(input.name ?? '')}"`;
+    case 'attach_to_socket':
+      return input.socketName ? 'Attached to socket' : 'Detached';
     case 'create_material':
       return `Created material${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'update_material':

@@ -8,6 +8,7 @@ import { useProjectStore } from '../store/projectStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
+import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, readAssetDragId } from './dragShared';
 import type { SceneObject } from '../types';
@@ -65,6 +66,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
           speed={resolvedAnimator.speed}
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}
+          registerId={object.id}
         />
       </Suspense>
     );
@@ -184,6 +186,15 @@ function SceneObjectView({
   registerObject: (id: string, object: THREE.Group | null) => void;
 }) {
   const selectObject = useEditorStore((state) => state.selectObject);
+
+  // Attached objects ride a character's bone instead of sitting at their own transform.
+  if (object.attachment) {
+    return (
+      <BoneAttachment object={object} onSelect={() => selectObject(object.id)}>
+        <Primitive object={object} selected={selected} />
+      </BoneAttachment>
+    );
+  }
 
   return (
     <group

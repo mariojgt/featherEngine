@@ -44,11 +44,17 @@ function useRuntimeLoop(active: boolean) {
       setRuntimeKey(event.code, true);
     };
     const onKeyUp = (event: KeyboardEvent) => setRuntimeKey(event.code, false);
+    const onMouseDown = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, true);
+    const onMouseUp = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, false);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mouseup', onMouseUp);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mouseup', onMouseUp);
     };
   }, [active, setRuntimeKey]);
 }

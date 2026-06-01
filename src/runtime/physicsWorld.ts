@@ -318,6 +318,9 @@ class PhysicsRuntime {
       const desired = prev
         ? { x: cur[0] - prev.position[0], y: cur[1] - prev.position[1], z: cur[2] - prev.position[2] }
         : { x: 0, y: 0, z: 0 };
+      // Release snap-to-ground while rising, or jumps get snapped straight back to the floor.
+      if (desired.y > 0.001) entry.controller.disableSnapToGround();
+      else entry.controller.enableSnapToGround(0.3);
       entry.controller.computeColliderMovement(entry.collider, desired);
       if (entry.controller.computedGrounded()) grounded.add(object.id);
       const move = entry.controller.computedMovement();

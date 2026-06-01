@@ -39,12 +39,19 @@ function RuntimePreviewLoop() {
       setRuntimeKey(event.code, true);
     };
     const handleKeyUp = (event: KeyboardEvent) => setRuntimeKey(event.code, false);
+    // Mouse buttons are exposed as runtime "keys" too: Mouse0 (left), Mouse1 (middle), Mouse2 (right).
+    const handleMouseDown = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, true);
+    const handleMouseUp = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, false);
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isPlaying, setRuntimeKey]);
 

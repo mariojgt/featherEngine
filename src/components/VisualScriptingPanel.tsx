@@ -48,7 +48,7 @@ const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Fire Event', 'Spawn Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Fire Event', 'Spawn Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Get Anim Param', 'Get Anim State', 'Print'],
   },
   {
     title: 'Physics',
@@ -349,13 +349,19 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesVariable = node.data.nodeKind === 'variable.get' || node.data.nodeKind === 'variable.set';
   const updatesDataAsset = node.data.nodeKind === 'data.tableGet';
   const updatesCompare = node.data.nodeKind === 'logic.compare';
-  const updatesBooleanValue = node.data.nodeKind === 'value.boolean' || node.data.nodeKind === 'logic.branch';
+  const updatesBooleanValue = node.data.nodeKind === 'value.boolean' || node.data.nodeKind === 'logic.branch' || node.data.nodeKind === 'animator.setBool';
   const updatesNumberValue =
     node.data.nodeKind === 'value.number' ||
     node.data.nodeKind === 'math.add' ||
     node.data.nodeKind === 'math.clamp' ||
     node.data.nodeKind === 'math.lerp' ||
-    node.data.nodeKind === 'logic.compare';
+    node.data.nodeKind === 'logic.compare' ||
+    node.data.nodeKind === 'animator.setFloat';
+  const updatesParamName =
+    node.data.nodeKind === 'animator.setFloat' ||
+    node.data.nodeKind === 'animator.setBool' ||
+    node.data.nodeKind === 'animator.setTrigger' ||
+    node.data.nodeKind === 'animator.getParam';
   const updatesStringValue = node.data.nodeKind === 'value.string';
   const updatesVectorValue = node.data.nodeKind === 'value.vector3';
   const updatesSaveSlot = node.data.nodeKind === 'save.write' || node.data.nodeKind === 'save.load' || node.data.nodeKind === 'save.clear';
@@ -684,6 +690,17 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
               value={node.data.message ?? ''}
               placeholder="Text to print"
               onChange={(event) => updateGraphNodeData(node.id, { message: event.target.value })}
+            />
+          </label>
+        )}
+
+        {updatesParamName && (
+          <label className="node-field">
+            <span>Animator Param</span>
+            <input
+              value={node.data.paramName ?? ''}
+              placeholder="e.g. Speed, Jump"
+              onChange={(event) => updateGraphNodeData(node.id, { paramName: event.target.value })}
             />
           </label>
         )}

@@ -76,6 +76,8 @@ export type GraphNodeKind =
   | 'animator.setFloat'
   | 'animator.setBool'
   | 'animator.setTrigger'
+  | 'animator.getParam'
+  | 'animator.getState'
   | 'input.move'
   | 'query.grounded'
   | 'action.move'
@@ -234,6 +236,8 @@ export interface SkeletonAsset {
   /** Stable hash of the bone hierarchy — the compatibility key. */
   signature: string;
   rootBone: string;
+  /** Reusable named sockets placed on this skeleton (Unreal-style), referenced by attachments. */
+  sockets?: SkeletonSocket[];
   /** Containing folder id, or undefined for the project root. */
   folderId?: string;
   createdAt: number;
@@ -275,7 +279,17 @@ export type AnimatorParamType = 'float' | 'bool' | 'trigger';
  * - `moving`: boolean, true when horizontal speed exceeds a small threshold.
  * - `variable`: mirrors a project variable (`variableId`), so existing scripts drive animation for free.
  */
-export type AnimatorParamSource = 'manual' | 'speed' | 'verticalSpeed' | 'moving' | 'crouching' | 'variable';
+export type AnimatorParamSource =
+  | 'manual'
+  | 'speed'
+  | 'verticalSpeed'
+  | 'moving'
+  | 'crouching'
+  | 'grounded'
+  | 'rolling'
+  | 'attacking'
+  | 'weaponEquipped'
+  | 'variable';
 
 export interface AnimatorParameter {
   id: string;
@@ -302,6 +316,8 @@ export interface AnimatorState {
   animationId?: string;
   speed: number;
   loop: boolean;
+  /** Position in the node-graph editor canvas. */
+  position?: { x: number; y: number };
 }
 
 /** A directed edge between states; taken when all conditions pass. */
@@ -313,6 +329,10 @@ export interface AnimatorTransition {
   conditions: AnimatorCondition[];
   /** Crossfade duration in seconds. */
   duration: number;
+  /** Only leave after the current state's clip has played to `exitTime` — for one-shots (Jump Start/Land). */
+  hasExitTime?: boolean;
+  /** Fraction (0–1) of the clip that must elapse before the transition can fire. Defaults to 1 (clip end). */
+  exitTime?: number;
 }
 
 /** A reusable animation state machine (Unreal Animation Blueprint / Unity Animator Controller). */
@@ -365,6 +385,13 @@ export interface CharacterControllerComponent {
   keyJump: string;
   keySprint: string;
   keyCrouch: string;
+  keyRoll: string;
+  /** Forward dash speed (units/sec) during a roll/dodge. */
+  rollSpeed: number;
+  /** How long a roll lasts (seconds) — set to the roll clip's length by the pawn builder. */
+  rollDuration: number;
+  /** Attack key — fires the "attacking" animator parameter (punch unarmed, weapon attack when equipped). */
+  keyAttack: string;
   // --- Camera ---
   /** Trail a third-person camera behind the character (game view / export). */
   cameraFollow: boolean;
@@ -403,6 +430,29 @@ export interface ScriptGraphComponent {
   enabled: boolean;
 }
 
+/**
+ * Attaches this object to a bone "socket" of another object's animated skeleton (Unreal-style).
+ * The object's own `transform` becomes the local offset from the bone, so it follows the bone as
+ * the character animates — e.g. a sword in the right-hand bone. Target must render a skinned model.
+ */
+export interface AttachmentComponent {
+  /** Object id of the skinned character to attach to. */
+  targetObjectId: string;
+  /** Bone name on the target's skeleton (the socket). */
+  boneName: string;
+  /** Optional named socket (on the target's Skeleton asset) — its offset is applied before this object's. */
+  socketName?: string;
+}
+
+/** A reusable named attach point on a skeleton (Unreal socket): a bone + a local offset. */
+export interface SkeletonSocket {
+  id: string;
+  name: string;
+  boneName: string;
+  position: Vector3Tuple;
+  rotation: Vector3Tuple;
+}
+
 export interface SceneObject {
   id: string;
   name: string;
@@ -414,6 +464,7 @@ export interface SceneObject {
   script?: ScriptGraphComponent;
   animator?: AnimatorComponent;
   character?: CharacterControllerComponent;
+  attachment?: AttachmentComponent;
 }
 
 /** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */

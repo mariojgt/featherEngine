@@ -6,6 +6,7 @@ import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
+import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import type { SceneObject, Vector3Tuple } from '../types';
 
@@ -39,6 +40,7 @@ function GameMesh({ object }: { object: SceneObject }) {
           speed={resolvedAnimator.speed}
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}
+          registerId={object.id}
         />
       </Suspense>
     );
@@ -154,16 +156,22 @@ function GameScene() {
       )}
 
       <group>
-        {objects.map((object) => (
-          <group
-            key={object.id}
-            position={object.transform.position}
-            rotation={object.transform.rotation}
-            scale={object.transform.scale}
-          >
-            <GameMesh object={object} />
-          </group>
-        ))}
+        {objects.map((object) =>
+          object.attachment ? (
+            <BoneAttachment key={object.id} object={object} onSelect={() => undefined}>
+              <GameMesh object={object} />
+            </BoneAttachment>
+          ) : (
+            <group
+              key={object.id}
+              position={object.transform.position}
+              rotation={object.transform.rotation}
+              scale={object.transform.scale}
+            >
+              <GameMesh object={object} />
+            </group>
+          ),
+        )}
       </group>
 
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />

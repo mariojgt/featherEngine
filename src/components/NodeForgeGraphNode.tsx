@@ -95,6 +95,8 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'animator.setFloat': Hash,
   'animator.setBool': ToggleLeft,
   'animator.setTrigger': Zap,
+  'animator.getParam': Hash,
+  'animator.getState': Radio,
   'input.move': Keyboard,
   'query.grounded': Crosshair,
   'action.move': Move,
@@ -140,6 +142,8 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'action.getMaterialProperty',
   'input.move',
   'query.grounded',
+  'animator.getParam',
+  'animator.getState',
 ]);
 
 const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string }> => {
