@@ -1,8 +1,8 @@
-# NodeForge Engine
+# Feather Engine
 
 A browser-based 3D game engine editor with a node-based visual scripting system. Build scenes, attach physics, wire up gameplay logic with a blueprint-style graph, and preview it all live — no compilation, no plugins, just the web.
 
-![NodeForge Engine](https://img.shields.io/badge/status-experimental-orange) ![React](https://img.shields.io/badge/React-18-61dafb) ![Three.js](https://img.shields.io/badge/Three.js-r171-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178c6)
+![Feather Engine](https://img.shields.io/badge/status-experimental-orange) ![React](https://img.shields.io/badge/React-18-61dafb) ![Three.js](https://img.shields.io/badge/Three.js-r171-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178c6)
 
 ## Features
 
@@ -109,7 +109,7 @@ AI chat can use it.
 
 ## Status
 
-NodeForge Engine is an **experimental** project under active development. APIs, the project file format, and the node palette may change.
+Feather Engine is an **experimental** project under active development. APIs, the project file format, and the node palette may change.
 
 ## License
 

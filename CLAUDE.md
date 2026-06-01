@@ -1,4 +1,4 @@
-# NodeForge Engine — working notes
+# Feather Engine — working notes
 
 Browser-only Vite + React + TypeScript 3D game-engine editor. State lives in a single
 Zustand store ([src/store/editorStore.ts](src/store/editorStore.ts)). 3D via
@@ -20,6 +20,13 @@ react-three-fiber + rapier; visual scripting via @xyflow/react.
   `src/store/projectStore.ts` owns new/open/save and the Launcher.
 - **Desktop viewport:** the environment is self-contained (`Lightformer`s, no external HDRI) so it
   renders offline and under the Tauri CSP. Loading disk assets uses `convertFileSrc` (`asset://`).
+- **Physics:** during Play a real Rapier rigid-body world ([src/runtime/physicsWorld.ts](src/runtime/physicsWorld.ts),
+  headless `@dimforge/rapier3d-compat`) is the authority. `tickRuntime` runs scripts, then a post-pass
+  feeds each physics-enabled object's scripted motion/impulses into its body, steps the world, and copies
+  transforms back. Rendering is unchanged (meshes read `object.transform`). Scripted motion maps to bodies
+  by `bodyType`: dynamic → per-axis velocity control + `applyImpulse`; kinematic → `setNextKinematic*`;
+  fixed → teleport on explicit script moves. Contacts surface via `runtimeCollisions` (one-frame delayed)
+  which fires `event.collisionEnter`. WASM inits on module import; `getActivePhysics()` is null until ready.
 
 ## ⚠️ AI assistant must stay in sync
 This project ships an agentic AI chat assistant ([src/ai/](src/ai/),

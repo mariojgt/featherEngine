@@ -9,6 +9,7 @@ import {
   Gamepad2,
   LampDesk,
   Layers,
+  Package,
   Pause,
   Play,
   Plus,
@@ -19,6 +20,7 @@ import {
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
+import { resetWorkspaceLayout } from './Workspace';
 import type { SceneObjectKind } from '../types';
 
 const creationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
@@ -72,6 +74,66 @@ function FileMenu() {
   );
 }
 
+function ViewMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, []);
+
+  return (
+    <div className="file-menu" ref={ref}>
+      <button className="file-menu-trigger" onClick={() => setOpen((value) => !value)}>
+        View
+      </button>
+      {open && (
+        <div className="file-menu-popover">
+          <button
+            onClick={() => {
+              setOpen(false);
+              resetWorkspaceLayout();
+            }}
+          >
+            Reset layout
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SaveToast() {
+  const toast = useProjectStore((state) => state.toast);
+  const clearToast = useProjectStore((state) => state.clearToast);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(clearToast, 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast, clearToast]);
+
+  return (
+    <AnimatePresence>
+      {toast && (
+        <motion.div
+          key={toast.message}
+          className={`save-toast ${toast.kind}`}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }}
+        >
+          {toast.message}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function SceneSwitcher() {
   const scenes = useEditorStore((state) => state.scenes);
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
@@ -118,6 +180,7 @@ export function Toolbar() {
   const isDirty = useEditorStore((state) => state.isDirty);
   const projectName = useProjectStore((state) => state.projectName);
   const save = useProjectStore((state) => state.save);
+  const exportGame = useProjectStore((state) => state.exportGame);
   const busy = useProjectStore((state) => state.busy);
 
   // ⌘S / Ctrl+S to save.
@@ -137,12 +200,13 @@ export function Toolbar() {
       <div className="brand">
         <Gamepad2 size={18} aria-hidden />
         <div>
-          <strong>NodeForge</strong>
+          <strong>Feather</strong>
           <span>Engine</span>
         </div>
       </div>
 
       <FileMenu />
+      <ViewMenu />
       <SceneSwitcher />
 
       <div className="tool-group" aria-label="Create scene object">
@@ -166,6 +230,8 @@ export function Toolbar() {
       </div>
 
       <div className="toolbar-spacer" />
+
+      <SaveToast />
 
       <div className="project-pill" title={projectName}>
         <span>{projectName}</span>
@@ -198,6 +264,15 @@ export function Toolbar() {
         <button className="export-button" title="Save project (⌘S)" onClick={() => void save()} disabled={busy}>
           <Save size={16} aria-hidden />
           <span>Save</span>
+        </button>
+        <button
+          className="export-button"
+          title="Export standalone game bundle"
+          onClick={() => void exportGame()}
+          disabled={busy}
+        >
+          <Package size={16} aria-hidden />
+          <span>Export</span>
         </button>
       </div>
     </header>

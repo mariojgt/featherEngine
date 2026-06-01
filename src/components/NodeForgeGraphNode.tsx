@@ -1,13 +1,17 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { useEditorStore } from '../store/editorStore';
 import {
   Ampersand,
   ArrowLeftRight,
   Axis3d,
   Box,
   Crosshair,
+  Database,
   Equal,
   GitBranch,
   GitMerge,
+  Hash,
+  Image,
   Keyboard,
   Move,
   Play,
@@ -15,10 +19,17 @@ import {
   Radio,
   RefreshCw,
   RotateCw,
+  Save,
   Send,
   Sigma,
+  Palette,
   Spline,
   Sparkles,
+  SlidersHorizontal,
+  Terminal,
+  ToggleLeft,
+  Trash2,
+  Type as TextIcon,
   Volume2,
   Waypoints,
   Wind,
@@ -46,6 +57,10 @@ const toneIcon: Record<GraphNodeTone, typeof Zap> = {
   physics: Box,
   audio: Volume2,
   value: Radio,
+  variable: Database,
+  data: Database,
+  persistence: Save,
+  material: Palette,
 };
 
 const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
@@ -62,17 +77,119 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'math.add': Plus,
   'math.clamp': ArrowLeftRight,
   'math.lerp': Spline,
+  'value.number': Hash,
+  'value.string': TextIcon,
+  'value.boolean': ToggleLeft,
   'value.vector3': Axis3d,
+  'variable.get': Database,
+  'variable.set': Database,
+  'data.tableGet': Database,
   'action.translate': Move,
   'action.rotate': RotateCw,
   'action.applyForce': Wind,
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
   'action.playSound': Volume2,
+  'action.setMaterialColor': Palette,
+  'action.setMaterialProperty': SlidersHorizontal,
+  'material.output': SlidersHorizontal,
+  'material.color': Palette,
+  'material.scalar': Hash,
+  'material.texture': Image,
+  'material.mix': GitMerge,
+  'save.write': Save,
+  'save.load': Database,
+  'save.clear': Trash2,
+  'action.print': Terminal,
+};
+
+const valueProducerKinds = new Set<GraphNodeKind>([
+  'logic.compare',
+  'logic.and',
+  'logic.or',
+  'math.add',
+  'math.clamp',
+  'math.lerp',
+  'value.number',
+  'value.string',
+  'value.boolean',
+  'value.vector3',
+  'variable.get',
+  'data.tableGet',
+  'material.color',
+  'material.scalar',
+  'material.texture',
+  'material.mix',
+]);
+
+const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string }> => {
+  switch (kind) {
+    case 'logic.branch':
+      return [{ id: 'condition', label: 'Condition' }];
+    case 'logic.compare':
+    case 'logic.and':
+    case 'logic.or':
+    case 'math.add':
+      return [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+      ];
+    case 'math.clamp':
+      return [
+        { id: 'value', label: 'Value' },
+        { id: 'min', label: 'Min' },
+        { id: 'max', label: 'Max' },
+      ];
+    case 'math.lerp':
+      return [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+        { id: 't', label: 'T' },
+      ];
+    case 'variable.set':
+      return [{ id: 'value', label: 'Value' }];
+    case 'data.tableGet':
+      return [{ id: 'rowKey', label: 'Row Key' }];
+    case 'action.translate':
+      return [
+        { id: 'vector', label: 'Vector' },
+        { id: 'amount', label: 'Amount' },
+      ];
+    case 'action.rotate':
+      return [{ id: 'amount', label: 'Amount' }];
+    case 'action.applyForce':
+      return [
+        { id: 'vector', label: 'Force' },
+        { id: 'amount', label: 'Amount' },
+      ];
+    case 'action.print':
+      return [{ id: 'message', label: 'Message' }];
+    case 'material.output':
+      return [
+        { id: 'baseColor', label: 'Base Color' },
+        { id: 'metalness', label: 'Metalness' },
+        { id: 'roughness', label: 'Roughness' },
+        { id: 'emissiveColor', label: 'Emissive' },
+        { id: 'emissiveIntensity', label: 'Emissive Int' },
+        { id: 'normal', label: 'Normal' },
+      ];
+    case 'material.mix':
+      return [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+        { id: 't', label: 'T' },
+      ];
+    default:
+      return [];
+  }
 };
 
 /** The key parameter for this node, shown as a chip — or null if it has none. */
-function nodeDetail(data: NodeForgeNode['data']): string | null {
+function nodeDetail(
+  data: NodeForgeNode['data'],
+  variables: ReturnType<typeof useEditorStore.getState>['variables'],
+  dataAssets: ReturnType<typeof useEditorStore.getState>['dataAssets'],
+): string | null {
   switch (data.nodeKind) {
     case 'event.keyDown':
     case 'event.keyUp': {
@@ -87,21 +204,67 @@ function nodeDetail(data: NodeForgeNode['data']): string | null {
       const unit = data.nodeKind === 'action.rotate' ? '°/s' : 'u/s';
       return `${(data.axis ?? 'z').toUpperCase()} axis · ${data.amount ?? 0} ${unit}`;
     }
+    case 'value.number':
+      return String(data.numberValue ?? 0);
+    case 'value.string':
+      return `“${data.stringValue ?? ''}”`;
+    case 'value.boolean':
+      return data.booleanValue ? 'True' : 'False';
+    case 'value.vector3':
+      return `[${(data.vectorValue ?? [0, 0, 0]).join(', ')}]`;
+    case 'variable.get':
+    case 'variable.set':
+      return data.variableId
+        ? `Variable · ${variables.find((variable) => variable.id === data.variableId)?.name ?? data.variableId}`
+        : 'No variable selected';
+    case 'data.tableGet': {
+      const table = dataAssets.find((item) => item.id === data.tableId);
+      const column = table?.columns.find((item) => item.id === data.columnId);
+      return table ? `${table.name} · ${data.rowKey || 'row'} · ${column?.name ?? 'column'}` : 'No Data Asset selected';
+    }
+    case 'save.write':
+    case 'save.load':
+    case 'save.clear':
+      return data.saveSlot ?? 'slot1';
+    case 'action.print':
+      return `“${data.message ?? ''}”`;
     default:
       return null;
   }
 }
 
-export function NodeForgeGraphNode({ data, selected }: NodeProps<NodeForgeNode>) {
+export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNode>) {
   const Icon = kindIcon[data.nodeKind] ?? toneIcon[data.tone];
   const isEvent = data.tone === 'event';
-  const detail = nodeDetail(data);
+  const isValueProducer = valueProducerKinds.has(data.nodeKind);
+  const valueInputs = valueInputsFor(data.nodeKind);
+  const variables = useEditorStore((state) => state.variables);
+  const dataAssets = useEditorStore((state) => state.dataAssets);
+  const detail = nodeDetail(data, variables, dataAssets);
+  const storeSelected = useEditorStore((state) => state.selectedGraphNodeId === id);
 
   return (
-    <div className={`nodeforge-node ${data.tone} ${isEvent ? 'is-event' : ''} ${selected ? 'selected' : ''}`}>
-      {data.hasInput !== false && (
-        <Handle className="node-port target" type="target" position={Position.Left} />
+    <div
+      className={`nodeforge-node ${data.tone} ${isEvent ? 'is-event' : ''} ${selected || storeSelected ? 'selected' : ''}`}
+      // Select directly so the inspector always opens, independent of ReactFlow's
+      // pointer-based selection (which can be unreliable inside a docked panel).
+      onClick={() => useEditorStore.getState().selectGraphNode(id)}
+      onPointerDown={() => useEditorStore.getState().selectGraphNode(id)}
+    >
+      {data.hasInput !== false && !isValueProducer && (
+        <Handle id="exec-in" className="node-port exec-port target" type="target" position={Position.Left} />
       )}
+
+      {valueInputs.map((input, index) => (
+        <Handle
+          key={input.id}
+          id={input.id}
+          className="node-port value-port target"
+          type="target"
+          position={Position.Left}
+          style={{ top: 82 + index * 22 }}
+        />
+      ))}
 
       <header className="nfn-head">
         <span className="nfn-badge">
@@ -115,11 +278,28 @@ export function NodeForgeGraphNode({ data, selected }: NodeProps<NodeForgeNode>)
 
       <div className="nfn-body">
         {detail && <span className="nfn-detail">{detail}</span>}
+        {valueInputs.length > 0 && (
+          <div className="nfn-inputs">
+            {valueInputs.map((input) => (
+              <span key={input.id}>{input.label}</span>
+            ))}
+          </div>
+        )}
         <p className="nfn-desc">{data.description}</p>
       </div>
 
-      {data.hasOutput !== false && (
-        <Handle className="node-port source" type="source" position={Position.Right} />
+      {data.hasOutput !== false && !isValueProducer && (
+        <Handle id="exec-out" className="node-port exec-port source" type="source" position={Position.Right} />
+      )}
+
+      {isValueProducer && (
+        <Handle
+          id="value-out"
+          className="node-port value-port source"
+          type="source"
+          position={Position.Right}
+          style={{ top: 82 }}
+        />
       )}
     </div>
   );

@@ -64,6 +64,10 @@ button {
 }
 
 .toolbar {
+  position: relative;
+  /* Lift the toolbar's stacking context above the workspace panels so the File
+     menu popover (and other dropdowns) render on top of them. */
+  z-index: 50;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -343,9 +347,15 @@ button {
   background: rgba(91, 140, 255, 0.15);
 }
 
+.scene-drop-zone,
 .scene-canvas {
   width: 100%;
   height: 100%;
+}
+
+.scene-drop-zone {
+  min-width: 0;
+  min-height: 0;
 }
 
 .viewport-fallback {
@@ -781,6 +791,12 @@ button {
   align-content: center;
 }
 
+.empty-state.compact {
+  height: auto;
+  min-height: 92px;
+  border-bottom: 1px solid var(--border);
+}
+
 .scripting-body {
   display: grid;
   grid-template-columns: minmax(174px, 210px) minmax(0, 1fr) minmax(220px, 260px);
@@ -826,6 +842,13 @@ button {
 
 .blueprint-card span,
 .script-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.field-hint {
   margin: 0;
   color: var(--muted);
   font-size: 11px;
@@ -993,6 +1016,184 @@ button {
   color: var(--muted);
 }
 
+.node-vector-field {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.node-vector-field label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(8, 10, 15, 0.44);
+}
+
+.node-vector-field label span {
+  display: grid;
+  height: 30px;
+  place-items: center;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.node-vector-field input {
+  height: 30px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+}
+
+.graph-library {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.graph-library section {
+  display: grid;
+  gap: 8px;
+}
+
+.library-heading,
+.library-row,
+.table-tools,
+.table-column-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.library-heading {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.library-heading button,
+.library-card button,
+.table-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 26px;
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(29, 34, 48, 0.74);
+  cursor: pointer;
+}
+
+.library-heading button:hover,
+.library-card button:hover,
+.table-tools button:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.library-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(29, 34, 48, 0.48);
+}
+
+.library-row input,
+.library-row select,
+.library-card > input,
+.library-card > select,
+.table-column-editor input,
+.table-column-editor select,
+.table-cell-editor input,
+.table-cell-editor select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(8, 10, 15, 0.44);
+  outline: none;
+}
+
+.library-row.two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.library-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(8, 10, 15, 0.34);
+  font-size: 11px;
+}
+
+.library-check input {
+  accent-color: var(--primary);
+}
+
+.data-table-card {
+  gap: 9px;
+}
+
+.table-tools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.table-tools button span {
+  font-size: 11px;
+}
+
+.table-columns,
+.table-rows,
+.table-row-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.table-column-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(70px, 0.7fr) 26px;
+}
+
+.table-row-editor {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.table-cell-editor {
+  display: grid;
+  gap: 4px;
+}
+
+.table-cell-editor > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .fire-event-button {
   display: inline-flex;
   align-items: center;
@@ -1051,7 +1252,7 @@ button {
   box-shadow:
     0 16px 32px rgba(0, 0, 0, 0.38),
     0 1px 0 rgba(255, 255, 255, 0.06) inset;
-  overflow: hidden;
+  /* No overflow:hidden — it would clip the connection handles that sit just outside the node. */
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
@@ -1093,12 +1294,23 @@ button {
 .nodeforge-node.value {
   --tone: #3dd0dc;
 }
+.nodeforge-node.variable {
+  --tone: #8bd35f;
+}
+.nodeforge-node.data {
+  --tone: #f0d46a;
+}
+.nodeforge-node.persistence {
+  --tone: #ff9f6b;
+}
 
 .nfn-head {
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 9px 11px;
+  /* Round the top corners ourselves now that the node no longer clips overflow. */
+  border-radius: 11px 11px 0 0;
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--tone) 28%, transparent),
@@ -1172,18 +1384,64 @@ button {
   line-height: 1.4;
 }
 
+.nfn-inputs {
+  display: grid;
+  gap: 4px;
+  padding-left: 3px;
+}
+
+.nfn-inputs span {
+  position: relative;
+  min-height: 18px;
+  padding-left: 12px;
+  color: color-mix(in srgb, var(--tone) 42%, #ffffff);
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.nfn-inputs span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--tone) 80%, #ffffff);
+}
+
 .node-port.react-flow__handle {
-  width: 11px;
-  height: 11px;
+  z-index: 5;
+  width: 12px;
+  height: 12px;
   border: 2px solid #0f1117;
   background: var(--tone, #5b8cff);
 }
 
+.node-port.value-port.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-color: #0f1117;
+  background: #3dd0dc;
+}
+
+.node-port.react-flow__handle:hover {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 35%, transparent);
+}
+
 .node-port.target {
-  left: -6px;
+  left: -7px;
 }
 
 .node-port.source {
+  right: -7px;
+}
+
+.node-port.value-port.target {
+  left: -6px;
+}
+
+.node-port.value-port.source {
   right: -6px;
 }
 
@@ -1840,4 +2098,379 @@ button {
 .asset-icon-preview.unresolved {
   opacity: 0.45;
   filter: grayscale(1);
+}
+
+/* ---------- Project browser tree ---------- */
+.project-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 6px 12px;
+}
+
+.project-tree.drop {
+  outline: 1px dashed var(--primary);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tree-row.selected {
+  background: rgba(91, 140, 255, 0.14);
+}
+
+.tree-row.active {
+  background: rgba(61, 220, 151, 0.14);
+}
+
+.tree-row.drop {
+  background: rgba(91, 140, 255, 0.22);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.tree-row svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.tree-unresolved {
+  opacity: 0.45;
+}
+
+.tree-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--primary);
+  border-radius: 5px;
+  background: rgba(8, 10, 15, 0.6);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+/* ---------- Context menu ---------- */
+.context-menu {
+  position: fixed;
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.context-menu button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu button:hover {
+  background: rgba(91, 140, 255, 0.16);
+}
+
+.context-menu button.danger {
+  color: var(--danger);
+}
+
+.context-menu button.danger:hover {
+  background: rgba(255, 107, 107, 0.16);
+}
+
+.context-menu hr {
+  margin: 4px 6px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- Dockview workspace ---------- */
+.nf-dockview-host {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  padding: 6px;
+  /* Match the NodeForge/Feather palette. */
+  --dv-background-color: transparent;
+  --dv-group-view-background-color: var(--panel);
+  --dv-tabs-and-actions-container-background-color: rgba(12, 14, 20, 0.6);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--panel-light);
+  --dv-activegroup-hiddenpanel-tab-background-color: rgba(29, 34, 48, 0.4);
+  --dv-inactivegroup-visiblepanel-tab-background-color: rgba(29, 34, 48, 0.55);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: rgba(29, 34, 48, 0.3);
+  --dv-tab-divider-color: var(--border);
+  --dv-separator-border: var(--border);
+  --dv-paneview-active-outline-color: var(--primary);
+  --dv-icon-hover-background-color: rgba(255, 255, 255, 0.08);
+  --dv-activegroup-visiblepanel-tab-color: var(--text);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--muted);
+}
+
+.nf-dockview-host > .dockview-theme-abyss {
+  height: 100%;
+  background: transparent;
+}
+
+/* Dockview supplies the group frame; drop the panels' own border/shadow inside it. */
+.nf-dockview-host .panel,
+.nf-dockview-host .viewport-panel {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.dv-header-actions {
+  display: inline-flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+/* Popped-out panel window: the single panel fills the whole OS window. */
+.panel-window {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #0f1117);
+}
+
+.panel-window > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.panel-window-empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.dv-float-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dv-float-action:hover {
+  color: var(--text);
+}
+
+/* ---------- Node search menu (right-click on graph) ---------- */
+.node-search {
+  position: fixed;
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  width: 248px;
+  max-height: 340px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.node-search-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.node-search-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.node-search-list {
+  overflow-y: auto;
+  padding: 5px;
+}
+
+.node-search-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.node-search-list button.active,
+.node-search-list button:hover {
+  background: rgba(91, 140, 255, 0.16);
+}
+
+.node-search-list button small {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.node-search-empty {
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ---------- Save toast ---------- */
+.save-toast {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border-strong);
+}
+
+.save-toast.success {
+  color: var(--success);
+  background: rgba(61, 220, 151, 0.12);
+  border-color: rgba(61, 220, 151, 0.3);
+}
+
+.save-toast.error {
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.12);
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.node-delete-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--danger);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.node-delete-button:hover {
+  background: rgba(255, 107, 107, 0.18);
+}
+
+/* ---------- Runtime console (Print node output) ---------- */
+.runtime-console {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, 38vw);
+  max-height: 220px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: rgba(8, 10, 15, 0.82);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.runtime-console-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.runtime-console-header button {
+  margin-left: auto;
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.runtime-console-header button:hover {
+  color: var(--text);
+}
+
+.runtime-console-body {
+  overflow-y: auto;
+  padding: 8px 10px;
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #cdd5e3;
+}
+
+.runtime-console-line {
+  white-space: pre-wrap;
+  word-break: break-word;
 }

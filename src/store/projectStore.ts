@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { getPlatform, isDesktop } from '../platform';
 import { blankProject } from '../project/serialize';
+import { buildGameBundle, embedAssets } from '../project/exportGame';
 import { useEditorStore } from './editorStore';
 
 interface RecentProject {
@@ -16,11 +17,14 @@ interface ProjectState {
   recentProjects: RecentProject[];
   busy: boolean;
   error: string | null;
+  toast: { kind: 'success' | 'error'; message: string } | null;
+  clearToast: () => void;
   newProject: (name: string) => Promise<void>;
   openProject: () => Promise<void>;
   openRecent: (dir: string) => Promise<void>;
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
+  exportGame: () => Promise<void>;
   useDemo: () => void;
   closeProject: () => void;
   clearError: () => void;
@@ -45,6 +49,8 @@ export const useProjectStore = create<ProjectState>()(
         recentProjects: [],
         busy: false,
         error: null,
+        toast: null,
+        clearToast: () => set({ toast: null }),
 
         newProject: async (name) => {
           set({ busy: true, error: null });
@@ -107,8 +113,10 @@ export const useProjectStore = create<ProjectState>()(
             const project = { ...useEditorStore.getState().exportProject(), name: projectName };
             await platform.saveProject(projectDir, project);
             useEditorStore.getState().markClean();
+            set({ toast: { kind: 'success', message: projectDir === 'web' ? 'Project downloaded' : 'Project saved' } });
           } catch (error) {
-            set({ error: errorMessage(error) });
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Save failed: ${message}` } });
           } finally {
             set({ busy: false });
           }
@@ -124,8 +132,33 @@ export const useProjectStore = create<ProjectState>()(
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
             useEditorStore.getState().markClean();
+            set({ toast: { kind: 'success', message: opened.dir === 'web' ? 'Project downloaded' : 'Project saved' } });
           } catch (error) {
-            set({ error: errorMessage(error) });
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Save failed: ${message}` } });
+          } finally {
+            set({ busy: false });
+          }
+        },
+
+        exportGame: async () => {
+          const { projectName, hasProject } = get();
+          if (!hasProject) return;
+          set({ busy: true, error: null });
+          try {
+            const platform = await getPlatform();
+            const editor = useEditorStore.getState();
+            const project = { ...editor.exportProject(), name: projectName };
+            // Inline asset bytes (from the live, url-carrying assets) so the bundle is self-contained.
+            project.assets = await embedAssets(editor.assets);
+            const bundle = buildGameBundle(project);
+            const destination = await platform.exportGame(projectName, bundle);
+            if (destination) {
+              set({ toast: { kind: 'success', message: `Game exported: ${destination}` } });
+            }
+          } catch (error) {
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Export failed: ${message}` } });
           } finally {
             set({ busy: false });
           }

@@ -1,10 +1,17 @@
-import { Canvas, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, Environment, Lightformer, OrbitControls, TransformControls } from '@react-three/drei';
 import { Move3D, Rotate3D, Scaling, View } from 'lucide-react';
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type * as THREE from 'three';
+import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useProjectStore } from '../store/projectStore';
+import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
+import { SkinnedModel } from '../three/SkinnedModel';
+import { useResolvedMaterial } from '../three/resolveMaterial';
+import { assetDrag, isAssetDrag, readAssetDragId } from './dragShared';
 import type { SceneObject } from '../types';
+
+type DropContext = { camera: THREE.Camera; canvas: HTMLCanvasElement };
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
 
@@ -38,12 +45,56 @@ class WebGLErrorBoundary extends Component<{ children: ReactNode }, { failed: bo
 
 function Primitive({ object, selected }: { object: SceneObject; selected: boolean }) {
   const renderer = object.renderer;
-  const color = renderer?.color ?? '#9CA3AF';
+  const resolved = useResolvedMaterial(renderer);
+  const modelUrl = useModelUrl(renderer?.modelAssetId);
+  const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
+  // Built-in geometries use the standard (flipped) UV convention; only load when not using a model.
+  const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
+  const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
+
+  // A skinned model with an enabled animator plays its clips; otherwise the model is static.
+  if (usingModel && object.animator?.enabled) {
+    return (
+      <Suspense fallback={null}>
+        <SkinnedModel
+          url={modelUrl as string}
+          clip={object.animator.clip}
+          speed={object.animator.speed}
+          loop={object.animator.loop}
+        />
+      </Suspense>
+    );
+  }
+
+  // An imported model replaces the built-in mesh when one is assigned and resolvable.
+  if (usingModel) {
+    return (
+      <Suspense fallback={null}>
+        <ModelAsset
+          url={modelUrl as string}
+          material={{
+            color: resolved.color,
+            metalness: resolved.metalness,
+            roughness: resolved.roughness,
+            emissiveColor: resolved.emissiveColor,
+            emissiveIntensity: resolved.emissiveIntensity,
+            override: resolved.overrideModel,
+            baseColorUrl: resolved.baseColorUrl,
+            normalUrl: resolved.normalUrl,
+          }}
+        />
+      </Suspense>
+    );
+  }
   const commonMaterial = (
     <meshStandardMaterial
-      color={color}
-      metalness={renderer?.metalness ?? 0.08}
-      roughness={renderer?.roughness ?? 0.72}
+      color={resolved.color}
+      metalness={resolved.metalness}
+      roughness={resolved.roughness}
+      emissive={resolved.emissiveColor}
+      emissiveIntensity={resolved.emissiveIntensity}
+      map={builtinBaseTexture ?? null}
+      normalMap={builtinNormalTexture ?? null}
     />
   );
 
@@ -250,10 +301,76 @@ function ViewportFallback() {
   );
 }
 
+/** Lives inside the Canvas so it can expose the live camera + canvas DOM node for drop raycasting. */
+function DropController({ contextRef }: { contextRef: MutableRefObject<DropContext | null> }) {
+  const camera = useThree((state) => state.camera);
+  const gl = useThree((state) => state.gl);
+  useEffect(() => {
+    contextRef.current = { camera, canvas: gl.domElement };
+    return () => {
+      contextRef.current = null;
+    };
+  }, [camera, gl, contextRef]);
+  return null;
+}
+
 export function ViewportPanel() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+
+  // Drag-and-drop a model from the project browser onto the ground under the cursor.
+  const dropContextRef = useRef<DropContext | null>(null);
+  const groundPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    // Rely on the shared holder (the webview may hide our custom type during dragover).
+    if (!isAssetDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      const assetId = readAssetDragId(event.dataTransfer);
+      assetDrag.id = null;
+      if (!assetId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const store = useEditorStore.getState();
+      const asset = store.assets.find((item) => item.id === assetId);
+      if (!asset) return;
+      if (asset.type !== 'model') {
+        useProjectStore.setState({
+          toast: { kind: 'error', message: 'Only 3D models can be dropped into the scene.' },
+        });
+        return;
+      }
+
+      // Project the cursor onto the ground plane (y=0); fall back to the origin if unavailable.
+      let position: [number, number, number] = [0, 0, 0];
+      const ctx = dropContextRef.current;
+      if (ctx) {
+        const rect = ctx.canvas.getBoundingClientRect();
+        const ndc = new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
+        raycaster.setFromCamera(ndc, ctx.camera);
+        const hit = new THREE.Vector3();
+        if (raycaster.ray.intersectPlane(groundPlane, hit)) {
+          position = [Number(hit.x.toFixed(2)), 0, Number(hit.z.toFixed(2))];
+        }
+      }
+
+      const name = asset.name.replace(/\.[^./\\]+$/, '');
+      const id = store.createObjectWithProps('cube', { name, position });
+      store.setObjectModel(id, assetId);
+    },
+    [groundPlane, raycaster],
+  );
 
   return (
     <section className="viewport-panel">
@@ -278,15 +395,18 @@ export function ViewportPanel() {
           ))}
         </div>
       </div>
-      {hasWebGL ? (
-        <WebGLErrorBoundary>
-          <Canvas className="scene-canvas" shadows camera={{ position: [6, 4.2, 7], fov: 46 }}>
-            <SceneContent transformMode={transformMode} />
-          </Canvas>
-        </WebGLErrorBoundary>
-      ) : (
-        <ViewportFallback />
-      )}
+      <div className="scene-drop-zone" onDragOverCapture={handleDragOver} onDropCapture={handleDrop}>
+        {hasWebGL ? (
+          <WebGLErrorBoundary>
+            <Canvas className="scene-canvas" shadows camera={{ position: [6, 4.2, 7], fov: 46 }}>
+              <SceneContent transformMode={transformMode} />
+              <DropController contextRef={dropContextRef} />
+            </Canvas>
+          </WebGLErrorBoundary>
+        ) : (
+          <ViewportFallback />
+        )}
+      </div>
     </section>
   );
 }

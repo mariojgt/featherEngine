@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "build:player": "tsc -b && BUILD_TARGET=player vite build",
     "preview": "vite preview --host 0.0.0.0",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -15,6 +16,7 @@
     "@ai-sdk/anthropic": "^3.0.81",
     "@ai-sdk/google": "^3.0.80",
     "@ai-sdk/openai": "^3.0.67",
+    "@dimforge/rapier3d-compat": "^0.14.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.10",
     "@react-three/rapier": "^1.5.0",
@@ -24,6 +26,7 @@
     "@xyflow/react": "^12.3.5",
     "ai": "^6.0.193",
     "clsx": "^2.1.1",
+    "dockview-react": "^6.6.1",
     "framer-motion": "^11.15.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

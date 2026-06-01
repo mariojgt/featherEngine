@@ -21,8 +21,12 @@ export function splitProject(project: NodeForgeProject): {
     savedAt: new Date().toISOString(),
     activeSceneId: project.activeSceneId,
     scenes: project.scenes.map((scene) => ({ id: scene.id, name: scene.name, file: sceneFile(scene.id) })),
-    // Never persist runtime-only fields (url, unresolved).
-    assets: project.assets.map(({ url: _url, unresolved: _unresolved, ...asset }) => asset),
+    // Never persist runtime-only / bundle-only fields (url, unresolved, embedded data).
+    assets: project.assets.map(({ url: _url, unresolved: _unresolved, data: _data, ...asset }) => asset),
+    folders: project.folders,
+    variables: project.variables,
+    dataAssets: project.dataAssets,
+    materials: project.materials,
     blueprints: project.blueprints,
     graphs: project.graphs,
   };
@@ -39,6 +43,10 @@ export function joinProject(manifest: ProjectManifest, scenes: Scene[]): NodeFor
     activeSceneId: manifest.activeSceneId,
     scenes,
     assets: manifest.assets,
+    folders: manifest.folders ?? [],
+    variables: manifest.variables ?? [],
+    dataAssets: manifest.dataAssets ?? ((manifest as unknown as { dataTables?: NodeForgeProject['dataAssets'] }).dataTables ?? []),
+    materials: manifest.materials ?? [],
     blueprints: manifest.blueprints,
     graphs: manifest.graphs,
   };
@@ -62,6 +70,12 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       activeSceneId,
       scenes: scenes.length ? scenes : [{ id: 'scene-main', name: 'Main', objects: [] }],
       assets: ((data.assets as NodeForgeProject['assets']) ?? []).map((asset) => ({ ...asset, url: undefined })),
+      folders: (data.folders as NodeForgeProject['folders']) ?? [],
+      variables: (data.variables as NodeForgeProject['variables']) ?? [],
+      dataAssets:
+        (data.dataAssets as NodeForgeProject['dataAssets']) ??
+        ((data.dataTables as NodeForgeProject['dataAssets']) ?? []),
+      materials: (data.materials as NodeForgeProject['materials']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
     };
@@ -82,6 +96,12 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
         url: undefined,
         unresolved: true,
       })),
+      folders: [],
+      variables: (data.variables as NodeForgeProject['variables']) ?? [],
+      dataAssets:
+        (data.dataAssets as NodeForgeProject['dataAssets']) ??
+        ((data.dataTables as NodeForgeProject['dataAssets']) ?? []),
+      materials: (data.materials as NodeForgeProject['materials']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
     };
@@ -99,6 +119,10 @@ export function blankProject(name: string): NodeForgeProject {
     activeSceneId: sceneId,
     scenes: [{ id: sceneId, name: 'Main', objects: [] }],
     assets: [],
+    folders: [],
+    variables: [],
+    dataAssets: [],
+    materials: [],
     blueprints: [],
     graphs: [],
   };

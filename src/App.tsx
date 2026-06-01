@@ -1,19 +1,18 @@
 import { useEffect } from 'react';
 import { AIChatWidget } from './components/AIChatWidget';
-import { AssetBrowser } from './components/AssetBrowser';
 import { Launcher } from './components/Launcher';
 import { useProjectStore } from './store/projectStore';
-import { HierarchyPanel } from './components/HierarchyPanel';
-import { InspectorPanel } from './components/InspectorPanel';
 import { Toolbar } from './components/Toolbar';
-import { ViewportPanel } from './components/Viewport';
-import { VisualScriptingPanel } from './components/VisualScriptingPanel';
+import { Workspace } from './components/Workspace';
+import { RuntimeConsole } from './components/RuntimeConsole';
 import { useEditorStore } from './store/editorStore';
+import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 
 function RuntimePreviewLoop() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const tickRuntime = useEditorStore((state) => state.tickRuntime);
   const setRuntimeKey = useEditorStore((state) => state.setRuntimeKey);
+  useRuntimeAudio();
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -63,13 +62,8 @@ export default function App() {
     <div className="editor-shell">
       <RuntimePreviewLoop />
       <Toolbar />
-      <main className="workspace">
-        <HierarchyPanel />
-        <ViewportPanel />
-        <InspectorPanel />
-        <AssetBrowser />
-        <VisualScriptingPanel />
-      </main>
+      <Workspace />
+      <RuntimeConsole />
       <AIChatWidget />
     </div>
   );

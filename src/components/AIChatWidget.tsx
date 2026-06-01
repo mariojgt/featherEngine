@@ -145,7 +145,7 @@ export function AIChatWidget() {
             <header className="ai-widget-header">
               <div className="ai-widget-title">
                 <Bot size={16} aria-hidden />
-                <strong>NodeForge Assistant</strong>
+                <strong>Feather Assistant</strong>
               </div>
               <div className="ai-widget-actions">
                 <button

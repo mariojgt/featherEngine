@@ -4,14 +4,18 @@ import type { OpenedProject, Platform } from './types';
 
 const WEB_DIR = 'web';
 
-function download(name: string, project: NodeForgeProject) {
-  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+function downloadJson(fileName: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = name.endsWith('.nforge') ? name : `${name}.nforge`;
+  anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function download(name: string, project: NodeForgeProject) {
+  downloadJson(name.endsWith('.nforge') ? name : `${name}.nforge`, project);
 }
 
 function pickFile(): Promise<File | null> {
@@ -57,5 +61,10 @@ export const webPlatform: Platform = {
 
   resolveAssetUrl() {
     return '';
+  },
+
+  async exportGame(name, bundle) {
+    downloadJson('game.json', bundle);
+    return `${name} downloaded as game.json`;
   },
 };

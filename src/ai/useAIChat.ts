@@ -39,7 +39,17 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'update_transform':
       return 'Moved object';
     case 'update_renderer':
+      return input.textureAssetId ? 'Applied texture' : 'Updated material';
+    case 'set_model':
+      return input.assetId ? 'Assigned model' : 'Cleared model';
+    case 'create_material':
+      return `Created material${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'update_material':
       return 'Updated material';
+    case 'set_object_material':
+      return input.materialId ? 'Assigned material' : 'Detached material';
+    case 'delete_material':
+      return 'Deleted material';
     case 'set_physics':
       return 'Configured physics';
     case 'rename_object':
@@ -50,6 +60,22 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Deleted object';
     case 'create_blueprint':
       return `Created blueprint${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'create_folder':
+      return `Created folder${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'move_to_folder':
+      return input.folderId ? 'Moved to folder' : 'Moved to root';
+    case 'create_variable':
+      return `Created variable${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'update_variable':
+      return 'Updated variable';
+    case 'create_data_asset':
+      return `Created Data Asset${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'add_data_asset_column':
+      return 'Added Data Asset column';
+    case 'add_data_asset_row':
+      return 'Added Data Asset row';
+    case 'set_data_asset_cell':
+      return 'Set Data Asset cell';
     case 'add_node':
       return `Added "${String(input.type ?? 'node')}" node`;
     case 'connect_nodes':
@@ -58,10 +84,14 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Tuned node';
     case 'attach_blueprint':
       return 'Attached blueprint';
+    case 'open_object_script':
+      return 'Opened object script';
     case 'set_playing':
       return input.playing ? 'Started Play' : 'Stopped Play';
     case 'fire_event':
       return `Fired "${String(input.eventName ?? '')}"`;
+    case 'export_game':
+      return 'Exported game';
     default:
       return toolName;
   }

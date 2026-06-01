@@ -1,6 +1,6 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { join } from '@tauri-apps/api/path';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists, mkdir, readTextFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import type { NodeForgeProject, ProjectManifest, Scene } from '../types';
 import { ASSETS_DIR, SCENES_DIR, blankProject, joinProject, splitProject } from '../project/serialize';
@@ -51,7 +51,7 @@ export const tauriPlatform: Platform = {
   },
 
   async openProject() {
-    const dir = await open({ directory: true, multiple: false, title: 'Open NodeForge project' });
+    const dir = await open({ directory: true, multiple: false, title: 'Open Feather project' });
     if (typeof dir !== 'string') return null;
     return this.openProjectAt(dir);
   },
@@ -79,5 +79,16 @@ export const tauriPlatform: Platform = {
   resolveAssetUrl(_dir, path) {
     // Assets are resolved to absolute urls at load time (readProjectDir); this is a fallback.
     return convertFileSrc(path);
+  },
+
+  async exportGame(_name, bundle) {
+    const target = await save({
+      title: 'Export game bundle',
+      defaultPath: 'game.json',
+      filters: [{ name: 'Game bundle', extensions: ['json'] }],
+    });
+    if (typeof target !== 'string') return null;
+    await writeTextFile(target, JSON.stringify(bundle, null, 2));
+    return target;
   },
 };

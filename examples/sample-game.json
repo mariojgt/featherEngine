@@ -1,0 +1,102 @@
+{
+  "bundleVersion": "1.0.0",
+  "startSceneId": "scene-main",
+  "project": {
+    "version": "0.2.0",
+    "name": "Sample Game",
+    "activeSceneId": "scene-main",
+    "scenes": [
+      {
+        "id": "scene-main",
+        "name": "Main",
+        "objects": [
+          {
+            "id": "obj-player",
+            "name": "Player",
+            "kind": "cube",
+            "transform": { "position": [0, 1, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1] },
+            "renderer": { "enabled": true, "mesh": "cube", "color": "#5B8CFF", "metalness": 0.1, "roughness": 0.65 },
+            "physics": { "enabled": true, "bodyType": "dynamic", "collider": "box", "mass": 1, "gravityScale": 1, "friction": 0.6, "linearDamping": 0, "angularDamping": 0.05 },
+            "script": { "blueprintId": "blueprint-player-controller", "graphId": "graph-player-controller", "enabled": true }
+          },
+          {
+            "id": "obj-ground",
+            "name": "Ground",
+            "kind": "plane",
+            "transform": { "position": [0, 0, 0], "rotation": [-1.5707963267948966, 0, 0], "scale": [8, 8, 1] },
+            "renderer": { "enabled": true, "mesh": "plane", "color": "#2B3345", "metalness": 0.1, "roughness": 0.65 },
+            "physics": { "enabled": true, "bodyType": "fixed", "collider": "box", "mass": 1, "gravityScale": 1, "friction": 0.6, "linearDamping": 0, "angularDamping": 0.05 }
+          },
+          {
+            "id": "obj-enemy",
+            "name": "Enemy",
+            "kind": "sphere",
+            "transform": { "position": [2.6, 0.75, -1.2], "rotation": [0, 0, 0], "scale": [1, 1, 1] },
+            "renderer": { "enabled": true, "mesh": "sphere", "color": "#FF6B6B", "metalness": 0.1, "roughness": 0.65 },
+            "physics": { "enabled": true, "bodyType": "dynamic", "collider": "sphere", "mass": 1, "gravityScale": 1, "friction": 0.6, "linearDamping": 0, "angularDamping": 0.05 }
+          },
+          {
+            "id": "obj-light",
+            "name": "Directional Light",
+            "kind": "light",
+            "transform": { "position": [4, 6, 3], "rotation": [0, 0, 0], "scale": [1, 1, 1] }
+          },
+          {
+            "id": "obj-camera",
+            "name": "Main Camera",
+            "kind": "camera",
+            "transform": { "position": [4, 3, 6], "rotation": [0, 0, 0], "scale": [1, 1, 1] }
+          }
+        ]
+      }
+    ],
+    "assets": [],
+    "folders": [],
+    "blueprints": [
+      {
+        "id": "blueprint-player-controller",
+        "name": "Player Controller",
+        "description": "Reusable movement Blueprint.",
+        "graphId": "graph-player-controller",
+        "color": "#5B8CFF",
+        "createdAt": 0
+      }
+    ],
+    "graphs": [
+      {
+        "id": "graph-player-controller",
+        "name": "Player Controller",
+        "nodes": [
+          {
+            "id": "node-key-w",
+            "type": "nodeforge",
+            "position": { "x": 48, "y": 48 },
+            "data": { "label": "Key Down: W", "nodeKind": "event.keyDown", "category": "Events", "description": "", "tone": "event", "keyCode": "KeyW", "hasInput": false, "hasOutput": true }
+          },
+          {
+            "id": "node-move-w",
+            "type": "nodeforge",
+            "position": { "x": 312, "y": 48 },
+            "data": { "label": "Translate Z -3.6", "nodeKind": "action.translate", "category": "Runtime", "description": "", "tone": "runtime", "axis": "z", "amount": -3.6, "hasInput": true, "hasOutput": false }
+          },
+          {
+            "id": "node-key-s",
+            "type": "nodeforge",
+            "position": { "x": 48, "y": 200 },
+            "data": { "label": "Key Down: S", "nodeKind": "event.keyDown", "category": "Events", "description": "", "tone": "event", "keyCode": "KeyS", "hasInput": false, "hasOutput": true }
+          },
+          {
+            "id": "node-move-s",
+            "type": "nodeforge",
+            "position": { "x": 312, "y": 200 },
+            "data": { "label": "Translate Z 3.6", "nodeKind": "action.translate", "category": "Runtime", "description": "", "tone": "runtime", "axis": "z", "amount": 3.6, "hasInput": true, "hasOutput": false }
+          }
+        ],
+        "edges": [
+          { "id": "edge-w", "source": "node-key-w", "target": "node-move-w", "animated": true, "type": "smoothstep" },
+          { "id": "edge-s", "source": "node-key-s", "target": "node-move-s", "animated": true, "type": "smoothstep" }
+        ]
+      }
+    ]
+  }
+}

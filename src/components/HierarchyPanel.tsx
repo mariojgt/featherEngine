@@ -1,6 +1,7 @@
 import { Box, Camera, Circle, FilePlus2, LampDesk, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { focusWorkspacePanel } from './workspacePanels';
 import type { SceneObject, SceneObjectKind } from '../types';
 
 const objectIcon: Record<SceneObjectKind, typeof Box> = {
@@ -16,13 +17,20 @@ const objectIcon: Record<SceneObjectKind, typeof Box> = {
 function HierarchyRow({ object }: { object: SceneObject }) {
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectObject = useEditorStore((state) => state.selectObject);
+  const openObjectScript = useEditorStore((state) => state.openObjectScript);
   const Icon = objectIcon[object.kind];
 
   return (
     <button
       className={clsx('hierarchy-row', selectedObjectId === object.id && 'selected')}
       onClick={() => selectObject(object.id)}
-      title={object.name}
+      onDoubleClick={() => {
+        // Open the object's blueprint (creating + attaching one if it has none)
+        // and reveal the Scripting panel.
+        openObjectScript(object.id);
+        focusWorkspacePanel('scripting');
+      }}
+      title={`${object.name} — double-click to edit its script`}
     >
       <Icon size={15} aria-hidden />
       <span>{object.name}</span>

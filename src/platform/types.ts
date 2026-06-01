@@ -22,4 +22,10 @@ export interface Platform {
   importAsset(dir: string, file: File): Promise<{ path: string; url: string }>;
   /** Resolve a stored relative asset path to a runtime url for rendering. */
   resolveAssetUrl(dir: string, path: string): string;
+  /**
+   * Write a standalone game bundle (the `game.json` the player loads).
+   * Downloads the file on web; prompts for a save location on desktop.
+   * Returns a short human-readable destination label, or null if cancelled.
+   */
+  exportGame(name: string, bundle: unknown): Promise<string | null>;
 }

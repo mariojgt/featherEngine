@@ -1,9 +1,9 @@
-# NodeForge Engine
+# Feather Engine
 ### MVP v2 – Browser-Based Visual Game Engine
 
 ## Vision
 
-NodeForge is a modern browser-based game engine built with:
+Feather is a modern browser-based game engine built with:
 
 - Three.js (3D rendering)
 - React
@@ -609,4 +609,4 @@ The MVP is successful when a user can:
 7. Export standalone game.
 8. Deploy exported game online.
 
-At that point, NodeForge is a real visual game engine rather than a demo.
+At that point, Feather is a real visual game engine rather than a demo.

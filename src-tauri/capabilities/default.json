@@ -2,9 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Core, dialog and filesystem access for project folders",
-  "windows": ["main"],
+  "windows": ["main", "panel-*"],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-focus",
     "dialog:default",
     "fs:default",
     "fs:allow-mkdir",

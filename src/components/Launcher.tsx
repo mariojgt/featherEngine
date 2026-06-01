@@ -19,7 +19,7 @@ export function Launcher() {
         <div className="launcher-brand">
           <Gamepad2 size={26} aria-hidden />
           <div>
-            <strong>NodeForge Engine</strong>
+            <strong>Feather Engine</strong>
             <span>{isDesktop ? 'Desktop' : 'Web preview'}</span>
           </div>
         </div>

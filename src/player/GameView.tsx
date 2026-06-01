@@ -1,0 +1,158 @@
+import { Canvas } from '@react-three/fiber';
+import { ContactShadows, Environment, Lightformer, OrbitControls, PerspectiveCamera } from '@react-three/drei';
+import { Suspense, useLayoutEffect, useMemo } from 'react';
+import { useThree } from '@react-three/fiber';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
+import { useResolvedMaterial } from '../three/resolveMaterial';
+import type { SceneObject, Vector3Tuple } from '../types';
+
+/** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
+function GameMesh({ object }: { object: SceneObject }) {
+  const renderer = object.renderer;
+  const resolved = useResolvedMaterial(renderer);
+  const modelUrl = useModelUrl(renderer?.modelAssetId);
+  const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
+  const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
+  const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
+
+  if (object.kind === 'light') {
+    return <directionalLight intensity={2.4} castShadow position={[0, 0, 0]} />;
+  }
+
+  // Cameras and empties are invisible scaffolding at runtime.
+  if (object.kind === 'camera' || object.kind === 'empty' || !renderer || !renderer.enabled) {
+    return null;
+  }
+
+  // An imported model replaces the built-in mesh when one is assigned and resolvable.
+  if (usingModel) {
+    return (
+      <Suspense fallback={null}>
+        <ModelAsset
+          url={modelUrl as string}
+          material={{
+            color: resolved.color,
+            metalness: resolved.metalness,
+            roughness: resolved.roughness,
+            emissiveColor: resolved.emissiveColor,
+            emissiveIntensity: resolved.emissiveIntensity,
+            override: resolved.overrideModel,
+            baseColorUrl: resolved.baseColorUrl,
+            normalUrl: resolved.normalUrl,
+          }}
+        />
+      </Suspense>
+    );
+  }
+
+  const material = (
+    <meshStandardMaterial
+      color={resolved.color}
+      metalness={resolved.metalness}
+      roughness={resolved.roughness}
+      emissive={resolved.emissiveColor}
+      emissiveIntensity={resolved.emissiveIntensity}
+      map={builtinBaseTexture ?? null}
+      normalMap={builtinNormalTexture ?? null}
+    />
+  );
+
+  if (renderer.mesh === 'sphere') {
+    return (
+      <mesh castShadow receiveShadow>
+        <sphereGeometry args={[0.55, 32, 24]} />
+        {material}
+      </mesh>
+    );
+  }
+
+  if (renderer.mesh === 'capsule') {
+    return (
+      <mesh castShadow receiveShadow>
+        <capsuleGeometry args={[0.34, 0.82, 8, 18]} />
+        {material}
+      </mesh>
+    );
+  }
+
+  if (renderer.mesh === 'plane') {
+    return (
+      <mesh receiveShadow>
+        <planeGeometry args={[1, 1, 12, 12]} />
+        {material}
+      </mesh>
+    );
+  }
+
+  return (
+    <mesh castShadow receiveShadow>
+      <boxGeometry args={[1, 1, 1]} />
+      {material}
+    </mesh>
+  );
+}
+
+/** Aims the active camera at the scene origin once it is mounted. */
+function CameraTarget({ target }: { target: Vector3Tuple }) {
+  const camera = useThree((state) => state.camera);
+  useLayoutEffect(() => {
+    camera.lookAt(target[0], target[1], target[2]);
+  }, [camera, target]);
+  return null;
+}
+
+function GameScene() {
+  const objects = useEditorStore(selectActiveObjects);
+
+  // Use the first authored camera object as the game view; otherwise allow free-orbit.
+  const cameraObject = useMemo(() => objects.find((object) => object.kind === 'camera'), [objects]);
+  const cameraPosition = cameraObject?.transform.position ?? ([6, 4.2, 7] as Vector3Tuple);
+
+  return (
+    <>
+      <color attach="background" args={['#0F1117']} />
+      <fog attach="fog" args={['#0F1117', 14, 28]} />
+      <ambientLight intensity={0.62} />
+      <directionalLight position={[6, 9, 4]} intensity={1.1} castShadow />
+      {/* Self-contained lighting (no external HDRI) so the export runs offline and under the desktop CSP. */}
+      <Environment resolution={256}>
+        <Lightformer intensity={1.2} position={[0, 6, 0]} scale={[10, 10, 1]} />
+        <Lightformer intensity={0.7} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
+        <Lightformer intensity={0.5} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
+      </Environment>
+
+      {cameraObject ? (
+        <>
+          <PerspectiveCamera makeDefault fov={50} position={cameraPosition} />
+          <CameraTarget target={[0, 0, 0]} />
+        </>
+      ) : (
+        <OrbitControls makeDefault enableDamping dampingFactor={0.07} minDistance={2.5} maxDistance={24} />
+      )}
+
+      <group>
+        {objects.map((object) => (
+          <group
+            key={object.id}
+            position={object.transform.position}
+            rotation={object.transform.rotation}
+            scale={object.transform.scale}
+          >
+            <GameMesh object={object} />
+          </group>
+        ))}
+      </group>
+
+      <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
+    </>
+  );
+}
+
+export function GameView() {
+  return (
+    <Canvas className="game-canvas" shadows camera={{ position: [6, 4.2, 7], fov: 50 }}>
+      <GameScene />
+    </Canvas>
+  );
+}
