@@ -116,11 +116,8 @@ const createFpsHud = (): UIDocument => {
     position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
     custom: { pointerEvents: 'none', background: 'radial-gradient(circle at center, transparent 55%, rgba(0,0,0,0.22) 100%)' },
   });
-  const crosshair = uiElement('text', 'Crosshair', {
-    position: 'absolute', left: '50%', top: '50%', width: '24px', height: '24px',
-    color: 'rgba(255,255,255,0.85)', fontSize: '22px', fontWeight: '600', textAlign: 'center',
-    custom: { lineHeight: '20px', transform: 'translate(-50%, -50%)', textShadow: '0 1px 8px rgba(0,0,0,0.6)' },
-  }, '+');
+  // (No static crosshair element — the engine's DynamicCrosshair overlay draws a live CoD-style reticle
+  // that spreads while moving and pops a hitmarker on hits.)
   // Bottom-right: weapon name + big ammo readout (Ammo / MagSize), turning red when empty.
   const weaponBox = uiElement('panel', 'Weapon Box', {
     position: 'absolute', display: 'flex', flexDirection: 'column',
@@ -142,7 +139,7 @@ const createFpsHud = (): UIDocument => {
     position: 'absolute', left: '50%', color: 'rgba(255,255,255,0.72)', fontSize: '12px', fontWeight: '500', textAlign: 'center',
     custom: { bottom: '20px', transform: 'translateX(-50%)', textShadow: '0 1px 4px rgba(0,0,0,0.7)' },
   }, '1-5 switch weapon · LMB fire · RMB aim · R reload · WASD move · Space jump');
-  root.children = [vignette, crosshair, weaponBox, hint];
+  root.children = [vignette, weaponBox, hint];
   return { id: makeId('ui'), name: 'FPS HUD', surface: 'screen', root, css: '', visibleOnStart: true, createdAt: Date.now() };
 };
 
@@ -640,6 +637,59 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     prop(`Brick ${i + 1}`, position, [0.7, 0.5, 0.4], '#b5563f', { modelAssetId: brickAsset?.id, dynamic: true }),
   );
 
+  // --- Example enemies: chase the player, stop in range, face + shoot on a cooldown. Fully node-based,
+  //     so the user can open "Enemy AI" in the Scripting panel and tweak ranges/behavior. ---
+  const enemyGraphId = makeId('graph');
+  const enemyBpId = makeId('bp');
+  const en: NodeForgeNode[] = [];
+  const enEdges: Edge[] = [];
+  const eUpdate = makeId('node');
+  const eDist = makeId('node');
+  const eCmpChase = makeId('node');
+  const eBranchChase = makeId('node');
+  const eDir = makeId('node');
+  const eMove = makeId('node');
+  const eCmpAtk = makeId('node');
+  const eBranchAtk = makeId('node');
+  const eFace = makeId('node');
+  const eCool = makeId('node');
+  const eShoot = makeId('node');
+  en.push(
+    graphNode(eUpdate, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Every frame.' }),
+    graphNode(eDist, 'Distance To Player', 'Runtime', 40, 200, { nodeKind: 'ai.distanceToPlayer', hasInput: false, description: 'Range to the player.' }),
+    graphNode(eCmpChase, 'Compare', 'Logic', 320, 200, { nodeKind: 'logic.compare', compareOp: '>', numberValue: 8, description: 'Farther than 8m?' }),
+    graphNode(eBranchChase, 'Branch', 'Logic', 560, 60, { nodeKind: 'logic.branch', description: 'Chase when far.' }),
+    graphNode(eDir, 'Direction To Player', 'Runtime', 560, 260, { nodeKind: 'ai.directionToPlayer', hasInput: false, description: 'Toward the player.' }),
+    graphNode(eMove, 'Move', 'Runtime', 820, 60, { nodeKind: 'action.move', amount: 2.8, description: 'Walk toward the player.' }),
+    graphNode(eCmpAtk, 'Compare', 'Logic', 320, 420, { nodeKind: 'logic.compare', compareOp: '<', numberValue: 18, description: 'Within 18m?' }),
+    graphNode(eBranchAtk, 'Branch', 'Logic', 560, 460, { nodeKind: 'logic.branch', description: 'Attack when in range.' }),
+    graphNode(eFace, 'Face Player', 'Runtime', 820, 420, { nodeKind: 'action.facePlayer', description: 'Aim at the player.' }),
+    graphNode(eCool, 'Cooldown', 'Logic', 1060, 420, { nodeKind: 'logic.cooldown', numberValue: 1.3, description: 'Fire rate (1.3s).' }),
+    graphNode(eShoot, 'Spawn Projectile', 'Runtime', 1300, 420, {
+      nodeKind: 'action.spawnProjectile', projectileSpeed: 22, projectileDamage: 8, projectileLife: 3, projectileColor: '#ff5a4d', projectileSize: 0.2,
+      description: 'Shoot at the player.',
+    }),
+  );
+  enEdges.push(
+    execEdge(eUpdate, eBranchChase), execEdge(eUpdate, eBranchAtk),
+    valueEdge(eDist, eCmpChase, 'a'), valueEdge(eCmpChase, eBranchChase, 'condition'), execEdge(eBranchChase, eMove), valueEdge(eDir, eMove, 'vector'),
+    valueEdge(eDist, eCmpAtk, 'a'), valueEdge(eCmpAtk, eBranchAtk, 'condition'), execEdge(eBranchAtk, eFace), execEdge(eFace, eCool), execEdge(eCool, eShoot),
+  );
+  const enemyGraph: ProjectGraph = { id: enemyGraphId, name: 'Enemy AI', nodes: en, edges: enEdges };
+  const enemyBlueprint: ScriptBlueprint = { id: enemyBpId, name: 'Enemy AI', description: 'Chase the player, then face + shoot on a cooldown.', graphId: enemyGraphId, color: '#FF5A5F', createdAt: Date.now() };
+
+  const enemySpots: Vector3Tuple[] = [[-6, 1, 22], [6, 1, 24], [0, 1, 28]];
+  const enemies: SceneObject[] = enemySpots.map((position, i) => ({
+    id: makeId('obj'),
+    name: `Enemy ${i + 1}`,
+    kind: 'capsule',
+    transform: { position, rotation: [0, 0, 0], scale: [1, 1, 1] },
+    renderer: { ...defaultRenderer('capsule', '#e0484d'), metalness: 0.1, roughness: 0.5, materialOverrides: { emissiveColor: '#e0484d', emissiveIntensity: 0.45 } },
+    character: { ...defaultCharacter(), enabled: true, moveSpeed: 2.8, sprintMultiplier: 1, jumpStrength: 0, cameraFollow: false, mouseLook: false },
+    script: { blueprintId: enemyBpId, graphId: enemyGraphId, enabled: true },
+    variables: { health: 60 },
+  }));
+
   const hud = createFpsHud();
 
   // --- Commit everything atomically. ---
@@ -647,14 +697,14 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     animatorControllers: [...draft.animatorControllers, ...built.map((w) => w.controller)],
     activeAnimatorControllerId: built[0].controller.id,
     variables: [...draft.variables, weaponVar, slotVar, ammoVar, magVar],
-    blueprints: [...draft.blueprints, blueprint],
-    graphs: [...draft.graphs, graph],
+    blueprints: [...draft.blueprints, blueprint, enemyBlueprint],
+    graphs: [...draft.graphs, graph, enemyGraph],
     activeBlueprintId: blueprintId,
     uiDocuments: [...draft.uiDocuments, hud],
     activeUIDocumentId: hud.id,
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId
-        ? { ...scene, objects: [...scene.objects, ground, ...props, ...arms, ...(bulletTemplate ? [bulletTemplate] : []), pawn] }
+        ? { ...scene, objects: [...scene.objects, ground, ...props, ...enemies, ...arms, ...(bulletTemplate ? [bulletTemplate] : []), pawn] }
         : scene,
     ),
     selectedObjectId: pawnId,

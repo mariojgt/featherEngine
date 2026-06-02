@@ -6,7 +6,9 @@ export type SceneObjectKind = 'empty' | 'cube' | 'sphere' | 'capsule' | 'plane' 
 
 export type RigidBodyType = 'dynamic' | 'fixed' | 'kinematic';
 
-export type ColliderType = 'box' | 'sphere' | 'capsule';
+// 'mesh' = exact triangle mesh (trimesh; best for static geometry), 'convex' = convex hull
+// of the model's vertices (cheaper, valid for dynamic bodies). Both require an imported model.
+export type ColliderType = 'box' | 'sphere' | 'capsule' | 'mesh' | 'convex';
 
 export type AssetType = 'model' | 'image' | 'audio' | 'unknown';
 
@@ -93,6 +95,12 @@ export type GraphNodeKind =
   | 'action.spawnProjectile'
   | 'action.setVisible'
   | 'action.spawnAttached'
+  | 'action.playAnimation'
+  | 'action.setMovementMode'
+  | 'action.facePlayer'
+  | 'ai.distanceToPlayer'
+  | 'ai.directionToPlayer'
+  | 'logic.cooldown'
   | 'material.output'
   | 'material.color'
   | 'material.scalar'
@@ -181,6 +189,14 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   attachOffsetPosition?: Vector3Tuple;
   attachOffsetRotation?: Vector3Tuple;
   attachOffsetScale?: Vector3Tuple;
+  /** action.playAnimation: id of the Animation asset to play as a one-shot montage on the target's animator. */
+  animationId?: string;
+  /** action.playAnimation: playback speed multiplier for the montage (default 1). */
+  animationSpeed?: number;
+  /** action.setMovementMode: how the target character moves until changed — 'walking' (normal gravity),
+   *  'swimming' (buoyant float; jump=up, crouch=down), 'climbing' (XZ locked, fwd/back = up/down), or
+   *  'flying' (no gravity, free 3D; jump=up, crouch=down). Drives the swimming/climbing animator sources. */
+  movementMode?: 'walking' | 'swimming' | 'climbing' | 'flying';
   hasInput?: boolean;
   hasOutput?: boolean;
 }
@@ -530,6 +546,11 @@ export interface CharacterControllerComponent {
   rollDuration: number;
   /** Attack key — fires the "attacking" animator parameter (punch unarmed, weapon attack when equipped). */
   keyAttack: string;
+  /** Melee hit: damage dealt to objects with `health` in a front cone when attacking WITHOUT a ranged weapon
+   *  (sword swing / punch). Default 34. */
+  meleeDamage?: number;
+  /** Melee hit reach (world units) for the front-cone damage check. Default 2.4. */
+  meleeRange?: number;
   /** Aim key (held) — drives the "aiming" parameter (ranged-weapon aim pose). */
   keyAim: string;
   /** Reload key — pulses the "reloading" parameter (ranged-weapon reload). */
@@ -700,9 +721,38 @@ export interface SceneObject {
   effect?: EffectComponent;
   /** Lighting for a `kind: 'light'` object — configurable point / spot / directional light. */
   light?: LightComponent;
+  /** Weapon/item inventory — drives the on-screen slot bar and click-to-equip (spawn attached + montage). */
+  inventory?: InventoryComponent;
   /** Set on the ROOT of an object stamped from a prefab — the source prefab's id. Lets the editor
    * find all instances of a prefab. Instances are independent copies; this is just provenance. */
   prefabSourceId?: string;
+}
+
+/** One equippable inventory slot (a weapon/item). An empty `weaponAssetId` is the "unarmed" slot. */
+export interface InventorySlot {
+  /** Short label shown on the HUD slot (e.g. "Fist", "Sword", "Pistol"). */
+  label: string;
+  /** Model asset id attached to the hand on equip; omit for unarmed (holster). */
+  weaponAssetId?: string;
+  /** When true, equipping this slot enables ranged fire (sets the RangedMode animator param). */
+  ranged?: boolean;
+  /** Uniform scale + Y-yaw applied to the attached weapon so the grip seats correctly. */
+  attachScale?: number;
+  attachYaw?: number;
+  /** One-shot montage (Animation asset id) played on the character when this slot is equipped. */
+  equipAnimId?: string;
+}
+
+/** A character's weapon inventory — the on-screen bar + click-to-equip switching. */
+export interface InventoryComponent {
+  slots: InventorySlot[];
+  /** Index of the currently equipped slot. */
+  equipped: number;
+  /** Bone + named socket the weapon attaches to (default hand_r / "RightHand"). */
+  boneName?: string;
+  socketName?: string;
+  /** Audio asset id played on each weapon switch. */
+  switchSoundId?: string;
 }
 
 /** Marks a runtime-spawned projectile. The runtime moves it by `velocity`, despawns it after `life`

@@ -14,10 +14,12 @@ import { useResolvedMaterial } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, isPrefabDrag, prefabDrag, readAssetDragId, readPrefabDragId } from './dragShared';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
+import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
 import { ImpactParticles } from '../three/ImpactParticles';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
+import { ColliderGizmo } from '../three/ColliderGizmo';
 import { PostFx } from '../three/PostFx';
 import type { SceneObject } from '../types';
 
@@ -99,6 +101,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
       <Suspense fallback={null}>
         <ModelAsset
           url={modelUrl as string}
+          geometryKey={renderer?.modelAssetId}
           material={{
             color: resolved.color,
             metalness: resolved.metalness,
@@ -351,6 +354,10 @@ function SceneContent({
   const selectedCameraObject = sceneObjects.find(
     (o) => o.id === selectedObjectId && o.character?.enabled && o.character.cameraFollow,
   );
+  // The selected physics object — gets a wireframe preview of its true collider shape.
+  const selectedColliderObject = sceneObjects.find(
+    (o) => o.id === selectedObjectId && o.physics?.enabled,
+  );
   const objectRefs = useRef(new Map<string, THREE.Group>());
   const [selectedTarget, setSelectedTarget] = useState<THREE.Group | null>(null);
 
@@ -430,6 +437,9 @@ function SceneContent({
       {/* Camera-placement mode: drag a handle to set the follow-camera offset. Hidden while previewing
           through the camera (you can't grab a handle from inside the lens — toggle preview off to drag). */}
       {cameraRigObject && !isPlaying && !previewCamera && <CameraRigGizmo object={cameraRigObject} />}
+      {/* Wireframe preview of the selected object's true collider (edit + Play), so the
+          actual physics shape — which often differs from the visual mesh — is visible. */}
+      {selectedColliderObject && <ColliderGizmo object={selectedColliderObject} />}
       <gridHelper args={[24, 24, '#30394D', '#202737']} position={[0, 0.01, 0]} />
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
       {/* During Play (or when previewing) a character's follow camera takes over the view; otherwise free-orbit.
@@ -750,6 +760,7 @@ export function ViewportPanel() {
         )}
         {/* Player HUD overlay — clipped to the viewport (Unreal-style "Game View"), not the whole window. */}
         <ScreenUILayer />
+        <DynamicCrosshair />
         <GameHud />
       </div>
     </section>

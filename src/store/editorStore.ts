@@ -48,6 +48,7 @@ import {
   type AnimatorTransition,
   type AnimatorCondition,
   type CharacterControllerComponent,
+  type InventoryComponent,
   type TransformComponent,
   type Vector3Tuple,
   type UIDocument,
@@ -80,6 +81,8 @@ export interface RuntimeAnimator {
   fade: number;
   /** Seconds elapsed in the current state — drives exit-time transitions (one-shot clips). */
   time: number;
+  /** Active one-shot montage (Play Animation node): overrides the state machine's clip until it ends. */
+  montage?: { animationId: string; remaining: number; speed: number };
 }
 
 /** A factory for a fresh default animator component (used when one is first enabled). */
@@ -629,6 +632,12 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Spawn Projectile': 'action.spawnProjectile',
   'Set Visible': 'action.setVisible',
   'Spawn Attached': 'action.spawnAttached',
+  'Play Animation': 'action.playAnimation',
+  'Set Movement Mode': 'action.setMovementMode',
+  'Distance To Player': 'ai.distanceToPlayer',
+  'Direction To Player': 'ai.directionToPlayer',
+  'Face Player': 'action.facePlayer',
+  Cooldown: 'logic.cooldown',
   'Material Output': 'material.output',
   Color: 'material.color',
   Scalar: 'material.scalar',
@@ -811,6 +820,24 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
         label: 'Spawn Attached',
         description: 'Spawns a model and attaches it to the owner (or Target) at a bone/socket — Unreal-style equip. Replaces any weapon already on that socket.',
       };
+    case 'ai.distanceToPlayer':
+      return { label: 'Distance To Player', description: 'Outputs the distance (units) from this object to the player. Wire into Compare for range checks.' };
+    case 'ai.directionToPlayer':
+      return { label: 'Direction To Player', description: 'Outputs a normalized direction vector toward the player. Wire into Move so the enemy chases.' };
+    case 'action.facePlayer':
+      return { label: 'Face Player', description: 'Turns this object to face the player (so Spawn Projectile fires at them).' };
+    case 'logic.cooldown':
+      return { label: `Cooldown: ${Number(data.numberValue ?? 1)}s`, description: 'Gate: lets execution through at most once every N seconds. Use for fire rate / spawn rate.' };
+    case 'action.playAnimation':
+      return {
+        label: 'Play Animation',
+        description: "Plays a one-shot animation (montage) on the owner's (or Target's) animator, overriding the state machine until it finishes, then returning automatically. Unreal Play-Montage style — fire it from any event (Interact, key, equip).",
+      };
+    case 'action.setMovementMode':
+      return {
+        label: `Set Movement Mode: ${data.movementMode ?? 'walking'}`,
+        description: "Sets how the owner (or Target) character moves until changed — walking / swimming (buoyant) / climbing (wall) / flying (free 3D). Drives the swimming/climbing animator params. Wire Trigger Enter→swimming, Trigger Exit→walking for a water volume (Unreal SetMovementMode).",
+      };
     case 'action.print':
       return { label: `Print: ${data.message || 'message'}`, description: 'Logs its message to the on-screen console during Play.' };
     case 'ui.show':
@@ -938,6 +965,8 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
     nodeKind === 'logic.compare' ||
     nodeKind === 'logic.and' ||
     nodeKind === 'logic.or' ||
+    nodeKind === 'ai.distanceToPlayer' ||
+    nodeKind === 'ai.directionToPlayer' ||
     nodeKind === 'variable.get' ||
     nodeKind === 'data.tableGet' ||
     nodeKind === 'material.color' ||
@@ -1425,6 +1454,8 @@ interface EditorState {
   runtimeInteract: Record<string, number>;
   /** Distance walked since the last footstep sound, per object — drives footstep audio cadence. */
   runtimeFootstep: Record<string, number>;
+  /** Per (object:node) remaining seconds for Cooldown gate nodes — drives AI fire rate / spawn rate. */
+  runtimeCooldowns: Record<string, number>;
   /** Object ids hidden at runtime by action.setVisible (e.g. holstered weapons). */
   runtimeHidden: string[];
   /** The interactable object the local (camera-follow) player is currently focused on — highlighted +
@@ -1439,6 +1470,12 @@ interface EditorState {
   /** Per-character footstep-sound override from the surface volume they're standing in (a trigger tagged with
    *  a `footstepSound` instance variable). Empty → use the character's own footstepSoundId. */
   runtimeSurfaceSound: Record<string, string>;
+  /** Per-character movement-mode override set by the "Set Movement Mode" node (walking/swimming/climbing/
+   *  flying). Persists until changed; takes precedence over the volume-tag swim/climb detection. */
+  runtimeMovementMode: Record<string, string>;
+  /** One-shot montage requests from outside the tick (e.g. clicking an inventory slot) — consumed next tick
+   *  to start a Play-Animation montage on the keyed object. Keyed by target object id. */
+  runtimeMontageRequests: Record<string, { animationId: string; speed: number }>;
   /** Solid-contact pairs that started in the previous physics step; drives event.collisionEnter. */
   runtimeCollisions: PhysicsContactEvent[];
   /** Trigger-overlap pairs that started in the previous physics step; drives event.triggerEnter. */
@@ -1551,6 +1588,11 @@ interface EditorState {
   toggleCharacterController: (id: string) => void;
   /** Patch an object's character controller. No-op if it has none. */
   updateCharacterController: (id: string, patch: Partial<CharacterControllerComponent>) => void;
+  /** Define/replace an object's weapon inventory (pass undefined to remove it). */
+  setInventory: (objectId: string, inventory: InventoryComponent | undefined) => void;
+  /** Equip the inventory slot at `index`: swaps the attached weapon, plays the equip montage + switch sound,
+   *  and sets the RangedMode animator param. Driven by the on-screen inventory bar (and AI). */
+  equipInventorySlot: (objectId: string, index: number) => void;
   /** Update project-wide render/post-processing settings (bloom, vignette). */
   updateRenderSettings: (patch: Partial<RenderSettings>) => void;
   /** Configure a `kind: 'light'` object's light (type/color/intensity/distance/angle). Creates the component if absent. */
@@ -1822,12 +1864,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeReload: {},
   runtimeInteract: {},
   runtimeFootstep: {},
+  runtimeCooldowns: {},
   runtimeHidden: [],
   runtimeInteractFocusId: null,
   runtimeHitMarker: 0,
   runtimeHurt: 0,
   runtimeEnemyCooldown: {},
   runtimeSurfaceSound: {},
+  runtimeMovementMode: {},
+  runtimeMontageRequests: {},
   runtimeCollisions: [],
   runtimeTriggers: [],
   runtimeTriggersExit: [],
@@ -2572,6 +2617,55 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ),
       ),
     ),
+  setInventory: (objectId, inventory) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === objectId ? { ...object, inventory } : object)),
+      ),
+    ),
+  equipInventorySlot: (objectId, index) => {
+    const player = selectActiveObjects(get()).find((o) => o.id === objectId);
+    const inv = player?.inventory;
+    if (!player || !inv || index < 0 || index >= inv.slots.length) return;
+    const slot = inv.slots[index];
+    const socketName = inv.socketName ?? 'RightHand';
+    const boneName = inv.boneName ?? 'hand_r';
+    const markerSlot = socketName || boneName;
+    const scale = slot.attachScale ?? 1;
+    const yaw = slot.attachYaw ?? 0;
+    set((state) => {
+      const scenes = state.scenes.map((scene) => {
+        if (scene.id !== state.activeSceneId) return scene;
+        // Drop the weapon currently held on that socket, then attach the new slot's weapon (if any).
+        let objects = scene.objects.filter(
+          (o) =>
+            !(o.variables?.__attachedWeapon && o.attachment?.targetObjectId === objectId && (o.attachment.socketName || o.attachment.boneName) === markerSlot),
+        );
+        if (slot.weaponAssetId) {
+          objects = [...objects, makeAttachedWeapon(objectId, slot.weaponAssetId, boneName, socketName, undefined, [0, yaw, 0], [scale, scale, scale])];
+        }
+        objects = objects.map((o) => (o.id === objectId && o.inventory ? { ...o, inventory: { ...o.inventory, equipped: index } } : o));
+        return { ...scene, objects };
+      });
+      const playing = state.isPlaying;
+      return {
+        scenes,
+        // During Play: fire the equip montage + switch sound. (Don't dirty the project — it's gameplay.)
+        runtimeMontageRequests:
+          playing && slot.equipAnimId
+            ? { ...state.runtimeMontageRequests, [objectId]: { animationId: slot.equipAnimId, speed: 1 } }
+            : state.runtimeMontageRequests,
+        runtimeSoundQueue: playing && inv.switchSoundId ? [...state.runtimeSoundQueue, inv.switchSoundId] : state.runtimeSoundQueue,
+        isDirty: playing ? state.isDirty : true,
+      };
+    });
+    // Ranged gate + aim pose follow the equipped slot (RangedMode is target-able by the shooting graph).
+    if (get().isPlaying) {
+      const controller = get().animatorControllers.find((c) => c.id === player.animator?.controllerId);
+      const ranged = controller?.parameters.find((p) => p.name === 'RangedMode');
+      if (ranged) get().setRuntimeAnimatorParam(objectId, ranged.id, Boolean(slot.ranged));
+    }
+  },
   updateRenderSettings: (patch) =>
     set((state) => ({ renderSettings: { ...state.renderSettings, ...stripUndefined(patch) }, isDirty: true })),
   setObjectLight: (objectId, patch) =>
@@ -4217,12 +4311,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeReload: {},
       runtimeInteract: {},
       runtimeFootstep: {},
+      runtimeCooldowns: {},
       runtimeHidden: [],
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
       runtimeSurfaceSound: {},
+      runtimeMovementMode: {},
+      runtimeMontageRequests: {},
           runtimeCollisions: [],
           runtimeTriggers: [],
           runtimeTriggersExit: [],
@@ -4271,12 +4368,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeReload: {},
       runtimeInteract: {},
       runtimeFootstep: {},
+      runtimeCooldowns: {},
       runtimeHidden: [],
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
       runtimeSurfaceSound: {},
+      runtimeMovementMode: {},
+      runtimeMontageRequests: {},
         runtimeCollisions: [],
         runtimeTriggers: [],
         runtimeTriggersExit: [],
@@ -4339,12 +4439,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let hitMarker = state.runtimeHitMarker;
       let hurt = state.runtimeHurt;
       const nextEnemyCd: Record<string, number> = {};
+      const meleeSwings = new Set<string>(); // characters that started an attack swing this frame (melee hit-test)
+      // Per-character movement-mode override (Set Movement Mode node) — persists across frames, updated by the
+      // node in the script pass, then read by the character + animator passes below.
+      const movementModeNow: Record<string, string> = { ...state.runtimeMovementMode };
       // The local player = the camera-follow character (drives hit marker / hurt flash / who enemies chase).
       const playerId = activeObjects.find((o) => o.character?.enabled && o.character.cameraFollow)?.id;
       // Objects hidden by action.setVisible — carried across frames so weapons stay holstered.
       const nextHidden = new Set<string>(state.runtimeHidden);
       // Animator parameter writes requested by animator.setX nodes this frame, keyed by object id.
       const animatorWrites: Record<string, Array<{ name: string; value: number | boolean; trigger?: boolean }>> = {};
+      // One-shot montage requests this frame (Play Animation node + external HUD equips), keyed by target id.
+      const animMontages: Record<string, { animationId: string; speed: number }> = { ...state.runtimeMontageRequests };
       // Character node requests this frame: object ids that fired a Jump node, and live camera overrides.
       const characterJumpRequests = new Set<string>();
       const nextCameraOverrides: Record<string, { distance: number; height: number }> = { ...state.runtimeCameraOverrides };
@@ -4355,6 +4461,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const nextInteract: Record<string, number> = {};
       // Distance-since-last-footstep per character (carried across frames) → footstep audio cadence.
       const nextFootstep: Record<string, number> = { ...state.runtimeFootstep };
+      // Cooldown gate timers per (object:node), decremented each frame; armed to N seconds when one passes.
+      const nextCooldowns: Record<string, number> = {};
+      for (const [key, remaining] of Object.entries(state.runtimeCooldowns)) {
+        const left = remaining - (delta || 1 / 60);
+        if (left > 0) nextCooldowns[key] = left;
+      }
+      // "The player" for AI nodes (Distance/Direction/Face To Player) = the active follow-camera character.
+      const aiPlayer = activeObjects.find((o) => o.character?.enabled && o.character.cameraFollow);
 
       // --- Interaction focus (Unreal-style): each character looks for the nearest object tagged with an
       //     `interactable` instance variable, within interactRange and roughly in front. The focused object
@@ -4470,6 +4584,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
             }
 
+            if (node.data.nodeKind === 'ai.distanceToPlayer') {
+              if (!aiPlayer || aiPlayer.id === object.id) return 9999;
+              const p = aiPlayer.transform.position;
+              return Math.hypot(p[0] - position[0], p[2] - position[2]);
+            }
+
+            if (node.data.nodeKind === 'ai.directionToPlayer') {
+              if (!aiPlayer || aiPlayer.id === object.id) return [0, 0, 0] as Vector3Tuple;
+              const p = aiPlayer.transform.position;
+              const dx = p[0] - position[0];
+              const dz = p[2] - position[2];
+              const len = Math.hypot(dx, dz) || 1;
+              return [dx / len, 0, dz / len] as Vector3Tuple;
+            }
+
             if (node.data.nodeKind === 'animator.getParam') {
               // Read the live animator parameter (previous frame) — from self, or another object's animator.
               const targetId = node.data.targetObjectId || object.id;
@@ -4563,14 +4692,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
 
-          // Resolve a node's target object id, supporting the "$trigger" sentinel = the object currently
-          // overlapping the owner (lets a pickup's own script act on whoever walked into it).
+          // Resolve a node's target object id, supporting the "$trigger" sentinel = the object overlapping the
+          // owner this frame (lets a volume/pickup's own script act on whoever entered OR left it). Checks the
+          // enter list first, then the exit list (so Trigger Exit handlers can target the leaving object too).
           const resolveTarget = (raw: string | undefined): string | undefined =>
-            raw === '$trigger' ? state.runtimeTriggers.find((t) => t.objectId === object.id)?.otherObjectId : raw;
+            raw === '$trigger'
+              ? state.runtimeTriggers.find((t) => t.objectId === object.id)?.otherObjectId ??
+                state.runtimeTriggersExit.find((t) => t.objectId === object.id)?.otherObjectId
+              : raw;
 
           function applyAction(node: NodeForgeNode, visited: Set<string>): boolean {
             if (node.data.nodeKind === 'logic.branch') {
               return toBoolean(valueInput(node, 'condition', node.data.booleanValue ?? true));
+            }
+
+            // Cooldown gate: passes through at most once per N seconds (fire rate / spawn rate). While on
+            // cooldown it stops the chain (returns false). Tracked per (object:node) in nextCooldowns.
+            if (node.data.nodeKind === 'logic.cooldown') {
+              const key = `${object.id}:${node.id}`;
+              if ((nextCooldowns[key] ?? 0) > 0) return false;
+              nextCooldowns[key] = Math.max(0.05, toNumber(valueInput(node, 'seconds', Number(node.data.numberValue ?? 1))));
+              return true;
+            }
+
+            // Turn this object to face the player on the ground plane (so Spawn Projectile fires at them).
+            if (node.data.nodeKind === 'action.facePlayer') {
+              if (aiPlayer && aiPlayer.id !== object.id) {
+                const p = aiPlayer.transform.position;
+                rotation[1] = Math.atan2(p[0] - position[0], p[2] - position[2]) + (object.character?.modelYawOffset ?? 0);
+                changed = true;
+              }
+              return true;
             }
 
             if (node.data.nodeKind === 'action.translate') {
@@ -4806,6 +4958,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               spawned.push(
                 makeAttachedWeapon(owner, node.data.assetId, boneName, socketName, node.data.attachOffsetPosition, node.data.attachOffsetRotation, node.data.attachOffsetScale),
               );
+            }
+
+            if (node.data.nodeKind === 'action.playAnimation' && node.data.animationId) {
+              // Montage: queue a one-shot clip on the owner's (or Target's) animator — the animator pass below
+              // turns it into a timed override that returns to the state machine when done.
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              animMontages[target] = { animationId: node.data.animationId, speed: Math.max(0.05, node.data.animationSpeed ?? 1) };
+            }
+
+            if (node.data.nodeKind === 'action.setMovementMode') {
+              // Override how the target moves (walking/swimming/climbing/flying) until changed — the character
+              // + animator passes read movementModeNow. This is what makes swim/climb fully blueprint-driven.
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              movementModeNow[target] = node.data.movementMode ?? 'walking';
             }
 
             if (node.data.nodeKind === 'action.spawnProjectile') {
@@ -5044,6 +5210,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (attackRemaining <= 0 && currentKeys[cc.keyAttack]) {
           attackRemaining = 0.18;
           if (cc.attackSoundId) sounds.push(cc.attackSoundId); // swing/whoosh on the swing's first frame
+          meleeSwings.add(object.id); // melee hit-test this frame (skipped later if a ranged weapon is out)
         } else if (attackRemaining > 0) attackRemaining = Math.max(0, attackRemaining - delta);
         if (attackRemaining > 0) nextAttack[object.id] = attackRemaining;
 
@@ -5063,9 +5230,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         else if (interactRemaining > 0) interactRemaining = Math.max(0, interactRemaining - delta);
         if (interactRemaining > 0) nextInteract[object.id] = interactRemaining;
 
-        // Swim / climb modes override normal gravity-based vertical motion (one-frame-delayed from triggers).
-        const swimming = state.runtimeSwimming.includes(object.id);
-        const climbing = state.runtimeClimbing.includes(object.id);
+        // Movement mode: a "Set Movement Mode" node OVERRIDES the volume-tag swim/climb detection (so swim/
+        // climb can be fully blueprint-driven). Falls back to the volume sets when no override is set.
+        const overrideMode = movementModeNow[object.id];
+        const swimming = overrideMode === 'swimming' || (!overrideMode && state.runtimeSwimming.includes(object.id));
+        const climbing = overrideMode === 'climbing' || (!overrideMode && state.runtimeClimbing.includes(object.id));
+        const flying = overrideMode === 'flying';
         if (climbing) {
           // Lock horizontal to the wall (undo this frame's script/auto XZ move) and climb up/down with fwd/back keys.
           const start = prevTransforms.get(object.id)?.position;
@@ -5076,12 +5246,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const climbDir = (currentKeys[cc.keyForward] ? 1 : 0) - (currentKeys[cc.keyBackward] ? 1 : 0);
           position[1] += climbDir * cc.moveSpeed * 0.6 * delta;
           nextVelocities[object.id] = [0, 0, 0];
-        } else if (swimming) {
-          // Buoyant: no gravity. Float (damp vertical), rise on jump key, sink on crouch key. Horizontal swims freely.
+        } else if (swimming || flying) {
+          // No gravity. Swim = buoyant (settles toward neutral); fly = stays put. Both: jump=up, crouch=down,
+          // horizontal moves freely (the horizontal step is applied above by the move pass).
           let vy = nextVelocities[object.id]?.[1] ?? 0;
           if (currentKeys[cc.keyJump]) vy = cc.moveSpeed * 0.7;
           else if (currentKeys[cc.keyCrouch]) vy = -cc.moveSpeed * 0.7;
-          else vy *= 0.85; // settle toward neutral buoyancy
+          else vy *= swimming ? 0.85 : 0; // swim drifts toward neutral buoyancy; fly holds altitude
           position[1] += vy * delta;
           nextVelocities[object.id] = [0, vy, 0];
         } else {
@@ -5179,11 +5350,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         for (const t of triggers) apply(t.objectId, t.otherObjectId, true);
         for (const t of triggersExit) apply(t.objectId, t.otherObjectId, false);
       }
-      const swimmingIds = [...nextSwimming];
-      const climbingIds = [...nextClimbing];
+      // Effective swim/climb = the "Set Movement Mode" OVERRIDE if present, else the volume-tag set. This is
+      // what makes swim/climb work whether driven by a blueprint (Set Movement Mode) or the zero-config volume.
+      const candidateIds = new Set<string>([...nextSwimming, ...nextClimbing, ...Object.keys(movementModeNow)]);
+      const swimmingIds: string[] = [];
+      const climbingIds: string[] = [];
+      for (const id of candidateIds) {
+        const m = movementModeNow[id];
+        if (m ? m === 'swimming' : nextSwimming.has(id)) swimmingIds.push(id);
+        if (m ? m === 'climbing' : nextClimbing.has(id)) climbingIds.push(id);
+      }
 
-      // Water entry FX: when a character first enters a water volume, fountain a splash at its feet and
-      // play its swim/splash sound (if assigned). Detected as "newly in the swimming set this frame".
+      // Water entry FX: when a character first starts swimming (volume- OR blueprint-driven), fountain a splash
+      // at its feet and play its swim/splash sound. Detected as "newly swimming vs last frame".
       for (const id of swimmingIds) {
         if (state.runtimeSwimming.includes(id)) continue;
         const obj = resolvedObjects.find((o) => o.id === id);
@@ -5264,6 +5443,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
             if (cd > 0) nextEnemyCd[e.id] = cd;
           }
+        }
+      }
+
+      // Melee hits: a character that started an attack swing this frame WITHOUT a ranged weapon out (sword
+      // swing / punch) damages every object with `health` in a front cone within meleeRange. Ranged shots are
+      // handled by the projectile system, so attackers in RangedMode are skipped here.
+      for (const attackerId of meleeSwings) {
+        const attacker = resolvedObjects.find((o) => o.id === attackerId);
+        if (!attacker?.character) continue;
+        const ctrl = state.animatorControllers.find((c) => c.id === attacker.animator?.controllerId);
+        const rangedParam = ctrl?.parameters.find((p) => p.name === 'RangedMode');
+        const isRanged = rangedParam ? Boolean(state.runtimeAnimators[attackerId]?.params?.[rangedParam.id]) : false;
+        if (isRanged) continue; // the gun's projectiles deal the damage, not the swing
+        const acc = { ...defaultCharacter(), ...attacker.character };
+        const range = acc.meleeRange ?? 2.4;
+        const dmg = acc.meleeDamage ?? 34;
+        const ap = attacker.transform.position;
+        const facing = attacker.transform.rotation[1] - (acc.modelYawOffset ?? 0);
+        const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
+        for (const target of resolvedObjects) {
+          if (target.id === attackerId || target.projectile) continue;
+          const hasHealth = nextObjectVariables[target.id]?.health !== undefined || target.variables?.health !== undefined;
+          if (!hasHealth) continue;
+          const dx = target.transform.position[0] - ap[0];
+          const dz = target.transform.position[2] - ap[2];
+          const d = Math.hypot(dx, dz);
+          if (d > range) continue;
+          if (d > 0.3 && (dx / d) * fwd[0] + (dz / d) * fwd[1] < 0.35) continue; // must be in the swing's front cone
+          const cur = toNumber(nextObjectVariables[target.id]?.health ?? target.variables?.health ?? 0);
+          const next = Math.max(0, cur - dmg);
+          (nextObjectVariables[target.id] ??= { ...(target.variables ?? {}) }).health = next;
+          spawned.push(makeDamageNumber(target.transform.position, dmg));
+          spawned.push(makeImpactObject(target.transform.position, '#ffd27f'));
+          if (attackerId === playerId) hitMarker += 1;
+          if (target.id === playerId) hurt += 1;
+          if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+          if (next <= 0) destroyedIds.add(target.id);
         }
       }
 
@@ -5390,7 +5606,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (param?.type === 'trigger') params[id] = false;
         }
 
-        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: nextStateId === fromStateId ? timeInState : 0 };
+        // Montage (Play Animation): a fresh request this frame starts a timed clip override; otherwise the
+        // previous montage counts down and clears when done. While active it overrides the state-machine clip.
+        let montage = prev?.montage && prev.montage.remaining > 0
+          ? { ...prev.montage, remaining: prev.montage.remaining - dt }
+          : undefined;
+        const requested = animMontages[object.id];
+        if (requested) {
+          const clip = state.animations.find((a) => a.id === requested.animationId);
+          if (clip) montage = { animationId: requested.animationId, speed: requested.speed, remaining: clip.duration / requested.speed };
+        }
+        if (montage && montage.remaining <= 0) montage = undefined;
+
+        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: nextStateId === fromStateId ? timeInState : 0, montage };
 
         // Death → ragdoll: entering a state named like "death"/"dead"/"die" goes limp automatically.
         const nextStateName = controller.states.find((s) => s.id === nextStateId)?.name ?? '';
@@ -5411,12 +5639,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeReload: nextReload,
         runtimeInteract: nextInteract,
         runtimeFootstep: nextFootstep,
+        runtimeCooldowns: nextCooldowns,
         runtimeHidden: [...nextHidden],
         runtimeInteractFocusId: interactFocusId,
         runtimeHitMarker: hitMarker,
         runtimeHurt: hurt,
         runtimeEnemyCooldown: nextEnemyCd,
         runtimeSurfaceSound: nextSurfaceSound,
+        runtimeMovementMode: movementModeNow,
+        runtimeMontageRequests: {},
         runtimeCollisions: collisions,
         runtimeTriggers: triggers,
         runtimeTriggersExit: triggersExit,
@@ -5613,12 +5844,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeReload: {},
       runtimeInteract: {},
       runtimeFootstep: {},
+      runtimeCooldowns: {},
       runtimeHidden: [],
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
       runtimeSurfaceSound: {},
+      runtimeMovementMode: {},
+      runtimeMontageRequests: {},
         runtimeCollisions: [],
         runtimeSoundQueue: [],
         runtimeLog: [],

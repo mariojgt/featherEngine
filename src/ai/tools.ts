@@ -75,7 +75,13 @@ const NODE_LABELS = [
   'Set Ragdoll',
   'Spawn Projectile',
   'Spawn Attached',
+  'Play Animation',
+  'Set Movement Mode',
   'Set Visible',
+  'Distance To Player',
+  'Direction To Player',
+  'Face Player',
+  'Cooldown',
   'Save Game',
   'Load Game',
   'Clear Save',
@@ -135,7 +141,13 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Set Ragdoll': 'Runtime',
   'Spawn Projectile': 'Runtime',
   'Spawn Attached': 'Runtime',
+  'Play Animation': 'Runtime',
+  'Set Movement Mode': 'Runtime',
   'Set Visible': 'Runtime',
+  'Distance To Player': 'Runtime',
+  'Direction To Player': 'Runtime',
+  'Face Player': 'Runtime',
+  Cooldown: 'Logic',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
@@ -239,7 +251,7 @@ export const engineTools = {
         .object({
           enabled: z.boolean().optional(),
           bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
-          collider: z.enum(['box', 'sphere', 'capsule']).optional(),
+          collider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional(),
         })
         .optional(),
     }),
@@ -323,13 +335,86 @@ export const engineTools = {
     },
   }),
 
+  set_scene_audio: tool({
+    description:
+      "Set the active scene's looping ambient bed and/or background music (both play while the game runs and stop on Stop). Pass \"audio\"-type asset ids; pass an empty string to clear either.",
+    inputSchema: z.object({
+      ambientSoundId: z.string().optional().describe('Audio asset id looped quietly as ambience (wind/room tone), or "" to clear.'),
+      musicSoundId: z.string().optional().describe('Audio asset id looped as background music, or "" to clear.'),
+    }),
+    execute: async ({ ambientSoundId, musicSoundId }) => {
+      const sceneId = store().activeSceneId;
+      const check = (id?: string) => {
+        if (!id) return undefined;
+        const asset = findAsset(id);
+        if (!asset) return `No asset with id ${id}.`;
+        if (asset.type !== 'audio') return `Asset ${id} is a ${asset.type}, not audio.`;
+        return undefined;
+      };
+      const err = check(ambientSoundId) ?? check(musicSoundId);
+      if (err) return err;
+      store().setSceneAudio(sceneId, {
+        ...(ambientSoundId !== undefined ? { ambientSoundId: ambientSoundId || undefined } : {}),
+        ...(musicSoundId !== undefined ? { musicSoundId: musicSoundId || undefined } : {}),
+      });
+      return `Updated scene audio (ambient/music).`;
+    },
+  }),
+
+  set_inventory: tool({
+    description:
+      "Define a character's weapon inventory — the on-screen clickable slot bar. Each slot equips a weapon (model asset) on click, swapping the held weapon, playing its equip montage + a switch sound, and toggling the RangedMode animator param (for the shoot gate). An empty weaponAssetId is the unarmed/holster slot. Pass slots:[] to remove the inventory.",
+    inputSchema: z.object({
+      objectId: z.string(),
+      slots: z
+        .array(
+          z.object({
+            label: z.string().describe('Short HUD label, e.g. "Fist", "Sword", "Pistol".'),
+            weaponAssetId: z.string().optional().describe('Model asset id attached on equip; omit for unarmed.'),
+            ranged: z.boolean().optional().describe('When true, equipping enables ranged fire (sets RangedMode).'),
+            attachScale: z.number().optional().describe('Uniform scale of the attached weapon.'),
+            attachYaw: z.number().optional().describe('Y-yaw (radians) to seat the grip.'),
+            equipAnimId: z.string().optional().describe('Animation asset id played as a montage on equip.'),
+          }),
+        )
+        .describe('Ordered weapon slots shown left→right in the HUD bar.'),
+      socketName: z.string().optional().describe('Named socket to attach to (default "RightHand").'),
+      boneName: z.string().optional().describe('Bone to attach to (default "hand_r").'),
+      switchSoundId: z.string().optional().describe('Audio asset id played on each weapon switch.'),
+      equipped: z.number().optional().describe('Initially equipped slot index (default 0).'),
+    }),
+    execute: async ({ objectId, slots, socketName, boneName, switchSoundId, equipped }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!slots.length) {
+        store().setInventory(objectId, undefined);
+        return `Removed inventory from ${objectId}.`;
+      }
+      store().setInventory(objectId, { slots, equipped: equipped ?? 0, socketName, boneName, switchSoundId });
+      return `Set ${slots.length}-slot inventory on ${objectId}.`;
+    },
+  }),
+
+  equip_slot: tool({
+    description:
+      'Equip the inventory slot at `index` on a character (same as clicking the HUD slot): swaps the held weapon, plays the equip montage + switch sound, and sets RangedMode. During Play it fires the montage/sound immediately.',
+    inputSchema: z.object({ objectId: z.string(), index: z.number() }),
+    execute: async ({ objectId, index }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.inventory) return `Object ${objectId} has no inventory (use set_inventory first).`;
+      store().equipInventorySlot(objectId, index);
+      return `Equipped slot ${index} on ${objectId}.`;
+    },
+  }),
+
   set_physics: tool({
     description: 'Enable/configure physics on an object. For solid walls/floors set enabled:true, bodyType:"fixed", isTrigger:false. For pickups/overlap volumes set enabled:true, bodyType:"fixed", isTrigger:true so it fires Trigger Enter without blocking. collisionLayer is 0-15 and collisionMask is a 16-bit layer bitmask.',
     inputSchema: z.object({
       id: z.string(),
       enabled: z.boolean().optional(),
       bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
-      collider: z.enum(['box', 'sphere', 'capsule']).optional(),
+      collider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional(),
       isTrigger: z.boolean().optional(),
       collisionLayer: z.number().int().min(0).max(15).optional(),
       collisionMask: z.number().int().min(0).max(0xffff).optional(),
@@ -605,6 +690,8 @@ export const engineTools = {
       rollSpeed: z.number().optional(),
       rollDuration: z.number().optional(),
       keyAttack: z.string().optional(),
+      meleeDamage: z.number().optional().describe('Damage a sword swing / punch deals to objects with `health` in a front cone (when no ranged weapon is out). Default 34.'),
+      meleeRange: z.number().optional().describe('Reach (units) of the melee front-cone hit test. Default 2.4.'),
       keyAim: z.string().optional(),
       keyReload: z.string().optional(),
       keyInteract: z.string().optional(),
@@ -1405,7 +1492,7 @@ export const engineTools = {
         .object({
           enabled: z.boolean().optional(),
           bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
-          collider: z.enum(['box', 'sphere', 'capsule']).optional(),
+          collider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional(),
         })
         .optional(),
       namePrefix: z.string().optional(),
@@ -1685,6 +1772,9 @@ export const engineTools = {
       projectileTemplateId: z.string().optional().describe('Spawn Projectile: id of a scene object to CLONE as the bullet (its mesh/model/scale/material). Omit for the built-in sphere.'),
       projectileMuzzle: vec3.optional().describe('Spawn Projectile: first-person muzzle offset [right, up, forward] from the eye where the shot originates (default [0.28,-0.26,0.6] = down-right of center). The shot still converges on the crosshair.'),
       projectileDebug: z.boolean().optional().describe('Spawn Projectile: when true, log every spawn + hit to the runtime console.'),
+      animationId: z.string().optional().describe('Play Animation: id of the Animation asset to play as a one-shot montage on the target.'),
+      animationSpeed: z.number().optional().describe('Play Animation: playback speed multiplier (default 1).'),
+      movementMode: z.enum(['walking', 'swimming', 'climbing', 'flying']).optional().describe('Set Movement Mode: how the target moves until changed (walking/swimming/climbing/flying).'),
     }),
     execute: async ({
       blueprintId,
@@ -1719,6 +1809,9 @@ export const engineTools = {
       projectileTemplateId,
       projectileMuzzle,
       projectileDebug,
+      animationId,
+      animationSpeed,
+      movementMode,
       otherObjectId,
       targetObjectId,
     }) => {
@@ -1761,6 +1854,9 @@ export const engineTools = {
         projectileTemplateId,
         projectileMuzzle: projectileMuzzle ? asVec3(projectileMuzzle) : undefined,
         projectileDebug,
+        animationId,
+        animationSpeed,
+        movementMode,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },

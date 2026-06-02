@@ -1,10 +1,9 @@
 /**
  * Built-in game HUD overlay (separate from the user-authored ScreenUILayer): the AAA-feel chrome the
- * runtime drives directly — interaction prompt, crosshair, hit markers, floating damage numbers, ammo,
- * and the hurt screen-flash. A click-through DOM layer mounted alongside ScreenUILayer in both the editor
- * viewport and the standalone player. Renders only while Play is active.
+ * runtime drives directly — interaction prompt, hit markers, ammo counter, and the hurt screen-flash.
+ * (The crosshair + first-person hitmarker live in DynamicCrosshair.) A click-through DOM layer mounted
+ * alongside ScreenUILayer in both the editor viewport and the standalone player. Shows only while Play is on.
  */
-import type { CSSProperties } from 'react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 
 /** Turn a KeyboardEvent.code into a short label for the prompt chip ("KeyE" → "E", "Space" → "Space"). */
@@ -16,66 +15,29 @@ function keyLabel(code: string | undefined): string {
   return code;
 }
 
-/** A 4-tick crosshair that tightens its center gap while aiming. */
-function Crosshair({ aiming }: { aiming: boolean }) {
-  const gap = aiming ? 4 : 9;
-  const len = aiming ? 7 : 9;
-  const tick = (style: CSSProperties) => (
-    <span style={{ position: 'absolute', background: 'rgba(255,255,255,0.9)', boxShadow: '0 0 2px rgba(0,0,0,0.8)', ...style }} />
-  );
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        top: '50%',
-        left: '50%',
-        width: 0,
-        height: 0,
-        transition: 'all 0.08s ease-out',
-      }}
-    >
-      {tick({ left: gap, top: -1, width: len, height: 2 })}
-      {tick({ right: gap, top: -1, width: len, height: 2 })}
-      {tick({ top: gap, left: -1, width: 2, height: len })}
-      {tick({ bottom: gap, left: -1, width: 2, height: len })}
-      <span
-        style={{
-          position: 'absolute',
-          left: -1.5,
-          top: -1.5,
-          width: 3,
-          height: 3,
-          borderRadius: '50%',
-          background: aiming ? '#ff5a5a' : 'rgba(255,255,255,0.85)',
-        }}
-      />
-    </div>
-  );
-}
-
 export function GameHud() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
   const objects = useEditorStore(selectActiveObjects);
-  const runtimeKeys = useEditorStore((state) => state.runtimeKeys);
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
   const hurt = useEditorStore((state) => state.runtimeHurt);
   const objVars = useEditorStore((state) => state.runtimeObjectVariables);
+  const equipInventorySlot = useEditorStore((state) => state.equipInventorySlot);
 
   if (!isPlaying) return null;
 
   const focus = focusId ? objects.find((object) => object.id === focusId) : undefined;
   const player = objects.find((object) => object.character?.enabled && object.character.cameraFollow);
   const interactKey = keyLabel(player?.character?.keyInteract);
-  // Crosshair: shown while aiming, or always in first-person. Tightens when the aim key is held.
-  const aiming = Boolean(player?.character?.keyAim && runtimeKeys[player.character.keyAim]);
-  const firstPerson = player?.character?.cameraMode === 'firstPerson';
-  const showCrosshair = aiming || firstPerson;
+  // First-person gets its crosshair + hitmarker from DynamicCrosshair; show this screen-center ✕ only for
+  // third-person so the player still gets hit feedback when there's no crosshair.
+  const thirdPerson = player?.character?.cameraMode !== 'firstPerson';
   // Ammo counter — shown when the player owns an `ammo` instance variable (live value, falling back to authored).
   const liveVars = player ? { ...(player.variables ?? {}), ...(objVars[player.id] ?? {}) } : {};
   const ammo = liveVars.ammo;
   const ammoMax = liveVars.ammoMax;
   const showAmmo = typeof ammo === 'number';
+  const inventory = player?.inventory;
   const prompt = focus
     ? typeof focus.variables?.interactPrompt === 'string' && focus.variables.interactPrompt
       ? focus.variables.interactPrompt
@@ -96,9 +58,8 @@ export function GameHud() {
           }}
         />
       )}
-      {showCrosshair && <Crosshair aiming={aiming} />}
-      {/* Hit marker: a brief ✕ at screen center each time the player's shot lands. */}
-      {hitMarker > 0 && (
+      {/* Hit marker (third-person): a brief ✕ at screen center each time the player's shot lands. */}
+      {hitMarker > 0 && thirdPerson && (
         <div
           key={`hit-${hitMarker}`}
           style={{
@@ -131,6 +92,62 @@ export function GameHud() {
         >
           <span style={{ fontSize: '34px', fontWeight: 800, lineHeight: 1 }}>{Number(ammo)}</span>
           {typeof ammoMax === 'number' && <span style={{ fontSize: '17px', opacity: 0.7, fontWeight: 600 }}>/ {Number(ammoMax)}</span>}
+        </div>
+      )}
+      {/* Inventory bar: clickable weapon slots, the equipped one highlighted; ammo shown on the ranged slot. */}
+      {inventory && inventory.slots.length > 0 && player && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            gap: '8px',
+            padding: '8px',
+            background: 'rgba(12,14,20,0.6)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '12px',
+            backdropFilter: 'blur(6px)',
+            pointerEvents: 'auto',
+          }}
+        >
+          {inventory.slots.map((slot, i) => {
+            const active = inventory.equipped === i;
+            return (
+              <button
+                key={i}
+                onClick={() => equipInventorySlot(player.id, i)}
+                title={slot.label}
+                style={{
+                  position: 'relative',
+                  width: '64px',
+                  height: '64px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '2px',
+                  cursor: 'pointer',
+                  borderRadius: '9px',
+                  border: active ? '2px solid #ffcf66' : '1px solid rgba(255,255,255,0.16)',
+                  background: active ? 'rgba(255,207,102,0.16)' : 'rgba(255,255,255,0.05)',
+                  color: active ? '#ffe6a8' : '#cfd6e6',
+                  boxShadow: active ? '0 0 14px rgba(255,207,102,0.35)' : 'none',
+                  transition: 'all 0.1s ease-out',
+                }}
+              >
+                <span style={{ position: 'absolute', top: '3px', left: '6px', fontSize: '11px', fontWeight: 700, opacity: 0.65 }}>{i + 1}</span>
+                <span style={{ fontSize: '13px', fontWeight: 700 }}>{slot.label}</span>
+                {slot.ranged && showAmmo && (
+                  <span style={{ fontSize: '11px', opacity: 0.8 }}>
+                    {Number(ammo)}
+                    {typeof ammoMax === 'number' ? `/${Number(ammoMax)}` : ''}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
       {prompt && (

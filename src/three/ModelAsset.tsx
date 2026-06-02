@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
+import { registerModelGeometry } from '../runtime/meshGeometryCache';
 
 /** Resolve any asset id to its runtime URL (blob:/asset:// in the editor, data: in an export). */
 export function useAssetUrl(assetId?: string): string | undefined {
@@ -68,7 +69,7 @@ type OriginalMaterial = {
  * cloned materials — so per-object material overrides never leak into the `useGLTF` cache shared
  * by every other instance of the same model. Suspends while loading — render inside a <Suspense>.
  */
-export function ModelAsset({ url, material }: { url: string; material?: ModelMaterial }) {
+export function ModelAsset({ url, material, geometryKey }: { url: string; material?: ModelMaterial; geometryKey?: string }) {
   const { scene } = useGLTF(url);
   const baseTexture = useAssetTexture(material?.baseColorUrl, false);
   const normalTexture = useAssetTexture(material?.normalUrl, false);
@@ -109,6 +110,12 @@ export function ModelAsset({ url, material }: { url: string; material?: ModelMat
     }
     return root;
   }, [scene]);
+
+  // Cache the merged geometry (in the clone's local space, so the normalization
+  // wrapper is baked in) for mesh/convex physics colliders and the collider gizmo.
+  useEffect(() => {
+    registerModelGeometry(geometryKey, clone);
+  }, [clone, geometryKey]);
 
   useEffect(() => {
     clone.traverse((node) => {

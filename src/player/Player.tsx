@@ -3,6 +3,7 @@ import { useEditorStore } from '../store/editorStore';
 import { GAME_BUNDLE_FILE, readGameBundle } from '../project/exportGame';
 import { useRuntimeAudio } from '../runtime/useRuntimeAudio';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
+import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
 import { GameView } from './GameView';
 
@@ -124,6 +125,7 @@ export function Player() {
       <>
         <GameView />
         <ScreenUILayer />
+        <DynamicCrosshair />
         <GameHud />
       </>
     );

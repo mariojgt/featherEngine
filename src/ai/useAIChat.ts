@@ -59,7 +59,13 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'update_transform':
       return 'Moved object';
     case 'update_renderer':
-      return input.textureAssetId ? 'Applied texture' : 'Updated material';
+      return input.textureAssetId ? 'Applied texture' : input.opacity !== undefined ? 'Set opacity' : 'Updated material';
+    case 'set_scene_audio':
+      return 'Set scene audio';
+    case 'set_inventory':
+      return 'Set inventory';
+    case 'equip_slot':
+      return 'Equipped weapon';
     case 'set_model':
       return input.assetId ? 'Assigned model' : 'Cleared model';
     case 'set_animator':

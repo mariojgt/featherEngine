@@ -2,7 +2,7 @@ import { getPlatform } from '../platform';
 import { useProjectStore } from '../store/projectStore';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { inspectModel } from '../three/inspectModel';
-import type { AssetItem } from '../types';
+import type { AssetItem, GraphNodeCategory } from '../types';
 
 /** The Quaternius "Universal Animation Library" pawn that ships with the engine (public/templates). */
 const TEMPLATE_URL = 'templates/UAL1.glb';
@@ -290,19 +290,38 @@ async function assembleStarter(pawnId: string): Promise<void> {
     chain([add('Trigger Exit', { otherObjectId: dummyZone }), add('Hide UI', { documentId: dummyPrompt })]);
   }
 
-  // --- Water pool: a tagged water VOLUME (trigger). Walk in → SWIM mode (Space rises, C sinks, float). ---
-  const waterId = store.createObjectWithProps('cube', {
-    name: 'Water Pool',
-    position: [11, 0.5, 0],
-    color: '#2f6fb0',
-    physics: { enabled: true, bodyType: 'dynamic', collider: 'box', isTrigger: true, gravityScale: 0 },
-  });
-  store.updateTransform(waterId, 'scale', [7, 1.2, 7]);
-  store.setObjectVariable(waterId, 'volume', 'water');
+  // --- Water pool + climb wall: BLUEPRINT-DRIVEN traversal (open "Water Logic" / "Climb Logic" to customize).
+  //     Each volume's blueprint sets the toucher's movement mode on enter, and back to walking on exit —
+  //     the Unreal SetMovementMode pattern. (Swim physics: Space rises, C sinks, buoyant float.) ---
+  const volumeFolder = store.createFolder('Volumes');
+  // Helper: build a trigger volume whose blueprint sets `$trigger`'s movement mode in/out.
+  const makeModeVolume = (name: string, mode: 'swimming' | 'climbing', position: [number, number, number], scale: [number, number, number]) => {
+    const id = store.createObjectWithProps(name === 'Climb Volume' ? 'empty' : 'cube', {
+      name,
+      position,
+      color: '#2f8fd0',
+      physics: { enabled: true, bodyType: 'dynamic', collider: 'box', isTrigger: true, gravityScale: 0 },
+    });
+    store.updateTransform(id, 'scale', scale);
+    const { blueprintId: volBp } = store.createBlueprintNamed(`${name} Logic`, `Set the toucher to ${mode} mode while inside; walking on exit. Open me to customize!`, volumeFolder);
+    store.attachScript(id, volBp);
+    const RT = new Set(['Set Movement Mode']);
+    const addV = (label: string, data?: Record<string, unknown>) =>
+      store.addGraphNodeToBlueprint(volBp, label, RT.has(label) ? 'Runtime' : 'Events', data);
+    const chainV = (ids: Array<string | undefined>) => {
+      const seq = ids.filter(Boolean) as string[];
+      for (let i = 0; i < seq.length - 1; i++) store.connectGraphNodes(volBp, seq[i], seq[i + 1], 'exec-out', 'exec-in');
+    };
+    chainV([addV('Trigger Enter'), addV('Set Movement Mode', { movementMode: mode, targetObjectId: '$trigger' })]);
+    chainV([addV('Trigger Exit'), addV('Set Movement Mode', { movementMode: 'walking', targetObjectId: '$trigger' })]);
+    return id;
+  };
+
+  const waterId = makeModeVolume('Water Pool', 'swimming', [11, 0.5, 0], [7, 1.2, 7]);
   // Water FX: translucent, glossy, faintly glowing surface so you can see the character swim through it.
   store.updateRenderer(waterId, { opacity: 0.5, metalness: 0.1, roughness: 0.08, color: '#2f8fd0' });
 
-  // --- Climb wall: a solid wall + a climb VOLUME on its face. Walk into it, hold W to climb up / S down. ---
+  // Climb wall: a solid wall (to stand against) + a climb VOLUME on its face that flips you to climb mode.
   const wallId = store.createObjectWithProps('cube', {
     name: 'Climb Wall',
     position: [-11, 2.5, 0],
@@ -310,13 +329,39 @@ async function assembleStarter(pawnId: string): Promise<void> {
     physics: { enabled: true, bodyType: 'fixed', collider: 'box' },
   });
   store.updateTransform(wallId, 'scale', [3, 5, 0.5]);
-  const climbZone = store.createObjectWithProps('empty', {
-    name: 'Climb Volume',
-    position: [-11, 2.5, 0.7],
-    physics: { enabled: true, bodyType: 'dynamic', collider: 'box', isTrigger: true, gravityScale: 0 },
+  makeModeVolume('Climb Volume', 'climbing', [-11, 2.5, 0.7], [3, 5, 1.2]);
+
+  // Montage clips for one-shot Play-Animation events (equip / interact). Best-effort name matches on the rig;
+  // a missing clip just means that montage no-ops (graceful).
+  const clips = useEditorStore.getState().animations.filter((a) => a.skeletonId === skeletonId);
+  const pickClip = (...patterns: RegExp[]) => {
+    for (const p of patterns) {
+      const found = clips.find((c) => p.test(c.name));
+      if (found) return found.id;
+    }
+    return undefined;
+  };
+  const equipAnim = pickClip(/equip/i, /draw/i, /unsheath/i, /pull/i, /grab/i, /pick.?up/i);
+  const useAnim = pickClip(/interact/i, /pick.?up/i, /loot/i, /open/i, /press/i, /button/i, /\buse\b/i, /point/i, /salute/i, /wave/i);
+
+  // --- Inventory: a clickable on-screen weapon bar (Fist / Sword / Pistol). Clicking a slot swaps the held
+  //     weapon, plays its equip montage + switch sound, and sets RangedMode (the shoot gate). ---
+  const switchSound = await importBundledAudio('weapon-switch.mp3');
+  if (switchSound) {
+    const audioFolder = useEditorStore.getState().folders.find((f) => f.name === 'Audio');
+    if (audioFolder) store.moveToFolder('asset', switchSound, audioFolder.id);
+  }
+  store.setInventory(pawnId, {
+    slots: [
+      { label: 'Fist', ranged: false, equipAnimId: equipAnim },
+      ...(swordAsset ? [{ label: 'Sword', weaponAssetId: swordAsset, ranged: false, attachScale: SWORD_SCALE, attachYaw: SWORD_YAW, equipAnimId: equipAnim }] : []),
+      ...(pistolAsset ? [{ label: 'Pistol', weaponAssetId: pistolAsset, ranged: true, attachScale: PISTOL_SCALE, attachYaw: PISTOL_YAW, equipAnimId: equipAnim }] : []),
+    ],
+    equipped: 0,
+    boneName: 'hand_r',
+    socketName: 'RightHand',
+    switchSoundId: switchSound,
   });
-  store.updateTransform(climbZone, 'scale', [3, 5, 1.2]);
-  store.setObjectVariable(climbZone, 'volume', 'climb');
 
   // --- Interaction demo: a treasure chest you press E to open (Unreal-style focus highlight + prompt). ---
   const chestId = store.createObjectWithProps('cube', {
@@ -337,27 +382,57 @@ async function assembleStarter(pawnId: string): Promise<void> {
     const seq = ids.filter(Boolean) as string[];
     for (let i = 0; i < seq.length - 1; i++) store.connectGraphNodes(chestBp, seq[i], seq[i + 1], 'exec-out', 'exec-in');
   };
-  // E while focused → glow gold (emissive), pop the message, then stop being interactable (one-time open).
+  // E while focused → play a "use" montage on the PLAYER, glow gold, pop the message, then stop being
+  // interactable (one-time open). The Play Animation node targets the player so the chest triggers the anim.
   chainChest([
     addChest('Interact'),
+    useAnim ? addChest('Play Animation', { animationId: useAnim, targetObjectId: pawnId }) : undefined,
     addChest('Set Material Color', { materialColor: '#ffd86b', materialColorTarget: 'emissive' }),
     addChest('Show UI', { documentId: chestMsg }),
     addChest('Set Object Var', { objectKey: 'interactable', booleanValue: false }),
   ]);
 
-  // --- Combat demo: a roaming enemy that CHASES the player when near and deals contact damage. Shoot it. ---
+  // --- Combat demo: a roaming enemy whose AI is a FULLY NODE-BASED blueprint you can open + edit
+  //     ("Enemy AI" in the Enemies folder): chase the player when far, then face + shoot on a cooldown.
+  //     Uses the AI nodes (Distance To Player / Direction To Player / Face Player / Cooldown). ---
+  const enemyFolder = store.createFolder('Enemies');
   const enemyId = store.createObjectWithProps('capsule', {
     name: 'Skeleton',
-    position: [-5, 1, -7],
+    position: [-6, 1, -8],
     color: '#b8c0cc',
-    physics: { enabled: true, bodyType: 'kinematic', collider: 'capsule' },
   });
-  store.setObjectVariable(enemyId, 'enemy', true);
+  store.toggleCharacterController(enemyId); // seeds a character controller (enabled)
+  store.updateCharacterController(enemyId, { moveSpeed: 3, sprintMultiplier: 1, jumpStrength: 0, cameraFollow: false, mouseLook: false, turnSpeed: 9 });
   store.setObjectVariable(enemyId, 'health', 60);
-  store.setObjectVariable(enemyId, 'enemySpeed', 3);
-  store.setObjectVariable(enemyId, 'chaseRange', 11);
-  store.setObjectVariable(enemyId, 'enemyDamage', 8);
-  store.setObjectVariable(enemyId, 'attackRange', 1.8);
+  const { blueprintId: enemyBp } = store.createBlueprintNamed('Enemy AI', 'Chase the player, then face + shoot on a cooldown. Open me to tweak ranges/behavior!', enemyFolder);
+  store.attachScript(enemyId, enemyBp);
+  const enemyCat = (label: string): GraphNodeCategory =>
+    label === 'Update' ? 'Events' : label === 'Branch' || label === 'Compare' || label === 'Cooldown' ? 'Logic' : 'Runtime';
+  const addE = (label: string, data?: Record<string, unknown>) => store.addGraphNodeToBlueprint(enemyBp, label, enemyCat(label), data);
+  const execE = (a: string, b: string) => store.connectGraphNodes(enemyBp, a, b, 'exec-out', 'exec-in');
+  const valE = (a: string, b: string, handle: string) => store.connectGraphNodes(enemyBp, a, b, 'value-out', handle);
+  const eUpdate = addE('Update');
+  const eDist = addE('Distance To Player');
+  const eCmpChase = addE('Compare', { compareOp: '>', numberValue: 2.4 }); // chase when farther than 2.4m
+  const eBranchChase = addE('Branch');
+  const eDir = addE('Direction To Player');
+  const eMove = addE('Move', { amount: 3 });
+  const eCmpAtk = addE('Compare', { compareOp: '<', numberValue: 13 }); // attack when within 13m
+  const eBranchAtk = addE('Branch');
+  const eFace = addE('Face Player');
+  const eCool = addE('Cooldown', { numberValue: 1.4 }); // fire rate
+  const eShoot = addE('Spawn Projectile', { projectileSpeed: 16, projectileDamage: 8, projectileColor: '#ff5a4d', projectileSize: 0.22, projectileLife: 3 });
+  execE(eUpdate, eBranchChase);
+  execE(eUpdate, eBranchAtk);
+  valE(eDist, eCmpChase, 'a');
+  valE(eCmpChase, eBranchChase, 'condition');
+  execE(eBranchChase, eMove);
+  valE(eDir, eMove, 'vector');
+  valE(eDist, eCmpAtk, 'a');
+  valE(eCmpAtk, eBranchAtk, 'condition');
+  execE(eBranchAtk, eFace);
+  execE(eFace, eCool);
+  execE(eCool, eShoot);
 
   // --- Surface-aware footsteps: a stone path VOLUME — footsteps over it use a stone sound. ---
   const stoneStep = await importBundledAudio('footstep-stone.mp3');

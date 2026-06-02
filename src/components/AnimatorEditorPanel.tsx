@@ -16,7 +16,7 @@ import {
   type NodeProps,
   type NodeTypes,
 } from '@xyflow/react';
-import { Plus, Trash2, Workflow } from 'lucide-react';
+import { LayoutGrid, Plus, Trash2, Workflow } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type {
   AnimatorCondition,
@@ -379,6 +379,51 @@ function TransitionInspector({ controller, transitionId }: { controller: Animato
 
 // ---- The graph ----------------------------------------------------------------
 
+/**
+ * Tidy left→right layered layout for an animator's states: BFS from the default (entry) state along
+ * transitions assigns a column by reachable depth; states in the same column stack into rows. Unreachable
+ * states (only entered via "Any State") land in a trailing column. Returns a {stateId: {x,y}} map.
+ */
+function computeAnimatorLayout(controller: AnimatorController): Record<string, { x: number; y: number }> {
+  const COL = 260;
+  const ROW = 140;
+  const ids = controller.states.map((s) => s.id);
+  const idSet = new Set(ids);
+  const adj = new Map<string, string[]>(ids.map((id) => [id, []]));
+  for (const t of controller.transitions) {
+    if (t.from === 'any' || !adj.has(t.from) || !idSet.has(t.to)) continue;
+    adj.get(t.from)!.push(t.to);
+  }
+  const depth = new Map<string, number>();
+  const root = controller.defaultStateId && idSet.has(controller.defaultStateId) ? controller.defaultStateId : ids[0];
+  const queue: string[] = [];
+  if (root) {
+    depth.set(root, 0);
+    queue.push(root);
+  }
+  while (queue.length) {
+    const cur = queue.shift()!;
+    for (const next of adj.get(cur) ?? []) {
+      if (!depth.has(next)) {
+        depth.set(next, (depth.get(cur) ?? 0) + 1);
+        queue.push(next);
+      }
+    }
+  }
+  let maxDepth = 0;
+  depth.forEach((d) => (maxDepth = Math.max(maxDepth, d)));
+  for (const id of ids) if (!depth.has(id)) depth.set(id, maxDepth + 1); // unreachable → trailing column
+  const byCol = new Map<number, string[]>();
+  for (const id of ids) {
+    const d = depth.get(id) ?? 0;
+    if (!byCol.has(d)) byCol.set(d, []);
+    byCol.get(d)!.push(id);
+  }
+  const out: Record<string, { x: number; y: number }> = {};
+  for (const [col, list] of byCol) list.forEach((id, row) => (out[id] = { x: 40 + col * COL, y: 40 + row * ROW }));
+  return out;
+}
+
 function AnimatorFlow({ controller }: { controller: AnimatorController }) {
   const addAnimatorState = useEditorStore((state) => state.addAnimatorState);
   const addAnimatorTransition = useEditorStore((state) => state.addAnimatorTransition);
@@ -452,6 +497,13 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
     addAnimatorTransition(controller.id, { from: connection.source === ANY_ID ? 'any' : connection.source, to: connection.target });
   };
 
+  // Auto-arrange: tidy left→right layered layout of the states; persists positions + updates the live graph.
+  const autoArrange = () => {
+    const layout = computeAnimatorLayout(controller);
+    for (const [id, position] of Object.entries(layout)) updateAnimatorState(controller.id, id, { position });
+    setNodes((current) => current.map((node) => (layout[node.id] ? { ...node, position: layout[node.id] } : node)));
+  };
+
   return (
     <div className="scripting-body">
       <aside className="node-palette">
@@ -461,6 +513,9 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
         </div>
         <button className="full-button" onClick={() => { const id = addAnimatorState(controller.id); if (id) setSelected({ kind: 'state', id }); }}>
           <Plus size={14} aria-hidden /> Add State
+        </button>
+        <button className="full-button" onClick={autoArrange} title="Tidy the state graph into a left→right layered layout">
+          <LayoutGrid size={14} aria-hidden /> Auto Arrange
         </button>
         <ParametersEditor controller={controller} />
       </aside>

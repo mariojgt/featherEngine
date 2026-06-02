@@ -14,6 +14,13 @@ import type { Collider, KinematicCharacterController, RigidBody, World } from '@
 import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
 import { clearRagdolls } from './ragdollState';
+import {
+  capsuleParams,
+  colliderKindFor,
+  halfScale,
+  sphereRadius,
+} from './colliderShape';
+import { getModelGeometry } from './meshGeometryCache';
 
 let ready = false;
 let initPromise: Promise<void> | null = null;
@@ -42,28 +49,6 @@ function quatFromEuler(rotation: Vector3Tuple) {
   return { x: reuseQuat.x, y: reuseQuat.y, z: reuseQuat.z, w: reuseQuat.w };
 }
 
-type ColliderKind = 'box' | 'sphere' | 'capsule' | 'plane';
-
-function colliderKindFor(object: SceneObject): ColliderKind {
-  // A plane is always a thin slab oriented by the object's rotation (matches the
-  // flat ground / wall the mesh draws), regardless of the configured collider.
-  if (object.renderer?.mesh === 'plane') return 'plane';
-  const configured = object.physics?.collider;
-  if (configured === 'sphere' || configured === 'capsule' || configured === 'box') return configured;
-  if (object.renderer?.mesh === 'sphere') return 'sphere';
-  if (object.renderer?.mesh === 'capsule') return 'capsule';
-  return 'box';
-}
-
-function halfScale(object: SceneObject): [number, number, number] {
-  const s = object.transform.scale;
-  return [
-    Math.max(Math.abs(s[0]), 0.01),
-    Math.max(Math.abs(s[1]), 0.01),
-    Math.max(Math.abs(s[2]), 0.01),
-  ];
-}
-
 function clampCollisionLayer(layer: number | undefined): number {
   return Math.min(Math.max(Math.trunc(layer ?? 0), 0), 15);
 }
@@ -73,20 +58,43 @@ function collisionGroups(layer: number | undefined, mask: number | undefined): n
   return ((membership & 0xffff) << 16) | ((mask ?? DEFAULT_COLLISION_MASK) & DEFAULT_COLLISION_MASK);
 }
 
+/** Cached model vertices (local space) baked to the object's scale, for mesh/convex colliders. */
+function scaledMeshVertices(object: SceneObject) {
+  const geo = getModelGeometry(object.renderer?.modelAssetId);
+  if (!geo) return null;
+  const [sx, sy, sz] = halfScale(object);
+  const out = new Float32Array(geo.vertices.length);
+  for (let i = 0; i < geo.vertices.length; i += 3) {
+    out[i] = geo.vertices[i] * sx;
+    out[i + 1] = geo.vertices[i + 1] * sy;
+    out[i + 2] = geo.vertices[i + 2] * sz;
+  }
+  return { vertices: out, indices: geo.indices };
+}
+
 function colliderDescFor(object: SceneObject) {
   const [sx, sy, sz] = halfScale(object);
   const kind = colliderKindFor(object);
+  // Falls back to a box when the kind needs model geometry that hasn't loaded yet
+  // (or a degenerate convex hull) — bodySignature tracks geometry so it rebuilds later.
+  const boxDesc = () => RAPIER.ColliderDesc.cuboid(0.5 * sx, 0.5 * sy, 0.5 * sz);
   let desc;
   if (kind === 'plane') {
     // planeGeometry is a unit quad in local XY; give it a thin depth so it acts as a surface.
     desc = RAPIER.ColliderDesc.cuboid(0.5 * sx, 0.5 * sy, 0.02);
   } else if (kind === 'sphere') {
-    desc = RAPIER.ColliderDesc.ball(0.55 * Math.max(sx, sy, sz));
+    desc = RAPIER.ColliderDesc.ball(sphereRadius(object));
   } else if (kind === 'capsule') {
-    // capsuleGeometry(radius 0.34, length 0.82): half cylinder segment = 0.41.
-    desc = RAPIER.ColliderDesc.capsule(0.41 * sy, 0.34 * Math.max(sx, sz));
+    const { halfHeight, radius } = capsuleParams(object);
+    desc = RAPIER.ColliderDesc.capsule(halfHeight, radius);
+  } else if (kind === 'trimesh') {
+    const mesh = scaledMeshVertices(object);
+    desc = mesh ? RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices) : boxDesc();
+  } else if (kind === 'convex') {
+    const mesh = scaledMeshVertices(object);
+    desc = (mesh && RAPIER.ColliderDesc.convexHull(mesh.vertices)) || boxDesc();
   } else {
-    desc = RAPIER.ColliderDesc.cuboid(0.5 * sx, 0.5 * sy, 0.5 * sz);
+    desc = boxDesc();
   }
   const physics = object.physics;
   desc.setFriction(physics?.friction ?? 0.5);
@@ -111,9 +119,18 @@ function bodyDescFor(object: SceneObject) {
 function bodySignature(object: SceneObject): string {
   const p = object.physics;
   const [sx, sy, sz] = halfScale(object);
+  const kind = colliderKindFor(object);
+  // Mesh/convex colliders depend on loaded model geometry — fold the source model and
+  // whether its geometry is available yet into the signature so the box-fallback collider
+  // gets rebuilt into the real mesh the moment the model finishes loading.
+  const meshToken =
+    kind === 'trimesh' || kind === 'convex'
+      ? `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`
+      : '';
   return [
     p?.bodyType,
-    colliderKindFor(object),
+    kind,
+    meshToken,
     sx.toFixed(3),
     sy.toFixed(3),
     sz.toFixed(3),

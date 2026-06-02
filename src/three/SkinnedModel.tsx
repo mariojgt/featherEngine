@@ -266,6 +266,24 @@ export function useResolvedAnimator(object: SceneObject): {
         .filter((b): b is { name: string; weight: number } => Boolean(b.name));
     }
 
+    // Montage override (Play Animation node): while a one-shot montage is active it replaces the state
+    // machine's clip/blend until it finishes, then the controller resumes automatically.
+    const montage = isPlaying && live?.montage && live.montage.remaining > 0 ? live.montage : undefined;
+    if (montage) {
+      const mClip = clipOf(montage.animationId);
+      if (mClip?.name) {
+        return {
+          meshUrl,
+          clipSourceUrls: mClip.url ? [...clipSourceUrls, mClip.url] : clipSourceUrls,
+          clipName: mClip.name,
+          blend: undefined,
+          loop: false,
+          speed: montage.speed,
+          fade: 0.1,
+        };
+      }
+    }
+
     return {
       meshUrl,
       clipSourceUrls,

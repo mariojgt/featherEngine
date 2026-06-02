@@ -71,6 +71,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
       <Suspense fallback={null}>
         <ModelAsset
           url={modelUrl as string}
+          geometryKey={renderer?.modelAssetId}
           material={{
             color: resolved.color,
             metalness: resolved.metalness,

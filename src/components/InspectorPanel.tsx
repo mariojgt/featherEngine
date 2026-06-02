@@ -805,6 +805,16 @@ function CharacterSection({
           <KeyBinding label="Aim" value={cc.keyAim} onChange={(keyAim) => onChange({ keyAim })} />
           <KeyBinding label="Reload" value={cc.keyReload} onChange={(keyReload) => onChange({ keyReload })} />
           <KeyBinding label="Interact" value={cc.keyInteract} onChange={(keyInteract) => onChange({ keyInteract })} />
+          <label className="field-row">
+            <span>Interact Range</span>
+            <input
+              type="number"
+              step={0.5}
+              min={0}
+              value={cc.interactRange ?? 3}
+              onChange={(event) => onChange({ interactRange: Number(event.target.value) })}
+            />
+          </label>
           <KeyBinding label="Emote" value={cc.keyEmote} onChange={(keyEmote) => onChange({ keyEmote })} />
           <KeyBinding label="Ragdoll" value={cc.keyRagdoll} onChange={(keyRagdoll) => onChange({ keyRagdoll })} />
 
@@ -984,8 +994,17 @@ function PhysicsSection({
           <option value="box">Box</option>
           <option value="sphere">Sphere</option>
           <option value="capsule">Capsule</option>
+          <option value="mesh">Mesh (exact)</option>
+          <option value="convex">Convex hull</option>
         </select>
       </label>
+      {(physics.collider === 'mesh' || physics.collider === 'convex') && (
+        <p className="field-hint">
+          {physics.collider === 'mesh'
+            ? 'Exact triangle collider from the imported model — best for STATIC geometry. Dynamic bodies should use Convex hull.'
+            : 'Convex hull of the model — cheaper and valid for dynamic bodies. Falls back to a box until the model loads (and if it has no model).'}
+        </p>
+      )}
       <label className="field-row">
         <span>Trigger</span>
         <input type="checkbox" checked={physics.isTrigger ?? false} onChange={(event) => onChange({ isTrigger: event.target.checked })} />
