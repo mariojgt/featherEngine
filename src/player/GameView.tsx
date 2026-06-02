@@ -6,10 +6,12 @@ import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
+import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import { ImpactParticles } from '../three/ImpactParticles';
+import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { PostFx } from '../three/PostFx';
@@ -26,9 +28,14 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   const renderer = object.renderer;
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight: warm emissive rim so the player sees what they can use (Unreal-style).
-  const resolved = focused
-    ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
-    : baseResolved;
+  // Combat hit-flash: a brief red emissive pulse when this object takes damage.
+  const hitFlash = useEditorStore((state) => state.runtimeHitFlash[object.id] ?? 0);
+  const resolved =
+    hitFlash > 0
+      ? { ...baseResolved, emissiveColor: '#ff3b30', emissiveIntensity: 0.2 + 1.6 * Math.min(1, hitFlash / 0.16), overrideModel: true }
+      : focused
+        ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+        : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
   const resolvedAnimator = useResolvedAnimator(object);
@@ -150,6 +157,7 @@ function GameScene() {
   const allObjects = useEditorStore(selectActiveObjects);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
+  const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
   // Objects holstered/hidden at runtime (action.setVisible) aren't rendered.
   const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id));
 
@@ -171,7 +179,9 @@ function GameScene() {
         <Lightformer intensity={0.5} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
       </Environment>
 
-      {followTarget ? (
+      {cinematicCamera ? (
+        <CinematicCamera />
+      ) : followTarget ? (
         <FollowCamera />
       ) : cameraObject ? (
         <>
@@ -187,15 +197,18 @@ function GameScene() {
           object.attachment ? (
             <BoneAttachment key={object.id} object={object} onSelect={() => undefined}>
               <GameMesh object={object} focused={object.id === focusId} />
+              {object.particles && <ParticleSystem object={object} />}
             </BoneAttachment>
           ) : (
             <group
               key={object.id}
+              userData={{ nfObjectId: object.id }}
               position={object.transform.position}
               rotation={object.transform.rotation}
               scale={object.transform.scale}
             >
               <GameMesh object={object} focused={object.id === focusId} />
+              {object.particles && <ParticleSystem object={object} />}
             </group>
           ),
         )}

@@ -7,6 +7,19 @@ import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLo
 import { SkinnedModel, useResolvedAnimator } from './SkinnedModel';
 import type { SceneObject } from '../types';
 
+/** Reusable zero vector for relaxing the look-ahead offset back to center when idle (avoids per-frame allocs). */
+const ZERO = new THREE.Vector3();
+
+/** True if `object3d` (or any ancestor) is the rendered group of scene object `objectId`. */
+function belongsToObject(object3d: THREE.Object3D | null, objectId: string): boolean {
+  let node: THREE.Object3D | null = object3d;
+  while (node) {
+    if (node.userData?.nfObjectId === objectId) return true;
+    node = node.parent;
+  }
+  return false;
+}
+
 /** The first active-scene object whose character controller wants a follow camera. */
 export function useFollowTarget(): SceneObject | undefined {
   const objects = useEditorStore(selectActiveObjects);
@@ -140,6 +153,14 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   // Spring-arm collision raycaster + smoothed aim-down-sights blend (0 = hip, 1 = aiming).
   const springRay = useRef(new THREE.Raycaster());
   const adsBlend = useRef(0);
+  // Camera-polish state: smoothed sprint-FOV boost, a velocity-derived look-ahead offset, and the
+  // previous target position used to estimate that velocity frame-to-frame.
+  const sprintBlend = useRef(0);
+  const lookAhead = useRef(new THREE.Vector3());
+  // Mouse-wheel zoom: a distance multiplier on the resting offset (1 = authored distance). Scroll in/out,
+  // clamped so you can't zoom inside the character or absurdly far. Smoothed toward its target each frame.
+  const zoomTarget = useRef(1);
+  const zoom = useRef(1);
 
   // Normalize so a controller created before `mouseLook` existed still enables the camera.
   // In `preview` mode (editor, not playing) we deliberately ignore mouse-look so tuning the camera
@@ -153,11 +174,21 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   useEffect(() => {
     if (!wantsMouseLook) return;
     resetMouseLook();
+    zoomTarget.current = 1;
+    zoom.current = 1;
     const canvas = gl.domElement;
     let dragging = false;
     const locked = () => document.pointerLockElement === canvas;
+    // Mouse wheel zooms the camera in/out (scales the resting distance). preventDefault stops the page scrolling.
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoomTarget.current = THREE.MathUtils.clamp(zoomTarget.current + event.deltaY * 0.0012, 0.45, 2.2);
+    };
     const onPointerDown = () => {
       dragging = true;
+      // First click in the viewport captures the pointer (this also hides the OS cursor
+      // natively), so you can't accidentally click the scene behind the game. ESC releases.
+      if (!locked()) canvas.requestPointerLock?.();
     };
     const onPointerUp = () => {
       dragging = false;
@@ -174,23 +205,27 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('dblclick', onDblClick);
     canvas.addEventListener('contextmenu', onContext);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('mousemove', onMove);
     return () => {
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('dblclick', onDblClick);
       canvas.removeEventListener('contextmenu', onContext);
+      canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('mousemove', onMove);
       if (locked()) document.exitPointerLock?.();
     };
   }, [wantsMouseLook, gl, target?.id]);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     const camera = cameraRef.current;
     if (!camera || !target?.character) return;
     const cc = { ...defaultCharacter(), ...target.character };
     const [x, y, z] = target.transform.position;
+    // Framerate-independent smoothing factor for a given responsiveness `k` (higher = snappier).
+    const smooth = (k: number) => 1 - Math.exp(-k * Math.min(delta, 0.1));
 
     // Aim-down-sights: hold the aim key (keyAim) → smoothly zoom in + tuck the camera closer. Read keys
     // via getState so the camera frame loop doesn't re-subscribe on every keypress.
@@ -223,12 +258,32 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       return;
     }
 
-    // Resting offset [side, up, back]. The Set Camera node can override distance/height at runtime.
-    // ADS tucks the camera in + over the shoulder for an aimed shot.
+    // Sprint speed-feel: while sprinting, smoothly widen the FOV (sense of speed). Read keys via getState so
+    // the frame loop doesn't re-subscribe per keypress; preview (editor) never sprints.
+    const keys = preview ? {} : useEditorStore.getState().runtimeKeys;
+    const moving = Boolean(keys[cc.keyForward] || keys[cc.keyBackward] || keys[cc.keyLeft] || keys[cc.keyRight]);
+    const sprinting = moving && Boolean(keys[cc.keySprint]);
+    sprintBlend.current = THREE.MathUtils.lerp(sprintBlend.current, sprinting ? 1 : 0, smooth(6));
+
+    // Look-ahead: lead the camera toward where the character is moving so you see more ahead. Driven by the
+    // runtime's ALREADY-SMOOTHED horizontal velocity (accel/decel ramped) rather than a raw frame-to-frame
+    // position delta — the delta spikes for a frame when the physics body depenetrates from geometry or you
+    // reverse direction, which read as a camera "snap". The smoothed velocity never spikes, so the lead glides.
+    const rv = preview ? undefined : useEditorStore.getState().runtimeVelocities[target.id];
+    if (rv) {
+      const lead = new THREE.Vector3(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier).multiplyScalar(0.14);
+      lookAhead.current.lerp(lead, smooth(4));
+    } else {
+      lookAhead.current.lerp(ZERO, smooth(4));
+    }
+
+    // Resting offset [side, up, back]. The Set Camera node can override distance/height at runtime; the mouse
+    // wheel scales the distance (zoom), smoothed so a scroll glides in/out instead of jumping.
+    zoom.current = THREE.MathUtils.lerp(zoom.current, zoomTarget.current, smooth(12));
     const override = overrides[target.id];
-    const baseSide = cc.cameraOffset[0];
+    const baseSide = cc.cameraOffset[0] * zoom.current;
     const up = override?.height ?? cc.cameraOffset[1];
-    const baseBack = override ? -Math.abs(override.distance) : cc.cameraOffset[2];
+    const baseBack = (override ? -Math.abs(override.distance) : cc.cameraOffset[2]) * zoom.current;
     const side = THREE.MathUtils.lerp(baseSide, baseSide + 0.7, ads); // shift to the shoulder
     const back = THREE.MathUtils.lerp(baseBack, baseBack * 0.5, ads); // pull in
 
@@ -237,12 +292,14 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const azimuth = Math.atan2(side, back) + (cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : 0);
     const pitch = cc.mouseLook && useMouse ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
     const horizontal = radius * Math.cos(pitch);
-    desired.current.set(x + Math.sin(azimuth) * horizontal, y + up + Math.sin(pitch) * radius, z + Math.cos(azimuth) * horizontal);
+    desired.current
+      .set(x + Math.sin(azimuth) * horizontal, y + up + Math.sin(pitch) * radius, z + Math.cos(azimuth) * horizontal)
+      .add(lookAhead.current);
 
     // Spring-arm: cast from the pivot (over the character) toward the desired camera spot; if a wall is in
     // the way, pull the camera in to just before it so it never clips through geometry. Point-blank hits
     // (the character's own body, < 0.6u) are ignored.
-    const pivot = new THREE.Vector3(x, y + up, z);
+    const pivot = new THREE.Vector3(x, y + up, z).add(lookAhead.current);
     const toCam = desired.current.clone().sub(pivot);
     const wanted = toCam.length();
     if (wanted > 0.001) {
@@ -250,15 +307,18 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       springRay.current.set(pivot, toCam);
       springRay.current.far = wanted;
       const hits = springRay.current.intersectObjects(scene.children, true);
-      const wall = hits.find((h) => h.distance > 0.6);
+      // Ignore the followed character's own meshes — otherwise the spring arm collides with the very
+      // body it's trailing and snaps the camera inside it, filling the screen (a black view).
+      const wall = hits.find((h) => h.distance > 0.6 && !belongsToObject(h.object, target.id));
       if (wall) {
         desired.current.copy(pivot).addScaledVector(toCam, Math.max(0.6, wall.distance - 0.3));
       }
     }
 
-    camera.position.lerp(desired.current, 0.18);
-    camera.lookAt(x, y + up * 0.4, z);
-    const tpFov = THREE.MathUtils.lerp(50, 40, ads);
+    // Framerate-independent follow lag (k≈12 ≈ the old fixed 0.18 lerp at 60fps, but stable at any framerate).
+    camera.position.lerp(desired.current, smooth(12));
+    camera.lookAt(x + lookAhead.current.x, y + up * 0.4, z + lookAhead.current.z);
+    const tpFov = THREE.MathUtils.lerp(50, 40, ads) + sprintBlend.current * 7;
     if (Math.abs(camera.fov - tpFov) > 0.05) {
       camera.fov = tpFov;
       camera.updateProjectionMatrix();

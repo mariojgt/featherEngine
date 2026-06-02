@@ -48,7 +48,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Fire Event', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -332,11 +332,14 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const fireCustomEvent = useEditorStore((state) => state.fireCustomEvent);
   const deleteGraphNode = useEditorStore((state) => state.deleteGraphNode);
   const isPlaying = useEditorStore((state) => state.isPlaying);
-  const audioAssets = useEditorStore((state) => state.assets).filter((asset) => asset.type === 'audio');
+  const assets = useEditorStore((state) => state.assets);
+  const audioAssets = useMemo(() => assets.filter((asset) => asset.type === 'audio'), [assets]);
   const variables = useEditorStore((state) => state.variables);
   const dataAssets = useEditorStore((state) => state.dataAssets);
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
+  const particleSystems = useEditorStore((state) => state.particleSystems);
+  const activeScene = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId));
   const sceneObjects = useEditorStore(selectActiveObjects);
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
   const isAnimNode = Boolean(node?.data.nodeKind.startsWith('animator.'));
@@ -379,27 +382,34 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'action.rotate' ||
     node.data.nodeKind === 'action.applyForce';
   const updatesSound = node.data.nodeKind === 'action.playSound';
+  const updatesCinematic = node.data.nodeKind === 'action.playCinematic';
+  const updatesParticleSystem = node.data.nodeKind === 'action.spawnParticleSystem';
   const updatesSpawn = node.data.nodeKind === 'action.spawnObject';
   const updatesProjectile = node.data.nodeKind === 'action.spawnProjectile';
   const updatesMessage = node.data.nodeKind === 'action.print';
   const updatesVariable = node.data.nodeKind === 'variable.get' || node.data.nodeKind === 'variable.set';
   const updatesDataAsset = node.data.nodeKind === 'data.tableGet';
   const updatesCompare = node.data.nodeKind === 'logic.compare';
-  const updatesBooleanValue = node.data.nodeKind === 'value.boolean' || node.data.nodeKind === 'logic.branch' || node.data.nodeKind === 'animator.setBool';
+  const updatesBooleanValue =
+    node.data.nodeKind === 'value.boolean' ||
+    node.data.nodeKind === 'logic.branch' ||
+    node.data.nodeKind === 'animator.setBool' ||
+    node.data.nodeKind === 'action.setParticlesEmitting';
   const updatesNumberValue =
     node.data.nodeKind === 'value.number' ||
     node.data.nodeKind === 'math.add' ||
     node.data.nodeKind === 'math.clamp' ||
     node.data.nodeKind === 'math.lerp' ||
     node.data.nodeKind === 'logic.compare' ||
-    node.data.nodeKind === 'animator.setFloat';
+    node.data.nodeKind === 'animator.setFloat' ||
+    node.data.nodeKind === 'action.burstParticles';
   const updatesParamName =
     node.data.nodeKind === 'animator.setFloat' ||
     node.data.nodeKind === 'animator.setBool' ||
     node.data.nodeKind === 'animator.setTrigger' ||
     node.data.nodeKind === 'animator.getParam';
   const updatesStringValue = node.data.nodeKind === 'value.string';
-  const updatesVectorValue = node.data.nodeKind === 'value.vector3';
+  const updatesVectorValue = node.data.nodeKind === 'value.vector3' || node.data.nodeKind === 'action.spawnParticleSystem';
   const updatesSaveSlot = node.data.nodeKind === 'save.write' || node.data.nodeKind === 'save.load' || node.data.nodeKind === 'save.clear';
   const updatesMaterialColor = node.data.nodeKind === 'action.setMaterialColor';
   const updatesMaterialProperty =
@@ -411,7 +421,12 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesObjectKey =
     node.data.nodeKind === 'variable.getObject' || node.data.nodeKind === 'variable.setObject';
   const updatesOtherObject = node.data.nodeKind === 'event.collisionEnter' || node.data.nodeKind === 'event.triggerEnter';
-  const updatesTargetObject = node.data.nodeKind === 'action.destroyObject' || node.data.nodeKind === 'action.setRagdoll';
+  const updatesTargetObject =
+    node.data.nodeKind === 'action.destroyObject' ||
+    node.data.nodeKind === 'action.setRagdoll' ||
+    node.data.nodeKind === 'action.burstParticles' ||
+    node.data.nodeKind === 'action.setParticlesEmitting' ||
+    node.data.nodeKind === 'action.spawnParticleSystem';
   const selectedUIDoc = uiDocuments.find((doc) => doc.id === node.data.documentId);
   const eventName = node.data.eventName || 'CustomEvent';
   const selectedVariable = variables.find((variable) => variable.id === node.data.variableId);
@@ -553,7 +568,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
 
         {updatesVectorValue && (
           <label className="node-field">
-            <span>Vector</span>
+            <span>{node.data.nodeKind === 'action.spawnParticleSystem' ? 'Offset' : 'Vector'}</span>
             <ValueEditor
               type="vector3"
               value={node.data.vectorValue ?? [0, 0, 0]}
@@ -832,6 +847,40 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               {audioAssets.map((asset) => (
                 <option key={asset.id} value={asset.id}>
                   {asset.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {updatesCinematic && (
+          <label className="node-field">
+            <span>Cinematic</span>
+            <select
+              value={node.data.cinematicId ?? ''}
+              onChange={(event) => updateGraphNodeData(node.id, { cinematicId: event.target.value || undefined })}
+            >
+              <option value="">{activeScene?.cinematics?.length ? 'Select cinematic…' : 'No cinematics in scene'}</option>
+              {(activeScene?.cinematics ?? []).map((cinematic) => (
+                <option key={cinematic.id} value={cinematic.id}>
+                  {cinematic.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {updatesParticleSystem && (
+          <label className="node-field">
+            <span>Particle System</span>
+            <select
+              value={node.data.particleSystemId ?? ''}
+              onChange={(event) => updateGraphNodeData(node.id, { particleSystemId: event.target.value || undefined })}
+            >
+              <option value="">{particleSystems.length ? 'Select particle system…' : 'No particle systems yet'}</option>
+              {particleSystems.map((system) => (
+                <option key={system.id} value={system.id}>
+                  {system.name}
                 </option>
               ))}
             </select>

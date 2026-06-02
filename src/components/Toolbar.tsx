@@ -15,6 +15,7 @@ import {
   Pause,
   Play,
   Plus,
+  Rocket,
   Save,
   Square,
   Trash2,
@@ -138,6 +139,34 @@ function SaveToast() {
   );
 }
 
+/** Full-screen overlay showing live output while a production build runs. */
+function BuildProgressOverlay() {
+  const progress = useProjectStore((state) => state.buildProgress);
+  const clearBuildProgress = useProjectStore((state) => state.clearBuildProgress);
+  if (!progress) return null;
+  return (
+    <div className="build-overlay">
+      <div className="build-overlay-card">
+        <div className="build-overlay-head">
+          <Rocket size={16} aria-hidden />
+          <strong>Building your game…</strong>
+          <button
+            className="build-overlay-close"
+            title="Hide (the build keeps running)"
+            onClick={clearBuildProgress}
+          >
+            <X size={15} aria-hidden />
+          </button>
+        </div>
+        <p className="build-overlay-hint">
+          Compiling a native app + portable web build. This can take a few minutes the first time.
+        </p>
+        <pre className="build-overlay-log">{progress.lines.slice(-16).join('\n')}</pre>
+      </div>
+    </div>
+  );
+}
+
 function SceneSwitcher() {
   const scenes = useEditorStore((state) => state.scenes);
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
@@ -211,6 +240,7 @@ export function Toolbar() {
   const projectName = useProjectStore((state) => state.projectName);
   const save = useProjectStore((state) => state.save);
   const exportGame = useProjectStore((state) => state.exportGame);
+  const exportProduction = useProjectStore((state) => state.exportProduction);
   const busy = useProjectStore((state) => state.busy);
 
   // ⌘S / Ctrl+S to save.
@@ -278,6 +308,7 @@ export function Toolbar() {
       <div className="toolbar-spacer" />
 
       <SaveToast />
+      <BuildProgressOverlay />
 
       <div className="project-pill" title={projectName}>
         <span>{projectName}</span>
@@ -314,12 +345,21 @@ export function Toolbar() {
         </button>
         <button
           className="export-button"
-          title="Export standalone game bundle"
+          title="Export standalone game bundle (game.json)"
           onClick={() => void exportGame()}
           disabled={busy}
         >
           <Package size={16} aria-hidden />
           <span>Export</span>
+        </button>
+        <button
+          className="export-button"
+          title="Export to Production — stage the game for a portable web build and a native Windows/Mac/Linux app"
+          onClick={() => void exportProduction()}
+          disabled={busy}
+        >
+          <Rocket size={16} aria-hidden />
+          <span>Production</span>
         </button>
       </div>
     </header>

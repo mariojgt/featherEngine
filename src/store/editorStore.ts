@@ -28,6 +28,9 @@ import {
   type ProjectGraph,
   type ProjectileComponent,
   type LightComponent,
+  type ParticleSystemComponent,
+  type ParticleConfig,
+  type ParticleSystemDefinition,
   type RenderSettings,
   type ProjectVariable,
   type RigidBodyType,
@@ -48,7 +51,15 @@ import {
   type AnimatorTransition,
   type AnimatorCondition,
   type CharacterControllerComponent,
+  type CinematicAction,
+  type CinematicCameraKeyframe,
+  type CinematicTransformKeyframe,
+  type CinematicEase,
+  type CinematicSequence,
   type InventoryComponent,
+  type RuntimeCinematicCamera,
+  type RuntimeCinematicFade,
+  type RuntimeCinematicState,
   type TransformComponent,
   type Vector3Tuple,
   type UIDocument,
@@ -62,6 +73,8 @@ import {
 import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent } from '../runtime/physicsWorld';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
+import { sendParticleCommand } from '../runtime/particleBus';
+import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
 import { resolveMaterial } from '../three/materialResolve';
 import type { ModelInspection } from '../three/inspectModel';
 
@@ -70,6 +83,256 @@ const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 /** Drop keys whose value is `undefined` so a partial patch never overwrites existing fields with undefined. */
 const stripUndefined = <T extends object>(patch: T): Partial<T> =>
   Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+const mix = (from: number, to: number, t: number) => from + (to - from) * t;
+const mixVec3 = (from: Vector3Tuple, to: Vector3Tuple, t: number): Vector3Tuple => [
+  mix(from[0], to[0], t),
+  mix(from[1], to[1], t),
+  mix(from[2], to[2], t),
+];
+
+const lookAtFromRotation = (position: Vector3Tuple, rotation: Vector3Tuple): Vector3Tuple => {
+  const pitch = rotation[0];
+  const yaw = rotation[1];
+  return [
+    position[0] + Math.sin(yaw) * Math.cos(pitch),
+    position[1] + Math.sin(pitch),
+    position[2] + Math.cos(yaw) * Math.cos(pitch),
+  ];
+};
+
+/** Map a linear 0..1 progress through an easing curve (smooth = ease-in-out, the cinematic default). */
+const applyCinematicEase = (t: number, ease: CinematicEase = 'smooth'): number => {
+  const x = clamp01(t);
+  switch (ease) {
+    case 'linear':
+      return x;
+    case 'in':
+      return x * x;
+    case 'out':
+      return 1 - (1 - x) * (1 - x);
+    case 'smooth':
+    default:
+      return x * x * (3 - 2 * x);
+  }
+};
+
+/** Eased local progress (0..1) of a beat at `time`, using the beat's `ease` (default smooth). */
+const cinematicActionLocalTime = (action: CinematicAction, time: number) =>
+  applyCinematicEase(clamp01((time - action.time) / Math.max(action.duration ?? 0, 0.001)), action.ease);
+
+const isCinematicActionActive = (action: CinematicAction, time: number) => {
+  const duration = Math.max(action.duration ?? 0, 0.001);
+  return time >= action.time && time <= action.time + duration;
+};
+
+/** Linearly blend two camera poses (position/lookAt/fov). */
+const mixCinematicCamera = (
+  from: RuntimeCinematicCamera,
+  to: RuntimeCinematicCamera,
+  t: number,
+): RuntimeCinematicCamera => ({
+  position: mixVec3(from.position, to.position, t),
+  lookAt: mixVec3(from.lookAt, to.lookAt, t),
+  fov: mix(from.fov, to.fov, t),
+});
+
+/** Catmull-Rom interpolation of one scalar through four control points (p1→p2 over t∈[0,1]). */
+const catmullRom = (p0: number, p1: number, p2: number, p3: number, t: number): number => {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+};
+
+const catmullRomVec3 = (p0: Vector3Tuple, p1: Vector3Tuple, p2: Vector3Tuple, p3: Vector3Tuple, t: number): Vector3Tuple => [
+  catmullRom(p0[0], p1[0], p2[0], p3[0], t),
+  catmullRom(p0[1], p1[1], p2[1], p3[1], t),
+  catmullRom(p0[2], p1[2], p2[2], p3[2], t),
+];
+
+/**
+ * Sample an animated camera track: fly smoothly through the keyframes via a Catmull-Rom spline
+ * (positions + look-ats + fov). Times are absolute seconds; outside the range the camera holds on
+ * the first/last keyframe. A single keyframe is a static framing.
+ */
+const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: number): RuntimeCinematicCamera | undefined => {
+  const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
+  if (!frames.length) return undefined;
+  if (frames.length === 1 || time <= frames[0].time) {
+    const first = frames[0];
+    return { position: first.position, lookAt: first.lookAt, fov: first.fov };
+  }
+  const last = frames[frames.length - 1];
+  if (time >= last.time) return { position: last.position, lookAt: last.lookAt, fov: last.fov };
+
+  let i = 0;
+  while (i < frames.length - 1 && frames[i + 1].time <= time) i += 1;
+  const k1 = frames[i];
+  const k2 = frames[i + 1];
+  const k0 = frames[i - 1] ?? k1;
+  const k3 = frames[i + 2] ?? k2;
+  const span = Math.max(k2.time - k1.time, 0.001);
+  const t = clamp01((time - k1.time) / span);
+  return {
+    position: catmullRomVec3(k0.position, k1.position, k2.position, k3.position, t),
+    lookAt: catmullRomVec3(k0.lookAt, k1.lookAt, k2.lookAt, k3.lookAt, t),
+    fov: catmullRom(k0.fov, k1.fov, k2.fov, k3.fov, t),
+  };
+};
+
+const cameraFromCinematicAction = (
+  action: CinematicAction,
+  objects: SceneObject[],
+  time: number,
+): RuntimeCinematicCamera | undefined => {
+  // An animated keyframe track takes over the whole framing when present.
+  if (action.keyframes && action.keyframes.length) {
+    const sampled = sampleCameraKeyframes(action.keyframes, time);
+    if (sampled) return sampled;
+  }
+  const cameraObject = action.objectId ? objects.find((object) => object.id === action.objectId) : undefined;
+  const toPosition = action.toPosition ?? action.position;
+  const position =
+    action.fromPosition && toPosition && isCinematicActionActive(action, time)
+      ? mixVec3(action.fromPosition, toPosition, cinematicActionLocalTime(action, time))
+      : action.position ?? action.toPosition ?? action.fromPosition ?? cameraObject?.transform.position;
+  if (!position) return undefined;
+  const toRotation = action.toRotation ?? action.rotation;
+  const rotation =
+    action.fromRotation && toRotation && isCinematicActionActive(action, time)
+      ? mixVec3(action.fromRotation, toRotation, cinematicActionLocalTime(action, time))
+      : action.rotation ?? action.toRotation ?? action.fromRotation ?? cameraObject?.transform.rotation;
+  return {
+    position,
+    lookAt: action.lookAt ?? (rotation ? lookAtFromRotation(position, rotation) : [0, 1, 0]),
+    fov: action.fov ?? 50,
+  };
+};
+
+const cinematicCameraAt = (
+  sequence: CinematicSequence | undefined,
+  objects: SceneObject[],
+  time: number,
+  fallback?: RuntimeCinematicCamera,
+): RuntimeCinematicCamera | undefined => {
+  const cameraActions = (sequence?.actions.filter((item) => item.type === 'camera') ?? []).sort((a, b) => a.time - b.time);
+  if (!cameraActions.length) return fallback;
+  const past = cameraActions.filter((item) => item.time <= time);
+  const current = past[past.length - 1] ?? cameraActions[0];
+  const currentPose = cameraFromCinematicAction(current, objects, time);
+  if (!currentPose) return fallback;
+
+  // Glide from the previous shot's framing into this one over `current.blend` seconds — a smooth
+  // dolly instead of a hard cut. `blend` 0 (or no previous shot) keeps the classic instant cut.
+  const previous = past.length >= 2 ? past[past.length - 2] : undefined;
+  const blend = current.blend ?? 0;
+  if (previous && blend > 0.001 && time < current.time + blend) {
+    const previousPose = cameraFromCinematicAction(previous, objects, current.time);
+    if (previousPose) {
+      const t = applyCinematicEase((time - current.time) / blend, current.ease);
+      return mixCinematicCamera(previousPose, currentPose, t);
+    }
+  }
+  return currentPose;
+};
+
+/** Sample an animated object transform track: fly smoothly through the keyframes via Catmull-Rom. */
+const sampleTransformKeyframes = (keyframes: CinematicTransformKeyframe[], time: number): TransformComponent | undefined => {
+  const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
+  if (!frames.length) return undefined;
+  const pick = (frame: CinematicTransformKeyframe): TransformComponent => ({ position: frame.position, rotation: frame.rotation, scale: frame.scale });
+  if (frames.length === 1 || time <= frames[0].time) return pick(frames[0]);
+  const last = frames[frames.length - 1];
+  if (time >= last.time) return pick(last);
+
+  let i = 0;
+  while (i < frames.length - 1 && frames[i + 1].time <= time) i += 1;
+  const k1 = frames[i];
+  const k2 = frames[i + 1];
+  const k0 = frames[i - 1] ?? k1;
+  const k3 = frames[i + 2] ?? k2;
+  const t = clamp01((time - k1.time) / Math.max(k2.time - k1.time, 0.001));
+  return {
+    position: catmullRomVec3(k0.position, k1.position, k2.position, k3.position, t),
+    rotation: catmullRomVec3(k0.rotation, k1.rotation, k2.rotation, k3.rotation, t),
+    scale: catmullRomVec3(k0.scale, k1.scale, k2.scale, k3.scale, t),
+  };
+};
+
+const cinematicFadeAt = (
+  sequence: CinematicSequence | undefined,
+  time: number,
+  fallback?: RuntimeCinematicFade,
+): RuntimeCinematicFade | undefined => {
+  const action = sequence?.actions
+    .filter((item) => item.type === 'fade' && item.time <= time)
+    .sort((a, b) => b.time - a.time)[0];
+  if (!action) return undefined;
+  const active = isCinematicActionActive(action, time);
+  const local = cinematicActionLocalTime(action, time);
+  return {
+    opacity: active ? mix(action.fadeFrom ?? fallback?.opacity ?? 0, action.fadeTo ?? 1, local) : action.fadeTo ?? fallback?.opacity ?? 0,
+    color: action.fadeColor ?? fallback?.color ?? '#000000',
+  };
+};
+
+const initialCinematicCamera = (sequence: CinematicSequence | undefined, objects: SceneObject[]): RuntimeCinematicCamera | undefined =>
+  cinematicCameraAt(sequence, objects, 0);
+
+const initialCinematicFade = (sequence: CinematicSequence | undefined): RuntimeCinematicFade | undefined =>
+  cinematicFadeAt(sequence, 0);
+
+const cinematicTransformsAt = (
+  sequence: CinematicSequence | undefined,
+  objects: SceneObject[],
+  time: number,
+): Record<string, TransformComponent> => {
+  if (!sequence) return {};
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const transforms: Record<string, TransformComponent> = {};
+
+  sequence.actions
+    .filter((action) => action.type === 'transform' && action.objectId && action.time <= time)
+    .sort((a, b) => a.time - b.time)
+    .forEach((action) => {
+      const objectId = action.objectId;
+      if (!objectId) return;
+      const current = transforms[objectId] ?? byId.get(objectId)?.transform;
+      if (!current) return;
+      // An animated keyframe track drives the object's whole transform when present.
+      if (action.transformKeyframes && action.transformKeyframes.length) {
+        const sampled = sampleTransformKeyframes(action.transformKeyframes, time);
+        if (sampled) transforms[objectId] = sampled;
+        return;
+      }
+      const local = isCinematicActionActive(action, time) ? cinematicActionLocalTime(action, time) : 1;
+      const toPosition = action.toPosition ?? action.position ?? current.position;
+      const toRotation = action.toRotation ?? action.rotation ?? current.rotation;
+      const toScale = action.toScale ?? action.scale ?? current.scale;
+      transforms[objectId] = {
+        position: action.fromPosition ? mixVec3(action.fromPosition, toPosition, local) : toPosition,
+        rotation: action.fromRotation ? mixVec3(action.fromRotation, toRotation, local) : toRotation,
+        scale: action.fromScale ? mixVec3(action.fromScale, toScale, local) : toScale,
+      };
+    });
+
+  return transforms;
+};
+
+const cinematicHiddenAt = (sequence: CinematicSequence | undefined, time: number): string[] => {
+  if (!sequence) return [];
+  const hidden = new Set<string>();
+  sequence.actions
+    .filter((action) => action.type === 'visibility' && action.objectId && action.time <= time)
+    .sort((a, b) => a.time - b.time)
+    .forEach((action) => {
+      if (!action.objectId) return;
+      if (action.visible === false) hidden.add(action.objectId);
+      else hidden.delete(action.objectId);
+    });
+  return [...hidden];
+};
 
 /** Live state of one object's Animator Controller during Play. */
 export interface RuntimeAnimator {
@@ -121,9 +384,15 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   moveSpeed: 3.4,
   sprintMultiplier: 2,
   crouchMultiplier: 0.45,
-  jumpStrength: 5,
-  gravity: 12,
-  turnSpeed: 10,
+  jumpStrength: 6.4,
+  gravity: 16,
+  fallMultiplier: 1.9,
+  jumpCutMultiplier: 0.45,
+  coyoteTime: 0.12,
+  acceleration: 60,
+  deceleration: 70,
+  airControl: 0.35,
+  turnSpeed: 12,
   modelYawOffset: 0,
   groundLevel: 0,
   keyForward: 'KeyW',
@@ -552,6 +821,7 @@ const nodeDescriptions: Record<string, string> = {
   'Spawn Object': 'Creates an object instance.',
   'Destroy Object': 'Removes an object during Play.',
   'Play Sound': 'Plays an audio source.',
+  'Play Cinematic': 'Starts a Film Mode cinematic sequence.',
   'Set Material Color': 'Changes the attached object\'s material color at runtime (per-object).',
   'Set Material Property': 'Sets a numeric material property (metalness/roughness/glow) at runtime (per-object).',
   'Set Anim Float': 'Writes a float into the object\'s animator parameter (e.g. Speed) to drive its state machine.',
@@ -633,9 +903,11 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set Visible': 'action.setVisible',
   'Spawn Attached': 'action.spawnAttached',
   'Play Animation': 'action.playAnimation',
+  'Play Cinematic': 'action.playCinematic',
   'Set Movement Mode': 'action.setMovementMode',
   'Distance To Player': 'ai.distanceToPlayer',
   'Direction To Player': 'ai.directionToPlayer',
+  'Player Location': 'ai.playerLocation',
   'Face Player': 'action.facePlayer',
   Cooldown: 'logic.cooldown',
   'Material Output': 'material.output',
@@ -657,6 +929,9 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set UI Text': 'ui.setText',
   'Get Object Var': 'variable.getObject',
   'Set Object Var': 'variable.setObject',
+  'Burst Particles': 'action.burstParticles',
+  'Set Particles Emitting': 'action.setParticlesEmitting',
+  'Spawn Particle System': 'action.spawnParticleSystem',
 };
 
 const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
@@ -824,6 +1099,8 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: 'Distance To Player', description: 'Outputs the distance (units) from this object to the player. Wire into Compare for range checks.' };
     case 'ai.directionToPlayer':
       return { label: 'Direction To Player', description: 'Outputs a normalized direction vector toward the player. Wire into Move so the enemy chases.' };
+    case 'ai.playerLocation':
+      return { label: 'Player Location', description: "Outputs the player's world position [x,y,z]. Wire into Spawn Particle System's Location (or any vector input) to spawn an effect at the player." };
     case 'action.facePlayer':
       return { label: 'Face Player', description: 'Turns this object to face the player (so Spawn Projectile fires at them).' };
     case 'logic.cooldown':
@@ -833,6 +1110,8 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
         label: 'Play Animation',
         description: "Plays a one-shot animation (montage) on the owner's (or Target's) animator, overriding the state machine until it finishes, then returning automatically. Unreal Play-Montage style — fire it from any event (Interact, key, equip).",
       };
+    case 'action.playCinematic':
+      return { label: 'Play Cinematic', description: 'Starts a Film Mode cinematic sequence from Blueprint logic, trigger volumes, or interactions.' };
     case 'action.setMovementMode':
       return {
         label: `Set Movement Mode: ${data.movementMode ?? 'walking'}`,
@@ -846,6 +1125,21 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: 'Hide UI', description: 'Hides a screen UI document during Play.' };
     case 'ui.setText':
       return { label: 'Set UI Text', description: "Overrides a UI element's text at runtime (wire a value into Text)." };
+    case 'action.burstParticles':
+      return {
+        label: `Burst Particles x${Number(data.numberValue ?? 16)}`,
+        description: "Emits a one-shot burst from the owner's (or Target's) particle emitter — explosions, hit sparks, puffs. The object must have a particle emitter.",
+      };
+    case 'action.setParticlesEmitting':
+      return {
+        label: `Particles ${data.booleanValue === false ? 'Off' : 'On'}`,
+        description: 'Starts or stops a continuous particle emitter on the owner (or Target) — e.g. ignite a torch, switch on a smoke plume.',
+      };
+    case 'action.spawnParticleSystem':
+      return {
+        label: 'Spawn Particle System',
+        description: "Spawns a fresh emitter from a reusable Particle System asset (explosions, pickups, hit effects). Position priority: a Vector3 wired into Location (e.g. Player Location) → the Target object's position → the owner. An Offset vector is added on top. Set its particleSystemId. Runtime-spawned; removed on Stop.",
+      };
     case 'variable.getObject':
       return { label: `Get Object Var: ${data.objectKey || 'health'}`, description: "Reads one of this object's instance variables (self)." };
     case 'variable.setObject':
@@ -967,6 +1261,7 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
     nodeKind === 'logic.or' ||
     nodeKind === 'ai.distanceToPlayer' ||
     nodeKind === 'ai.directionToPlayer' ||
+    nodeKind === 'ai.playerLocation' ||
     nodeKind === 'variable.get' ||
     nodeKind === 'data.tableGet' ||
     nodeKind === 'material.color' ||
@@ -1319,6 +1614,15 @@ const makeSpawnedObject = (spawnKind: SceneObjectKind, position: Vector3Tuple): 
   } as SceneObject;
 };
 
+/** A runtime-spawned emitter that references a particle-system asset (Spawn Particle System node). */
+const makeSpawnedParticleEmitter = (systemId: string, position: Vector3Tuple): SceneObject => ({
+  id: makeId('psfx'),
+  name: 'Particle System',
+  kind: 'empty',
+  transform: defaultTransform([position[0], position[1], position[2]]),
+  particles: { ...withParticleDefaults({ enabled: true }), systemId },
+});
+
 const LAYOUT_COL = 264;
 const LAYOUT_ROW = 152;
 const LAYOUT_X0 = 48;
@@ -1403,6 +1707,7 @@ interface EditorState {
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
+  particleSystems: ParticleSystemDefinition[];
   skeletons: SkeletonAsset[];
   skeletalMeshes: SkeletalMeshAsset[];
   animations: AnimationAsset[];
@@ -1419,7 +1724,9 @@ interface EditorState {
   activeBlueprintId: string;
   activeAnimatorControllerId: string;
   activeMaterialId: string;
+  activeParticleSystemId: string;
   activeUIDocumentId: string;
+  activeCinematicId: string;
   /** Editor-only: selected UI element id (shared between the UI panel and viewport overlay). */
   selectedUIElementId: string;
   isPlaying: boolean;
@@ -1446,6 +1753,8 @@ interface EditorState {
   runtimeClimbing: string[];
   /** Remaining roll/dodge time (seconds) per object — drives the forward dash + "rolling" param. */
   runtimeRoll: Record<string, number>;
+  /** Remaining coyote-time (seconds) per object — a jump still registers this long after leaving the ground. */
+  runtimeCoyote: Record<string, number>;
   /** Remaining attack time (seconds) per object — drives the "attacking" param. */
   runtimeAttack: Record<string, number>;
   /** Remaining reload time (seconds) per object — drives the "reloading" param. */
@@ -1467,6 +1776,8 @@ interface EditorState {
   runtimeHurt: number;
   /** Per-enemy attack cooldown (seconds remaining) so contact damage applies on a cadence, not every frame. */
   runtimeEnemyCooldown: Record<string, number>;
+  /** Per-object hit-flash time remaining (seconds) — drives a brief red emissive pulse when something takes damage. */
+  runtimeHitFlash: Record<string, number>;
   /** Per-character footstep-sound override from the surface volume they're standing in (a trigger tagged with
    *  a `footstepSound` instance variable). Empty → use the character's own footstepSoundId. */
   runtimeSurfaceSound: Record<string, string>;
@@ -1492,6 +1803,16 @@ interface EditorState {
   runtimeObjectVariables: Record<string, Record<string, GraphValue>>;
   /** Runtime text overrides written by ui.setText, keyed by `${docId}:${elementId}`. Play-only. */
   runtimeUITextOverrides: Record<string, string>;
+  runtimeCinematic?: RuntimeCinematicState;
+  runtimeCinematicCamera?: RuntimeCinematicCamera;
+  runtimeCinematicFade?: RuntimeCinematicFade;
+  editorCinematicPreview?: { sequenceId: string; time: number };
+  editorCinematicPreviewCamera?: RuntimeCinematicCamera;
+  editorCinematicPreviewFade?: RuntimeCinematicFade;
+  editorCinematicPreviewTransforms: Record<string, TransformComponent>;
+  editorCinematicPreviewHidden: string[];
+  /** Editor-only: Film Mode "Record" mode — moving the camera or dragging objects auto-keys them. */
+  cinematicRecording: boolean;
   runtimeStarted: boolean;
   runtimeTime: number;
   assetSearch: string;
@@ -1597,6 +1918,12 @@ interface EditorState {
   updateRenderSettings: (patch: Partial<RenderSettings>) => void;
   /** Configure a `kind: 'light'` object's light (type/color/intensity/distance/angle). Creates the component if absent. */
   setObjectLight: (objectId: string, patch: Partial<LightComponent>) => void;
+  /** Add an authored particle emitter to an object (optionally seeded from a preset). Creates the component if absent. */
+  addParticles: (objectId: string, preset?: ParticlePresetId) => void;
+  /** Patch an object's particle emitter (no-op if it has none). */
+  updateParticles: (objectId: string, patch: Partial<ParticleSystemComponent>) => void;
+  /** Remove an object's particle emitter. */
+  removeParticles: (objectId: string) => void;
   /** Attach an object to a character's bone socket (or pass undefined target to detach). */
   setAttachment: (objectId: string, attachment?: AttachmentComponent) => void;
   /** Add a named socket (bone + offset) to a Skeleton asset. Returns the socket id. */
@@ -1619,6 +1946,32 @@ interface EditorState {
   createCharacterPawn: (modelAssetId: string, name?: string) => string | undefined;
   /** Augment a character's animator with a gameplay kit (extra states/params/transitions). Returns a summary. */
   addGameplayKit: (objectId: string, kit: 'ranged' | 'health' | 'interactions' | 'emotes') => string | undefined;
+  /** Create a self-contained collectible pickup wired to increment a project variable and update a HUD counter. */
+  createCollectibleCounter: (options?: {
+    name?: string;
+    variableName?: string;
+    label?: string;
+    amount?: number;
+    position?: Vector3Tuple;
+    playerObjectId?: string;
+    color?: string;
+  }) => { objectId: string; blueprintId: string; variableId: string; uiDocumentId: string; counterElementId: string };
+  createCinematic: (name?: string, duration?: number) => string;
+  updateCinematic: (id: string, patch: Partial<Omit<CinematicSequence, 'id' | 'actions' | 'createdAt'>>) => void;
+  deleteCinematic: (id: string) => void;
+  setActiveCinematic: (id: string) => void;
+  addCinematicAction: (cinematicId: string, action: Omit<CinematicAction, 'id'>) => string | undefined;
+  updateCinematicAction: (cinematicId: string, actionId: string, patch: Partial<Omit<CinematicAction, 'id'>>) => void;
+  removeCinematicAction: (cinematicId: string, actionId: string) => void;
+  /** Capture/replace a camera keyframe at `time` on the cinematic's camera track (creates one). */
+  addCinematicCameraKeyframe: (cinematicId: string, time: number, pose: RuntimeCinematicCamera) => string | undefined;
+  /** Capture/replace an object transform keyframe at `time` (uses `transform` or the object's live pose). */
+  addCinematicTransformKeyframe: (cinematicId: string, objectId: string, time: number, transform?: TransformComponent) => string | undefined;
+  setCinematicRecording: (recording: boolean) => void;
+  previewCinematic: (cinematicId: string, time: number) => void;
+  clearCinematicPreview: () => void;
+  playCinematic: (cinematicId: string) => void;
+  stopCinematic: () => void;
   attachScript: (id: string, nextBlueprintId?: string) => void;
   detachScript: (id: string) => void;
   setActiveBlueprint: (id: string) => void;
@@ -1632,7 +1985,7 @@ interface EditorState {
   createFolder: (name?: string, parentId?: string) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
-  moveToFolder: (kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab', id: string, folderId?: string) => void;
+  moveToFolder: (kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab', id: string, folderId?: string) => void;
   renameBlueprint: (id: string, name: string) => void;
   deleteBlueprint: (id: string) => void;
   renameAsset: (id: string, name: string) => void;
@@ -1659,6 +2012,14 @@ interface EditorState {
   deleteMaterial: (id: string) => void;
   setActiveMaterial: (id: string) => void;
   setObjectMaterial: (objectId: string, materialId?: string) => void;
+  // --- Reusable particle-system assets (Unreal-style). Edit once, every referencing emitter updates. ---
+  createParticleSystem: (name?: string, preset?: ParticlePresetId, folderId?: string) => string;
+  renameParticleSystem: (id: string, name: string) => void;
+  updateParticleSystem: (id: string, patch: Partial<ParticleConfig>) => void;
+  deleteParticleSystem: (id: string) => void;
+  setActiveParticleSystem: (id: string) => void;
+  /** Assign a particle-system asset to an object (seeds/points its emitter component at the asset). Pass undefined to detach. */
+  setObjectParticleSystem: (objectId: string, systemId?: string) => void;
   // --- Game UI documents (HUD + world-space widgets). AI-friendly: explicit params, return ids. ---
   createUIDocument: (name?: string, surface?: UISurface, folderId?: string) => string;
   renameUIDocument: (id: string, name: string) => void;
@@ -1832,6 +2193,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   variables: starterVariables,
   dataAssets: starterDataAssets,
   materials: [],
+  particleSystems: [],
   skeletons: [],
   skeletalMeshes: [],
   animations: [],
@@ -1845,7 +2207,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   prefabThumbnailQueue: [],
   activeBlueprintId: blueprintId,
   activeMaterialId: '',
+  activeParticleSystemId: '',
   activeUIDocumentId: '',
+  activeCinematicId: '',
   selectedUIElementId: '',
   activeAnimatorControllerId: '',
   isPlaying: false,
@@ -1860,6 +2224,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeSwimming: [],
   runtimeClimbing: [],
   runtimeRoll: {},
+  runtimeCoyote: {},
   runtimeAttack: {},
   runtimeReload: {},
   runtimeInteract: {},
@@ -1870,6 +2235,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeHitMarker: 0,
   runtimeHurt: 0,
   runtimeEnemyCooldown: {},
+  runtimeHitFlash: {},
   runtimeSurfaceSound: {},
   runtimeMovementMode: {},
   runtimeMontageRequests: {},
@@ -1881,6 +2247,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVisibleUI: {},
   runtimeObjectVariables: {},
   runtimeUITextOverrides: {},
+  runtimeCinematic: undefined,
+  runtimeCinematicCamera: undefined,
+  runtimeCinematicFade: undefined,
+  editorCinematicPreview: undefined,
+  editorCinematicPreviewCamera: undefined,
+  editorCinematicPreviewFade: undefined,
+  editorCinematicPreviewTransforms: {},
+  editorCinematicPreviewHidden: [],
+  cinematicRecording: false,
   runtimeStarted: false,
   runtimeTime: 0,
   assetSearch: '',
@@ -1889,7 +2264,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   createScene: (name) => {
     const id = makeId('scene');
     set((state) => ({
-      scenes: [...state.scenes, { id, name: name ?? `Scene ${state.scenes.length + 1}`, objects: [] }],
+      scenes: [...state.scenes, { id, name: name ?? `Scene ${state.scenes.length + 1}`, objects: [], cinematics: [] }],
       isDirty: true,
     }));
     return id;
@@ -1925,9 +2300,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => {
       const source = state.scenes.find((scene) => scene.id === id);
       if (!source) return state;
-      // Keep object ids: they only need to be unique within a scene, and preserving them
-      // keeps parentId links intact. Scenes run independently, so cross-scene id reuse is fine.
-      const copy: Scene = { id: newId, name: `${source.name} Copy`, objects: structuredClone(source.objects) };
+      // Keep ids inside the scene copy: they only need to be unique within a scene, and preserving them
+      // keeps parent/action/track links intact. Scenes run independently, so cross-scene id reuse is fine.
+      const copy: Scene = { ...structuredClone(source), id: newId, name: `${source.name} Copy` };
       return { scenes: [...state.scenes, copy], isDirty: true };
     });
     return newId;
@@ -2343,7 +2718,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRuntimeAnimatorParam: (objectId, paramId, value) =>
     set((state) => {
       const live = state.runtimeAnimators[objectId];
-      if (!live) return state;
+      if (!live) {
+        const object = selectActiveObjects(state).find((item) => item.id === objectId);
+        const controller = state.animatorControllers.find((item) => item.id === object?.animator?.controllerId);
+        const stateId = controller?.defaultStateId ?? controller?.states[0]?.id;
+        if (!controller || !stateId) return state;
+        const params = Object.fromEntries(controller.parameters.map((param) => [param.id, param.defaultValue])) as Record<
+          string,
+          number | boolean
+        >;
+        if (!(paramId in params)) return state;
+        return {
+          runtimeAnimators: {
+            ...state.runtimeAnimators,
+            [objectId]: { stateId, params: { ...params, [paramId]: value }, fade: 0, time: 0 },
+          },
+        };
+      }
       // Carried into next tick; manual params persist (auto-sourced ones get recomputed, as expected).
       return { runtimeAnimators: { ...state.runtimeAnimators, [objectId]: { ...live, params: { ...live.params, [paramId]: value } } } };
     }),
@@ -2633,6 +3024,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const markerSlot = socketName || boneName;
     const scale = slot.attachScale ?? 1;
     const yaw = slot.attachYaw ?? 0;
+    const offsetPosition = slot.attachPosition;
+    const offsetRotation = slot.attachRotation ?? ([0, yaw, 0] as Vector3Tuple);
+    const offsetScale = [scale, scale, scale] as Vector3Tuple;
     set((state) => {
       const scenes = state.scenes.map((scene) => {
         if (scene.id !== state.activeSceneId) return scene;
@@ -2642,7 +3036,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             !(o.variables?.__attachedWeapon && o.attachment?.targetObjectId === objectId && (o.attachment.socketName || o.attachment.boneName) === markerSlot),
         );
         if (slot.weaponAssetId) {
-          objects = [...objects, makeAttachedWeapon(objectId, slot.weaponAssetId, boneName, socketName, undefined, [0, yaw, 0], [scale, scale, scale])];
+          objects = [...objects, makeAttachedWeapon(objectId, slot.weaponAssetId, boneName, socketName, offsetPosition, offsetRotation, offsetScale)];
         }
         objects = objects.map((o) => (o.id === objectId && o.inventory ? { ...o, inventory: { ...o.inventory, equipped: index } } : o));
         return { ...scene, objects };
@@ -2676,6 +3070,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ? { ...object, kind: 'light', light: { ...defaultLight(), ...object.light, ...stripUndefined(patch) } }
             : object,
         ),
+      ),
+    ),
+  addParticles: (objectId, preset) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === objectId
+            ? { ...object, particles: withParticleDefaults({ ...object.particles, ...(preset ? particlePresets[preset] : {}) }) }
+            : object,
+        ),
+      ),
+    ),
+  updateParticles: (objectId, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === objectId && object.particles
+            ? { ...object, particles: { ...object.particles, ...stripUndefined(patch) } }
+            : object,
+        ),
+      ),
+    ),
+  removeParticles: (objectId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId) return object;
+          const next = { ...object };
+          delete next.particles;
+          return next;
+        }),
       ),
     ),
   setAttachment: (objectId, attachment) =>
@@ -3014,11 +3439,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (stateId.jumpStart && stateId.jumpLoop) linkExit('jumpStart', 'jumpLoop', [], 0.12, 0.5);
       // Short hop: if we land while still in the start clip, recover instead of waiting.
       if (stateId.jumpStart) link('jumpStart', stateId.jumpLand ? 'jumpLand' : 'locomotion', [C(groundedParamId, '==', true)], 0.1);
-      // Land when we touch ground again.
-      if (stateId.jumpLand && airKey) link(airKey, 'jumpLand', [C(groundedParamId, '==', true)], 0.1);
-      // Land clip plays out, then back to locomotion. If there's no land clip, return on grounded.
-      if (stateId.jumpLand) linkExit('jumpLand', 'locomotion');
-      else if (airKey) link(airKey, 'locomotion', [C(groundedParamId, '==', true)]);
+      // Land when we touch ground again. If you touch down ALREADY MOVING, skip the land plant and go straight
+      // to locomotion (push this first so it wins); land stationary and the plant clip plays.
+      if (stateId.jumpLand && airKey) {
+        link(airKey, 'locomotion', [C(groundedParamId, '==', true), C(speedParamId, '>', 0.1)], 0.12);
+        link(airKey, 'jumpLand', [C(groundedParamId, '==', true)], 0.1);
+      }
+      // Out of the land plant: starting to move INTERRUPTS it immediately (no exit time) so it never overstays;
+      // if you just stand there it still recovers partway through the clip rather than waiting for the full end.
+      if (stateId.jumpLand) {
+        link('jumpLand', 'locomotion', [C(speedParamId, '>', 0.1)]);
+        linkExit('jumpLand', 'locomotion', [], 0.12, 0.45);
+      } else if (airKey) link(airKey, 'locomotion', [C(groundedParamId, '==', true)]);
     } else if (stateId.jump) {
       groundStates.forEach((from) => link(from, 'jump', [C(vspeedParamId, '>', 1)], 0.1));
       link('jump', 'locomotion', [C(groundedParamId, '==', true)]);
@@ -3234,15 +3666,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const shoot = addState('Shoot', pick(/pistol.*shoot/i), false);
         const reload = addState('Reload', pick(/pistol.*reload/i), false);
         if (pistolIdle) {
+          const meleeStateIds = new Set(
+            states.filter((state) => /sword attack|punch|kick/i.test(state.name)).map((state) => state.id),
+          );
+          transitions.forEach((transition) => {
+            if (!meleeStateIds.has(transition.to)) return;
+            if (transition.conditions.some((condition) => condition.parameterId === ranged)) return;
+            transition.conditions = [...transition.conditions, C(ranged, '==', false)];
+          });
+          const linkFirst = (from: string, to: string, conds: AnimatorCondition[], duration = 0.08) =>
+            transitions.unshift({ id: makeId('xition'), from, to, conditions: conds, duration });
           link(homeId, pistolIdle, [C(ranged, '==', true)]);
           link(pistolIdle, homeId, [C(ranged, '==', false)]);
           if (aim) {
             link(pistolIdle, aim, [C(aiming, '==', true)]);
             link(aim, pistolIdle, [C(aiming, '==', false)]);
           }
-          if (shoot && aim) {
-            link(aim, shoot, [C(attacking, '==', true)]);
-            linkExit(shoot, aim);
+          if (shoot) {
+            linkFirst(homeId, shoot, [C(ranged, '==', true), C(attacking, '==', true)]);
+            link(pistolIdle, shoot, [C(attacking, '==', true)]);
+            if (aim) link(aim, shoot, [C(attacking, '==', true)]);
+            linkExit(shoot, aim ?? pistolIdle);
           }
           if (reload) {
             link(pistolIdle, reload, [C(reloading, '==', true)]);
@@ -3296,6 +3740,323 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
     return summary || undefined;
   },
+  createCollectibleCounter: (options = {}) => {
+    const rawVariableName = options.variableName?.trim() || 'Coins';
+    const variableName = (/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawVariableName) ? rawVariableName : rawVariableName.replace(/[^A-Za-z0-9_]/g, '_').replace(/^[^A-Za-z_]+/, '')) || 'Coins';
+    const label = options.label?.trim() || variableName;
+    const amount = options.amount ?? 1;
+    const name = options.name?.trim() || `${label} Pickup`;
+    const color = options.color ?? '#FFD166';
+    const expressionLabel = label.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+    let variable = get().variables.find((item) => item.name === variableName);
+    if (!variable) {
+      const id = get().createVariable(variableName, 'number', false);
+      get().updateVariable(id, { defaultValue: 0 });
+      variable = get().variables.find((item) => item.id === id);
+    }
+    const variableId = variable?.id ?? get().createVariable(variableName, 'number', false);
+
+    const findCounter = (element: UIElement): string | undefined => {
+      if (element.bindings.some((binding) => binding.target === 'text' && binding.expression.includes(variableName))) {
+        return element.id;
+      }
+      for (const child of element.children) {
+        const found = findCounter(child);
+        if (found) return found;
+      }
+      return undefined;
+    };
+
+    let uiDocument =
+      get().uiDocuments.find((doc) => doc.surface === 'screen' && doc.name.toLowerCase() === `${label.toLowerCase()} hud`) ??
+      get().uiDocuments.find((doc) => doc.surface === 'screen' && doc.name.toLowerCase() === 'hud') ??
+      get().uiDocuments.find((doc) => doc.surface === 'screen');
+    if (!uiDocument) {
+      const docId = get().createUIDocument(`${label} HUD`, 'screen');
+      uiDocument = get().uiDocuments.find((doc) => doc.id === docId);
+    }
+    const uiDocumentId = uiDocument?.id ?? get().createUIDocument(`${label} HUD`, 'screen');
+    const currentDoc = get().uiDocuments.find((doc) => doc.id === uiDocumentId);
+    let counterElementId = currentDoc ? findCounter(currentDoc.root) : undefined;
+    if (!counterElementId) {
+      counterElementId = get().addUIElement(uiDocumentId, undefined, 'text');
+      get().updateUIElement(uiDocumentId, counterElementId, {
+        name: `${label} Counter`,
+        text: `${label}: 0`,
+        style: {
+          color: '#ffffff',
+          fontSize: '20px',
+          fontWeight: '700',
+          custom: { textShadow: '0 2px 6px rgba(0,0,0,0.65)' },
+        },
+      });
+      get().setUIBinding(uiDocumentId, counterElementId, 'text', `'${expressionLabel}: ' + ${variableName}`);
+    }
+
+    const objectId = get().createObjectWithProps('sphere', {
+      name,
+      position: options.position ?? [0, 1, 0],
+      color,
+      physics: { enabled: true, bodyType: 'fixed', collider: 'sphere', isTrigger: true, gravityScale: 0 },
+    });
+    get().updateTransform(objectId, 'scale', [0.35, 0.35, 0.35]);
+
+    const { blueprintId } = get().createBlueprintNamed(`${name} Pickup Logic`, `Adds ${amount} to ${variableName} and removes the pickup.`);
+    const triggerId = get().addGraphNodeToBlueprint(
+      blueprintId,
+      'Trigger Enter',
+      'Events',
+      { otherObjectId: options.playerObjectId },
+      { x: 80, y: 180 },
+    );
+    const getId = get().addGraphNodeToBlueprint(blueprintId, 'Get Variable', 'Variables', { variableId }, { x: 80, y: 360 });
+    const amountId = get().addGraphNodeToBlueprint(blueprintId, 'Number', 'Values', { numberValue: amount }, { x: 80, y: 500 });
+    const addId = get().addGraphNodeToBlueprint(blueprintId, 'Add', 'Math', {}, { x: 320, y: 420 });
+    const setId = get().addGraphNodeToBlueprint(blueprintId, 'Set Variable', 'Variables', { variableId }, { x: 560, y: 240 });
+    const destroyId = get().addGraphNodeToBlueprint(blueprintId, 'Destroy Object', 'Runtime', {}, { x: 800, y: 240 });
+    get().connectGraphNodes(blueprintId, triggerId, setId);
+    get().connectGraphNodes(blueprintId, setId, destroyId);
+    get().connectGraphNodes(blueprintId, getId, addId, 'value-out', 'a');
+    get().connectGraphNodes(blueprintId, amountId, addId, 'value-out', 'b');
+    get().connectGraphNodes(blueprintId, addId, setId, 'value-out', 'value');
+    get().attachScript(objectId, blueprintId);
+    get().setActiveBlueprint(blueprintId);
+
+    return { objectId, blueprintId, variableId, uiDocumentId, counterElementId };
+  },
+  createCinematic: (name = 'New Cinematic', duration = 8) => {
+    const id = makeId('cinematic');
+    const sequence: CinematicSequence = {
+      id,
+      name,
+      duration: Math.max(0.5, duration),
+      skippable: true,
+      actions: [],
+      createdAt: Date.now(),
+    };
+    set((state) => ({
+      scenes: state.scenes.map((scene) =>
+        scene.id === state.activeSceneId ? { ...scene, cinematics: [...(scene.cinematics ?? []), sequence] } : scene,
+      ),
+      activeCinematicId: id,
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateCinematic: (id, patch) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) =>
+          cinematic.id === id ? { ...cinematic, ...stripUndefined(patch), duration: Math.max(0.5, patch.duration ?? cinematic.duration) } : cinematic,
+        ),
+      })),
+      isDirty: true,
+    })),
+  deleteCinematic: (id) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).filter((cinematic) => cinematic.id !== id),
+      })),
+      activeCinematicId: state.activeCinematicId === id ? '' : state.activeCinematicId,
+      runtimeCinematic: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematic,
+      runtimeCinematicCamera: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematicCamera,
+      runtimeCinematicFade: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematicFade,
+      editorCinematicPreview: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreview,
+      editorCinematicPreviewCamera: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreviewCamera,
+      editorCinematicPreviewFade: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreviewFade,
+      editorCinematicPreviewTransforms: state.editorCinematicPreview?.sequenceId === id ? {} : state.editorCinematicPreviewTransforms,
+      editorCinematicPreviewHidden: state.editorCinematicPreview?.sequenceId === id ? [] : state.editorCinematicPreviewHidden,
+      isDirty: true,
+    })),
+  setActiveCinematic: (id) =>
+    set((state) =>
+      state.editorCinematicPreview && state.editorCinematicPreview.sequenceId !== id
+        ? {
+            activeCinematicId: id,
+            editorCinematicPreview: undefined,
+            editorCinematicPreviewCamera: undefined,
+            editorCinematicPreviewFade: undefined,
+            editorCinematicPreviewTransforms: {},
+            editorCinematicPreviewHidden: [],
+          }
+        : { activeCinematicId: id },
+    ),
+  addCinematicAction: (cinematicId, action) => {
+    const actionId = makeId('caction');
+    set((state) => {
+      let found = false;
+      const scenes = state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) => {
+          if (cinematic.id !== cinematicId) return cinematic;
+          found = true;
+          const nextAction: CinematicAction = { ...action, id: actionId, time: Math.max(0, action.time) };
+          const actions = [...cinematic.actions, nextAction].sort((a, b) => a.time - b.time);
+          const duration = Math.max(cinematic.duration, nextAction.time + (nextAction.duration ?? 0.1));
+          return { ...cinematic, actions, duration };
+        }),
+      }));
+      return found ? { scenes, isDirty: true } : state;
+    });
+    return get().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId) ? actionId : undefined;
+  },
+  updateCinematicAction: (cinematicId, actionId, patch) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) =>
+          cinematic.id === cinematicId
+            ? {
+                ...cinematic,
+                actions: cinematic.actions
+                  .map((action) => (action.id === actionId ? { ...action, ...stripUndefined(patch), time: Math.max(0, patch.time ?? action.time) } : action))
+                  .sort((a, b) => a.time - b.time),
+              }
+            : cinematic,
+        ),
+      })),
+      isDirty: true,
+    })),
+  removeCinematicAction: (cinematicId, actionId) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) =>
+          cinematic.id === cinematicId ? { ...cinematic, actions: cinematic.actions.filter((action) => action.id !== actionId) } : cinematic,
+        ),
+      })),
+      isDirty: true,
+    })),
+  addCinematicCameraKeyframe: (cinematicId, time, pose) => {
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+    if (!cinematic) return undefined;
+    const frame: CinematicCameraKeyframe = {
+      time: Number(Math.max(0, time).toFixed(3)),
+      position: [...pose.position],
+      lookAt: [...pose.lookAt],
+      fov: Math.round(pose.fov),
+    };
+    const track = cinematic.actions.find((action) => action.type === 'camera' && action.keyframes?.length);
+    let actionId = track?.id;
+    if (!track) {
+      actionId = get().addCinematicAction(cinematicId, { type: 'camera', time: frame.time, duration: 0.5, label: 'Camera track', ease: 'smooth', keyframes: [frame] });
+    }
+    if (!actionId) return undefined;
+    const existing = track?.keyframes ?? [frame];
+    const merged = [...existing.filter((keyframe) => Math.abs(keyframe.time - frame.time) > 0.06), frame].sort((a, b) => a.time - b.time);
+    const minTime = Math.min(0, ...merged.map((keyframe) => keyframe.time));
+    const maxTime = Math.max(0.5, ...merged.map((keyframe) => keyframe.time));
+    get().updateCinematicAction(cinematicId, actionId, { keyframes: merged, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
+    const preview = get().editorCinematicPreview;
+    if (preview?.sequenceId === cinematicId) get().previewCinematic(cinematicId, preview.time);
+    return actionId;
+  },
+  addCinematicTransformKeyframe: (cinematicId, objectId, time, transform) => {
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+    if (!cinematic) return undefined;
+    const object = selectActiveObjects(get()).find((item) => item.id === objectId);
+    const pose = transform ?? object?.transform;
+    if (!pose) return undefined;
+    const frame: CinematicTransformKeyframe = {
+      time: Number(Math.max(0, time).toFixed(3)),
+      position: [...pose.position],
+      rotation: [...pose.rotation],
+      scale: [...pose.scale],
+    };
+    const track = cinematic.actions.find((action) => action.type === 'transform' && action.objectId === objectId && action.transformKeyframes);
+    let actionId = track?.id;
+    if (!track) {
+      actionId = get().addCinematicAction(cinematicId, {
+        type: 'transform',
+        objectId,
+        time: frame.time,
+        duration: 0.5,
+        label: `Animate ${object?.name ?? 'object'}`,
+        ease: 'smooth',
+        transformKeyframes: [frame],
+      });
+    }
+    if (!actionId) return undefined;
+    const existing = track?.transformKeyframes ?? [frame];
+    const merged = [...existing.filter((keyframe) => Math.abs(keyframe.time - frame.time) > 0.06), frame].sort((a, b) => a.time - b.time);
+    const minTime = Math.min(0, ...merged.map((keyframe) => keyframe.time));
+    const maxTime = Math.max(0.5, ...merged.map((keyframe) => keyframe.time));
+    get().updateCinematicAction(cinematicId, actionId, { transformKeyframes: merged, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
+    const preview = get().editorCinematicPreview;
+    if (preview?.sequenceId === cinematicId) get().previewCinematic(cinematicId, preview.time);
+    return actionId;
+  },
+  setCinematicRecording: (recording) =>
+    set((state) => {
+      if (!recording) return { cinematicRecording: false };
+      // Turning Record on implies an active preview so the playhead has a position to key against.
+      const cinematicId = state.activeCinematicId || state.scenes.find((scene) => scene.id === state.activeSceneId)?.cinematics?.[0]?.id;
+      if (cinematicId && !state.editorCinematicPreview) {
+        queueMicrotask(() => get().previewCinematic(cinematicId, 0));
+      }
+      return { cinematicRecording: true };
+    }),
+  previewCinematic: (cinematicId, time) =>
+    set((state) => {
+      if (state.isPlaying) return state;
+      const scene = state.scenes.find((item) => item.id === state.activeSceneId);
+      const sequence = scene?.cinematics?.find((cinematic) => cinematic.id === cinematicId);
+      if (!sequence) return state;
+      const previewTime = Math.min(Math.max(time, 0), sequence.duration);
+      const objects = scene?.objects ?? [];
+      return {
+        editorCinematicPreview: { sequenceId: cinematicId, time: previewTime },
+        editorCinematicPreviewCamera: cinematicCameraAt(sequence, objects, previewTime),
+        editorCinematicPreviewFade: cinematicFadeAt(sequence, previewTime),
+        editorCinematicPreviewTransforms: cinematicTransformsAt(sequence, objects, previewTime),
+        editorCinematicPreviewHidden: cinematicHiddenAt(sequence, previewTime),
+      };
+    }),
+  clearCinematicPreview: () =>
+    set((state) =>
+      state.editorCinematicPreview
+        ? {
+            editorCinematicPreview: undefined,
+            editorCinematicPreviewCamera: undefined,
+            editorCinematicPreviewFade: undefined,
+            editorCinematicPreviewTransforms: {},
+            editorCinematicPreviewHidden: [],
+          }
+        : state,
+    ),
+  playCinematic: (cinematicId) => {
+    const current = get();
+    if (!current.isPlaying) {
+      current.setPlaying(true);
+      if (!get().isPlaying) return;
+    }
+
+    set((state) => {
+      const scene = state.scenes.find((item) => item.id === state.activeSceneId);
+      const sequence = scene?.cinematics?.find((cinematic) => cinematic.id === cinematicId);
+      if (!sequence) return state;
+      return {
+        runtimeCinematic: { sequenceId: cinematicId, time: 0, firedActionIds: [], spawnedObjectIds: [] },
+        runtimeCinematicCamera: initialCinematicCamera(sequence, scene?.objects ?? []),
+        runtimeCinematicFade: initialCinematicFade(sequence),
+      };
+    });
+  },
+  stopCinematic: () =>
+    set((state) => {
+      const spawnedIds = new Set(state.runtimeCinematic?.spawnedObjectIds ?? []);
+      return {
+        scenes: spawnedIds.size
+          ? state.scenes.map((scene) => (scene.id === state.activeSceneId ? { ...scene, objects: scene.objects.filter((object) => !spawnedIds.has(object.id)) } : scene))
+          : state.scenes,
+        runtimeCinematic: undefined,
+        runtimeCinematicCamera: undefined,
+        runtimeCinematicFade: undefined,
+      };
+    }),
   attachScript: (id, nextBlueprintId) =>
     set((state) => {
       const blueprint = state.blueprints.find((item) => item.id === (nextBlueprintId ?? state.activeBlueprintId));
@@ -3468,6 +4229,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         : kind === 'material'
           ? {
               materials: state.materials.map((material) => (material.id === id ? { ...material, folderId } : material)),
+              isDirty: true,
+            }
+        : kind === 'particleSystem'
+          ? {
+              particleSystems: state.particleSystems.map((system) => (system.id === id ? { ...system, folderId } : system)),
               isDirty: true,
             }
         : kind === 'uiDocument'
@@ -3807,6 +4573,67 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     }),
   setActiveMaterial: (id) => set({ activeMaterialId: id }),
+  // --- Reusable particle-system assets ---
+  createParticleSystem: (name, preset, folderId) => {
+    const id = makeId('psys');
+    set((state) => {
+      const systemName = name ?? `Particle System ${state.particleSystems.length + 1}`;
+      const config: ParticleConfig = { ...defaultParticleConfig(), ...(preset ? particlePresets[preset] : {}) };
+      return {
+        particleSystems: [
+          ...state.particleSystems,
+          { id, name: systemName, description: 'Reusable particle system.', folderId, createdAt: Date.now(), ...config },
+        ],
+        activeParticleSystemId: id,
+        isDirty: true,
+      };
+    });
+    return id;
+  },
+  renameParticleSystem: (id, name) =>
+    set((state) => ({
+      particleSystems: state.particleSystems.map((system) => (system.id === id ? { ...system, name } : system)),
+      isDirty: true,
+    })),
+  updateParticleSystem: (id, patch) =>
+    set((state) => ({
+      particleSystems: state.particleSystems.map((system) => (system.id === id ? { ...system, ...stripUndefined(patch) } : system)),
+      isDirty: true,
+    })),
+  deleteParticleSystem: (id) =>
+    set((state) => ({
+      particleSystems: state.particleSystems.filter((item) => item.id !== id),
+      activeParticleSystemId:
+        state.activeParticleSystemId === id ? state.particleSystems.find((p) => p.id !== id)?.id ?? '' : state.activeParticleSystemId,
+      // Detach the emitter from any object referencing the removed asset.
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        objects: scene.objects.map((object) => {
+          if (object.particles?.systemId !== id) return object;
+          const next = { ...object };
+          delete next.particles;
+          return next;
+        }),
+      })),
+      isDirty: true,
+    })),
+  setActiveParticleSystem: (id) => set({ activeParticleSystemId: id }),
+  setObjectParticleSystem: (objectId, systemId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId) return object;
+          if (!systemId) {
+            const next = { ...object };
+            delete next.particles;
+            return next;
+          }
+          const asset = state.particleSystems.find((p) => p.id === systemId);
+          const config = asset ? particleAssetConfig(asset) : defaultParticleConfig();
+          return { ...object, particles: { ...config, enabled: true, systemId } };
+        }),
+      ),
+    ),
   // --- Game UI documents ---
   createUIDocument: (name, surface, folderId) => {
     const docName = name ?? `UI ${useEditorStore.getState().uiDocuments.length + 1}`;
@@ -4291,6 +5118,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (isPlaying && state.editingPrefabId) return state;
       if (isPlaying) {
         const objects = selectActiveObjects(state);
+        const autoplay = state.scenes.find((scene) => scene.id === state.activeSceneId)?.cinematics?.find((cinematic) => cinematic.autoplay);
         // Spin up a fresh Rapier world to own the simulation for this play session.
         startPhysics();
         return {
@@ -4307,6 +5135,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeSwimming: [],
           runtimeClimbing: [],
           runtimeRoll: {},
+          runtimeCoyote: {},
           runtimeAttack: {},
       runtimeReload: {},
       runtimeInteract: {},
@@ -4317,6 +5146,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
+      runtimeHitFlash: {},
       runtimeSurfaceSound: {},
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
@@ -4334,6 +5164,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             objects.filter((object) => object.variables).map((object) => [object.id, { ...object.variables }]),
           ),
           runtimeUITextOverrides: {},
+          runtimeCinematic: autoplay ? { sequenceId: autoplay.id, time: 0, firedActionIds: [], spawnedObjectIds: [] } : undefined,
+          runtimeCinematicCamera: initialCinematicCamera(autoplay, objects),
+          runtimeCinematicFade: initialCinematicFade(autoplay),
+          editorCinematicPreview: undefined,
+          editorCinematicPreviewCamera: undefined,
+          editorCinematicPreviewFade: undefined,
+          editorCinematicPreviewTransforms: {},
+          editorCinematicPreviewHidden: [],
           runtimeStarted: false,
           // Full deep clone so Stop fully resets the scene (restores picked-up/destroyed objects, removes
           // spawned projectiles, reverts transforms/materials/instance variables).
@@ -4364,6 +5202,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: [],
         runtimeClimbing: [],
         runtimeRoll: {},
+        runtimeCoyote: {},
         runtimeAttack: {},
       runtimeReload: {},
       runtimeInteract: {},
@@ -4374,6 +5213,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
+      runtimeHitFlash: {},
       runtimeSurfaceSound: {},
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
@@ -4385,6 +5225,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVisibleUI: {},
         runtimeObjectVariables: {},
         runtimeUITextOverrides: {},
+        runtimeCinematic: undefined,
+        runtimeCinematicCamera: undefined,
+        runtimeCinematicFade: undefined,
+        editorCinematicPreview: undefined,
+        editorCinematicPreviewCamera: undefined,
+        editorCinematicPreviewFade: undefined,
+        editorCinematicPreviewTransforms: {},
+        editorCinematicPreviewHidden: [],
         runtimeStarted: false,
         scenes,
         playSnapshot: undefined,
@@ -4435,10 +5283,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const spawned: SceneObject[] = [];
       const destroyedIds = new Set<string>();
       const prints: string[] = [];
+      let pendingCinematicId: string | undefined;
       // Combat feedback counters (bumped on hits / when the local player is hurt) + per-enemy attack cooldowns.
       let hitMarker = state.runtimeHitMarker;
       let hurt = state.runtimeHurt;
       const nextEnemyCd: Record<string, number> = {};
+      // Hit-flash timers: decay last frame's flashes by delta (drop the spent ones); the combat pass re-arms a
+      // target to HIT_FLASH_TIME whenever it takes damage. The render layer turns this into a red emissive pulse.
+      const HIT_FLASH_TIME = 0.16;
+      const nextHitFlash: Record<string, number> = {};
+      for (const [id, t] of Object.entries(state.runtimeHitFlash)) {
+        const left = t - delta;
+        if (left > 0) nextHitFlash[id] = left;
+      }
       const meleeSwings = new Set<string>(); // characters that started an attack swing this frame (melee hit-test)
       // Per-character movement-mode override (Set Movement Mode node) — persists across frames, updated by the
       // node in the script pass, then read by the character + animator passes below.
@@ -4456,6 +5313,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const nextCameraOverrides: Record<string, { distance: number; height: number }> = { ...state.runtimeCameraOverrides };
       // Roll/dodge + attack/reload/interact timers carried frame-to-frame (started on their key, counted down here).
       const nextRoll: Record<string, number> = {};
+      const nextCoyote: Record<string, number> = {};
       const nextAttack: Record<string, number> = {};
       const nextReload: Record<string, number> = {};
       const nextInteract: Record<string, number> = {};
@@ -4597,6 +5455,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const dz = p[2] - position[2];
               const len = Math.hypot(dx, dz) || 1;
               return [dx / len, 0, dz / len] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'ai.playerLocation') {
+              const p = aiPlayer?.transform.position;
+              return (p ? [p[0], p[1], p[2]] : [0, 0, 0]) as Vector3Tuple;
             }
 
             if (node.data.nodeKind === 'animator.getParam') {
@@ -4836,6 +5699,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'action.playSound' && node.data.assetId) {
               sounds.push(node.data.assetId);
+            }
+
+            if (node.data.nodeKind === 'action.playCinematic' && node.data.cinematicId) {
+              pendingCinematicId = node.data.cinematicId;
+            }
+
+            if (node.data.nodeKind === 'action.burstParticles') {
+              // Spit a one-shot burst from the target's authored emitter (e.g. an explosion on hit).
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const count = Math.max(1, Math.round(toNumber(valueInput(node, 'count', Number(node.data.numberValue ?? 16)))));
+              sendParticleCommand(target, { type: 'burst', count });
+            }
+
+            if (node.data.nodeKind === 'action.setParticlesEmitting') {
+              // Start/stop a continuous emitter (e.g. ignite a torch, turn on a smoke plume).
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const on = toBoolean(valueInput(node, 'on', node.data.booleanValue ?? true));
+              sendParticleCommand(target, { type: 'emit', on });
+            }
+
+            if (node.data.nodeKind === 'action.spawnParticleSystem' && node.data.particleSystemId) {
+              // Position priority: a Vector3 wired into Location → the Target object's position → the owner.
+              const loc = valueInput(node, 'location');
+              let base: Vector3Tuple;
+              if (Array.isArray(loc) && loc.length === 3) {
+                base = [Number(loc[0]) || 0, Number(loc[1]) || 0, Number(loc[2]) || 0];
+              } else {
+                const targetId = resolveTarget(node.data.targetObjectId);
+                const targetObj = targetId && targetId !== object.id ? activeObjects.find((o) => o.id === targetId) : null;
+                base = targetObj ? [...targetObj.transform.position] : [position[0], position[1], position[2]];
+              }
+              // A static Offset (the node's vector field) is added on top — e.g. spawn 2 units above.
+              const off = node.data.vectorValue;
+              if (Array.isArray(off) && off.length === 3) base = [base[0] + off[0], base[1] + off[1], base[2] + off[2]];
+              spawned.push(makeSpawnedParticleEmitter(node.data.particleSystemId, base));
             }
 
             if (node.data.nodeKind === 'action.spawnObject') {
@@ -5094,6 +5992,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Character controller pass: turn input into ground movement + jump for character objects.
       // Runs after scripts, before physics; the motion it produces feeds the animator's speed params.
+      // Move `current` toward `target` by at most `maxStep` — the basis for accel/decel velocity ramping.
+      const approach = (current: number, target: number, maxStep: number) => {
+        const diff = target - current;
+        return Math.abs(diff) <= maxStep ? target : current + Math.sign(diff) * maxStep;
+      };
       const movedObjects = mappedObjects.map((object) => {
         // Particle bursts (impacts): count down their life; despawn when spent.
         if (object.effect) {
@@ -5156,6 +6059,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (rollRemaining <= 0 && grounded && currentKeys[cc.keyRoll]) rollRemaining = cc.rollDuration;
         const rolling = rollRemaining > 0;
 
+        // Persistent horizontal velocity (carried across frames so movement accelerates/decelerates instead of
+        // snapping on/off — the fix for "stiff" feel). Only the auto-WASD path ramps it; scripted/rolling motion
+        // is driven directly, so they start from a clean stop.
+        const storedVel = nextVelocities[object.id];
+        let hVelX = !scripted && !rolling ? storedVel?.[0] ?? 0 : 0;
+        let hVelZ = !scripted && !rolling ? storedVel?.[2] ?? 0 : 0;
+
         if (!scripted && !rolling) {
           // Forward = +Z (model forward); right = -X. Camera sits behind, so this reads correctly on screen.
           let inputX = 0;
@@ -5169,6 +6079,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const crouching = Boolean(currentKeys[cc.keyCrouch]);
           const crawling = Boolean(cc.keyCrawl && currentKeys[cc.keyCrawl]);
           const speed = cc.moveSpeed * (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
+          // Target velocity from the (camera-relative) input direction; 0 when no key is held (→ decelerate to stop).
+          let targetX = 0;
+          let targetZ = 0;
           if (length > 0) {
             let dirX = inputX / length;
             let dirZ = inputZ / length;
@@ -5179,12 +6092,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const sin = Math.sin(yaw);
               [dirX, dirZ] = [dirX * cos + dirZ * sin, -dirX * sin + dirZ * cos];
             }
-            position[0] += dirX * speed * delta;
-            position[2] += dirZ * speed * delta;
-            // Strafe mode faces the camera (set below); otherwise turn to face the movement direction.
-            if (!(cc.strafe && cc.mouseLook)) {
-              rotation[1] = lerpAngle(rotation[1], Math.atan2(dirX, dirZ) + cc.modelYawOffset, cc.turnSpeed * delta);
-            }
+            targetX = dirX * speed;
+            targetZ = dirZ * speed;
+          }
+          // Ramp velocity toward the target: accelerate when there's input, decelerate when not. Airborne motion
+          // is dampened (airControl) so you mostly keep your jump momentum instead of turning on a dime mid-air.
+          const rate = (length > 0 ? cc.acceleration ?? 60 : cc.deceleration ?? 70) * (grounded ? 1 : cc.airControl ?? 0.35);
+          const maxStep = rate * delta;
+          hVelX = approach(hVelX, targetX, maxStep);
+          hVelZ = approach(hVelZ, targetZ, maxStep);
+          position[0] += hVelX * delta;
+          position[2] += hVelZ * delta;
+          // Face the actual velocity (not raw input) so turning eases in/out with the slide. Strafe faces the camera.
+          const moveLen = Math.hypot(hVelX, hVelZ);
+          if (!(cc.strafe && cc.mouseLook) && moveLen > 0.05) {
+            rotation[1] = lerpAngle(rotation[1], Math.atan2(hVelX, hVelZ) + cc.modelYawOffset, cc.turnSpeed * delta);
           }
           // Strafe: always face the camera yaw so the character can move in all 8 directions (2D blend).
           if (cc.strafe && cc.mouseLook) {
@@ -5254,24 +6176,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           else if (currentKeys[cc.keyCrouch]) vy = -cc.moveSpeed * 0.7;
           else vy *= swimming ? 0.85 : 0; // swim drifts toward neutral buoyancy; fly holds altitude
           position[1] += vy * delta;
-          nextVelocities[object.id] = [0, vy, 0];
+          nextVelocities[object.id] = [hVelX, vy, hVelZ];
         } else {
           // Vertical motion: gravity + jump. Grounded comes from the physics character controller
           // (last frame) so the character can stand on real colliders, not just the ground plane.
           let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
           const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]);
           if (grounded && verticalVelocity < 0) verticalVelocity = 0;
-          if (grounded && wantsJump) {
+          // Coyote time: top up the grace window while grounded; otherwise count it down. Lets a jump pressed a
+          // few frames after running off a ledge still fire — a big responsiveness win.
+          let coyote = grounded ? cc.coyoteTime ?? 0.12 : Math.max(0, (state.runtimeCoyote[object.id] ?? 0) - delta);
+          // Jump only when on (or just-off) the ground AND not already rising (prevents a grounded re-jump / double jump).
+          if (wantsJump && (grounded || coyote > 0) && verticalVelocity <= 0.0001) {
             verticalVelocity = cc.jumpStrength;
+            coyote = 0; // consume the grace so one press = one jump
             if (cc.jumpSoundId) sounds.push(cc.jumpSoundId);
           }
-          verticalVelocity -= cc.gravity * delta;
+          // Variable jump height: releasing the jump key while still rising cuts the climb short (tap = hop,
+          // hold = full jump). Auto mode only — scripted jumps don't read the raw key.
+          if (!scripted && verticalVelocity > 0 && !currentKeys[cc.keyJump] && previousKeys[cc.keyJump]) {
+            verticalVelocity *= cc.jumpCutMultiplier ?? 0.45;
+          }
+          // Asymmetric gravity: fall faster than you rose so the arc feels snappy, not floaty.
+          const g = cc.gravity * (verticalVelocity < 0 ? cc.fallMultiplier ?? 1.9 : 1);
+          verticalVelocity -= g * delta;
           position[1] += verticalVelocity * delta;
           if (position[1] <= cc.groundLevel) {
             position[1] = cc.groundLevel;
             if (verticalVelocity < 0) verticalVelocity = 0;
           }
-          nextVelocities[object.id] = [0, verticalVelocity, 0];
+          nextVelocities[object.id] = [hVelX, verticalVelocity, hVelZ];
+          if (coyote > 0) nextCoyote[object.id] = coyote;
         }
 
         // Footsteps: accumulate horizontal distance and play a footstep sound each stride while grounded.
@@ -5407,6 +6342,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
             // hurt flash if the LOCAL player was the one hit.
             spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
+            nextHitFlash[other] = HIT_FLASH_TIME; // red pulse on the struck object
             if (proj.ownerId === playerId) hitMarker += 1;
             if (other === playerId) hurt += 1;
             if (proj.debug) prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name}: -${proj.damage} hp → ${next}${next <= 0 ? ' (destroyed)' : ''}`);
@@ -5438,6 +6374,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const cur = toNumber(nextObjectVariables[playerId]?.health ?? player.variables?.health ?? 0);
               (nextObjectVariables[playerId] ??= { ...(player.variables ?? {}) }).health = Math.max(0, cur - dmg);
               hurt += 1;
+              nextHitFlash[playerId] = HIT_FLASH_TIME;
               if (player.character?.hurtSoundId) sounds.push(player.character.hurtSoundId);
               cd = 1;
             }
@@ -5476,6 +6413,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           (nextObjectVariables[target.id] ??= { ...(target.variables ?? {}) }).health = next;
           spawned.push(makeDamageNumber(target.transform.position, dmg));
           spawned.push(makeImpactObject(target.transform.position, '#ffd27f'));
+          nextHitFlash[target.id] = HIT_FLASH_TIME; // red pulse on the struck object
           if (attackerId === playerId) hitMarker += 1;
           if (target.id === playerId) hurt += 1;
           if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
@@ -5485,6 +6423,98 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       let allObjects = [...resolvedObjects, ...spawned];
       for (const id of destroyedIds) allObjects = deleteWithChildren(allObjects, id);
+      const cinematicEvents: string[] = [];
+      const startingCinematic = pendingCinematicId ? { sequenceId: pendingCinematicId, time: 0, firedActionIds: [], spawnedObjectIds: [] } : undefined;
+      let nextRuntimeCinematic = startingCinematic ?? state.runtimeCinematic;
+      let nextRuntimeCinematicCamera = startingCinematic ? undefined : state.runtimeCinematicCamera;
+      let nextRuntimeCinematicFade = startingCinematic ? undefined : state.runtimeCinematicFade;
+      if (nextRuntimeCinematic) {
+        const scene = state.scenes.find((item) => item.id === state.activeSceneId);
+        const sequence = scene?.cinematics?.find((item) => item.id === nextRuntimeCinematic?.sequenceId);
+        if (!sequence) {
+          nextRuntimeCinematic = undefined;
+          nextRuntimeCinematicCamera = undefined;
+          nextRuntimeCinematicFade = undefined;
+        } else {
+          const prevTime = nextRuntimeCinematic.time;
+          const currentTime = Math.min(sequence.duration, prevTime + delta);
+          const fired = new Set(nextRuntimeCinematic.firedActionIds);
+          const spawnedByCinematic = new Set(nextRuntimeCinematic.spawnedObjectIds);
+
+          nextRuntimeCinematicCamera = cinematicCameraAt(sequence, allObjects, currentTime, nextRuntimeCinematicCamera);
+          nextRuntimeCinematicFade = cinematicFadeAt(sequence, currentTime, nextRuntimeCinematicFade);
+
+          for (const action of sequence.actions) {
+            const length = Math.max(action.duration ?? 0, 0.001);
+            const local = clamp01((currentTime - action.time) / length);
+            const active = currentTime >= action.time && currentTime <= action.time + length;
+            const shouldFire = !fired.has(action.id) && action.time >= prevTime && action.time <= currentTime;
+
+            if (action.type === 'transform' && active && action.objectId) {
+              allObjects = allObjects.map((object) => {
+                if (object.id !== action.objectId) return object;
+                return {
+                  ...object,
+                  transform: {
+                    position: action.fromPosition && action.toPosition ? mixVec3(action.fromPosition, action.toPosition, local) : action.toPosition ?? action.position ?? object.transform.position,
+                    rotation: action.fromRotation && action.toRotation ? mixVec3(action.fromRotation, action.toRotation, local) : action.toRotation ?? action.rotation ?? object.transform.rotation,
+                    scale: action.fromScale && action.toScale ? mixVec3(action.fromScale, action.toScale, local) : action.toScale ?? action.scale ?? object.transform.scale,
+                  },
+                };
+              });
+            }
+
+            if (!shouldFire) continue;
+            fired.add(action.id);
+            if (action.type === 'visibility' && action.objectId) {
+              if (action.visible === false) nextHidden.add(action.objectId);
+              else nextHidden.delete(action.objectId);
+            } else if (action.type === 'spawn') {
+              if (action.prefabId) {
+                const prefab = state.prefabs.find((item) => item.id === action.prefabId);
+                if (prefab) {
+                  const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
+                  const root = clones.find((object) => object.id === rootId);
+                  if (root && action.position) root.transform.position = action.position;
+                  allObjects = [...allObjects, ...clones];
+                  for (const clone of clones) spawnedByCinematic.add(clone.id);
+                }
+              } else {
+                const kind = action.spawnKind ?? 'cube';
+                const object: SceneObject = {
+                  id: makeId('obj'),
+                  name: action.name ?? `Cinematic ${kind}`,
+                  kind,
+                  transform: {
+                    position: action.position ?? [0, 1, 0],
+                    rotation: action.rotation ?? [0, 0, 0],
+                    scale: action.scale ?? [1, 1, 1],
+                  },
+                  ...objectDefaults[kind],
+                  variables: { cinematicOnly: true },
+                };
+                allObjects.push(object);
+                spawnedByCinematic.add(object.id);
+              }
+            } else if (action.type === 'animation' && action.objectId && action.animationId) {
+              animMontages[action.objectId] = { animationId: action.animationId, speed: action.animationSpeed ?? 1 };
+            } else if (action.type === 'sound' && action.soundId) {
+              sounds.push(action.soundId);
+            } else if (action.type === 'event' && action.eventName) {
+              cinematicEvents.push(action.eventName);
+            }
+          }
+
+          if (currentTime >= sequence.duration) {
+            allObjects = allObjects.filter((object) => !spawnedByCinematic.has(object.id));
+            nextRuntimeCinematic = undefined;
+            nextRuntimeCinematicCamera = undefined;
+            nextRuntimeCinematicFade = undefined;
+          } else {
+            nextRuntimeCinematic = { ...nextRuntimeCinematic, time: currentTime, firedActionIds: [...fired], spawnedObjectIds: [...spawnedByCinematic] };
+          }
+        }
+      }
       const remainingObjectIds = new Set(allObjects.map((object) => object.id));
       const remainingResolvedObjects = resolvedObjects.filter((object) => remainingObjectIds.has(object.id));
       const nextScenes = state.scenes.map((scene) =>
@@ -5635,6 +6665,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: swimmingIds,
         runtimeClimbing: climbingIds,
         runtimeRoll: nextRoll,
+        runtimeCoyote: nextCoyote,
         runtimeAttack: nextAttack,
         runtimeReload: nextReload,
         runtimeInteract: nextInteract,
@@ -5645,6 +6676,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeHitMarker: hitMarker,
         runtimeHurt: hurt,
         runtimeEnemyCooldown: nextEnemyCd,
+        runtimeHitFlash: nextHitFlash,
         runtimeSurfaceSound: nextSurfaceSound,
         runtimeMovementMode: movementModeNow,
         runtimeMontageRequests: {},
@@ -5652,13 +6684,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeTriggers: triggers,
         runtimeTriggersExit: triggersExit,
         runtimePreviousKeys: { ...currentKeys },
-        runtimeEventQueue: [],
+        runtimeEventQueue: cinematicEvents,
         runtimeStarted: true,
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
         runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
         runtimeObjectVariables: nextObjectVariables,
         runtimeVisibleUI: nextVisibleUI,
         runtimeUITextOverrides: nextUITextOverrides,
+        runtimeCinematic: nextRuntimeCinematic,
+        runtimeCinematicCamera: nextRuntimeCinematicCamera,
+        runtimeCinematicFade: nextRuntimeCinematicFade,
         scenes: nextScenes,
       };
     }),
@@ -5758,6 +6793,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       animations: state.animations ?? [],
       animatorControllers: state.animatorControllers ?? [],
       uiDocuments: state.uiDocuments ?? [],
+      particleSystems: state.particleSystems ?? [],
       blueprints: state.blueprints,
       graphs: state.graphs,
       prefabs: state.prefabs ?? [],
@@ -5769,6 +6805,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const rawScenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
       const scenes = rawScenes.map((scene) => ({
         ...scene,
+        cinematics: scene.cinematics ?? [],
         objects: scene.objects.map((object) => ({
           ...object,
           character: object.character ? { ...defaultCharacter(), ...object.character } : object.character,
@@ -5826,6 +6863,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         activeBlueprintId: project.blueprints[0]?.id ?? '',
         activeMaterialId: project.materials?.[0]?.id ?? '',
         activeUIDocumentId: project.uiDocuments?.[0]?.id ?? '',
+        activeCinematicId: activeScene.cinematics?.[0]?.id ?? '',
         selectedGraphNodeId: undefined,
         isPlaying: false,
         playSnapshot: undefined,
@@ -5840,6 +6878,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: [],
         runtimeClimbing: [],
         runtimeRoll: {},
+        runtimeCoyote: {},
         runtimeAttack: {},
       runtimeReload: {},
       runtimeInteract: {},
@@ -5850,6 +6889,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
+      runtimeHitFlash: {},
       runtimeSurfaceSound: {},
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
@@ -5859,6 +6899,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVisibleUI: {},
         runtimeObjectVariables: {},
         runtimeUITextOverrides: {},
+        runtimeCinematic: undefined,
+        runtimeCinematicCamera: undefined,
+        runtimeCinematicFade: undefined,
+        editorCinematicPreview: undefined,
+        editorCinematicPreviewCamera: undefined,
+        editorCinematicPreviewFade: undefined,
+        editorCinematicPreviewTransforms: {},
+        editorCinematicPreviewHidden: [],
         runtimeTriggers: [],
         runtimeTriggersExit: [],
         runtimeStarted: false,

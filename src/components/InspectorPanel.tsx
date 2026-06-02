@@ -5,7 +5,8 @@ import { defaultCharacter, defaultLight, selectActiveObjects, useEditorStore } f
 import { useAssetUrl } from '../three/ModelAsset';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
+import { particlePresetIds } from '../runtime/particlePresets';
 
 const axes = ['X', 'Y', 'Z'] as const;
 
@@ -725,19 +726,20 @@ function CharacterSection({
     next[index] = value;
     onChange({ cameraOffset: next });
   };
-  const num = (label: string, key: keyof CharacterControllerComponent, step = 0.1) => (
+  const num = (label: string, key: keyof CharacterControllerComponent, step = 0.1, fallback = 0) => (
     <label className="field-row">
       <span>{label}</span>
       <input
         type="number"
         step={step}
-        value={Number(cc?.[key] ?? 0)}
+        value={Number(cc?.[key] ?? fallback)}
         onChange={(event) => onChange({ [key]: Number(event.target.value) } as Partial<CharacterControllerComponent>)}
       />
     </label>
   );
   // Player-sound pickers (audio asset ids; the runtime plays each automatically on its event).
-  const audioAssets = useEditorStore((state) => state.assets).filter((asset) => asset.type === 'audio');
+  const assets = useEditorStore((state) => state.assets);
+  const audioAssets = useMemo(() => assets.filter((asset) => asset.type === 'audio'), [assets]);
   const sound = (label: string, key: keyof CharacterControllerComponent) => (
     <label className="field-row">
       <span>{label}</span>
@@ -773,6 +775,19 @@ function CharacterSection({
           {num('Jump', 'jumpStrength')}
           {num('Gravity', 'gravity')}
           {num('Ground Y', 'groundLevel')}
+
+          <h4 className="inspector-subhead">Feel</h4>
+          {num('Acceleration', 'acceleration', 1, 60)}
+          {num('Deceleration', 'deceleration', 1, 70)}
+          {num('Air Control', 'airControl', 0.05, 0.35)}
+          {num('Fall Multiplier', 'fallMultiplier', 0.1, 1.9)}
+          {num('Jump Cut', 'jumpCutMultiplier', 0.05, 0.45)}
+          {num('Coyote Time', 'coyoteTime', 0.02, 0.12)}
+          <p className="field-hint">
+            Higher Accel/Decel = snappier starts &amp; stops. Fall Multiplier &gt;1 makes the jump less floaty; Jump Cut
+            shortens a tapped jump; Coyote Time lets you jump just after leaving a ledge.
+          </p>
+
           <label className="field-row">
             <span>Flip Facing 180°</span>
             <input
@@ -962,6 +977,239 @@ function RenderSettingsSection() {
         <span>Vignette</span>
         <input type="checkbox" checked={rs.vignetteEnabled} onChange={(e) => update({ vignetteEnabled: e.target.checked })} />
       </label>
+    </section>
+  );
+}
+
+function ParticleSection({
+  objectId,
+  particles,
+  imageAssets,
+}: {
+  objectId: string;
+  particles: ParticleSystemComponent | undefined;
+  imageAssets: AssetItem[];
+}) {
+  const addParticles = useEditorStore((state) => state.addParticles);
+  const updateParticles = useEditorStore((state) => state.updateParticles);
+  const removeParticles = useEditorStore((state) => state.removeParticles);
+  const particleSystems = useEditorStore((state) => state.particleSystems);
+  const setObjectParticleSystem = useEditorStore((state) => state.setObjectParticleSystem);
+  const setActiveParticleSystem = useEditorStore((state) => state.setActiveParticleSystem);
+
+  // "Source" picker: a reusable asset (edits propagate to every instance) vs an inline custom emitter.
+  const sourceRow = (
+    <label className="field-row">
+      <span>Source</span>
+      <select
+        value={particles?.systemId ?? (particles ? 'inline' : '')}
+        onChange={(event) => {
+          const value = event.target.value;
+          if (value === '') removeParticles(objectId);
+          else if (value === 'inline') addParticles(objectId);
+          else setObjectParticleSystem(objectId, value);
+        }}
+      >
+        <option value="">None</option>
+        <option value="inline">Inline (custom)</option>
+        {particleSystems.length > 0 && <option disabled>── Assets ──</option>}
+        {particleSystems.map((system) => (
+          <option key={system.id} value={system.id}>
+            {system.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  if (!particles) {
+    return (
+      <section className="inspector-section">
+        <h3>Particles</h3>
+        <p className="field-hint">Fire, smoke, sparks, magic, fountains — a live emitter that previews here and plays in-game. Pick a reusable asset or add an inline emitter.</p>
+        {sourceRow}
+        <label className="field-row">
+          <span>Preset</span>
+          <select
+            defaultValue=""
+            onChange={(event) => {
+              if (event.target.value) addParticles(objectId, event.target.value as (typeof particlePresetIds)[number]);
+            }}
+          >
+            <option value="" disabled>
+              Add inline emitter from preset…
+            </option>
+            {particlePresetIds.map((preset) => (
+              <option key={preset} value={preset}>
+                {preset.charAt(0).toUpperCase() + preset.slice(1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="full-button" onClick={() => addParticles(objectId)}>
+          Add Inline Emitter
+        </button>
+      </section>
+    );
+  }
+
+  const onChange = (patch: Partial<ParticleSystemComponent>) => updateParticles(objectId, patch);
+
+  // Referencing a reusable asset — the asset's config wins, so edit it in the Particle System panel.
+  if (particles.systemId) {
+    const asset = particleSystems.find((p) => p.id === particles.systemId);
+    return (
+      <section className="inspector-section">
+        <h3>Particles</h3>
+        {sourceRow}
+        <p className="field-hint">{asset ? `Using particle system "${asset.name}". Edit it once to update every object that uses it.` : 'Referenced particle system was removed.'}</p>
+        <label className="field-row">
+          <span>Enabled</span>
+          <input type="checkbox" checked={particles.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+        </label>
+        {asset && (
+          <button
+            className="full-button"
+            onClick={() => {
+              setActiveParticleSystem(asset.id);
+              focusWorkspacePanel('particles');
+            }}
+          >
+            Edit Particle System
+          </button>
+        )}
+        <button className="full-button" onClick={() => removeParticles(objectId)}>
+          Remove Emitter
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="inspector-section">
+      <h3>Particles</h3>
+      {sourceRow}
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={particles.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Preset</span>
+        <select
+          defaultValue=""
+          onChange={(event) => {
+            if (event.target.value) addParticles(objectId, event.target.value as (typeof particlePresetIds)[number]);
+          }}
+        >
+          <option value="">Re-seed from preset…</option>
+          {particlePresetIds.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset.charAt(0).toUpperCase() + preset.slice(1)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field-row">
+        <span>Looping</span>
+        <input type="checkbox" checked={particles.looping} onChange={(event) => onChange({ looping: event.target.checked })} />
+      </label>
+      {particles.looping ? (
+        <label className="field-row">
+          <span>Rate /s</span>
+          <NumberInput value={particles.rate} min={0} step={1} onChange={(rate) => onChange({ rate })} />
+        </label>
+      ) : (
+        <label className="field-row">
+          <span>Burst</span>
+          <NumberInput value={particles.burst} min={0} step={1} onChange={(burst) => onChange({ burst })} />
+        </label>
+      )}
+      <label className="field-row">
+        <span>Max</span>
+        <NumberInput value={particles.maxParticles} min={1} max={4000} step={10} onChange={(maxParticles) => onChange({ maxParticles })} />
+      </label>
+      <label className="field-row">
+        <span>Shape</span>
+        <select value={particles.shape} onChange={(event) => onChange({ shape: event.target.value as ParticleEmitterShape })}>
+          <option value="point">Point</option>
+          <option value="cone">Cone</option>
+          <option value="disc">Disc</option>
+          <option value="sphere">Sphere</option>
+          <option value="hemisphere">Hemisphere</option>
+          <option value="box">Box</option>
+        </select>
+      </label>
+      <label className="field-row">
+        <span>Radius</span>
+        <NumberInput value={particles.shapeRadius} min={0} step={0.05} onChange={(shapeRadius) => onChange({ shapeRadius })} />
+      </label>
+      <label className="field-row">
+        <span>Spread °</span>
+        <NumberInput value={particles.coneAngle} min={0} max={180} step={1} onChange={(coneAngle) => onChange({ coneAngle })} />
+      </label>
+      <VectorField label="Direction" value={particles.direction} onChange={(direction) => onChange({ direction })} />
+      <label className="field-row">
+        <span>Speed</span>
+        <NumberInput value={particles.speed} step={0.1} onChange={(speed) => onChange({ speed })} />
+      </label>
+      <RangeField label="Speed Jitter" value={particles.speedJitter} onChange={(speedJitter) => onChange({ speedJitter })} />
+      <label className="field-row">
+        <span>Gravity</span>
+        <NumberInput value={particles.gravity} step={0.1} onChange={(gravity) => onChange({ gravity })} />
+      </label>
+      <RangeField label="Drag" value={particles.drag} max={3} onChange={(drag) => onChange({ drag })} />
+      <label className="field-row">
+        <span>Lifetime</span>
+        <NumberInput value={particles.lifetime} min={0.05} step={0.1} onChange={(lifetime) => onChange({ lifetime })} />
+      </label>
+      <RangeField label="Life Jitter" value={particles.lifetimeJitter} onChange={(lifetimeJitter) => onChange({ lifetimeJitter })} />
+      <label className="field-row">
+        <span>Start Size</span>
+        <NumberInput value={particles.startSize} min={0} step={0.02} onChange={(startSize) => onChange({ startSize })} />
+      </label>
+      <label className="field-row">
+        <span>End Size</span>
+        <NumberInput value={particles.endSize} min={0} step={0.02} onChange={(endSize) => onChange({ endSize })} />
+      </label>
+      <label className="field-row">
+        <span>Start Color</span>
+        <input type="color" value={particles.startColor} onChange={(event) => onChange({ startColor: event.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>End Color</span>
+        <input type="color" value={particles.endColor} onChange={(event) => onChange({ endColor: event.target.value })} />
+      </label>
+      <RangeField label="Start Opacity" value={particles.startOpacity} onChange={(startOpacity) => onChange({ startOpacity })} />
+      <RangeField label="End Opacity" value={particles.endOpacity} onChange={(endOpacity) => onChange({ endOpacity })} />
+      <label className="field-row">
+        <span>Blend</span>
+        <select value={particles.blend} onChange={(event) => onChange({ blend: event.target.value as ParticleSystemComponent['blend'] })}>
+          <option value="additive">Additive (glow)</option>
+          <option value="normal">Normal (smoke)</option>
+        </select>
+      </label>
+      <label className="field-row">
+        <span>World Space</span>
+        <input type="checkbox" checked={particles.worldSpace} onChange={(event) => onChange({ worldSpace: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Emit Light</span>
+        <input type="checkbox" checked={particles.light ?? false} onChange={(event) => onChange({ light: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Sprite</span>
+        <select value={particles.textureAssetId ?? ''} onChange={(event) => onChange({ textureAssetId: event.target.value || undefined })}>
+          <option value="">Soft dot</option>
+          {imageAssets.map((asset) => (
+            <option key={asset.id} value={asset.id}>
+              {asset.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="full-button" onClick={() => removeParticles(objectId)}>
+        Remove Emitter
+      </button>
     </section>
   );
 }
@@ -1220,6 +1468,8 @@ export function InspectorPanel() {
               </button>
             </section>
           )}
+
+          <ParticleSection objectId={object.id} particles={object.particles} imageAssets={imageAssets} />
 
           <section className="inspector-section">
             <h3>Scripts</h3>

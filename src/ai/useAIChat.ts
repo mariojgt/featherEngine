@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { type ModelMessage, stepCountIs, streamText } from 'ai';
 import { PROVIDERS, resolveModel } from './providers';
 import { useAISettings } from '../store/aiSettingsStore';
-import { buildSystemPrompt } from './systemPrompt';
+import { COMPACT_ENGINE_GUIDE, buildSnapshotContext } from './systemPrompt';
 import { engineTools } from './tools';
 
 export interface ToolAction {
@@ -20,12 +20,26 @@ export interface ChatMessage {
 export type ChatStatus = 'idle' | 'streaming';
 
 const newId = () => crypto.randomUUID();
+const MAX_CONTEXT_MESSAGES = 6;
+const MAX_HISTORY_CHARS = 1200;
+type EngineToolName = keyof typeof engineTools;
+
+const trimForModelHistory = (content: string) =>
+  content.length > MAX_HISTORY_CHARS ? `${content.slice(0, MAX_HISTORY_CHARS)}... [trimmed]` : content;
+
+const chooseActiveTools = (_prompt: string): EngineToolName[] => Object.keys(engineTools) as EngineToolName[];
 
 /** Human-friendly label for a tool call shown as a chip in the chat. */
 function describeToolCall(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
     case 'list_scene':
       return 'Inspected scene';
+    case 'inspect_object':
+      return 'Inspected object';
+    case 'inspect_blueprint':
+      return 'Inspected blueprint';
+    case 'inspect_animator_controller':
+      return 'Inspected controller';
     case 'list_scenes':
       return 'Listed scenes';
     case 'create_scene':
@@ -104,6 +118,18 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Added ${String(input.kit ?? 'gameplay')} kit`;
     case 'create_third_person_template':
       return 'Built third-person template';
+    case 'create_first_person_template':
+      return 'Built FPS template';
+    case 'create_film_mode_template':
+      return 'Built Film Mode template';
+    case 'create_cinematic':
+      return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'add_cinematic_action':
+      return 'Added cinematic action';
+    case 'animate_on_timeline':
+      return 'Animated on timeline';
+    case 'play_cinematic':
+      return input.stop ? 'Stopped cinematic' : 'Played cinematic';
     case 'list_bones':
       return 'Listed bones';
     case 'attach_to_bone':
@@ -130,6 +156,14 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Tuned material node';
     case 'delete_material_node':
       return 'Removed material node';
+    case 'create_particle_system':
+      return `Created particle system${input.preset ? ` (${String(input.preset)})` : ''}`;
+    case 'update_particle_system':
+      return 'Tuned particle system';
+    case 'delete_particle_system':
+      return 'Deleted particle system';
+    case 'attach_particle_system':
+      return input.particleSystemId ? 'Attached particle system' : 'Detached particle system';
     case 'set_physics':
       return input.isTrigger ? 'Configured trigger' : 'Configured physics';
     case 'set_light':
@@ -184,6 +218,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Opened object script';
     case 'create_ui_document':
       return `Created UI${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'create_ui_template':
+      return `Created ${String(input.template ?? 'HUD')} UI`;
     case 'add_ui_element':
       return `Added ${String(input.kind ?? 'UI')} element`;
     case 'add_ui_preset':
@@ -200,6 +236,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.documentId ? 'Attached world UI' : 'Detached world UI';
     case 'set_object_variable':
       return `Set ${String(input.key ?? 'variable')}`;
+    case 'create_collectible_counter':
+      return `Created ${String(input.label ?? input.variableName ?? 'collectible')} pickup`;
     case 'open_ui_logic':
       return 'Opened UI logic';
     case 'delete_ui_document':
@@ -210,6 +248,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Fired "${String(input.eventName ?? '')}"`;
     case 'export_game':
       return 'Exported game';
+    case 'export_production':
+      return 'Staged production build';
     default:
       return toolName;
   }
@@ -250,11 +290,23 @@ export function useAIChat() {
     const assistantId = newId();
     const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '', actions: [] };
 
-    // History sent to the model is the prior conversation plus this user turn.
-    const history: ModelMessage[] = [...messages, userMessage].map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
+    // Cacheable prefix first: the static engine guide carries an Anthropic cache breakpoint so the
+    // (also-static) tool schemas + guide are billed at ~10% on cache hits instead of full price every
+    // step. The changing scene snapshot is a SEPARATE, uncached system message placed AFTER the
+    // breakpoint, and recent turns follow. OpenAI/Gemini auto-cache this now-stable prefix too.
+    const history: ModelMessage[] = [
+      {
+        role: 'system',
+        content: COMPACT_ENGINE_GUIDE,
+        providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+      },
+      { role: 'system', content: buildSnapshotContext() },
+      ...messages.slice(-MAX_CONTEXT_MESSAGES).map((message) => ({
+        role: message.role,
+        content: trimForModelHistory(message.content),
+      })),
+      { role: userMessage.role, content: userMessage.content },
+    ];
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setStatus('streaming');
@@ -269,7 +321,6 @@ export function useAIChat() {
       const model = resolveModel(settings.provider, apiKey, settings.activeModel());
       const result = streamText({
         model,
-        system: buildSystemPrompt(),
         messages: history,
         tools: engineTools,
         stopWhen: stepCountIs(16),

@@ -96,10 +96,12 @@ export type GraphNodeKind =
   | 'action.setVisible'
   | 'action.spawnAttached'
   | 'action.playAnimation'
+  | 'action.playCinematic'
   | 'action.setMovementMode'
   | 'action.facePlayer'
   | 'ai.distanceToPlayer'
   | 'ai.directionToPlayer'
+  | 'ai.playerLocation'
   | 'logic.cooldown'
   | 'material.output'
   | 'material.color'
@@ -117,7 +119,10 @@ export type GraphNodeKind =
   | 'ui.hide'
   | 'ui.setText'
   | 'variable.getObject'
-  | 'variable.setObject';
+  | 'variable.setObject'
+  | 'action.burstParticles'
+  | 'action.setParticlesEmitting'
+  | 'action.spawnParticleSystem';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -191,6 +196,12 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   attachOffsetScale?: Vector3Tuple;
   /** action.playAnimation: id of the Animation asset to play as a one-shot montage on the target's animator. */
   animationId?: string;
+  /** action.playCinematic: id of the Film Mode cinematic sequence to play. */
+  cinematicId?: string;
+  /** action.spawnParticleSystem: id of the reusable particle-system asset to spawn. */
+  particleSystemId?: string;
+  /** action.spawnParticleSystem: attach the spawned emitter to the Target (rides it) instead of spawning at its position. */
+  particleAttach?: boolean;
   /** action.playAnimation: playback speed multiplier for the montage (default 1). */
   animationSpeed?: number;
   /** action.setMovementMode: how the target character moves until changed — 'walking' (normal gravity),
@@ -520,6 +531,27 @@ export interface CharacterControllerComponent {
   jumpStrength: number;
   /** Downward acceleration (units/sec²). */
   gravity: number;
+  /**
+   * Gravity multiplier applied while DESCENDING (vertical velocity < 0). >1 makes the fall snappier than
+   * the rise — the classic fix for "floaty" jumps. Default 1.9. (Rising uses plain `gravity`.)
+   */
+  fallMultiplier?: number;
+  /**
+   * Variable jump height: the fraction of upward velocity KEPT when the jump key is released while still
+   * rising (a tap = short hop, a hold = full jump). 0 = hard cut, 1 = no cut. Default 0.45.
+   */
+  jumpCutMultiplier?: number;
+  /** Grace window (seconds) after walking off a ledge during which a jump still registers. Default 0.12. */
+  coyoteTime?: number;
+  /**
+   * Ground acceleration (units/sec²) ramping horizontal speed UP toward the target. Higher = snappier
+   * starts; lower = weightier. `undefined` keeps the legacy instant-velocity behavior. Default 60.
+   */
+  acceleration?: number;
+  /** Ground deceleration (units/sec²) easing horizontal speed DOWN to a stop (slide-to-stop). Default 70. */
+  deceleration?: number;
+  /** Multiplier (0..1) on accel/decel while airborne — lower = less air steering. Default 0.35. */
+  airControl?: number;
   /** How fast (radians/sec) the mesh turns to face its movement direction. */
   turnSpeed: number;
   /**
@@ -719,6 +751,8 @@ export interface SceneObject {
   projectile?: ProjectileComponent;
   /** Present on a runtime-spawned particle burst (e.g. a bullet impact): a short-lived THREE.Points effect. */
   effect?: EffectComponent;
+  /** Authored particle emitter (fire, smoke, sparks, magic, fountain) — previews in the editor and plays in-game. */
+  particles?: ParticleSystemComponent;
   /** Lighting for a `kind: 'light'` object — configurable point / spot / directional light. */
   light?: LightComponent;
   /** Weapon/item inventory — drives the on-screen slot bar and click-to-equip (spawn attached + montage). */
@@ -739,6 +773,9 @@ export interface InventorySlot {
   /** Uniform scale + Y-yaw applied to the attached weapon so the grip seats correctly. */
   attachScale?: number;
   attachYaw?: number;
+  /** Fine-grained local grip offset applied after the target hand/socket transform. */
+  attachPosition?: Vector3Tuple;
+  attachRotation?: Vector3Tuple;
   /** One-shot montage (Animation asset id) played on the character when this slot is equipped. */
   equipAnimId?: string;
 }
@@ -787,6 +824,203 @@ export interface EffectComponent {
   count: number;
 }
 
+/** Emission volume the particles spawn from (in the emitter's local space). */
+export type ParticleEmitterShape = 'point' | 'sphere' | 'hemisphere' | 'cone' | 'box' | 'disc';
+/** How particles composite — additive glows (fire/sparks/magic), normal layers (smoke/debris). */
+export type ParticleBlendMode = 'additive' | 'normal';
+
+/**
+ * The tunable emitter settings shared by an authored particle component AND a reusable particle-system
+ * asset ([ParticleSystemDefinition]). Pure data — no identity, no enable flag.
+ */
+export interface ParticleConfig {
+  /** Emit continuously while active (fire/smoke/fountain). False = only bursts emit. */
+  looping: boolean;
+  /** Particles spawned per second while looping. */
+  rate: number;
+  /** Particles released in one burst on start (and via the Burst Particles node / bus). */
+  burst: number;
+  /** Hard cap on simultaneously-live particles (pool size). */
+  maxParticles: number;
+  /** Emission volume shape. */
+  shape: ParticleEmitterShape;
+  /** Radius for sphere / hemisphere / cone base / disc (units). */
+  shapeRadius: number;
+  /** Cone half-angle in degrees (shape 'cone'). */
+  coneAngle: number;
+  /** Initial speed along the emission direction (units/sec). */
+  speed: number;
+  /** 0–1 random speed variation. */
+  speedJitter: number;
+  /** Base emit direction in the emitter's local space (normalized at runtime). */
+  direction: Vector3Tuple;
+  /** Constant downward acceleration (world -Y). Negative = buoyant rise (smoke). */
+  gravity: number;
+  /** Velocity damping per second (0 = none). */
+  drag: number;
+  /** Particle lifetime in seconds. */
+  lifetime: number;
+  /** 0–1 random lifetime variation. */
+  lifetimeJitter: number;
+  /** Particle size (world units) at birth and death — interpolated over life. */
+  startSize: number;
+  endSize: number;
+  /** Particle color (hex) at birth and death — interpolated over life. */
+  startColor: string;
+  endColor: string;
+  /** Opacity at birth and death — interpolated over life. */
+  startOpacity: number;
+  endOpacity: number;
+  /** Simulate in world space (particles stay put as the emitter moves) vs local (ride the emitter). */
+  worldSpace: boolean;
+  /** Additive (fire/sparks/magic) or normal (smoke/debris) blending. */
+  blend: ParticleBlendMode;
+  /** Optional sprite texture (image asset id). Falls back to a soft round dot. */
+  textureAssetId?: string;
+  /** Emit a soft point-light pulse tinted to startColor (nice for fire/explosions). */
+  light?: boolean;
+}
+
+/**
+ * An authored particle emitter living on an object (fire, smoke, sparks, magic, fountain). Previews
+ * live in the editor and plays in-game. The renderer ([src/three/ParticleSystem.tsx]) pools
+ * `maxParticles` points and simulates them each frame; scripts start/stop emission and fire bursts via
+ * the particle command bus ([src/runtime/particleBus.ts]). When `systemId` is set the emitter pulls its
+ * config from a reusable [ParticleSystemDefinition] asset (editing the asset updates every instance,
+ * like materials); otherwise the inline fields are used.
+ */
+export interface ParticleSystemComponent extends ParticleConfig {
+  /** Master switch — false = dormant (no preview, no play emission). */
+  enabled: boolean;
+  /** When set, the emitter resolves its config from this reusable particle-system asset. */
+  systemId?: string;
+}
+
+/**
+ * A reusable, project-level particle-system asset (Unreal-style). Created via the Project Browser,
+ * edited in the Particle System panel with a live preview, referenced by objects (`systemId`) and
+ * spawned at runtime via the "Spawn Particle System" Blueprint node.
+ */
+export interface ParticleSystemDefinition extends ParticleConfig {
+  id: string;
+  name: string;
+  description?: string;
+  folderId?: string;
+  createdAt: number;
+}
+
+export type CinematicActionType = 'camera' | 'transform' | 'visibility' | 'spawn' | 'animation' | 'sound' | 'event' | 'fade';
+
+/**
+ * Interpolation curve applied to a beat's progress (and to camera shot-to-shot blends).
+ * `smooth` (ease-in-out) is the cinematic default; `linear` is a constant-speed move;
+ * `in`/`out` accelerate/decelerate at one end.
+ */
+export type CinematicEase = 'linear' | 'smooth' | 'in' | 'out';
+
+/**
+ * One keyframe on a camera beat's animated track: the camera's framing at an absolute time
+ * (seconds from the cinematic start). A camera beat with two or more keyframes smoothly flies
+ * through all of them (Catmull-Rom spline through positions/look-ats, eased FOV). This is the
+ * "keyframe the camera" workflow — scrub the playhead, frame the viewport, capture a keyframe.
+ */
+export interface CinematicCameraKeyframe {
+  /** Absolute time in seconds from the cinematic start. */
+  time: number;
+  position: Vector3Tuple;
+  lookAt: Vector3Tuple;
+  fov: number;
+}
+
+/**
+ * One keyframe on a transform beat's animated track: an object's full transform at an absolute
+ * time. A transform beat with ≥2 keyframes smoothly drives the object through them (Catmull-Rom
+ * spline). This is the Unreal-Sequencer-style "keyframe the object" workflow — scrub, pose, key.
+ */
+export interface CinematicTransformKeyframe {
+  /** Absolute time in seconds from the cinematic start. */
+  time: number;
+  position: Vector3Tuple;
+  rotation: Vector3Tuple;
+  scale: Vector3Tuple;
+}
+
+export interface CinematicAction {
+  id: string;
+  type: CinematicActionType;
+  time: number;
+  duration?: number;
+  label?: string;
+  /** Easing curve for this beat's from→to interpolation (camera/transform/fade). Defaults to `smooth`. */
+  ease?: CinematicEase;
+  /**
+   * Camera beats only: seconds to glide from the previous camera shot's framing into this one.
+   * `0` (or omitted) is a hard cut; any positive value produces a smooth dolly/blend between shots.
+   */
+  blend?: number;
+  /**
+   * Camera beats only: an animated camera track. With ≥2 keyframes the camera smoothly flies
+   * through them over the cinematic timeline (overrides position/lookAt/fov on this beat).
+   */
+  keyframes?: CinematicCameraKeyframe[];
+  /**
+   * Transform beats only: an animated transform track for `objectId`. With ≥2 keyframes the object
+   * smoothly flies through them over the timeline (overrides the from/to fields on this beat).
+   */
+  transformKeyframes?: CinematicTransformKeyframe[];
+  objectId?: string;
+  prefabId?: string;
+  spawnKind?: SceneObjectKind;
+  name?: string;
+  fromPosition?: Vector3Tuple;
+  toPosition?: Vector3Tuple;
+  fromRotation?: Vector3Tuple;
+  toRotation?: Vector3Tuple;
+  fromScale?: Vector3Tuple;
+  toScale?: Vector3Tuple;
+  position?: Vector3Tuple;
+  rotation?: Vector3Tuple;
+  scale?: Vector3Tuple;
+  lookAt?: Vector3Tuple;
+  fov?: number;
+  visible?: boolean;
+  animationId?: string;
+  animationSpeed?: number;
+  soundId?: string;
+  eventName?: string;
+  fadeFrom?: number;
+  fadeTo?: number;
+  fadeColor?: string;
+}
+
+export interface CinematicSequence {
+  id: string;
+  name: string;
+  duration: number;
+  autoplay?: boolean;
+  skippable?: boolean;
+  actions: CinematicAction[];
+  createdAt: number;
+}
+
+export interface RuntimeCinematicCamera {
+  position: Vector3Tuple;
+  lookAt: Vector3Tuple;
+  fov: number;
+}
+
+export interface RuntimeCinematicFade {
+  opacity: number;
+  color: string;
+}
+
+export interface RuntimeCinematicState {
+  sequenceId: string;
+  time: number;
+  firedActionIds: string[];
+  spawnedObjectIds: string[];
+}
+
 /** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */
 export interface Scene {
   id: string;
@@ -796,6 +1030,8 @@ export interface Scene {
   ambientSoundId?: string;
   /** Audio asset id looped as background music while this scene plays. */
   musicSoundId?: string;
+  /** Timeline-driven scene control: camera cuts, transforms, temporary spawns, sounds, fades, and events. */
+  cinematics?: CinematicSequence[];
 }
 
 /**
@@ -1016,6 +1252,8 @@ export interface NodeForgeProject {
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
+  /** Reusable particle-system assets (Unreal-style). Referenced by objects via `systemId`. */
+  particleSystems: ParticleSystemDefinition[];
   skeletons: SkeletonAsset[];
   skeletalMeshes: SkeletalMeshAsset[];
   animations: AnimationAsset[];
@@ -1041,6 +1279,8 @@ export interface ProjectManifest {
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
+  /** Reusable particle-system assets (Unreal-style). Referenced by objects via `systemId`. */
+  particleSystems: ParticleSystemDefinition[];
   skeletons: SkeletonAsset[];
   skeletalMeshes: SkeletalMeshAsset[];
   animations: AnimationAsset[];

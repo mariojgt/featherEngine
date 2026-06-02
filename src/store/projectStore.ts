@@ -18,13 +18,17 @@ interface ProjectState {
   busy: boolean;
   error: string | null;
   toast: { kind: 'success' | 'error'; message: string } | null;
+  /** Live progress while a production build runs (desktop). Null when idle. */
+  buildProgress: { running: boolean; lines: string[] } | null;
   clearToast: () => void;
+  clearBuildProgress: () => void;
   newProject: (name: string) => Promise<void>;
   openProject: () => Promise<void>;
   openRecent: (dir: string) => Promise<void>;
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
   exportGame: () => Promise<void>;
+  exportProduction: () => Promise<void>;
   useDemo: () => void;
   closeProject: () => void;
   clearError: () => void;
@@ -50,7 +54,9 @@ export const useProjectStore = create<ProjectState>()(
         busy: false,
         error: null,
         toast: null,
+        buildProgress: null,
         clearToast: () => set({ toast: null }),
+        clearBuildProgress: () => set({ buildProgress: null }),
 
         newProject: async (name) => {
           set({ busy: true, error: null });
@@ -159,6 +165,85 @@ export const useProjectStore = create<ProjectState>()(
           } catch (error) {
             const message = errorMessage(error);
             set({ error: message, toast: { kind: 'error', message: `Export failed: ${message}` } });
+          } finally {
+            set({ busy: false });
+          }
+        },
+
+        exportProduction: async () => {
+          const { projectName, hasProject } = get();
+          if (!hasProject) return;
+          set({ busy: true, error: null });
+          try {
+            const platform = await getPlatform();
+            const editor = useEditorStore.getState();
+            const project = { ...editor.exportProject(), name: projectName };
+            // Inline asset bytes so the production build is fully self-contained.
+            project.assets = await embedAssets(editor.assets);
+            const bundle = buildGameBundle(project);
+
+            // Desktop: run the full build right here, streaming progress to the overlay.
+            if (platform.isDesktop && platform.buildProduction) {
+              // Let the user choose where the finished game is written.
+              const destination = platform.pickDirectory
+                ? await platform.pickDirectory('Choose where to save your game')
+                : undefined;
+              // A picker that returns null means the user cancelled — don't build.
+              if (destination === null) return;
+              set({ buildProgress: { running: true, lines: ['Preparing build…'] } });
+              try {
+                const outDir = await platform.buildProduction(
+                  JSON.stringify(bundle),
+                  true,
+                  (line) => {
+                    set((state) => ({
+                      buildProgress: {
+                        running: true,
+                        lines: [...(state.buildProgress?.lines ?? []), line].slice(-300),
+                      },
+                    }));
+                  },
+                  destination ?? undefined,
+                );
+                set({
+                  buildProgress: null,
+                  toast: { kind: 'success', message: `Production build complete → ${outDir}` },
+                });
+              } catch (err) {
+                const message = errorMessage(err);
+                set({
+                  buildProgress: null,
+                  error: message,
+                  toast: { kind: 'error', message: `Build failed: ${message}` },
+                });
+              }
+              return;
+            }
+
+            // Web fallback: stage the bundle and tell the user the CLI command.
+            const path = await platform.stageProduction(projectName, bundle);
+            if (path) {
+              set({
+                toast: {
+                  kind: 'success',
+                  message:
+                    `Staged for production. From the engine folder, run:  ` +
+                    `npm run export:production -- --bundle "${path}"`,
+                },
+              });
+            } else {
+              set({
+                toast: {
+                  kind: 'success',
+                  message:
+                    `game.json downloaded. From the engine source folder, place it at ` +
+                    `exports/staging/game.json and run:  npm run export:production`,
+                },
+              });
+            }
+          } catch (error) {
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Production export failed: ${message}` } });
           } finally {
             set({ busy: false });
           }

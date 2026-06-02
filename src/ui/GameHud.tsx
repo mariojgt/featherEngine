@@ -4,6 +4,7 @@
  * (The crosshair + first-person hitmarker live in DynamicCrosshair.) A click-through DOM layer mounted
  * alongside ScreenUILayer in both the editor viewport and the standalone player. Shows only while Play is on.
  */
+import type { CSSProperties } from 'react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 
 /** Turn a KeyboardEvent.code into a short label for the prompt chip ("KeyE" → "E", "Space" → "Space"). */
@@ -22,6 +23,8 @@ export function GameHud() {
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
   const hurt = useEditorStore((state) => state.runtimeHurt);
   const objVars = useEditorStore((state) => state.runtimeObjectVariables);
+  const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
+  const animatorControllers = useEditorStore((state) => state.animatorControllers);
   const equipInventorySlot = useEditorStore((state) => state.equipInventorySlot);
 
   if (!isPlaying) return null;
@@ -38,11 +41,24 @@ export function GameHud() {
   const ammoMax = liveVars.ammoMax;
   const showAmmo = typeof ammo === 'number';
   const inventory = player?.inventory;
+  const activeSlot = inventory?.slots[inventory.equipped];
+  const controller = animatorControllers.find((item) => item.id === player?.animator?.controllerId);
+  const rangedParam = controller?.parameters.find((param) => param.name === 'RangedMode');
+  const rangedLive = player && rangedParam ? runtimeAnimators[player.id]?.params[rangedParam.id] : undefined;
+  const showThirdPersonReticle = Boolean(thirdPerson && (activeSlot?.ranged || rangedLive === true));
   const prompt = focus
     ? typeof focus.variables?.interactPrompt === 'string' && focus.variables.interactPrompt
       ? focus.variables.interactPrompt
       : `Use ${focus.name}`
     : null;
+
+  const reticleTick = (style: CSSProperties): CSSProperties => ({
+    position: 'absolute',
+    background: 'rgba(236,246,255,0.94)',
+    borderRadius: '2px',
+    boxShadow: '0 0 2px rgba(0,0,0,0.9), 0 0 12px rgba(96,165,250,0.25)',
+    ...style,
+  });
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', fontFamily: 'inherit' }}>
@@ -58,7 +74,49 @@ export function GameHud() {
           }}
         />
       )}
-      {/* Hit marker (third-person): a brief ✕ at screen center each time the player's shot lands. */}
+      {showThirdPersonReticle && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            width: '52px',
+            height: '52px',
+            transform: 'translate(-50%,-50%)',
+            opacity: 0.94,
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              inset: '13px',
+              border: '1px solid rgba(125,211,252,0.26)',
+              borderRadius: '50%',
+              boxShadow: 'inset 0 0 16px rgba(15,23,42,0.35)',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              width: '4px',
+              height: '4px',
+              marginLeft: '-2px',
+              marginTop: '-2px',
+              borderRadius: '50%',
+              background: '#ecfeff',
+              boxShadow: '0 0 3px rgba(0,0,0,0.95), 0 0 10px rgba(125,211,252,0.34)',
+            }}
+          />
+          <div style={reticleTick({ left: '50%', top: '3px', width: '2px', height: '13px', marginLeft: '-1px' })} />
+          <div style={reticleTick({ left: '50%', bottom: '3px', width: '2px', height: '13px', marginLeft: '-1px' })} />
+          <div style={reticleTick({ left: '3px', top: '50%', width: '13px', height: '2px', marginTop: '-1px' })} />
+          <div style={reticleTick({ right: '3px', top: '50%', width: '13px', height: '2px', marginTop: '-1px' })} />
+        </div>
+      )}
+      {/* Hit marker (third-person): a brief center mark each time the player's shot lands. */}
       {hitMarker > 0 && thirdPerson && (
         <div
           key={`hit-${hitMarker}`}
@@ -67,14 +125,29 @@ export function GameHud() {
             top: '50%',
             left: '50%',
             transform: 'translate(-50%,-50%)',
-            color: '#fff',
-            fontSize: '26px',
-            fontWeight: 700,
-            textShadow: '0 0 4px rgba(0,0,0,0.9)',
+            width: '26px',
+            height: '26px',
             animation: 'nf-hit 0.32s ease-out forwards',
           }}
         >
-          ✕
+          {[45, -45].map((deg) => (
+            <div
+              key={deg}
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: '50%',
+                width: '19px',
+                height: '3px',
+                marginLeft: '-9.5px',
+                marginTop: '-1.5px',
+                background: '#ffffff',
+                borderRadius: '3px',
+                boxShadow: '0 0 3px rgba(0,0,0,0.95), 0 0 12px rgba(125,211,252,0.38)',
+                transform: `rotate(${deg}deg)`,
+              }}
+            />
+          ))}
         </div>
       )}
       {showAmmo && (
@@ -105,10 +178,11 @@ export function GameHud() {
             display: 'flex',
             gap: '8px',
             padding: '8px',
-            background: 'rgba(12,14,20,0.6)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '12px',
-            backdropFilter: 'blur(6px)',
+            background: 'rgba(9,12,18,0.72)',
+            border: '1px solid rgba(148,163,184,0.18)',
+            borderRadius: '8px',
+            backdropFilter: 'blur(8px)',
+            boxShadow: '0 12px 36px rgba(0,0,0,0.34)',
             pointerEvents: 'auto',
           }}
         >
@@ -129,11 +203,11 @@ export function GameHud() {
                   justifyContent: 'center',
                   gap: '2px',
                   cursor: 'pointer',
-                  borderRadius: '9px',
-                  border: active ? '2px solid #ffcf66' : '1px solid rgba(255,255,255,0.16)',
-                  background: active ? 'rgba(255,207,102,0.16)' : 'rgba(255,255,255,0.05)',
-                  color: active ? '#ffe6a8' : '#cfd6e6',
-                  boxShadow: active ? '0 0 14px rgba(255,207,102,0.35)' : 'none',
+                  borderRadius: '7px',
+                  border: active ? '1px solid rgba(125,211,252,0.85)' : '1px solid rgba(148,163,184,0.18)',
+                  background: active ? 'rgba(14,165,233,0.18)' : 'rgba(15,23,42,0.68)',
+                  color: active ? '#e0f7ff' : '#cfd6e6',
+                  boxShadow: active ? 'inset 0 0 0 1px rgba(236,246,255,0.12), 0 0 18px rgba(14,165,233,0.22)' : 'none',
                   transition: 'all 0.1s ease-out',
                 }}
               >
@@ -197,7 +271,7 @@ export function GameHud() {
       )}
       <style>{`
         @keyframes nf-prompt-in { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
-        @keyframes nf-hit { 0% { opacity: 0; transform: translate(-50%,-50%) scale(1.6); } 25% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%,-50%) scale(1); } }
+        @keyframes nf-hit { 0% { opacity: 0; transform: translate(-50%,-50%) scale(1.8); } 25% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%,-50%) scale(0.9); } }
         @keyframes nf-hurt { 0% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 0; } }
       `}</style>
     </div>

@@ -7,8 +7,11 @@ export const POPPABLE_PANELS: Record<string, string> = {
   project: 'Project',
   scripting: 'Scripting',
   materials: 'Material',
+  particles: 'Particle System',
   animator: 'Animator',
   ui: 'UI',
+  scene: 'Scene',
+  cinematic: 'Film Mode',
 };
 
 const labelFor = (kind: string) => `panel-${kind}`;

@@ -110,6 +110,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.setVisible': Sparkles,
   'ai.distanceToPlayer': Crosshair,
   'ai.directionToPlayer': Move,
+  'ai.playerLocation': Crosshair,
   'action.facePlayer': RotateCw,
   'logic.cooldown': RefreshCw,
   'material.output': SlidersHorizontal,
@@ -160,6 +161,7 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'query.grounded',
   'animator.getParam',
   'animator.getState',
+  'ai.playerLocation',
 ]);
 
 const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string }> => {
@@ -224,6 +226,12 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       return [{ id: 'on', label: 'On' }];
     case 'action.setVisible':
       return [{ id: 'visible', label: 'Visible' }];
+    case 'action.burstParticles':
+      return [{ id: 'count', label: 'Count' }];
+    case 'action.setParticlesEmitting':
+      return [{ id: 'on', label: 'On' }];
+    case 'action.spawnParticleSystem':
+      return [{ id: 'location', label: 'Location' }];
     case 'action.spawnProjectile':
       return [
         { id: 'speed', label: 'Speed' },

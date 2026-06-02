@@ -6,6 +6,7 @@ import { Toolbar } from './components/Toolbar';
 import { Workspace } from './components/Workspace';
 import { RuntimeConsole } from './components/RuntimeConsole';
 import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
+import { CinematicOverlay } from './components/CinematicOverlay';
 import { useEditorStore } from './store/editorStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 
@@ -72,6 +73,7 @@ export default function App() {
       <Toolbar />
       <Workspace />
       <RuntimeConsole />
+      <CinematicOverlay />
       <AIChatWidget />
       <PrefabThumbnailHost />
     </div>

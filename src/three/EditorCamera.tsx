@@ -9,6 +9,19 @@ import { selectActiveObjects, useEditorStore } from '../store/editorStore';
  */
 export const editorNav = { flying: false };
 
+/**
+ * Live framing of the editor viewport camera, refreshed every frame while EditorCamera is mounted.
+ * Lets UI outside the Canvas (the Cinematic panel) capture "what I'm looking at right now" as a
+ * camera shot — position + a look-at point on the view ray + current FOV. `valid` is false whenever
+ * the editor camera isn't the active view (during Play or cinematic preview).
+ */
+export const editorCameraPose: {
+  position: [number, number, number];
+  lookAt: [number, number, number];
+  fov: number;
+  valid: boolean;
+} = { position: [0, 0, 0], lookAt: [0, 0.5, 0], fov: 50, valid: false };
+
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const tmpForward = new THREE.Vector3();
 const tmpRight = new THREE.Vector3();
@@ -57,6 +70,11 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
     s.pitch = s.euler.x;
   }, [camera]);
 
+  // Mark the captured framing stale whenever the editor camera isn't the live view.
+  useEffect(() => () => {
+    editorCameraPose.valid = false;
+  }, []);
+
   // Pointer + wheel navigation on the canvas element.
   useEffect(() => {
     const el = gl.domElement;
@@ -79,6 +97,20 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
 
     const onContextMenu = (event: MouseEvent) => event.preventDefault();
 
+    // Record mode: drop/refresh a camera keyframe at the playhead from the framing we just navigated to.
+    const autoKeyCamera = () => {
+      const store = useEditorStore.getState();
+      if (!store.cinematicRecording || store.isPlaying) return;
+      const cinematicId = store.activeCinematicId || store.activeScene()?.cinematics?.[0]?.id;
+      if (!cinematicId) return;
+      const time = store.editorCinematicPreview?.sequenceId === cinematicId ? store.editorCinematicPreview.time : 0;
+      store.addCinematicCameraKeyframe(cinematicId, time, {
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        lookAt: [s.target.x, s.target.y, s.target.z],
+        fov: (camera as THREE.PerspectiveCamera).isPerspectiveCamera ? (camera as THREE.PerspectiveCamera).fov : 50,
+      });
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       if (event.button === 2) s.mode = 'fly';
       else if (event.button === 1) s.mode = 'pan';
@@ -98,6 +130,7 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
       s.keys.clear();
       el.releasePointerCapture?.(event.pointerId);
       el.style.cursor = '';
+      autoKeyCamera();
     };
 
     const onPointerMove = (event: PointerEvent) => {
@@ -134,6 +167,7 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
       s.focusing = false;
       s.distance = clamp(s.distance * (event.deltaY < 0 ? 0.86 : 1.16), 0.5, 600);
       applyFromTarget();
+      autoKeyCamera();
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -187,6 +221,12 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
   useFrame((_, delta) => {
     const s = nav.current;
     const dt = Math.min(delta, 0.05);
+
+    // Publish the live framing so the Cinematic panel can capture this exact angle as a shot.
+    editorCameraPose.position = [camera.position.x, camera.position.y, camera.position.z];
+    editorCameraPose.lookAt = [s.target.x, s.target.y, s.target.z];
+    editorCameraPose.fov = (camera as THREE.PerspectiveCamera).isPerspectiveCamera ? (camera as THREE.PerspectiveCamera).fov : 50;
+    editorCameraPose.valid = true;
 
     if (s.focusing) {
       s.target.lerp(s.focusTarget, 0.18);

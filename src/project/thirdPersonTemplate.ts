@@ -2,7 +2,7 @@ import { getPlatform } from '../platform';
 import { useProjectStore } from '../store/projectStore';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { inspectModel } from '../three/inspectModel';
-import type { AssetItem, GraphNodeCategory } from '../types';
+import type { AssetItem, GraphNodeCategory, Vector3Tuple } from '../types';
 
 /** The Quaternius "Universal Animation Library" pawn that ships with the engine (public/templates). */
 const TEMPLATE_URL = 'templates/UAL1.glb';
@@ -119,6 +119,12 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
     swimSoundId: splash,
     attackSoundId: swing,
     hurtSoundId: hurt,
+    // Over-the-shoulder camera (God of War / Helldivers style): pulled in close, offset to the right shoulder
+    // so the player sits on the left third of the screen, held near shoulder height at a fairly level angle —
+    // not the high, far, centered chase cam. cameraOffset is [side, up, back]; the follow camera already tucks
+    // further over the shoulder + zooms when you aim (RMB). Tune in the Inspector → Character Controller → Camera.
+    cameraOffset: [0.75, 1.45, -2.4],
+    cameraPitch: 0.12,
   });
 
   // Atmosphere: a looping ambient bed + background music on the active scene (Play starts/stops them).
@@ -169,18 +175,34 @@ async function assembleStarter(pawnId: string): Promise<void> {
   // extreme models to ~1 unit, so these are now intuitive fractions of a unit (sword ≈ 0.85u long, pistol
   // ≈ 0.3u). Tune per-object in the Inspector if needed.
   const SWORD_SCALE = 0.85;
-  const PISTOL_SCALE = 0.3;
+  const PISTOL_SCALE = 0.34;
 
   // hand_r bind orientation (from the GLB): local +Z → world forward, local +X → world up. The sword's
-  // blade is the model's +Z and the pistol's barrel is the model's +X, so we rotate each weapon about Y to
-  // seat the grip: sword +90° (blade up), pistol −90° (barrel forward). The weapon is SPAWNED on equip and
-  // attached to this socket (Unreal-style) — it carries this offset, so it doesn't depend on a map object.
+  // blade is the model's +Z and the pistol's barrel is the model's +X, so each weapon gets a full local grip
+  // offset: sword +90° yaw, pistol -90° yaw plus a 180° roll to sit in the palm. The weapon is SPAWNED on
+  // equip and attached to this socket (Unreal-style) — it carries this offset, so it doesn't depend on a map object.
   store.addSkeletonSocket(skeletonId, { name: 'RightHand', boneName: 'hand_r' });
-  const SWORD_YAW = (90 * Math.PI) / 180;
-  const PISTOL_YAW = (-90 * Math.PI) / 180;
+  const SWORD_ROTATION: Vector3Tuple = [0, (90 * Math.PI) / 180, 0];
+  const PISTOL_ROTATION: Vector3Tuple = [0, (-90 * Math.PI) / 180, Math.PI];
+  const SWORD_POSITION: Vector3Tuple = [0.015, -0.02, 0.02];
+  const PISTOL_POSITION: Vector3Tuple = [0.035, -0.035, 0.055];
+
+  // Montage clips for one-shot Play-Animation events (equip / interact). Best-effort name matches on the rig;
+  // a missing clip just means that montage no-ops (graceful).
+  const clips = useEditorStore.getState().animations.filter((a) => a.skeletonId === skeletonId);
+  const pickClip = (...patterns: RegExp[]) => {
+    for (const p of patterns) {
+      const found = clips.find((c) => p.test(c.name));
+      if (found) return found.id;
+    }
+    return undefined;
+  };
+  const swordEquipAnim = pickClip(/sword.*enter/i, /sword.*idle/i, /equip/i, /draw/i, /unsheath/i, /pull/i, /grab/i, /pick.?up/i);
+  const pistolEquipAnim = pickClip(/pistol.*idle/i, /pistol.*aim.*neutral/i, /pistol.*aim/i, /equip/i, /draw/i, /pull/i, /grab/i);
+  const useAnim = pickClip(/interact/i, /pick.?up/i, /loot/i, /open/i, /press/i, /button/i, /\buse\b/i, /point/i, /salute/i, /wave/i);
 
   // Node helpers. `add` resolves the node kind from its label; `chain` wires exec-out → exec-in in order.
-  const RUNTIME = new Set(['Spawn Attached', 'Spawn Projectile', 'Set Anim Bool', 'Destroy Object', 'Get Anim Param']);
+  const RUNTIME = new Set(['Spawn Attached', 'Spawn Projectile', 'Set Anim Bool', 'Destroy Object', 'Get Anim Param', 'Play Animation']);
   const add = (label: string, data?: Record<string, unknown>) =>
     store.addGraphNodeToBlueprint(blueprintId, label, RUNTIME.has(label) ? 'Runtime' : label === 'Branch' ? 'Logic' : 'Events', data);
   const chain = (ids: Array<string | undefined>) => {
@@ -213,7 +235,17 @@ async function assembleStarter(pawnId: string): Promise<void> {
   //     it works dropped anywhere. Walking into it spawns the weapon attached to WHOEVER touched it ($trigger)
   //     and removes itself. Each is registered as a reusable PREFAB in the Weapons folder.
   //     `pickupScale` = ground item + trigger size (catchable); `attachScale` = in-hand size. ---
-  const makePickup = (name: string, assetId: string | undefined, position: [number, number, number], rangedMode: boolean, pickupScale: number, attachScale: number, yaw: number) => {
+  const makePickup = (
+    name: string,
+    assetId: string | undefined,
+    position: Vector3Tuple,
+    rangedMode: boolean,
+    pickupScale: number,
+    attachScale: number,
+    attachRotation: Vector3Tuple,
+    attachPosition: Vector3Tuple,
+    equipAnimId?: string,
+  ) => {
     if (!assetId) return;
     const pickupId = store.createObjectWithProps('cube', {
       name,
@@ -238,18 +270,19 @@ async function assembleStarter(pawnId: string): Promise<void> {
         targetObjectId: '$trigger', // attach to the toucher (the player), not the pickup
         attachSocketName: 'RightHand',
         attachBoneName: 'hand_r',
-        attachOffsetRotation: [0, yaw, 0],
+        attachOffsetRotation: attachRotation,
         attachOffsetScale: [attachScale, attachScale, attachScale],
-        attachOffsetPosition: [0, 0, 0],
+        attachOffsetPosition: attachPosition,
       }),
+      equipAnimId ? addP('Play Animation', { animationId: equipAnimId, targetObjectId: '$trigger' }) : undefined,
       addP('Set Anim Bool', { paramName: 'RangedMode', booleanValue: rangedMode, targetObjectId: '$trigger' }),
       addP('Destroy Object'), // no target → destroy self (the pickup)
     ]);
     // Register as a reusable prefab — drop more copies from the Project browser; each works on its own.
     store.createPrefabFromObject(pickupId, `${name} Prefab`, weaponsFolder);
   };
-  makePickup('Sword Pickup', swordAsset, [-2.5, 0.6, 5], false, 1.2, SWORD_SCALE, SWORD_YAW);
-  makePickup('Pistol Pickup', pistolAsset, [2.5, 0.6, 5], true, 0.8, PISTOL_SCALE, PISTOL_YAW);
+  makePickup('Sword Pickup', swordAsset, [-2.5, 0.6, 5], false, 1.2, SWORD_SCALE, SWORD_ROTATION, SWORD_POSITION, swordEquipAnim);
+  makePickup('Pistol Pickup', pistolAsset, [2.5, 0.6, 5], true, 0.8, PISTOL_SCALE, PISTOL_ROTATION, PISTOL_POSITION, pistolEquipAnim);
 
   // --- Click (release) → fire a projectile, but ONLY while the pistol is equipped (RangedMode true). ---
   const shoot = add('Key Up', { keyCode: 'Mouse0' });
@@ -331,19 +364,6 @@ async function assembleStarter(pawnId: string): Promise<void> {
   store.updateTransform(wallId, 'scale', [3, 5, 0.5]);
   makeModeVolume('Climb Volume', 'climbing', [-11, 2.5, 0.7], [3, 5, 1.2]);
 
-  // Montage clips for one-shot Play-Animation events (equip / interact). Best-effort name matches on the rig;
-  // a missing clip just means that montage no-ops (graceful).
-  const clips = useEditorStore.getState().animations.filter((a) => a.skeletonId === skeletonId);
-  const pickClip = (...patterns: RegExp[]) => {
-    for (const p of patterns) {
-      const found = clips.find((c) => p.test(c.name));
-      if (found) return found.id;
-    }
-    return undefined;
-  };
-  const equipAnim = pickClip(/equip/i, /draw/i, /unsheath/i, /pull/i, /grab/i, /pick.?up/i);
-  const useAnim = pickClip(/interact/i, /pick.?up/i, /loot/i, /open/i, /press/i, /button/i, /\buse\b/i, /point/i, /salute/i, /wave/i);
-
   // --- Inventory: a clickable on-screen weapon bar (Fist / Sword / Pistol). Clicking a slot swaps the held
   //     weapon, plays its equip montage + switch sound, and sets RangedMode (the shoot gate). ---
   const switchSound = await importBundledAudio('weapon-switch.mp3');
@@ -353,9 +373,35 @@ async function assembleStarter(pawnId: string): Promise<void> {
   }
   store.setInventory(pawnId, {
     slots: [
-      { label: 'Fist', ranged: false, equipAnimId: equipAnim },
-      ...(swordAsset ? [{ label: 'Sword', weaponAssetId: swordAsset, ranged: false, attachScale: SWORD_SCALE, attachYaw: SWORD_YAW, equipAnimId: equipAnim }] : []),
-      ...(pistolAsset ? [{ label: 'Pistol', weaponAssetId: pistolAsset, ranged: true, attachScale: PISTOL_SCALE, attachYaw: PISTOL_YAW, equipAnimId: equipAnim }] : []),
+      { label: 'Fist', ranged: false },
+      ...(swordAsset
+        ? [
+            {
+              label: 'Sword',
+              weaponAssetId: swordAsset,
+              ranged: false,
+              attachScale: SWORD_SCALE,
+              attachYaw: SWORD_ROTATION[1],
+              attachPosition: SWORD_POSITION,
+              attachRotation: SWORD_ROTATION,
+              equipAnimId: swordEquipAnim,
+            },
+          ]
+        : []),
+      ...(pistolAsset
+        ? [
+            {
+              label: 'Pistol',
+              weaponAssetId: pistolAsset,
+              ranged: true,
+              attachScale: PISTOL_SCALE,
+              attachYaw: PISTOL_ROTATION[1],
+              attachPosition: PISTOL_POSITION,
+              attachRotation: PISTOL_ROTATION,
+              equipAnimId: pistolEquipAnim,
+            },
+          ]
+        : []),
     ],
     equipped: 0,
     boneName: 'hand_r',
@@ -392,20 +438,14 @@ async function assembleStarter(pawnId: string): Promise<void> {
     addChest('Set Object Var', { objectKey: 'interactable', booleanValue: false }),
   ]);
 
-  // --- Combat demo: a roaming enemy whose AI is a FULLY NODE-BASED blueprint you can open + edit
-  //     ("Enemy AI" in the Enemies folder): chase the player when far, then face + shoot on a cooldown.
-  //     Uses the AI nodes (Distance To Player / Direction To Player / Face Player / Cooldown). ---
+  // --- Combat demo: a small encounter of varied enemies, each highlighting a different system. Hits flash the
+  //     struck body red and pop a floating damage number (built-in combat feedback). ---
   const enemyFolder = store.createFolder('Enemies');
-  const enemyId = store.createObjectWithProps('capsule', {
-    name: 'Skeleton',
-    position: [-6, 1, -8],
-    color: '#b8c0cc',
-  });
-  store.toggleCharacterController(enemyId); // seeds a character controller (enabled)
-  store.updateCharacterController(enemyId, { moveSpeed: 3, sprintMultiplier: 1, jumpStrength: 0, cameraFollow: false, mouseLook: false, turnSpeed: 9 });
-  store.setObjectVariable(enemyId, 'health', 60);
-  const { blueprintId: enemyBp } = store.createBlueprintNamed('Enemy AI', 'Chase the player, then face + shoot on a cooldown. Open me to tweak ranges/behavior!', enemyFolder);
-  store.attachScript(enemyId, enemyBp);
+
+  // (1) RANGED SKELETONS — a FULLY NODE-BASED AI blueprint you can open + edit ("Skeleton AI" in Enemies):
+  //     chase the player when far, then face + shoot on a cooldown. The same blueprint drives both skeletons
+  //     (a reusable brain), so editing it tweaks every shooter at once.
+  const { blueprintId: enemyBp } = store.createBlueprintNamed('Skeleton AI', 'Chase the player, then face + shoot on a cooldown. Open me to tweak ranges/behavior!', enemyFolder);
   const enemyCat = (label: string): GraphNodeCategory =>
     label === 'Update' ? 'Events' : label === 'Branch' || label === 'Compare' || label === 'Cooldown' ? 'Logic' : 'Runtime';
   const addE = (label: string, data?: Record<string, unknown>) => store.addGraphNodeToBlueprint(enemyBp, label, enemyCat(label), data);
@@ -433,6 +473,65 @@ async function assembleStarter(pawnId: string): Promise<void> {
   execE(eBranchAtk, eFace);
   execE(eFace, eCool);
   execE(eCool, eShoot);
+
+  // Spawn a shooter: capsule + character controller (so it slides along walls/ground) + health, driving the
+  // shared "Skeleton AI" brain. First one is captured as a reusable prefab so you can drop more from the browser.
+  const makeShooter = (name: string, position: Vector3Tuple) => {
+    const id = store.createObjectWithProps('capsule', { name, position, color: '#b8c0cc' });
+    store.toggleCharacterController(id);
+    store.updateCharacterController(id, { moveSpeed: 3, sprintMultiplier: 1, jumpStrength: 0, cameraFollow: false, mouseLook: false, turnSpeed: 9 });
+    store.setObjectVariable(id, 'health', 60);
+    store.attachScript(id, enemyBp);
+    return id;
+  };
+  const shooterId = makeShooter('Skeleton', [-6, 1, -8]);
+  makeShooter('Skeleton', [6.5, 1, -9]);
+  store.createPrefabFromObject(shooterId, 'Skeleton Prefab', enemyFolder);
+
+  // (2) MELEE BRUTE — a ZERO-SCRIPT enemy using the built-in chase AI: tag it `enemy` (no character controller)
+  //     and it homes in on the player and deals contact damage on a cadence. Tunables are plain instance vars
+  //     (enemySpeed / chaseRange / enemyDamage / attackRange) — no graph to wire. Tankier + hits harder up close.
+  const bruteId = store.createObjectWithProps('capsule', { name: 'Brute', position: [9, 1, 4], color: '#9a4b3f' });
+  store.updateTransform(bruteId, 'scale', [1.5, 1.5, 1.5]);
+  store.setObjectVariable(bruteId, 'enemy', true);
+  store.setObjectVariable(bruteId, 'health', 120);
+  store.setObjectVariable(bruteId, 'enemySpeed', 3.6);
+  store.setObjectVariable(bruteId, 'chaseRange', 16);
+  store.setObjectVariable(bruteId, 'enemyDamage', 18);
+  store.setObjectVariable(bruteId, 'attackRange', 2);
+  store.createPrefabFromObject(bruteId, 'Brute Prefab', enemyFolder);
+
+  // --- Playground: solid (fixed-body) geometry the character stands on, laid out to SHOW OFF the movement —
+  //     a parkour ascent (variable-height jumps + coyote time) up to an overlook, a ramp onto a platform
+  //     (carry your run momentum up), and cover blocks for the firefight (duck behind them; the spring-arm
+  //     camera pulls in). All box colliders so you collide + stand on them. ---
+  const makeBlock = (name: string, position: Vector3Tuple, scale: Vector3Tuple, color: string, rotation?: Vector3Tuple) => {
+    const id = store.createObjectWithProps('cube', {
+      name,
+      position,
+      color,
+      physics: { enabled: true, bodyType: 'fixed', collider: 'box' },
+    });
+    store.updateTransform(id, 'scale', scale);
+    if (rotation) store.updateTransform(id, 'rotation', rotation);
+    return id;
+  };
+
+  // Parkour ascent (front-left) → overlook ledge. Step tops climb 0.7 → 1.4 → 2.1, then a wide ledge at 2.7 —
+  // sized so each hop needs the snappy jump + a little coyote grace, not a super-jump.
+  makeBlock('Step 1', [-4.5, 0.35, 2.5], [2.2, 0.7, 2.2], '#3b4252');
+  makeBlock('Step 2', [-6.5, 0.7, 3.8], [2.2, 1.4, 2.2], '#434c5e');
+  makeBlock('Step 3', [-5, 1.05, 5.3], [2.2, 2.1, 2.2], '#4c566a');
+  makeBlock('Overlook', [-8.5, 1.35, 6], [5, 2.7, 4.5], '#5a6477');
+
+  // Ramp → mid platform (right side): run up the ramp and your momentum carries onto the platform.
+  makeBlock('Mid Platform', [7.5, 0.75, -5], [4, 1.5, 4], '#4c566a');
+  makeBlock('Ramp', [7.5, 0.75, -1.4], [3, 0.3, 4], '#5a6477', [0.42, 0, 0]);
+
+  // Cover for the firefight (between the spawn and the skeletons) — break line-of-sight, test the camera.
+  makeBlock('Cover Wall', [-4, 0.6, -3], [3, 1.2, 0.6], '#6b7280');
+  makeBlock('Crate', [3.5, 0.6, -2.5], [1.2, 1.2, 1.2], '#7a5c3a');
+  makeBlock('Pillar', [0, 1.1, -6.5], [1, 2.2, 1], '#6b7280');
 
   // --- Surface-aware footsteps: a stone path VOLUME — footsteps over it use a stone sound. ---
   const stoneStep = await importBundledAudio('footstep-stone.mp3');

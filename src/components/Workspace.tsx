@@ -14,18 +14,21 @@ import { InspectorPanel } from './InspectorPanel';
 import { AssetBrowser } from './AssetBrowser';
 import { VisualScriptingPanel } from './VisualScriptingPanel';
 import { MaterialEditorPanel } from './MaterialEditorPanel';
+import { ParticleSystemEditorPanel } from './ParticleSystemEditorPanel';
 import { AnimatorEditorPanel } from './AnimatorEditorPanel';
 import { UIEditorPanel } from './UIEditorPanel';
+import { SceneSettingsPanel } from './SceneSettingsPanel';
+import { CinematicPanel } from './CinematicPanel';
 import { getWorkspaceApi, setWorkspaceApi } from './workspacePanels';
 import { onPanelClosed } from '../sync/storeSync';
 import { POPPABLE_PANELS, openPanelWindow } from '../sync/popoutWindow';
 
 const LAYOUT_KEY = 'nodeforge.layout';
-const LAYOUT_VERSION = 5;
+const LAYOUT_VERSION = 8;
 
 // Where each panel sits when (re)added to the dock — used to restore a panel after
 // its popped-out window closes.
-type PanelDir = 'left' | 'right' | 'above' | 'below';
+type PanelDir = 'left' | 'right' | 'above' | 'below' | 'within';
 type PanelDef = { component: string; title: string; ref?: string; direction?: PanelDir };
 const PANEL_DEFS: Record<string, PanelDef> = {
   viewport: { component: 'viewport', title: 'Viewport' },
@@ -34,8 +37,11 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   scripting: { component: 'scripting', title: 'Scripting', ref: 'viewport', direction: 'below' },
   project: { component: 'project', title: 'Project', ref: 'hierarchy', direction: 'below' },
   materials: { component: 'materials', title: 'Material', ref: 'inspector', direction: 'below' },
+  particles: { component: 'particles', title: 'Particle System', ref: 'materials', direction: 'within' },
   animator: { component: 'animator', title: 'Animator', ref: 'inspector', direction: 'below' },
   ui: { component: 'ui', title: 'UI', ref: 'inspector', direction: 'below' },
+  scene: { component: 'scene', title: 'Scene', ref: 'inspector', direction: 'within' },
+  cinematic: { component: 'cinematic', title: 'Film Mode', ref: 'materials', direction: 'within' },
 };
 
 // Each Dockview panel just renders the existing panel component (they read stores directly).
@@ -46,8 +52,11 @@ const components = {
   project: () => <AssetBrowser />,
   scripting: () => <VisualScriptingPanel />,
   materials: () => <MaterialEditorPanel />,
+  particles: () => <ParticleSystemEditorPanel />,
   animator: () => <AnimatorEditorPanel />,
   ui: () => <UIEditorPanel />,
+  scene: () => <SceneSettingsPanel />,
+  cinematic: () => <CinematicPanel />,
 };
 
 /** Re-add a panel to the dock (after its popped-out window closes), avoiding duplicates. */
@@ -110,6 +119,7 @@ function buildDefaultLayout(api: DockviewApi) {
   api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
   api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'viewport', direction: 'left' } });
   api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
+  api.addPanel({ id: 'scene', component: 'scene', title: 'Scene', position: { referencePanel: 'inspector', direction: 'within' } });
   api.addPanel({ id: 'scripting', component: 'scripting', title: 'Scripting', position: { referencePanel: 'viewport', direction: 'below' } });
   api.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'hierarchy', direction: 'below' } });
   api.addPanel({ id: 'materials', component: 'materials', title: 'Material', position: { referencePanel: 'inspector', direction: 'below' } });
@@ -117,6 +127,8 @@ function buildDefaultLayout(api: DockviewApi) {
   api.addPanel({ id: 'animator', component: 'animator', title: 'Animator', position: { referencePanel: 'materials', direction: 'within' } });
   // UI editor joins the same group as another tab.
   api.addPanel({ id: 'ui', component: 'ui', title: 'UI', position: { referencePanel: 'materials', direction: 'within' } });
+  api.addPanel({ id: 'particles', component: 'particles', title: 'Particle System', position: { referencePanel: 'materials', direction: 'within' } });
+  api.addPanel({ id: 'cinematic', component: 'cinematic', title: 'Film Mode', position: { referencePanel: 'materials', direction: 'within' } });
 }
 
 /** Rebuild the default layout (wired to the toolbar's View → Reset Layout). */

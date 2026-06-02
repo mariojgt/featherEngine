@@ -67,4 +67,10 @@ export const webPlatform: Platform = {
     downloadJson('game.json', bundle);
     return `${name} downloaded as game.json`;
   },
+
+  async stageProduction(_name, bundle) {
+    // No local filesystem on web — download the bundle; the build script picks it up.
+    downloadJson('game.json', bundle);
+    return null;
+  },
 };

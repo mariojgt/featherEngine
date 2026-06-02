@@ -4,10 +4,13 @@ import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import type {
   ColliderType,
+  CinematicAction,
+  CinematicActionType,
   GraphNodeCategory,
   NodeForgeNodeData,
   GraphValue,
   GraphValueType,
+  InventorySlot,
   MaterialDefinition,
   MeshRendererComponent,
   RigidBodyType,
@@ -15,8 +18,10 @@ import type {
   UIElement,
   Vector3Tuple,
 } from '../types';
-import { buildSceneSnapshot } from './systemPrompt';
+import { buildSceneSnapshot, type SceneSnapshotDetail } from './systemPrompt';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
+import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
+import { createFilmModeTemplate } from '../project/filmModeTemplate';
 
 const store = () => useEditorStore.getState();
 
@@ -26,6 +31,82 @@ const VALUE_TYPES = ['number', 'string', 'boolean', 'vector3'] as const;
 const graphValue = z.union([z.number(), z.string(), z.boolean(), vec3]);
 const asGraphValue = (value: string | number | boolean | number[]) =>
   (Array.isArray(value) ? asVec3(value) : value) as GraphValue;
+const cinematicActionSchema = z.object({
+  type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade']),
+  time: z.number().min(0).describe('Seconds from cinematic start.'),
+  duration: z.number().min(0).optional().describe('Seconds this beat lasts; use for camera/transform/fade interpolation.'),
+  ease: z.enum(['linear', 'smooth', 'in', 'out']).optional().describe('Interpolation curve for camera/transform/fade beats. Default smooth (ease in-out); use linear for constant-speed moves.'),
+  blend: z.number().min(0).max(10).optional().describe('Camera beats only: seconds to glide from the previous camera shot into this one (0 = hard cut, >0 = smooth dolly/blend between shots).'),
+  keyframes: z
+    .array(
+      z.object({
+        time: z.number().min(0).describe('Absolute seconds from cinematic start.'),
+        position: vec3,
+        lookAt: vec3,
+        fov: z.number().min(10).max(140),
+      }),
+    )
+    .optional()
+    .describe('Camera beats only: an animated camera track. With ≥2 keyframes the camera flies smoothly (spline) through them; overrides position/lookAt/fov. Prefer this for moving camera shots.'),
+  transformKeyframes: z
+    .array(
+      z.object({
+        time: z.number().min(0).describe('Absolute seconds from cinematic start.'),
+        position: vec3,
+        rotation: vec3,
+        scale: vec3,
+      }),
+    )
+    .optional()
+    .describe('Transform beats only: an animated object track (requires objectId). With ≥2 keyframes the object flies smoothly (spline) through them; overrides from/to. Prefer this for moving/animating an object.'),
+  label: z.string().optional(),
+  objectId: z.string().optional().describe('Target scene object id for transform/visibility/animation.'),
+  prefabId: z.string().optional().describe('Prefab to instantiate temporarily during the cinematic.'),
+  spawnKind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera']).optional(),
+  name: z.string().optional(),
+  fromPosition: vec3.optional(),
+  toPosition: vec3.optional(),
+  fromRotation: vec3.optional(),
+  toRotation: vec3.optional(),
+  fromScale: vec3.optional(),
+  toScale: vec3.optional(),
+  position: vec3.optional(),
+  rotation: vec3.optional(),
+  scale: vec3.optional(),
+  lookAt: vec3.optional(),
+  fov: z.number().min(10).max(140).optional(),
+  visible: z.boolean().optional(),
+  animationId: z.string().optional(),
+  animationSpeed: z.number().min(0.05).max(5).optional(),
+  soundId: z.string().optional(),
+  eventName: z.string().optional(),
+  fadeFrom: z.number().min(0).max(1).optional(),
+  fadeTo: z.number().min(0).max(1).optional(),
+  fadeColor: z.string().optional(),
+});
+
+function normalizeCinematicAction(input: z.infer<typeof cinematicActionSchema>): Omit<CinematicAction, 'id'> {
+  return {
+    ...input,
+    type: input.type as CinematicActionType,
+    fromPosition: input.fromPosition ? asVec3(input.fromPosition) : undefined,
+    toPosition: input.toPosition ? asVec3(input.toPosition) : undefined,
+    fromRotation: input.fromRotation ? asVec3(input.fromRotation) : undefined,
+    toRotation: input.toRotation ? asVec3(input.toRotation) : undefined,
+    fromScale: input.fromScale ? asVec3(input.fromScale) : undefined,
+    toScale: input.toScale ? asVec3(input.toScale) : undefined,
+    position: input.position ? asVec3(input.position) : undefined,
+    rotation: input.rotation ? asVec3(input.rotation) : undefined,
+    scale: input.scale ? asVec3(input.scale) : undefined,
+    lookAt: input.lookAt ? asVec3(input.lookAt) : undefined,
+    keyframes: input.keyframes
+      ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov }))
+      : undefined,
+    transformKeyframes: input.transformKeyframes
+      ? input.transformKeyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), rotation: asVec3(frame.rotation), scale: asVec3(frame.scale) }))
+      : undefined,
+  };
+}
 
 const NODE_LABELS = [
   'Start',
@@ -76,6 +157,7 @@ const NODE_LABELS = [
   'Spawn Projectile',
   'Spawn Attached',
   'Play Animation',
+  'Play Cinematic',
   'Set Movement Mode',
   'Set Visible',
   'Distance To Player',
@@ -142,6 +224,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Spawn Projectile': 'Runtime',
   'Spawn Attached': 'Runtime',
   'Play Animation': 'Runtime',
+  'Play Cinematic': 'Runtime',
   'Set Movement Mode': 'Runtime',
   'Set Visible': 'Runtime',
   'Distance To Player': 'Runtime',
@@ -189,12 +272,106 @@ const findUIElement = (root: UIElement, id: string): UIElement | undefined => {
 };
 const findController = (id: string) => store().animatorControllers.find((controller) => controller.id === id);
 const findPrefab = (id: string) => store().prefabs.find((prefab) => prefab.id === id);
+const findBlueprintGraph = (blueprintId: string) => {
+  const blueprint = findBlueprint(blueprintId);
+  const graph = blueprint ? store().graphs.find((item) => item.id === blueprint.graphId) : undefined;
+  return blueprint && graph ? { blueprint, graph } : undefined;
+};
+
+const ensureNumberVariable = (name: string, defaultValue: number) => {
+  let variable = store().variables.find((item) => item.name.toLowerCase() === name.toLowerCase());
+  if (!variable) {
+    const id = store().createVariable(name, 'number', false);
+    store().updateVariable(id, { defaultValue });
+    variable = store().variables.find((item) => item.id === id);
+  }
+  return variable?.name ?? name;
+};
+
+const setUIStyle = (documentId: string, elementId: string, style: Partial<UIElement['style']>) => {
+  const doc = findUIDocument(documentId);
+  const element = doc ? findUIElement(doc.root, elementId) : undefined;
+  if (!element) return;
+  store().updateUIElement(documentId, elementId, {
+    style: {
+      ...element.style,
+      ...style,
+      custom: { ...(element.style.custom ?? {}), ...(style.custom ?? {}) },
+    },
+  });
+};
 
 export const engineTools = {
   list_scene: tool({
-    description: 'List the current (active) scene objects, all scenes, blueprints and runtime state. Call this before acting if unsure.',
-    inputSchema: z.object({}),
-    execute: async () => JSON.stringify(buildSceneSnapshot()),
+    description: 'List the current project snapshot. Defaults to tiny; request compact/standard/full only when extra graph or asset detail is needed.',
+    inputSchema: z.object({ detail: z.enum(['tiny', 'compact', 'standard', 'full']).optional(), limit: z.number().int().min(1).max(200).optional() }),
+    execute: async ({ detail, limit }) => JSON.stringify(buildSceneSnapshot({ detail: detail as SceneSnapshotDetail | undefined, limit })),
+  }),
+
+  inspect_object: tool({
+    description:
+      'Inspect one active-scene object with full components plus related blueprint/controller/material summaries. Use this instead of full scene snapshots when one object is the focus.',
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      const blueprint = object.script?.blueprintId ? findBlueprintGraph(object.script.blueprintId) : undefined;
+      const controller = object.animator?.controllerId ? findController(object.animator.controllerId) : undefined;
+      const material = object.renderer?.materialId ? findMaterial(object.renderer.materialId) : undefined;
+      const model = object.renderer?.modelAssetId ? findAsset(object.renderer.modelAssetId) : undefined;
+      return JSON.stringify({
+        object,
+        model: model ? { id: model.id, name: model.name, type: model.type } : null,
+        material: material
+          ? { id: material.id, name: material.name, color: material.color, metalness: material.metalness, roughness: material.roughness }
+          : null,
+        blueprint: blueprint
+          ? {
+              id: blueprint.blueprint.id,
+              name: blueprint.blueprint.name,
+              nodes: blueprint.graph.nodes.map((node) => ({ id: node.id, position: node.position, data: node.data })),
+              edges: blueprint.graph.edges,
+            }
+          : null,
+        animatorController: controller
+          ? {
+              id: controller.id,
+              name: controller.name,
+              skeletonId: controller.skeletonId,
+              parameters: controller.parameters,
+              states: controller.states,
+              transitions: controller.transitions,
+            }
+          : null,
+      });
+    },
+  }),
+
+  inspect_blueprint: tool({
+    description: 'Inspect a blueprint node graph by blueprintId, including nodes and edges. Use for scripting/debugging logic.',
+    inputSchema: z.object({ blueprintId: z.string() }),
+    execute: async ({ blueprintId }) => {
+      const found = findBlueprintGraph(blueprintId);
+      if (!found) return `No blueprint with id ${blueprintId}.`;
+      return JSON.stringify({ blueprint: found.blueprint, nodes: found.graph.nodes, edges: found.graph.edges });
+    },
+  }),
+
+  inspect_animator_controller: tool({
+    description: 'Inspect an Animator Controller by controllerId, including parameters, states, transitions, and clip names.',
+    inputSchema: z.object({ controllerId: z.string() }),
+    execute: async ({ controllerId }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      const animationsById = new Map(store().animations.map((animation) => [animation.id, animation]));
+      return JSON.stringify({
+        ...controller,
+        states: controller.states.map((state) => ({
+          ...state,
+          animationName: state.animationId ? animationsById.get(state.animationId)?.name ?? null : null,
+        })),
+      });
+    },
   }),
 
   list_scenes: tool({
@@ -298,7 +475,7 @@ export const engineTools = {
 
   update_renderer: tool({
     description:
-      "Update an object's material. color (hex), metalness 0-1 and roughness 0-1 affect built-in meshes always; for an object using an imported model they only take effect when overrideMaterial is true. textureAssetId assigns an image asset as the base-color (albedo) texture and applies to both built-in meshes and models regardless of overrideMaterial — pass an empty string to remove it.",
+      "Update an object's inline material/render settings. For imported models, color/metalness/roughness need overrideMaterial:true; textureAssetId applies an image texture.",
     inputSchema: z.object({
       id: z.string(),
       color: z.string().optional(),
@@ -337,7 +514,7 @@ export const engineTools = {
 
   set_scene_audio: tool({
     description:
-      "Set the active scene's looping ambient bed and/or background music (both play while the game runs and stop on Stop). Pass \"audio\"-type asset ids; pass an empty string to clear either.",
+      "Set Scene Settings audio for the active scene: looping ambient and/or music. These are scene-level Play loops, not Blueprint nodes. Empty string clears either.",
     inputSchema: z.object({
       ambientSoundId: z.string().optional().describe('Audio asset id looped quietly as ambience (wind/room tone), or "" to clear.'),
       musicSoundId: z.string().optional().describe('Audio asset id looped as background music, or "" to clear.'),
@@ -363,7 +540,7 @@ export const engineTools = {
 
   set_inventory: tool({
     description:
-      "Define a character's weapon inventory — the on-screen clickable slot bar. Each slot equips a weapon (model asset) on click, swapping the held weapon, playing its equip montage + a switch sound, and toggling the RangedMode animator param (for the shoot gate). An empty weaponAssetId is the unarmed/holster slot. Pass slots:[] to remove the inventory.",
+      "Define or remove a character weapon inventory. Slots appear in the HUD and can equip model assets, play equip animations/sounds, and toggle ranged mode.",
     inputSchema: z.object({
       objectId: z.string(),
       slots: z
@@ -374,6 +551,8 @@ export const engineTools = {
             ranged: z.boolean().optional().describe('When true, equipping enables ranged fire (sets RangedMode).'),
             attachScale: z.number().optional().describe('Uniform scale of the attached weapon.'),
             attachYaw: z.number().optional().describe('Y-yaw (radians) to seat the grip.'),
+            attachPosition: vec3.optional().describe('Fine local grip offset [x,y,z].'),
+            attachRotation: vec3.optional().describe('Fine local grip rotation [x,y,z] in radians; overrides attachYaw when provided.'),
             equipAnimId: z.string().optional().describe('Animation asset id played as a montage on equip.'),
           }),
         )
@@ -390,7 +569,12 @@ export const engineTools = {
         store().setInventory(objectId, undefined);
         return `Removed inventory from ${objectId}.`;
       }
-      store().setInventory(objectId, { slots, equipped: equipped ?? 0, socketName, boneName, switchSoundId });
+      const normalizedSlots: InventorySlot[] = slots.map((slot) => ({
+        ...slot,
+        attachPosition: slot.attachPosition ? asVec3(slot.attachPosition) : undefined,
+        attachRotation: slot.attachRotation ? asVec3(slot.attachRotation) : undefined,
+      }));
+      store().setInventory(objectId, { slots: normalizedSlots, equipped: equipped ?? 0, socketName, boneName, switchSoundId });
       return `Set ${slots.length}-slot inventory on ${objectId}.`;
     },
   }),
@@ -409,7 +593,7 @@ export const engineTools = {
   }),
 
   set_physics: tool({
-    description: 'Enable/configure physics on an object. For solid walls/floors set enabled:true, bodyType:"fixed", isTrigger:false. For pickups/overlap volumes set enabled:true, bodyType:"fixed", isTrigger:true so it fires Trigger Enter without blocking. collisionLayer is 0-15 and collisionMask is a 16-bit layer bitmask.',
+    description: 'Enable/configure object physics. Use fixed solids for walls/floors, dynamic for movable bodies, and fixed triggers for pickups/volumes.',
     inputSchema: z.object({
       id: z.string(),
       enabled: z.boolean().optional(),
@@ -440,6 +624,93 @@ export const engineTools = {
     },
   }),
 
+  create_particle_system: tool({
+    description:
+      'Create a reusable Particle System ASSET (Unreal-style: fire, smoke, sparks, magic, fountain, rain, explosion, dust). Edit it once with update_particle_system and every object/spawn that references it updates. Optionally seed from a preset. Returns the particleSystemId — then attach_particle_system to put it on an object, or use the "Spawn Particle System" Blueprint node to spawn it at runtime.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      preset: z.enum(['fire', 'smoke', 'sparks', 'magic', 'fountain', 'rain', 'explosion', 'dust']).optional(),
+      folderId: z.string().optional(),
+    }),
+    execute: async ({ name, preset, folderId }) => {
+      const id = store().createParticleSystem(name, preset, folderId);
+      return `Created particle system "${store().particleSystems.find((p) => p.id === id)?.name}" with particleSystemId ${id}.`;
+    },
+  }),
+
+  update_particle_system: tool({
+    description:
+      'Tune a reusable Particle System asset (every referencing emitter updates live). looping=continuous (rate/sec) vs one-shot (burst count). gravity>0 falls, <0 rises (smoke). worldSpace keeps particles in the world as the emitter moves. blend additive=glow (fire/magic), normal=smoke/debris. Size/color/opacity interpolate from start→end over each particle\'s life. Pass the particleSystemId from the snapshot / create_particle_system.',
+    inputSchema: z.object({
+      particleSystemId: z.string(),
+      looping: z.boolean().optional(),
+      rate: z.number().optional().describe('Particles per second while looping.'),
+      burst: z.number().optional().describe('Particles per one-shot burst (non-looping / Burst / Spawn nodes).'),
+      maxParticles: z.number().optional().describe('Pool cap (1–4000).'),
+      shape: z.enum(['point', 'sphere', 'hemisphere', 'cone', 'box', 'disc']).optional(),
+      shapeRadius: z.number().optional(),
+      coneAngle: z.number().optional().describe('Spread half-angle in degrees.'),
+      speed: z.number().optional(),
+      speedJitter: z.number().optional().describe('0–1 random speed variation.'),
+      direction: z.array(z.number()).length(3).optional().describe('Local emit direction [x,y,z].'),
+      gravity: z.number().optional().describe('Downward accel; negative = rise.'),
+      drag: z.number().optional(),
+      lifetime: z.number().optional(),
+      lifetimeJitter: z.number().optional(),
+      startSize: z.number().optional(),
+      endSize: z.number().optional(),
+      startColor: z.string().optional().describe('Hex color at birth.'),
+      endColor: z.string().optional().describe('Hex color at death.'),
+      startOpacity: z.number().optional(),
+      endOpacity: z.number().optional(),
+      worldSpace: z.boolean().optional(),
+      blend: z.enum(['additive', 'normal']).optional(),
+      light: z.boolean().optional().describe('Emit a soft point-light pulse (fire/explosions).'),
+      textureAssetId: z.string().optional().describe('Image asset id for a sprite, or empty for a soft dot.'),
+    }),
+    execute: async ({ particleSystemId, direction, textureAssetId, ...patch }) => {
+      if (!store().particleSystems.some((p) => p.id === particleSystemId)) return `No particle system with id ${particleSystemId}.`;
+      if (textureAssetId) {
+        const asset = findAsset(textureAssetId);
+        if (!asset) return `No asset with id ${textureAssetId}.`;
+        if (asset.type !== 'image') return `Asset ${textureAssetId} is a ${asset.type}, not an image.`;
+      }
+      store().updateParticleSystem(particleSystemId, {
+        ...patch,
+        ...(direction ? { direction: direction as [number, number, number] } : {}),
+        ...(textureAssetId !== undefined ? { textureAssetId: textureAssetId || undefined } : {}),
+      });
+      return `Updated particle system ${particleSystemId}.`;
+    },
+  }),
+
+  delete_particle_system: tool({
+    description: 'Delete a reusable Particle System asset. Any object referencing it loses its emitter.',
+    inputSchema: z.object({ particleSystemId: z.string() }),
+    execute: async ({ particleSystemId }) => {
+      if (!store().particleSystems.some((p) => p.id === particleSystemId)) return `No particle system with id ${particleSystemId}.`;
+      store().deleteParticleSystem(particleSystemId);
+      return `Deleted particle system ${particleSystemId}.`;
+    },
+  }),
+
+  attach_particle_system: tool({
+    description:
+      'Attach a reusable Particle System asset to an object (the object emits it; editing the asset updates it). Works on any object including empties — drop an empty where you want an effect anchor. Pass particleSystemId empty to detach.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      particleSystemId: z.string().optional().describe('Particle system asset id, or empty to detach.'),
+    }),
+    execute: async ({ objectId, particleSystemId }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      if (particleSystemId && !store().particleSystems.some((p) => p.id === particleSystemId)) {
+        return `No particle system with id ${particleSystemId}.`;
+      }
+      store().setObjectParticleSystem(objectId, particleSystemId || undefined);
+      return particleSystemId ? `Attached particle system ${particleSystemId} to ${objectId}.` : `Detached the particle emitter from ${objectId}.`;
+    },
+  }),
+
   set_model: tool({
     description: 'Assign an imported glTF/GLB model asset to an object (rendered instead of its built-in mesh), or clear it. The assetId must be a "model"-type asset from the snapshot.',
     inputSchema: z.object({
@@ -460,7 +731,7 @@ export const engineTools = {
 
   set_animator: tool({
     description:
-      'Play a skeletal animation on an object that renders a rigged model. Enable the animator and set animationId to an Animation asset from the snapshot whose skeletonId matches the object\'s model skeleton (any clip on that skeleton works, even one imported from another character). speed/loop are optional. Pass enabled:false to stop.',
+      'Play or stop a skeletal animation on a rigged object. animationId must belong to the same skeleton; speed/loop are optional.',
     inputSchema: z.object({
       objectId: z.string(),
       enabled: z.boolean().optional(),
@@ -491,7 +762,7 @@ export const engineTools = {
 
   create_animator_controller: tool({
     description:
-      'Create a reusable Animator Controller (animation state machine). Optionally bind it to a skeletonId so only that skeleton\'s clips are offered. Returns controllerId. Then add parameters, states and transitions, and assign it to an object with set_object_controller.',
+      'Create a reusable Animator Controller. Add parameters/states/transitions, then assign it with set_object_controller. Returns controllerId.',
     inputSchema: z.object({ name: z.string().optional(), skeletonId: z.string().optional() }),
     execute: async ({ name, skeletonId }) => {
       if (skeletonId && !store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
@@ -502,7 +773,7 @@ export const engineTools = {
 
   add_animator_parameter: tool({
     description:
-      'Add a parameter the state machine reads. type: float | bool | trigger. source: manual (set by scripts/AI), speed (object horizontal speed), verticalSpeed, moving (bool), or variable (mirror a project variable — pass variableId). Use a float "Speed" with source "speed" for locomotion. Returns parameterId.',
+      'Add an Animator Controller parameter. Sources can be manual, motion/input auto-sources, or variable. Returns parameterId.',
     inputSchema: z.object({
       controllerId: z.string(),
       name: z.string(),
@@ -562,7 +833,7 @@ export const engineTools = {
 
   set_blendspace: tool({
     description:
-      'Turn an animator state into a BLEND SPACE (Unreal-style): it blends `samples` continuously by parameter(s) instead of playing one clip — smooth, no popping. 1D (parameterName only): each sample {animationId, value} sits on one axis (e.g. Speed → idle@0/walk@1.5/jog@3.4/sprint@6.8). 2D (also pass parameterNameY): each sample also has `y`, placed on a plane (e.g. moveX × moveY → 8-way directional strafe; center sample = idle at 0,0). Pass empty samples to revert to a single-clip state.',
+      'Turn an animator state into a 1D/2D blend space. Use parameterName for X, optional parameterNameY for Y, and samples with animationId/value/y. Empty samples clears it.',
     inputSchema: z.object({
       controllerId: z.string(),
       stateId: z.string(),
@@ -593,7 +864,7 @@ export const engineTools = {
 
   add_animator_transition: tool({
     description:
-      'Add a transition between states. from is a stateId or "any". Conditions are ANDed; each compares a parameterId against a value with op (==,!=,>,>=,<,<=). duration is the crossfade seconds. Set hasExitTime:true for one-shot states (e.g. Jump Start/Land) so the transition only fires after the clip finishes. Returns transitionId.',
+      'Add an animator transition from a state id or "any" to another state. Conditions are ANDed; duration is crossfade seconds. Returns transitionId.',
     inputSchema: z.object({
       controllerId: z.string(),
       from: z.string().describe('Source stateId, or "any".'),
@@ -623,7 +894,7 @@ export const engineTools = {
 
   set_anim_parameter: tool({
     description:
-      'Set a live animator parameter value on an object during Play (e.g. flip a manual "WeaponEquipped" bool, set a float). Resolves the parameter by name on the object\'s controller. Auto-sourced params (speed, grounded, etc.) are recomputed each frame so setting them has no lasting effect — use for "manual" params and triggers.',
+      'Set a live animator parameter by name during Play. Best for manual params and triggers; auto-sourced params are recomputed.',
     inputSchema: z.object({ objectId: z.string(), paramName: z.string(), value: z.union([z.number(), z.boolean()]) }),
     execute: async ({ objectId, paramName, value }) => {
       const object = findObject(objectId);
@@ -639,7 +910,7 @@ export const engineTools = {
 
   set_ragdoll: tool({
     description:
-      'Turn a physics ragdoll on or off for a character object during Play — its skeleton goes limp and falls under gravity (works on any rigged object). Takes effect immediately during Play; entering an animator state named "Death" auto-ragdolls. Use the "Set Ragdoll" node for in-graph triggers, or the character\'s Ragdoll test key.',
+      'Turn a rigged object ragdoll on/off during Play. Requires a skinned model with ragdoll settings.',
     inputSchema: z.object({ objectId: z.string(), on: z.boolean().default(true) }),
     execute: async ({ objectId, on }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
@@ -674,6 +945,16 @@ export const engineTools = {
       gravity: z.number().optional(),
       turnSpeed: z.number().optional(),
       groundLevel: z.number().optional(),
+      // Movement "feel" — fix stiff/floaty. acceleration/deceleration ramp horizontal speed (higher = snappier
+      // starts/stops; lower = weightier). airControl (0..1) dampens mid-air steering. fallMultiplier >1 makes the
+      // jump fall faster than it rose (less floaty). jumpCutMultiplier (0..1) shortens a tapped jump. coyoteTime
+      // lets a jump still fire shortly after leaving a ledge.
+      acceleration: z.number().optional().describe('Ground accel toward target speed (units/s²). Default 60.'),
+      deceleration: z.number().optional().describe('Ground decel to a stop (units/s²). Default 70.'),
+      airControl: z.number().optional().describe('Accel/decel multiplier while airborne, 0..1. Default 0.35.'),
+      fallMultiplier: z.number().optional().describe('Gravity ×multiplier while descending. >1 = snappier fall. Default 1.9.'),
+      jumpCutMultiplier: z.number().optional().describe('Upward velocity kept when jump released early, 0..1. Default 0.45.'),
+      coyoteTime: z.number().optional().describe('Grace seconds after leaving a ledge a jump still fires. Default 0.12.'),
       modelYawOffset: z.number().optional().describe('Facing offset in radians; use Math.PI (~3.14159) to flip a model that faces backwards.'),
       // Key bindings — KeyboardEvent.code strings, e.g. "KeyW", "Space", "ShiftLeft", "ArrowUp".
       keyForward: z.string().optional(),
@@ -690,28 +971,28 @@ export const engineTools = {
       rollSpeed: z.number().optional(),
       rollDuration: z.number().optional(),
       keyAttack: z.string().optional(),
-      meleeDamage: z.number().optional().describe('Damage a sword swing / punch deals to objects with `health` in a front cone (when no ranged weapon is out). Default 34.'),
-      meleeRange: z.number().optional().describe('Reach (units) of the melee front-cone hit test. Default 2.4.'),
+      meleeDamage: z.number().optional().describe('Melee damage. Default 34.'),
+      meleeRange: z.number().optional().describe('Melee range. Default 2.4.'),
       keyAim: z.string().optional(),
       keyReload: z.string().optional(),
       keyInteract: z.string().optional(),
-      interactRange: z.number().optional().describe('Max distance (units) to focus an interactable object in front of the character (drives the Interact prompt/event). Default 3.'),
+      interactRange: z.number().optional().describe('Interact distance. Default 3.'),
       keyEmote: z.string().optional(),
       keyRagdoll: z.string().optional(),
       // Player sound effects — pass an "audio"-type asset id; the runtime plays each automatically on its event.
-      footstepSoundId: z.string().optional().describe('Audio asset id played on each stride while moving on the ground.'),
-      jumpSoundId: z.string().optional().describe('Audio asset id played when the character jumps.'),
-      landSoundId: z.string().optional().describe('Audio asset id played when the character lands after falling.'),
-      swimSoundId: z.string().optional().describe('Audio asset id played (splash) when the character enters a water volume.'),
-      attackSoundId: z.string().optional().describe('Audio asset id played when the character starts an attack/swing.'),
-      hurtSoundId: z.string().optional().describe("Audio asset id played when the character's health drops (took damage)."),
+      footstepSoundId: z.string().optional().describe('Footstep audio asset id.'),
+      jumpSoundId: z.string().optional().describe('Jump audio asset id.'),
+      landSoundId: z.string().optional().describe('Land audio asset id.'),
+      swimSoundId: z.string().optional().describe('Water splash audio asset id.'),
+      attackSoundId: z.string().optional().describe('Attack audio asset id.'),
+      hurtSoundId: z.string().optional().describe('Hurt audio asset id.'),
       // Camera.
       cameraFollow: z.boolean().optional(),
-      cameraOffset: vec3.optional().describe('Resting camera position relative to the pawn: [side, up, back]. Negative Z is behind a +Z-forward model.'),
+      cameraOffset: vec3.optional().describe('[side, up, back]. Negative Z is behind.'),
       cameraPitch: z.number().optional().describe('Base camera elevation in radians.'),
-      mouseLook: z.boolean().optional().describe('Orbit the camera with the mouse (click the view to capture).'),
+      mouseLook: z.boolean().optional().describe('Orbit camera with mouse.'),
       mouseSensitivity: z.number().optional(),
-      cameraRelativeMovement: z.boolean().optional().describe('Move relative to the camera facing.'),
+      cameraRelativeMovement: z.boolean().optional().describe('Move relative to camera.'),
     }),
     execute: async ({ objectId, enabled, ...patch }) => {
       const object = findObject(objectId);
@@ -737,7 +1018,7 @@ export const engineTools = {
 
   create_character_pawn: tool({
     description:
-      'One-click third-person pawn: from a RIGGED model asset (a "model"-type asset that was split into a skeletalMesh), creates an object rendering it, auto-builds a locomotion Animator Controller (Idle/Walk/Jog/Jump matched from the skeleton\'s clips by name) and attaches a character controller. Returns the new objectId. Use this as the fast path before fine-tuning with the other animator tools.',
+      'Create a third-person character pawn from a rigged model asset, with locomotion controller and character controller. Returns objectId.',
     inputSchema: z.object({ modelAssetId: z.string(), name: z.string().optional() }),
     execute: async ({ modelAssetId, name }) => {
       const asset = findAsset(modelAssetId);
@@ -754,7 +1035,7 @@ export const engineTools = {
 
   add_gameplay_kit: tool({
     description:
-      "Add a ready-made gameplay system to a character that already has an Animator Controller (e.g. from create_character_pawn) — augments its state machine with extra states/params/transitions matched from the skeleton's clips. Kits: 'ranged' (pistol aim/shoot/reload — toggle the RangedMode param to enter; aim=keyAim/RMB, shoot=keyAttack, reload=keyReload), 'health' (a Health project variable + Hit-reaction state fired by a manual 'Hit' trigger + a Death state that auto-drops into the ragdoll at Health<=0), 'interactions' (an Interact state on keyInteract/E), 'emotes' (a dance/wave Emote held on keyEmote/F). The bundled third-person template ships with all four.",
+      "Add a ready-made kit to a character Animator Controller. Kits: ranged, health, interactions, emotes. Requires matching clips on the rig.",
     inputSchema: z.object({ objectId: z.string(), kit: z.enum(['ranged', 'health', 'interactions', 'emotes']) }),
     execute: async ({ objectId, kit }) => {
       const object = findObject(objectId);
@@ -780,7 +1061,7 @@ export const engineTools = {
 
   attach_to_bone: tool({
     description:
-      'Attach an object to a bone "socket" of a character\'s animated skeleton (e.g. a sword to "hand_r"), so it follows the bone. The object\'s transform becomes the offset from the bone — use update_transform to fine-tune position/rotation. Pass no targetObjectId to detach. Use list_bones to find bone names.',
+      'Attach an object to a rigged target bone so it follows animation. Omit targetObjectId to detach. Use list_bones for bone names.',
     inputSchema: z.object({
       objectId: z.string(),
       targetObjectId: z.string().optional().describe('The character to attach to, or omit/empty to detach.'),
@@ -805,7 +1086,7 @@ export const engineTools = {
 
   set_attachment_offset: tool({
     description:
-      "Set the local attach offset of an already-attached object (seat a weapon in the hand). position/scale are vec3, rotation is in DEGREES (XYZ). This offset overrides the object's own transform as the attach offset. Tip for the bundled rig (hand_r): the sword's blade is +Z and the pistol's barrel is +X, so a sword sits blade-up at rotation [0,90,0] and a pistol points forward at [0,-90,0].",
+      'Set local offset for an attached object. position/scale are vec3; rotation is XYZ degrees.',
     inputSchema: z.object({
       objectId: z.string(),
       position: z.array(z.number()).length(3).optional(),
@@ -826,7 +1107,7 @@ export const engineTools = {
 
   add_skeleton_socket: tool({
     description:
-      'Add a reusable named socket (a bone + offset) to a Skeleton asset, Unreal-style. Attachments can then target it by name with attach_to_socket, and editing the socket moves everything attached to it. Returns the socketId. skeletonId comes from the snapshot\'s skeletalMeshes[].skeletonId; use list_bones on a character to find bone names.',
+      'Add a reusable named socket to a Skeleton asset. Returns socketId. Use list_bones for exact bone names.',
     inputSchema: z.object({ skeletonId: z.string(), name: z.string(), boneName: z.string() }),
     execute: async ({ skeletonId, name, boneName }) => {
       const skeleton = store().skeletons.find((s) => s.id === skeletonId);
@@ -839,7 +1120,7 @@ export const engineTools = {
 
   set_ragdoll_settings: tool({
     description:
-      "Tune a skeleton's physics-ragdoll definition (shared by every character using that skeleton). Adjust when a ragdoll looks too floppy/stiff/light. skeletonId comes from the snapshot's skeletalMeshes[].skeletonId or skeletons[].id. All fields optional. capsuleRadius (bone thickness, fatter=more stable), density (mass, heavier=swings slower), linearDamping/angularDamping (higher=less motion/stiffer), groundY (floor height it piles on), excludePattern (case-insensitive regex of bone names NOT simulated).",
+      "Tune shared ragdoll settings for a skeleton. Optional fields control body radius, density, damping, groundY, and excluded bone-name pattern.",
     inputSchema: z.object({
       skeletonId: z.string(),
       capsuleRadius: z.number().optional(),
@@ -860,7 +1141,7 @@ export const engineTools = {
 
   generate_ragdoll_bodies: tool({
     description:
-      'Auto-generate a default capsule physics body for every simulated bone of a skeleton (Unreal "auto-generate bodies"). A starting point you then fine-tune per bone with set_ragdoll_body. skeletonId from snapshot skeletalMeshes[].skeletonId / skeletons[].id.',
+      'Auto-generate default ragdoll bodies for a skeleton, then fine-tune with set_ragdoll_body.',
     inputSchema: z.object({ skeletonId: z.string() }),
     execute: async ({ skeletonId }) => {
       if (!store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
@@ -872,7 +1153,7 @@ export const engineTools = {
 
   set_ragdoll_body: tool({
     description:
-      "Configure ONE bone's physics body in a skeleton's ragdoll, Unreal-PhAT-style (overrides the global ragdoll defaults for that bone). Use list_bones on a character to get exact bone names. enabled:false removes that bone from the simulation. shape: capsule|box|sphere. radius (capsule/sphere), length (capsule half-length; 0=auto from bone), density (mass), linearDamping, angularDamping (=joint stiffness, higher=stiffer). Omitted fields fall back to the skeleton defaults.",
+      "Configure one bone's ragdoll body override. Use enabled:false to exclude it; omitted fields use skeleton defaults.",
     inputSchema: z.object({
       skeletonId: z.string(),
       boneName: z.string(),
@@ -896,7 +1177,7 @@ export const engineTools = {
 
   remove_ragdoll_body: tool({
     description:
-      "Remove a bone's per-bone ragdoll body override so it reverts to the skeleton's global defaults. To instead stop a bone from simulating at all, use set_ragdoll_body with enabled:false.",
+      "Remove a bone's ragdoll body override so it reverts to skeleton defaults.",
     inputSchema: z.object({ skeletonId: z.string(), boneName: z.string() }),
     execute: async ({ skeletonId, boneName }) => {
       if (!store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
@@ -907,7 +1188,7 @@ export const engineTools = {
 
   attach_to_socket: tool({
     description:
-      'Attach an object to a named skeleton socket on a character (created with add_skeleton_socket). Like attach_to_bone but references the reusable socket by name so its offset is shared. Pass no socketName to detach.',
+      'Attach an object to a named skeleton socket on a rigged target. Omit socketName to detach.',
     inputSchema: z.object({ objectId: z.string(), targetObjectId: z.string().optional(), socketName: z.string().optional() }),
     execute: async ({ objectId, targetObjectId, socketName }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
@@ -927,7 +1208,7 @@ export const engineTools = {
 
   create_third_person_template: tool({
     description:
-      'Build a complete, ready-to-play third-person STARTER GAME from the engine\'s bundled Quaternius UAL rig (127 clips): a "Player" pawn with an Idle → Walk → Jog → Sprint locomotion animator (+jump/crouch/roll/punch/kick/sword), mouse-look follow camera, editable controller blueprint, and all four gameplay kits (ranged/health/interactions/emotes); a SWORD and PISTOL that are reusable PREFABS you EQUIP BY WALKING OVER them (spawn-attached to the hand, switching melee/ranged); click to shoot a projectile while the pistol is equipped; a HUD health bar; a damageable Target Dummy. Generated content is foldered (Weapons / UI / Player). No asset import needed — use when the user asks for a third-person character/game/template from scratch. Returns the pawn objectId.',
+      'Build a complete third-person starter game from bundled assets: player pawn, controller, kits, sword/pistol pickups, HUD, and target dummy. Returns pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createThirdPersonTemplate();
@@ -935,9 +1216,119 @@ export const engineTools = {
     },
   }),
 
+  create_first_person_template: tool({
+    description:
+      'Build a complete FPS starter from bundled assets: invisible player pawn, camera-bound animated arms, weapon triggers, HUD crosshair, enemies, props, and projectile logic. Returns pawn objectId.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createFirstPersonTemplate();
+      return id
+        ? `Created FPS starter — pawn objectId ${id}. Press Play: WASD move, mouse look, click to fire, R reload/fix, Q/E grab, C/T push, and 1-4 swap arm/weapon animations.`
+        : `Couldn't build the FPS template.`;
+    },
+  }),
+
+  create_film_mode_template: tool({
+    description:
+      'Build the Film Mode cinematic tutorial template: staged objects, director camera, autoplay cinematic with fades, camera cut, transform, temporary spawn, visibility, and event beats. Returns cinematicId.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = createFilmModeTemplate();
+      return id ? `Created Film Mode cinematic tutorial with cinematicId ${id}. Press Play to watch it.` : `Couldn't build the Film Mode template.`;
+    },
+  }),
+
+  create_cinematic: tool({
+    description:
+      'Create a Film Mode cinematic timeline in the active scene. Use this for AI-authored cutscenes: camera cuts, object transform tracks, temporary spawns, animation montages, sounds, custom events, visibility, and fades.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      duration: z.number().min(0.5).optional(),
+      autoplay: z.boolean().optional(),
+      actions: z.array(cinematicActionSchema).optional(),
+    }),
+    execute: async ({ name, duration = 8, autoplay, actions = [] }) => {
+      const id = store().createCinematic(name ?? 'AI Cinematic', duration);
+      store().updateCinematic(id, { autoplay });
+      const created = actions
+        .map((action) => store().addCinematicAction(id, normalizeCinematicAction(action)))
+        .filter(Boolean);
+      return `Created cinematic "${name ?? 'AI Cinematic'}" with cinematicId ${id} and ${created.length} actions.`;
+    },
+  }),
+
+  add_cinematic_action: tool({
+    description:
+      'Add one timed action to an existing Film Mode cinematic. Use after create_cinematic when iterating on a cutscene.',
+    inputSchema: z.object({ cinematicId: z.string(), action: cinematicActionSchema }),
+    execute: async ({ cinematicId, action }) => {
+      const id = store().addCinematicAction(cinematicId, normalizeCinematicAction(action));
+      return id ? `Added cinematic action ${id}.` : `No cinematic with id ${cinematicId}.`;
+    },
+  }),
+
+  animate_on_timeline: tool({
+    description:
+      'Create an object animation on a Film Mode timeline. This adds a transform track/keyframed clip for moving, rotating, and/or scaling a scene object over time. Use for prompts like "make mesh X move/turn/grow from time A to B".',
+    inputSchema: z.object({
+      objectId: z.string(),
+      cinematicId: z.string().optional().describe('Existing cinematic id. Omit to create/use an AI Cinematic.'),
+      name: z.string().optional().describe('Name for a new cinematic if cinematicId is omitted.'),
+      startTime: z.number().min(0).optional().describe('Start time in seconds. Default 0.'),
+      duration: z.number().min(0.05).optional().describe('Clip length in seconds. Default 2.'),
+      fromPosition: vec3.optional(),
+      toPosition: vec3.optional(),
+      fromRotation: vec3.optional(),
+      toRotation: vec3.optional(),
+      fromScale: vec3.optional(),
+      toScale: vec3.optional(),
+      label: z.string().optional(),
+      autoplay: z.boolean().optional(),
+    }),
+    execute: async ({ objectId, cinematicId, name, startTime = 0, duration = 2, fromPosition, toPosition, fromRotation, toRotation, fromScale, toScale, label, autoplay }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      let id = cinematicId;
+      if (id && !store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === id)) return `No cinematic with id ${id}.`;
+      if (!id) {
+        id = store().activeScene()?.cinematics?.[0]?.id ?? store().createCinematic(name ?? 'AI Timeline Animation', Math.max(4, startTime + duration));
+      }
+      store().updateCinematic(id, { autoplay, duration: Math.max(store().activeScene()?.cinematics?.find((cinematic) => cinematic.id === id)?.duration ?? 0.5, startTime + duration) });
+      const actionId = store().addCinematicAction(id, {
+        type: 'transform',
+        time: startTime,
+        duration,
+        label: label ?? `Animate ${object.name}`,
+        objectId,
+        fromPosition: fromPosition ? asVec3(fromPosition) : object.transform.position,
+        toPosition: toPosition ? asVec3(toPosition) : undefined,
+        fromRotation: fromRotation ? asVec3(fromRotation) : object.transform.rotation,
+        toRotation: toRotation ? asVec3(toRotation) : undefined,
+        fromScale: fromScale ? asVec3(fromScale) : object.transform.scale,
+        toScale: toScale ? asVec3(toScale) : undefined,
+      });
+      return actionId ? `Added timeline animation ${actionId} for ${object.name} in cinematic ${id}.` : `Couldn't add timeline animation.`;
+    },
+  }),
+
+  play_cinematic: tool({
+    description: 'Preview or stop a Film Mode cinematic in the active scene. The game must be in Play mode for camera/fade runtime preview.',
+    inputSchema: z.object({ cinematicId: z.string().optional(), stop: z.boolean().optional() }),
+    execute: async ({ cinematicId, stop }) => {
+      if (stop) {
+        store().stopCinematic();
+        return 'Stopped cinematic playback.';
+      }
+      const id = cinematicId ?? store().activeScene()?.cinematics?.[0]?.id;
+      if (!id) return 'No cinematic found in the active scene.';
+      store().playCinematic(id);
+      return `Started cinematic ${id}.`;
+    },
+  }),
+
   create_prefab: tool({
     description:
-      'Capture an object and ALL its descendants as a reusable prefab (object template) in the Project browser. Returns the prefabId. Use this to make something the user built reusable; stamp copies later with instantiate_prefab.',
+      'Capture an object tree as a reusable prefab. Returns prefabId; instantiate_prefab stamps copies later.',
     inputSchema: z.object({ objectId: z.string(), name: z.string().optional(), folderId: z.string().optional() }),
     execute: async ({ objectId, name, folderId }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
@@ -1056,7 +1447,7 @@ export const engineTools = {
 
   create_material: tool({
     description:
-      'Create a reusable material asset. It owns a node graph with a Material Output node; the flat fields (set via update_material) are the BASE surface, and graph nodes wired into the Output pins override them. Returns its materialId. Assign to objects with set_object_material.',
+      'Create a reusable material asset with a Material Output graph. Returns materialId; assign with set_object_material.',
     inputSchema: z.object({ name: z.string().optional(), folderId: z.string().optional() }),
     execute: async ({ name, folderId }) => {
       const id = store().createMaterial(name, undefined, folderId);
@@ -1066,7 +1457,7 @@ export const engineTools = {
 
   update_material: tool({
     description:
-      "Update a reusable material's properties. color/emissiveColor are hex; metalness/roughness are 0-1; emissiveIntensity is a glow strength (0+). textureAssetId/normalMapAssetId must be \"image\"-type asset ids (pass \"\" to clear). Every object using this material updates live.",
+      'Update a reusable material. Color fields are hex; metalness/roughness are 0-1; texture/normal ids must be image assets.',
     inputSchema: z.object({
       id: z.string(),
       name: z.string().optional(),
@@ -1125,7 +1516,7 @@ export const engineTools = {
 
   create_ui_document: tool({
     description:
-      'Create a Game UI document. surface "screen" = a HUD overlay drawn on the player\'s screen (health bars, score); "world" = a widget anchored over a 3D object (attach with attach_world_ui). It starts with an empty root Panel. Returns its uiDocumentId; add elements with add_ui_element.',
+      'Create a screen HUD or world UI document with a root panel. Returns uiDocumentId; add elements or presets next.',
     inputSchema: z.object({
       name: z.string().optional(),
       surface: z.enum(['screen', 'world']).optional().describe('Defaults to "screen".'),
@@ -1138,9 +1529,235 @@ export const engineTools = {
     },
   }),
 
+  create_ui_template: tool({
+    description:
+      'Create a polished screen UI template in one call. Use for beautiful HUDs, main menus, dialogue boxes, inventory panels, and quick UI mockups.',
+    inputSchema: z.object({
+      template: z.enum(['hud', 'mainMenu', 'dialogue', 'inventory']).optional().describe('Defaults to hud.'),
+      name: z.string().optional(),
+      title: z.string().optional(),
+      themeColor: z.string().optional().describe('Primary accent hex color. Defaults to #3DDC97.'),
+      folderId: z.string().optional(),
+    }),
+    execute: async ({ template = 'hud', name, title, themeColor, folderId }) => {
+      const accent = themeColor ?? '#3DDC97';
+      const documentId = store().createUIDocument(name ?? `${title ?? template} UI`, 'screen', folderId);
+      const doc = findUIDocument(documentId);
+      if (!doc) return `Couldn't create UI template.`;
+      const rootId = doc.root.id;
+      const elements: Record<string, string> = { rootId };
+      const add = (kind: 'panel' | 'text' | 'bar' | 'button' | 'image', parentId = rootId) => {
+        const id = store().addUIElement(documentId, parentId, kind);
+        return id;
+      };
+      const update = (elementId: string, patch: Partial<UIElement>) => store().updateUIElement(documentId, elementId, patch);
+
+      setUIStyle(documentId, rootId, {
+        width: '100%',
+        height: '100%',
+        padding: '18px',
+        custom: { pointerEvents: 'none' },
+      });
+
+      if (template === 'mainMenu') {
+        setUIStyle(documentId, rootId, {
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(4,8,14,0.42)',
+        });
+        const panel = add('panel');
+        elements.panel = panel;
+        setUIStyle(documentId, panel, {
+          width: '360px',
+          padding: '22px',
+          gap: '12px',
+          background: 'rgba(12,17,24,0.86)',
+          border: '1px solid rgba(255,255,255,0.14)',
+          borderRadius: '8px',
+          custom: { boxShadow: '0 18px 52px rgba(0,0,0,0.38)', backdropFilter: 'blur(12px)' },
+        });
+        const heading = add('text', panel);
+        elements.heading = heading;
+        update(heading, {
+          text: title ?? 'New Game',
+          style: { color: '#ffffff', fontSize: '34px', fontWeight: '800', textAlign: 'center' },
+        });
+        const subtitle = add('text', panel);
+        elements.subtitle = subtitle;
+        update(subtitle, {
+          text: 'Choose your next move',
+          style: { color: '#B8C2D8', fontSize: '13px', textAlign: 'center' },
+        });
+        for (const [index, label] of ['Start', 'Options', 'Quit'].entries()) {
+          const button = add('button', panel);
+          elements[`button${index + 1}`] = button;
+          update(button, {
+            text: label,
+            onClickEvent: label === 'Start' ? 'startGame' : `${label.toLowerCase()}Pressed`,
+            style: {
+              padding: '11px 14px',
+              background: index === 0 ? accent : 'rgba(255,255,255,0.08)',
+              color: '#ffffff',
+              borderRadius: '8px',
+              fontWeight: '700',
+              textAlign: 'center',
+            },
+          });
+        }
+      } else if (template === 'dialogue') {
+        setUIStyle(documentId, rootId, { custom: { pointerEvents: 'auto' } });
+        const box = add('panel');
+        elements.dialogueBox = box;
+        setUIStyle(documentId, box, {
+          width: 'min(760px, calc(100% - 40px))',
+          padding: '18px',
+          gap: '8px',
+          background: 'rgba(8,12,18,0.88)',
+          border: '1px solid rgba(255,255,255,0.16)',
+          borderRadius: '8px',
+          position: 'absolute',
+          left: '20px',
+          custom: { bottom: '20px', boxShadow: '0 14px 44px rgba(0,0,0,0.42)' },
+        });
+        const speaker = add('text', box);
+        elements.speaker = speaker;
+        update(speaker, {
+          text: title ?? 'Guide',
+          style: { color: accent, fontSize: '13px', fontWeight: '800' },
+        });
+        const body = add('text', box);
+        elements.body = body;
+        update(body, {
+          text: 'The door is locked. Find the key, then come back.',
+          style: { color: '#ffffff', fontSize: '18px' },
+        });
+        const button = add('button', box);
+        elements.continueButton = button;
+        update(button, {
+          text: 'Continue',
+          onClickEvent: 'dialogueContinue',
+          style: { width: '120px', padding: '9px 12px', background: accent, color: '#06100d', borderRadius: '8px', fontWeight: '800' },
+        });
+      } else if (template === 'inventory') {
+        const panel = add('panel');
+        elements.panel = panel;
+        setUIStyle(documentId, panel, {
+          width: '280px',
+          padding: '14px',
+          gap: '10px',
+          background: 'rgba(10,15,22,0.84)',
+          border: '1px solid rgba(255,255,255,0.14)',
+          borderRadius: '8px',
+          position: 'absolute',
+          custom: { right: '18px', top: '18px', boxShadow: '0 12px 36px rgba(0,0,0,0.32)' },
+        });
+        const heading = add('text', panel);
+        elements.heading = heading;
+        update(heading, {
+          text: title ?? 'Inventory',
+          style: { color: '#ffffff', fontSize: '18px', fontWeight: '800' },
+        });
+        for (let i = 1; i <= 5; i += 1) {
+          const slot = add('panel', panel);
+          elements[`slot${i}`] = slot;
+          setUIStyle(documentId, slot, {
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '9px',
+            background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '8px',
+          });
+          const index = add('text', slot);
+          update(index, { text: String(i), style: { color: accent, fontSize: '13px', fontWeight: '800', width: '18px' } });
+          const item = add('text', slot);
+          update(item, { text: i === 1 ? 'Starter Blade' : 'Empty Slot', style: { color: '#ffffff', fontSize: '13px' } });
+        }
+      } else {
+        const health = ensureNumberVariable('Health', 100);
+        const score = ensureNumberVariable('Score', 0);
+        const ammo = ensureNumberVariable('Ammo', 12);
+        const top = add('panel');
+        elements.topBar = top;
+        setUIStyle(documentId, top, {
+          display: 'flex',
+          flexDirection: 'row',
+          gap: '12px',
+          position: 'absolute',
+          left: '18px',
+          custom: { top: '18px', right: '18px', justifyContent: 'space-between', alignItems: 'flex-start' },
+        });
+        const left = add('panel', top);
+        elements.leftCluster = left;
+        setUIStyle(documentId, left, {
+          gap: '7px',
+          padding: '10px',
+          background: 'rgba(7,11,18,0.66)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: '8px',
+        });
+        const label = add('text', left);
+        update(label, { text: title ?? 'Player', style: { color: '#FFFFFF', fontSize: '13px', fontWeight: '800' } });
+        const healthBar = add('bar', left);
+        elements.healthBar = healthBar;
+        setUIStyle(documentId, healthBar, { width: '210px', height: '12px', background: 'rgba(255,255,255,0.12)', borderRadius: '8px' });
+        store().setUIBinding(documentId, healthBar, 'fill', `${health} / 100`);
+        store().setUIBinding(documentId, healthBar, 'color', `'${accent}'`);
+        const scoreText = add('text', top);
+        elements.scoreText = scoreText;
+        update(scoreText, {
+          text: 'Score: 0',
+          style: {
+            color: '#ffffff',
+            fontSize: '17px',
+            fontWeight: '800',
+            textAlign: 'right',
+            custom: { textShadow: '0 2px 8px rgba(0,0,0,0.7)' },
+          },
+        });
+        store().setUIBinding(documentId, scoreText, 'text', `'Score: ' + ${score}`);
+        const crosshair = add('text');
+        elements.crosshair = crosshair;
+        update(crosshair, {
+          text: '+',
+          style: {
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            color: 'rgba(255,255,255,0.8)',
+            fontSize: '24px',
+            fontWeight: '700',
+            textAlign: 'center',
+            custom: { transform: 'translate(-50%, -50%)', textShadow: '0 1px 6px rgba(0,0,0,0.7)' },
+          },
+        });
+        const ammoText = add('text');
+        elements.ammoText = ammoText;
+        update(ammoText, {
+          text: 'Ammo: 12',
+          style: {
+            position: 'absolute',
+            color: '#ffffff',
+            fontSize: '22px',
+            fontWeight: '800',
+            textAlign: 'right',
+            custom: { right: '20px', bottom: '18px', textShadow: '0 2px 8px rgba(0,0,0,0.7)' },
+          },
+        });
+        store().setUIBinding(documentId, ammoText, 'text', `'Ammo: ' + ${ammo}`);
+      }
+
+      store().setActiveUIDocument(documentId);
+      return `Created polished ${template} UI "${findUIDocument(documentId)?.name}" with uiDocumentId ${documentId}. Elements: ${JSON.stringify(elements)}.`;
+    },
+  }),
+
   add_ui_element: tool({
     description:
-      'Add an element to a UI document under a parent element (omit parentId to add under the root panel). kind: panel (container), text, bar (a fill bar — bind its "fill" to a 0-1 value), button (set onClickEvent via update_ui_element), image. Returns the new elementId.',
+      'Add a UI element under a parent or root. Kinds: panel, text, bar, button, image. Returns elementId.',
     inputSchema: z.object({
       documentId: z.string(),
       parentId: z.string().optional().describe('Parent element id; defaults to the root panel.'),
@@ -1155,7 +1772,7 @@ export const engineTools = {
 
   update_ui_element: tool({
     description:
-      "Update a UI element: text (text/button label), className (for raw CSS), onClickEvent (button → fires that custom event), assetId (image), and style (CSS-like: background, color hex; width/height/padding/fontSize/borderRadius as CSS strings e.g. '160px'; flexDirection 'row'|'column').",
+      'Update UI element text/name/class/event/image/style. Style uses CSS-like strings plus flexDirection/textAlign enums.',
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
@@ -1195,7 +1812,7 @@ export const engineTools = {
 
   bind_ui_element: tool({
     description:
-      'Bind a UI element property to a live expression evaluated every frame. target: "text" (element text), "fill" (a bar\'s 0-1 fill; e.g. health/maxHealth), "visible" (show/hide), "color"/"background" (CSS color), "width". The expression reads project variables BY NAME (e.g. "health / 100") and, for world UI, the host object via "self.<key>" (e.g. "self.health"). Pass an empty expression to remove the binding.',
+      'Bind a UI property to a live expression using project variable names or self.<key> for world UI. Empty expression removes the binding.',
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
@@ -1213,7 +1830,7 @@ export const engineTools = {
 
   attach_world_ui: tool({
     description:
-      'Anchor a "world" UI document over a 3D object (e.g. an enemy health bar). The object then shows the widget at its position; world UI bindings can read that object\'s instance variables via self.<key> (set with set_object_variable). Pass empty documentId to detach.',
+      'Anchor a world UI document over an object; bindings can read object variables via self.<key>. Empty documentId detaches.',
     inputSchema: z.object({
       objectId: z.string(),
       documentId: z.string().optional().describe('A world UI document id, or empty to detach.'),
@@ -1234,7 +1851,7 @@ export const engineTools = {
 
   set_object_variable: tool({
     description:
-      "Set a per-instance variable on an object (e.g. this enemy's health). Read by that object's world UI as self.<key> and by Get/Set Object Var script nodes. Use this to seed starting values like health=100.",
+      "Set an object's per-instance variable for scripts and world UI self.<key> bindings.",
     inputSchema: z.object({ objectId: z.string(), key: z.string(), value: graphValue }),
     execute: async ({ objectId, key, value }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
@@ -1243,9 +1860,35 @@ export const engineTools = {
     },
   }),
 
+  create_collectible_counter: tool({
+    description: 'Create a reliable pickup collectible that increments a project counter, updates a HUD text counter, and destroys itself on trigger enter.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      variableName: z.string().optional().describe('Counter variable name, e.g. Coins or Score. Defaults to Coins.'),
+      label: z.string().optional().describe('HUD label. Defaults to variableName.'),
+      amount: z.number().optional().describe('Amount added when collected. Defaults to 1.'),
+      position: vec3.optional(),
+      playerObjectId: z.string().optional().describe('Optional player id filter; omit to let any object collect it.'),
+      color: z.string().optional().describe('Pickup color hex. Defaults to gold.'),
+    }),
+    execute: async ({ name, variableName, label, amount, position, playerObjectId, color }) => {
+      if (playerObjectId && !findObject(playerObjectId)) return `No player object with id ${playerObjectId}.`;
+      const result = store().createCollectibleCounter({
+        name,
+        variableName,
+        label,
+        amount,
+        position: position ? asVec3(position) : undefined,
+        playerObjectId,
+        color,
+      });
+      return `Created collectible ${result.objectId}; it increments variable ${result.variableId}, updates HUD ${result.uiDocumentId}/${result.counterElementId}, and uses blueprint ${result.blueprintId}.`;
+    },
+  }),
+
   set_light: tool({
     description:
-      'Turn an object into (or reconfigure) a light. point = an omni bulb that illuminates nearby surfaces (great for accent/mood lights); spot = a cone; directional = a sun (whole-scene, no falloff). Position it by moving the object. Pair bright lights/emissive colors with bloom (set_render_settings) for glow.',
+      'Configure an object light: point, spot, or directional. Move the object to position the light.',
     inputSchema: z.object({
       objectId: z.string(),
       type: z.enum(['point', 'spot', 'directional']).optional(),
@@ -1271,7 +1914,7 @@ export const engineTools = {
 
   set_render_settings: tool({
     description:
-      'Set project-wide post-processing (bloom + vignette) — the biggest "AAA" visual lever. Bloom makes emissive materials and additive tracers/muzzle flashes glow. Lower bloomThreshold = more things glow. Applies in Play and the exported game.',
+      'Set project-wide bloom/vignette post-processing used in Play and export.',
     inputSchema: z.object({
       bloomEnabled: z.boolean().optional(),
       bloomIntensity: z.number().optional().describe('Bloom strength, ~0.3–2.'),
@@ -1287,7 +1930,7 @@ export const engineTools = {
 
   add_ui_preset: tool({
     description:
-      'Insert a ready-made widget into a UI document — the FAST way to build common UI. "healthBar" = a labeled bar pre-bound to a number variable (auto-created if missing, default "health"=100); "counter" = a text pre-bound to a variable (default "score"); "label"/"button"/"panel"/"image" = styled primitives. Drops under parentId (or the root). Returns the inserted element id. Prefer this over composing primitives by hand.',
+      'Insert a ready-made UI widget. Presets include healthBar, counter, label, button, panel, image. Returns elementId.',
     inputSchema: z.object({
       documentId: z.string(),
       preset: z.enum(['panel', 'label', 'healthBar', 'button', 'counter', 'image']),
@@ -1323,7 +1966,7 @@ export const engineTools = {
 
   open_ui_logic: tool({
     description:
-      "Get (or create) the Blueprint that holds a UI document's behaviour, and ensure it runs (an empty \"UI Logic\" object carrying it is auto-created). Returns its blueprintId — then use add_node / connect_nodes on it to wire behaviour (Show UI, Hide UI, Set UI Text, Custom Event ← button clicks, etc.).",
+      "Get/create the Blueprint that runs a UI document's behavior. Returns blueprintId for add_node/connect_nodes.",
     inputSchema: z.object({ documentId: z.string() }),
     execute: async ({ documentId }) => {
       if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
@@ -1344,7 +1987,7 @@ export const engineTools = {
 
   add_material_node: tool({
     description:
-      "Add a node to a material's graph. Returns its nodeId. 'Color' sets materialColor; 'Scalar'/'Mix' set numberValue (Mix's = blend factor T); 'Texture' sets assetId (an image asset). 'Multiply'/'Add'/'Clamp' take their inputs from wires (numbers or colors). Then connect_material_nodes from this node's 'value-out' into a Material Output pin (baseColor, metalness, roughness, emissiveColor, emissiveIntensity, normal) — or into another operator's input (a/b/t, value/min/max).",
+      "Add a material graph node. Color uses materialColor; Scalar/Mix use numberValue; Texture uses image assetId. Returns nodeId.",
     inputSchema: z.object({
       materialId: z.string(),
       type: z.enum(['Color', 'Scalar', 'Texture', 'Mix', 'Multiply', 'Add', 'Clamp']),
@@ -1370,7 +2013,7 @@ export const engineTools = {
 
   connect_material_nodes: tool({
     description:
-      "Wire a material node's output into another node's input pin. sourceHandle defaults to 'value-out'. targetHandle is a Material Output pin (baseColor|metalness|roughness|emissiveColor|emissiveIntensity|normal) or a Mix pin (a|b|t). Texture → baseColor/normal; Color/Mix → baseColor/emissiveColor; Scalar → metalness/roughness/emissiveIntensity.",
+      "Wire a material node output to another node/input pin. sourceHandle defaults to value-out; targetHandle names the target pin.",
     inputSchema: z.object({
       materialId: z.string(),
       sourceId: z.string(),
@@ -1743,38 +2386,36 @@ export const engineTools = {
       vectorValue: vec3.optional(),
       variableId: z.string().optional(),
       dataAssetId: z.string().optional(),
-      tableId: z.string().optional().describe('Legacy alias for dataAssetId. Prefer dataAssetId.'),
+      tableId: z.string().optional().describe('Alias for dataAssetId.'),
       rowKey: z.string().optional(),
       columnId: z.string().optional(),
       compareOp: z.enum(['==', '!=', '>', '>=', '<', '<=']).optional(),
       saveSlot: z.string().optional(),
       eventName: z.string().optional(),
-      otherObjectId: z.string().optional().describe('Collision/Trigger Enter: optional id of the other object to filter against.'),
-      targetObjectId: z.string().optional().describe('Destroy Object / Set Ragdoll / animator nodes: target object; omit for self.'),
+      otherObjectId: z.string().optional().describe('Collision/trigger filter object id.'),
+      targetObjectId: z.string().optional().describe('Target object id; omit for self.'),
       assetId: z.string().optional().describe('Play Sound: id of an audio asset.'),
       spawnKind: z.enum(['cube', 'sphere', 'capsule', 'plane']).optional().describe('Spawn Object: what to spawn.'),
       message: z.string().optional().describe('Print: the text to log during Play.'),
       materialColor: z.string().optional().describe('Set Material Color: hex color to apply at runtime.'),
-      materialColorTarget: z
-        .enum(['base', 'emissive'])
-        .optional()
-        .describe('Set Material Color: which channel to write (base or emissive). Defaults to base.'),
+      materialColorTarget: z.enum(['base', 'emissive']).optional().describe('base or emissive. Default base.'),
       materialProperty: z
         .enum(['metalness', 'roughness', 'emissiveIntensity'])
         .optional()
-        .describe('Set/Get Material Property: which numeric property to read or write (Set uses numberValue).'),
-      projectileSpeed: z.number().optional().describe('Spawn Projectile: muzzle speed (units/sec). Default 20.'),
-      projectileDamage: z.number().optional().describe('Spawn Projectile: hit damage subtracted from the target\'s health. Default 25.'),
-      projectileSize: z.number().optional().describe('Spawn Projectile: radius of the built-in sphere bullet (ignored when projectileTemplateId is set). Default 0.18.'),
-      projectileColor: z.string().optional().describe('Spawn Projectile: hex color of the built-in sphere bullet (ignored when a template is set). Default #ffd166.'),
-      projectileLife: z.number().optional().describe('Spawn Projectile: seconds before the bullet auto-despawns. Default 3.'),
-      projectileGravity: z.number().optional().describe('Spawn Projectile: gravity scale. 0 = flies straight; raise for an arcing shot. Default 0.'),
-      projectileTemplateId: z.string().optional().describe('Spawn Projectile: id of a scene object to CLONE as the bullet (its mesh/model/scale/material). Omit for the built-in sphere.'),
-      projectileMuzzle: vec3.optional().describe('Spawn Projectile: first-person muzzle offset [right, up, forward] from the eye where the shot originates (default [0.28,-0.26,0.6] = down-right of center). The shot still converges on the crosshair.'),
-      projectileDebug: z.boolean().optional().describe('Spawn Projectile: when true, log every spawn + hit to the runtime console.'),
-      animationId: z.string().optional().describe('Play Animation: id of the Animation asset to play as a one-shot montage on the target.'),
-      animationSpeed: z.number().optional().describe('Play Animation: playback speed multiplier (default 1).'),
-      movementMode: z.enum(['walking', 'swimming', 'climbing', 'flying']).optional().describe('Set Movement Mode: how the target moves until changed (walking/swimming/climbing/flying).'),
+        .describe('Numeric material property.'),
+      projectileSpeed: z.number().optional().describe('Projectile speed. Default 20.'),
+      projectileDamage: z.number().optional().describe('Projectile damage. Default 25.'),
+      projectileSize: z.number().optional().describe('Built-in projectile radius.'),
+      projectileColor: z.string().optional().describe('Built-in projectile color.'),
+      projectileLife: z.number().optional().describe('Projectile lifetime. Default 3.'),
+      projectileGravity: z.number().optional().describe('Projectile gravity. 0 = straight.'),
+      projectileTemplateId: z.string().optional().describe('Scene object id to clone as projectile.'),
+      projectileMuzzle: vec3.optional().describe('First-person muzzle offset [right, up, forward].'),
+      projectileDebug: z.boolean().optional().describe('Log projectile spawns/hits.'),
+      animationId: z.string().optional().describe('One-shot animation asset id.'),
+      animationSpeed: z.number().optional().describe('Animation speed. Default 1.'),
+      cinematicId: z.string().optional().describe('Play Cinematic: Film Mode cinematic id.'),
+      movementMode: z.enum(['walking', 'swimming', 'climbing', 'flying']).optional().describe('Character movement mode.'),
     }),
     execute: async ({
       blueprintId,
@@ -1811,6 +2452,7 @@ export const engineTools = {
       projectileDebug,
       animationId,
       animationSpeed,
+      cinematicId,
       movementMode,
       otherObjectId,
       targetObjectId,
@@ -1820,6 +2462,7 @@ export const engineTools = {
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
       if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
       if (projectileTemplateId && !findObject(projectileTemplateId)) return `No object with id ${projectileTemplateId}.`;
+      if (cinematicId && !store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const nodeId = store().addGraphNodeToBlueprint(blueprintId, type, NODE_CATEGORY[type], {
@@ -1856,6 +2499,7 @@ export const engineTools = {
         projectileDebug,
         animationId,
         animationSpeed,
+        cinematicId,
         movementMode,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
@@ -1895,13 +2539,13 @@ export const engineTools = {
       vectorValue: vec3.optional(),
       variableId: z.string().optional(),
       dataAssetId: z.string().optional(),
-      tableId: z.string().optional().describe('Legacy alias for dataAssetId. Prefer dataAssetId.'),
+      tableId: z.string().optional().describe('Alias for dataAssetId.'),
       rowKey: z.string().optional(),
       columnId: z.string().optional(),
       compareOp: z.enum(['==', '!=', '>', '>=', '<', '<=']).optional(),
       saveSlot: z.string().optional(),
       eventName: z.string().optional(),
-      otherObjectId: z.string().optional().describe('Collision/Trigger Enter: optional id of the other object to filter against.'),
+      otherObjectId: z.string().optional().describe('Collision/trigger filter object id.'),
       assetId: z.string().optional(),
       spawnKind: z.enum(['cube', 'sphere', 'capsule', 'plane']).optional(),
       message: z.string().optional(),
@@ -1910,23 +2554,25 @@ export const engineTools = {
       materialProperty: z.enum(['metalness', 'roughness', 'emissiveIntensity']).optional(),
       projectileSpeed: z.number().optional().describe('Spawn Projectile: muzzle speed (units/sec).'),
       projectileDamage: z.number().optional().describe('Spawn Projectile: hit damage.'),
-      projectileSize: z.number().optional().describe('Spawn Projectile: built-in sphere radius (ignored with a template).'),
-      projectileColor: z.string().optional().describe('Spawn Projectile: built-in sphere hex color (ignored with a template).'),
-      projectileLife: z.number().optional().describe('Spawn Projectile: seconds before auto-despawn.'),
-      projectileGravity: z.number().optional().describe('Spawn Projectile: gravity scale (0 = straight).'),
-      projectileTemplateId: z.string().optional().describe('Spawn Projectile: scene object id to clone as the bullet; empty string clears it.'),
-      projectileMuzzle: vec3.optional().describe('Spawn Projectile: first-person muzzle offset [right, up, forward] from the eye (default [0.28,-0.26,0.6]).'),
-      projectileDebug: z.boolean().optional().describe('Spawn Projectile: log spawns + hits to the runtime console.'),
+      projectileSize: z.number().optional().describe('Built-in projectile radius.'),
+      projectileColor: z.string().optional().describe('Built-in projectile color.'),
+      projectileLife: z.number().optional().describe('Projectile lifetime.'),
+      projectileGravity: z.number().optional().describe('Projectile gravity.'),
+      projectileTemplateId: z.string().optional().describe('Scene object id to clone as projectile.'),
+      projectileMuzzle: vec3.optional().describe('First-person muzzle offset.'),
+      projectileDebug: z.boolean().optional().describe('Log projectile spawns/hits.'),
+      cinematicId: z.string().optional().describe('Play Cinematic: Film Mode cinematic id.'),
       // Set/Get Anim nodes: which animator parameter (by name, from the snapshot's controllers) and which object.
       paramName: z.string().optional(),
-      targetObjectId: z.string().optional().describe('For Destroy Object, Set Ragdoll, and Set/Get Anim nodes: object to target; omit for self.'),
+      targetObjectId: z.string().optional().describe('Target object id; omit for self.'),
     }),
-    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, ...patch }) => {
+    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
       if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
       if (projectileTemplateId && !findObject(projectileTemplateId)) return `No object with id ${projectileTemplateId}.`;
+      if (cinematicId && !store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const updates: Partial<NodeForgeNodeData> = { ...patch };
@@ -1936,6 +2582,7 @@ export const engineTools = {
       if (targetObjectId !== undefined) updates.targetObjectId = targetObjectId || undefined;
       if (projectileTemplateId !== undefined) updates.projectileTemplateId = projectileTemplateId || undefined;
       if (projectileMuzzle !== undefined) updates.projectileMuzzle = asVec3(projectileMuzzle);
+      if (cinematicId !== undefined) updates.cinematicId = cinematicId || undefined;
       if (vectorValue !== undefined) updates.vectorValue = asVec3(vectorValue);
       store().setActiveBlueprint(blueprintId);
       store().updateGraphNodeData(nodeId, updates);
@@ -2009,6 +2656,20 @@ export const engineTools = {
       await useProjectStore.getState().exportGame();
       const { error } = useProjectStore.getState();
       return error ? `Export failed: ${error}` : 'Exported the game bundle (game.json).';
+    },
+  }),
+
+  export_production: tool({
+    description:
+      'Export the game to PRODUCTION: build a playable native app for the current OS plus a portable web build. On the DESKTOP app it first asks the user to choose a destination folder, then runs the full build right away (live progress; a few minutes) and writes the native installers (<slug>-native/) and portable web build (<slug>-web/) into that folder. On web it instead downloads game.json and the build is finished from the engine folder with `npm run export:production`. Use when the user wants a final shippable/playable build for desktop platforms, not just the raw game bundle.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      if (!useProjectStore.getState().hasProject) return 'No project is open to export.';
+      await useProjectStore.getState().exportProduction();
+      const { error } = useProjectStore.getState();
+      return error
+        ? `Production build failed: ${error}`
+        : 'Production build done (desktop): native app + web build are in src-tauri/target/release/bundle/ and exports/. On web, game.json was downloaded to finish with `npm run export:production`.';
     },
   }),
 };

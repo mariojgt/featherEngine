@@ -8,6 +8,7 @@ import { useProjectStore } from '../store/projectStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget, computeRestingCameraPose } from '../three/FollowCamera';
+import { CinematicCamera } from '../three/CinematicCamera';
 import { EditorCamera, editorNav } from '../three/EditorCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
@@ -17,6 +18,7 @@ import { ScreenUILayer } from '../ui/ScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
 import { ImpactParticles } from '../three/ImpactParticles';
+import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
@@ -66,10 +68,14 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.
   const interactFocusId = useEditorStore((state) => state.runtimeInteractFocusId);
+  // Combat hit-flash: a brief red emissive pulse when this object takes damage (re-renders only while > 0).
+  const hitFlash = useEditorStore((state) => state.runtimeHitFlash[object.id] ?? 0);
   const resolved =
-    interactFocusId === object.id
-      ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
-      : baseResolved;
+    hitFlash > 0
+      ? { ...baseResolved, emissiveColor: '#ff3b30', emissiveIntensity: 0.2 + 1.6 * Math.min(1, hitFlash / 0.16), overrideModel: true }
+      : interactFocusId === object.id
+        ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+        : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
   const resolvedAnimator = useResolvedAnimator(object);
@@ -222,12 +228,14 @@ export function SceneObjectView({
   registerObject: (id: string, object: THREE.Group | null) => void;
 }) {
   const selectObject = useEditorStore((state) => state.selectObject);
+  const isPlaying = useEditorStore((state) => state.isPlaying);
 
   // Attached objects ride a character's bone instead of sitting at their own transform.
   if (object.attachment) {
     return (
-      <BoneAttachment object={object} onSelect={() => selectObject(object.id)}>
+      <BoneAttachment object={object} onSelect={() => !isPlaying && selectObject(object.id)}>
         <Primitive object={object} selected={selected} />
+        {object.particles && <ParticleSystem object={object} />}
       </BoneAttachment>
     );
   }
@@ -235,10 +243,13 @@ export function SceneObjectView({
   return (
     <group
       ref={(node) => registerObject(object.id, node)}
+      userData={{ nfObjectId: object.id }}
       position={object.transform.position}
       rotation={object.transform.rotation}
       scale={object.transform.scale}
       onPointerDown={(event: ThreeEvent<PointerEvent>) => {
+        // While playing, clicks belong to the game (mouse-look / shooting), not editor selection.
+        if (isPlaying) return;
         // Alt+LMB drives the orbit camera; don't hijack it for selection.
         if (event.nativeEvent.altKey || event.nativeEvent.button !== 0) return;
         event.stopPropagation();
@@ -246,6 +257,7 @@ export function SceneObjectView({
       }}
     >
       <Primitive object={object} selected={selected} />
+      {object.particles && <ParticleSystem object={object} />}
     </group>
   );
 }
@@ -339,13 +351,21 @@ function SceneContent({
   const selectObject = useEditorStore((state) => state.selectObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
+  const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
+  const cinematicPreviewCamera = useEditorStore((state) => state.editorCinematicPreviewCamera);
+  const cinematicPreviewTransforms = useEditorStore((state) => state.editorCinematicPreviewTransforms);
+  const cinematicPreviewHidden = useEditorStore((state) => state.editorCinematicPreviewHidden);
+  const recording = useEditorStore((state) => state.cinematicRecording);
+  const previewingCinematic = !isPlaying && Boolean(cinematicPreview);
   // Camera-space view-models are hidden from the world viewport; select them from the Hierarchy
   // and edit their transform in the Inspector when their first-person placement needs tuning.
   const sceneObjects = allSceneObjects.filter(
     (object) =>
       !object.viewModel &&
-      // Hide empties during Play — EXCEPT runtime particle effects (impact/muzzle bursts live on empties).
-      !(isPlaying && (runtimeHidden.includes(object.id) || (object.kind === 'empty' && !object.effect))),
+      // Hide empties during Play — EXCEPT particle effects (impact/muzzle bursts + authored emitters live on empties).
+      !((isPlaying ? runtimeHidden : cinematicPreviewHidden).includes(object.id)) &&
+      !(isPlaying && object.kind === 'empty' && !object.effect && !object.particles),
   );
   const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
   const followTarget = useFollowTarget();
@@ -379,6 +399,8 @@ function SceneContent({
     setSelectedTarget(objectRefs.current.get(selectedObjectId) ?? null);
   }, [selectedObjectId, sceneObjects.length]);
 
+  const [draggingGizmo, setDraggingGizmo] = useState(false);
+
   const syncSelectedTransform = useCallback(() => {
     const target = objectRefs.current.get(selectedObjectId);
     if (!target) return;
@@ -387,6 +409,37 @@ function SceneContent({
     updateTransform(selectedObjectId, 'rotation', [target.rotation.x, target.rotation.y, target.rotation.z]);
     updateTransform(selectedObjectId, 'scale', [target.scale.x, target.scale.y, target.scale.z]);
   }, [selectedObjectId, updateTransform]);
+
+  // Record mode: seed the object's pose from the current keyframe sample so grabbing the gizmo
+  // doesn't snap, then suppress its preview override for the duration of the drag.
+  const beginGizmoDrag = useCallback(() => {
+    if (recording && previewingCinematic) {
+      const sampled = cinematicPreviewTransforms[selectedObjectId];
+      if (sampled) {
+        updateTransform(selectedObjectId, 'position', sampled.position);
+        updateTransform(selectedObjectId, 'rotation', sampled.rotation);
+        updateTransform(selectedObjectId, 'scale', sampled.scale);
+      }
+    }
+    setDraggingGizmo(true);
+  }, [recording, previewingCinematic, cinematicPreviewTransforms, selectedObjectId, updateTransform]);
+
+  // Record mode: on release, drop/refresh a transform keyframe at the playhead from the dragged pose.
+  const endGizmoDrag = useCallback(() => {
+    setDraggingGizmo(false);
+    const store = useEditorStore.getState();
+    if (!store.cinematicRecording || store.isPlaying) return;
+    const target = objectRefs.current.get(selectedObjectId);
+    if (!target) return;
+    const cinematicId = store.activeCinematicId || store.activeScene()?.cinematics?.[0]?.id;
+    if (!cinematicId) return;
+    const time = store.editorCinematicPreview?.sequenceId === cinematicId ? store.editorCinematicPreview.time : 0;
+    store.addCinematicTransformKeyframe(cinematicId, selectedObjectId, time, {
+      position: [target.position.x, target.position.y, target.position.z],
+      rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
+      scale: [target.scale.x, target.scale.y, target.scale.z],
+    });
+  }, [selectedObjectId]);
 
   return (
     <>
@@ -402,29 +455,40 @@ function SceneContent({
       </Environment>
       <group
         onPointerMissed={(event: MouseEvent) => {
+          // While playing, clicks belong to the game, not editor selection.
+          if (isPlaying) return;
           // Ignore the click that ends an Alt-orbit / right-drag navigation gesture.
           if (event.altKey || event.button !== 0) return;
           selectObject('');
         }}
       >
-        {sceneObjects.map((object) => (
+        {sceneObjects.map((object) => {
+          // While recording, the object being dragged uses its live transform (not the keyframe
+          // sample) so the gizmo edit is what you see and key.
+          const suppressOverride = recording && draggingGizmo && object.id === selectedObjectId;
+          const previewTransform = previewingCinematic && !suppressOverride ? cinematicPreviewTransforms[object.id] : undefined;
+          const visibleObject = previewTransform ? { ...object, transform: previewTransform } : object;
+          return (
           <SceneObjectView
             key={object.id}
-            object={object}
+            object={visibleObject}
             selected={object.id === selectedObjectId}
             registerObject={registerObject}
           />
-        ))}
+          );
+        })}
       </group>
       {/* World-space UI widgets anchored to objects (edit + play). Use the UNFILTERED list so signs on
           invisible/empty anchors (e.g. tutorial labels) still show during Play. */}
       {allSceneObjects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
-      {selectedTarget && !isPlaying && !cameraRigObject && (
+      {selectedTarget && !isPlaying && !cameraRigObject && (!previewingCinematic || recording) && (
         <TransformControls
           object={selectedTarget}
           mode={transformMode}
           size={0.95}
           onObjectChange={syncSelectedTransform}
+          onMouseDown={beginGizmoDrag}
+          onMouseUp={endGizmoDrag}
           space={transformSpace}
           translationSnap={snapEnabled ? snapStep : null}
           rotationSnap={snapEnabled ? Math.PI / 12 : null}
@@ -433,10 +497,10 @@ function SceneContent({
       )}
       {/* Live camera frustum for the selected player — shows where its camera sits/looks and updates
           as you tune Side/Up/Back/Pitch/Mode. Hidden while playing or looking through the camera. */}
-      {selectedCameraObject && !isPlaying && !previewCamera && <CameraIndicator object={selectedCameraObject} />}
+      {selectedCameraObject && !isPlaying && !previewCamera && !previewingCinematic && <CameraIndicator object={selectedCameraObject} />}
       {/* Camera-placement mode: drag a handle to set the follow-camera offset. Hidden while previewing
           through the camera (you can't grab a handle from inside the lens — toggle preview off to drag). */}
-      {cameraRigObject && !isPlaying && !previewCamera && <CameraRigGizmo object={cameraRigObject} />}
+      {cameraRigObject && !isPlaying && !previewCamera && !previewingCinematic && <CameraRigGizmo object={cameraRigObject} />}
       {/* Wireframe preview of the selected object's true collider (edit + Play), so the
           actual physics shape — which often differs from the visual mesh — is visible. */}
       {selectedColliderObject && <ColliderGizmo object={selectedColliderObject} />}
@@ -444,7 +508,13 @@ function SceneContent({
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
       {/* During Play (or when previewing) a character's follow camera takes over the view; otherwise free-orbit.
           Preview mode (editor, not playing) frames the resting camera so offset/pitch tuning is visible live. */}
-      {(isPlaying || previewCamera) && followTarget ? (
+      {isPlaying && cinematicCamera ? (
+        <CinematicCamera />
+      ) : !isPlaying && cinematicPreviewCamera && !recording ? (
+        // While recording you stay on the free editor camera so you can fly to frame each shot —
+        // navigating the viewport auto-keys the cinematic camera track.
+        <CinematicCamera pose={cinematicPreviewCamera} />
+      ) : (isPlaying || previewCamera) && followTarget ? (
         <FollowCamera preview={!isPlaying} />
       ) : (
         <EditorCamera focusNonce={focusNonce} />
@@ -509,6 +579,8 @@ export function ViewportPanel() {
   const [previewCamera, setPreviewCamera] = useState(false);
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
+  const cinematicPreviewFade = useEditorStore((state) => state.editorCinematicPreviewFade);
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const editingPrefabName = useEditorStore((state) =>
     state.prefabs.find((prefab) => prefab.id === state.editingPrefabId)?.name ?? 'Prefab',
@@ -635,6 +707,18 @@ export function ViewportPanel() {
       if (!assetId) return;
       event.preventDefault();
       event.stopPropagation();
+
+      // A Particle System asset → drop an empty effect anchor at the cursor, emitting that system.
+      const particleSystem = store.particleSystems.find((item) => item.id === assetId);
+      if (particleSystem) {
+        const position = cursorGroundPosition(event);
+        const id = store.createObjectWithProps('empty', { name: particleSystem.name, position });
+        store.setObjectParticleSystem(id, particleSystem.id);
+        store.selectObject(id);
+        useProjectStore.setState({ toast: { kind: 'success', message: `Placed "${particleSystem.name}" in the scene.` } });
+        return;
+      }
+
       const asset = store.assets.find((item) => item.id === assetId);
       if (!asset) return;
       if (asset.type !== 'model') {
@@ -751,14 +835,23 @@ export function ViewportPanel() {
         ) : (
           <ViewportFallback />
         )}
-        {showMouseHint && <div className="mouse-look-hint">Drag to look · double-click to capture mouse · ESC to release</div>}
-        {!isPlaying && previewCamera && followTarget && (
+        {showMouseHint && <div className="mouse-look-hint">Click to capture mouse · ESC to release</div>}
+        {!isPlaying && cinematicPreview && (
+          <div className="mouse-look-hint cinematic-preview-hint">Film preview {cinematicPreview.time.toFixed(2)}s</div>
+        )}
+        {!isPlaying && !cinematicPreview && previewCamera && followTarget && (
           <div className="mouse-look-hint">📷 Previewing “{followTarget.name}” camera — edit Side/Up/Back/Pitch/Mode in the Inspector to see it update live</div>
         )}
-        {!isPlaying && !previewCamera && (
+        {!isPlaying && !previewCamera && !cinematicPreview && (
           <div className="mouse-look-hint">RMB + WASD/QE fly · Alt+LMB orbit · MMB pan · F focus · W/E/R gizmo · Ctrl+D dupe</div>
         )}
         {/* Player HUD overlay — clipped to the viewport (Unreal-style "Game View"), not the whole window. */}
+        {!isPlaying && cinematicPreviewFade && cinematicPreviewFade.opacity > 0.001 && (
+          <div
+            className="cinematic-viewport-fade"
+            style={{ background: cinematicPreviewFade.color, opacity: Math.min(1, Math.max(0, cinematicPreviewFade.opacity)) }}
+          />
+        )}
         <ScreenUILayer />
         <DynamicCrosshair />
         <GameHud />

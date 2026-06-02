@@ -6,6 +6,8 @@ import { ScreenUILayer } from '../ui/ScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
 import { GameView } from './GameView';
+import { CinematicOverlay } from '../components/CinematicOverlay';
+import { DebugOverlay, PlayerErrorBoundary } from './PlayerDiagnostics';
 
 type Status = 'loading' | 'ready' | 'needs-file' | 'error';
 
@@ -81,11 +83,23 @@ export function Player() {
     }
   };
 
-  // On launch, fetch the bundle that ships next to the player (./game.json).
+  // On launch, resolve the game bundle in priority order:
+  //   1. a baked-in global (window.__NODEFORGE_GAME__) written by `game-bundle.js` —
+  //      this is what a production export injects, so the player runs from file:// and
+  //      inside the native (Tauri) shell with no fetch.
+  //   2. a sibling ./game.json (served builds / dropping a bundle next to the player).
+  //   3. a manual file picker (opened directly during testing).
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     let cancelled = false;
+
+    const baked = (window as unknown as { __NODEFORGE_GAME__?: unknown }).__NODEFORGE_GAME__;
+    if (baked) {
+      start(baked);
+      return;
+    }
+
     fetch(`./${GAME_BUNDLE_FILE}`)
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -122,12 +136,14 @@ export function Player() {
 
   if (status === 'ready')
     return (
-      <>
+      <PlayerErrorBoundary>
         <GameView />
         <ScreenUILayer />
         <DynamicCrosshair />
         <GameHud />
-      </>
+        <CinematicOverlay />
+        <DebugOverlay />
+      </PlayerErrorBoundary>
     );
 
   return (

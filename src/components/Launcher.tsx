@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { AlertTriangle, Crosshair, FolderOpen, Gamepad2, PersonStanding, Plus, Sparkles } from 'lucide-react';
+import { AlertTriangle, Clapperboard, Crosshair, FolderOpen, Gamepad2, PersonStanding, Plus, Sparkles } from 'lucide-react';
 import { isDesktop } from '../platform';
 import { useProjectStore } from '../store/projectStore';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
+import { createFilmModeTemplate } from '../project/filmModeTemplate';
 
 export function Launcher() {
   const [name, setName] = useState('My Game');
@@ -14,7 +15,7 @@ export function Launcher() {
   const recentProjects = useProjectStore((state) => state.recentProjects);
   const busy = useProjectStore((state) => state.busy);
   const error = useProjectStore((state) => state.error);
-  const createTemplateProject = async (builder: () => Promise<unknown>) => {
+  const createTemplateProject = async (builder: () => Promise<unknown> | unknown) => {
     try {
       await newProject(name.trim());
       if (!useProjectStore.getState().hasProject) return;
@@ -67,6 +68,15 @@ export function Launcher() {
         >
           <Crosshair size={16} aria-hidden />
           <span>New FPS template</span>
+        </button>
+
+        <button
+          className="launcher-primary template-button"
+          disabled={busy || !name.trim()}
+          onClick={() => void createTemplateProject(createFilmModeTemplate)}
+        >
+          <Clapperboard size={16} aria-hidden />
+          <span>New Film Mode template</span>
         </button>
 
         <div className="launcher-actions">

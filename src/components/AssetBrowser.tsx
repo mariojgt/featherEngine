@@ -14,6 +14,7 @@ import {
   Palette,
   PersonStanding,
   Search,
+  Sparkles,
   Table2,
   Upload,
   Workflow,
@@ -28,7 +29,7 @@ import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './Con
 import { SkeletonEditorModal } from './SkeletonEditorModal';
 import { ASSET_DRAG_TYPE, PREFAB_DRAG_TYPE, assetDrag, hasDragType, prefabDrag } from './dragShared';
 import { focusWorkspacePanel } from './workspacePanels';
-import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, Prefab, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset, UIDocument } from '../types';
+import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ParticleSystemDefinition, Prefab, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset, UIDocument } from '../types';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -51,7 +52,7 @@ const isAccepted = (name: string) => ACCEPTED_EXT.has(name.split('.').pop()?.toL
 
 const assetGlyph = (type: AssetType) => (type === 'audio' ? Music : type === 'image' ? Image : Box);
 
-type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab';
+type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab';
 type DragRef = { items: Array<{ kind: DragKind; id: string }> } | null;
 
 const itemKey = (kind: DragKind, id: string) => `${kind}:${id}`;
@@ -97,6 +98,12 @@ export function AssetBrowser() {
   const renameMaterial = useEditorStore((state) => state.renameMaterial);
   const deleteMaterial = useEditorStore((state) => state.deleteMaterial);
   const setActiveMaterial = useEditorStore((state) => state.setActiveMaterial);
+  const particleSystems = useEditorStore((state) => state.particleSystems);
+  const activeParticleSystemId = useEditorStore((state) => state.activeParticleSystemId);
+  const createParticleSystem = useEditorStore((state) => state.createParticleSystem);
+  const renameParticleSystem = useEditorStore((state) => state.renameParticleSystem);
+  const deleteParticleSystem = useEditorStore((state) => state.deleteParticleSystem);
+  const setActiveParticleSystem = useEditorStore((state) => state.setActiveParticleSystem);
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
   const activeUIDocumentId = useEditorStore((state) => state.activeUIDocumentId);
   const createUIDocument = useEditorStore((state) => state.createUIDocument);
@@ -121,7 +128,7 @@ export function AssetBrowser() {
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedFolderId, setSelectedFolderId] = useState<string | undefined>(undefined);
-  const [renaming, setRenaming] = useState<{ kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab'; id: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab'; id: string } | null>(null);
   const [draft, setDraft] = useState('');
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
@@ -234,7 +241,7 @@ export function AssetBrowser() {
     }
   };
 
-  const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab', id: string, current: string) => {
+  const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab', id: string, current: string) => {
     setRenaming({ kind, id });
     setDraft(current);
   };
@@ -247,6 +254,7 @@ export function AssetBrowser() {
       else if (renaming.kind === 'blueprint') renameBlueprint(renaming.id, name);
       else if (renaming.kind === 'dataAsset') renameDataAsset(renaming.id, name);
       else if (renaming.kind === 'material') renameMaterial(renaming.id, name);
+      else if (renaming.kind === 'particleSystem') renameParticleSystem(renaming.id, name);
       else if (renaming.kind === 'uiDocument') renameUIDocument(renaming.id, name);
       else if (renaming.kind === 'prefab') renamePrefab(renaming.id, name);
       else renameAsset(renaming.id, name);
@@ -286,6 +294,18 @@ export function AssetBrowser() {
   const openMaterial = (id: string) => {
     setActiveMaterial(id);
     focusWorkspacePanel('materials');
+  };
+
+  const newParticleSystem = (folderId?: string) => {
+    const id = createParticleSystem(undefined, 'fire', folderId);
+    if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
+    startRename('particleSystem', id, particleSystems.length ? `Particle System ${particleSystems.length + 1}` : 'Particle System 1');
+    focusWorkspacePanel('particles');
+  };
+
+  const openParticleSystem = (id: string) => {
+    setActiveParticleSystem(id);
+    focusWorkspacePanel('particles');
   };
 
   const newUIDocument = (folderId?: string) => {
@@ -364,6 +384,7 @@ export function AssetBrowser() {
       searchMatches.blueprints.forEach((b) => out.push(itemKey('blueprint', b.id)));
       searchMatches.dataAssets.forEach((d) => out.push(itemKey('dataAsset', d.id)));
       searchMatches.materials.forEach((m) => out.push(itemKey('material', m.id)));
+      searchMatches.particleSystems.forEach((p) => out.push(itemKey('particleSystem', p.id)));
       searchMatches.uiDocuments.forEach((u) => out.push(itemKey('uiDocument', u.id)));
       searchMatches.assets.forEach((a) => out.push(itemKey('asset', a.id)));
       return out;
@@ -376,6 +397,7 @@ export function AssetBrowser() {
       blueprints.filter((b) => b.folderId === parentId).forEach((b) => out.push(itemKey('blueprint', b.id)));
       dataAssets.filter((d) => d.folderId === parentId).forEach((d) => out.push(itemKey('dataAsset', d.id)));
       materials.filter((m) => m.folderId === parentId).forEach((m) => out.push(itemKey('material', m.id)));
+      particleSystems.filter((p) => p.folderId === parentId).forEach((p) => out.push(itemKey('particleSystem', p.id)));
       uiDocuments.filter((u) => u.folderId === parentId).forEach((u) => out.push(itemKey('uiDocument', u.id)));
       assets.filter((a) => a.folderId === parentId).forEach((a) => out.push(itemKey('asset', a.id)));
     };
@@ -483,7 +505,7 @@ export function AssetBrowser() {
   // Context-menu entries to move an item between folders. Membership is purely organizational —
   // scene objects/nodes reference the asset by id, so moving it never breaks those references.
   const moveEntries = (
-    kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab',
+    kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab',
     id: string,
     currentFolderId?: string,
   ): ContextMenuEntry[] => {
@@ -591,6 +613,34 @@ export function AssetBrowser() {
         <RenameInput onCommit={commitRename} />
       ) : (
         <span className="tree-label">{material.name}</span>
+      )}
+    </button>
+  );
+
+  const renderParticleSystem = (system: ParticleSystemDefinition, depth: number) => (
+    <button
+      key={system.id}
+      className={rowClass('particleSystem', system.id, activeParticleSystemId === system.id && 'active')}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      {...rowDnd('particleSystem', system.id, system.folderId, system.name)}
+      onDoubleClick={() => openParticleSystem(system.id)}
+      onClick={(event) => handleItemClick(event, 'particleSystem', system.id, () => openParticleSystem(system.id))}
+      title={`particle system · ${system.shape}`}
+      onContextMenu={(event) =>
+        openMenu(event, [
+          { label: 'Edit Particle System', onClick: () => openParticleSystem(system.id) },
+          { label: 'Rename', onClick: () => startRename('particleSystem', system.id, system.name) },
+          ...moveEntries('particleSystem', system.id, system.folderId),
+          'separator',
+          { label: 'Delete particle system', danger: true, onClick: () => deleteParticleSystem(system.id) },
+        ])
+      }
+    >
+      <Sparkles size={14} style={{ color: system.startColor }} aria-hidden />
+      {renaming?.kind === 'particleSystem' && renaming.id === system.id ? (
+        <RenameInput onCommit={commitRename} />
+      ) : (
+        <span className="tree-label">{system.name}</span>
       )}
     </button>
   );
@@ -780,6 +830,7 @@ export function AssetBrowser() {
               { label: 'Create Blueprint', onClick: () => newBlueprint(folder.id) },
               { label: 'Create Data Asset', onClick: () => newDataAsset(folder.id) },
               { label: 'Create Material', onClick: () => newMaterial(folder.id) },
+              { label: 'Create Particle System', onClick: () => newParticleSystem(folder.id) },
               { label: 'Create UI', onClick: () => newUIDocument(folder.id) },
               { label: 'Import Asset…', onClick: () => triggerImport(folder.id) },
               'separator',
@@ -808,6 +859,7 @@ export function AssetBrowser() {
       {blueprints.filter((bp) => bp.folderId === parentId).map((bp) => renderBlueprint(bp, depth))}
       {dataAssets.filter((asset) => asset.folderId === parentId).map((asset) => renderDataAsset(asset, depth))}
       {materials.filter((material) => material.folderId === parentId).map((material) => renderMaterial(material, depth))}
+      {particleSystems.filter((system) => system.folderId === parentId).map((system) => renderParticleSystem(system, depth))}
       {uiDocuments.filter((doc) => doc.folderId === parentId).map((doc) => renderUIDocument(doc, depth))}
       {animatorControllers.filter((controller) => controller.folderId === parentId).map((controller) => renderController(controller, depth))}
       {skeletons.filter((skeleton) => skeleton.folderId === parentId).map((skeleton) => renderSkeleton(skeleton, depth))}
@@ -825,6 +877,7 @@ export function AssetBrowser() {
         blueprints: blueprints.filter((bp) => bp.name.toLowerCase().includes(search)),
         dataAssets: dataAssets.filter((asset) => asset.name.toLowerCase().includes(search)),
         materials: materials.filter((material) => material.name.toLowerCase().includes(search)),
+        particleSystems: particleSystems.filter((system) => system.name.toLowerCase().includes(search)),
         uiDocuments: uiDocuments.filter((doc) => doc.name.toLowerCase().includes(search)),
         controllers: animatorControllers.filter((controller) => controller.name.toLowerCase().includes(search)),
         animations: animationAssets.filter((anim) => anim.name.toLowerCase().includes(search)),
@@ -882,6 +935,7 @@ export function AssetBrowser() {
             { label: 'Create Blueprint', onClick: () => newBlueprint(undefined) },
             { label: 'Create Data Asset', onClick: () => newDataAsset(undefined) },
             { label: 'Create Material', onClick: () => newMaterial(undefined) },
+            { label: 'Create Particle System', onClick: () => newParticleSystem(undefined) },
             { label: 'Create UI', onClick: () => newUIDocument(undefined) },
             { label: 'Import Asset…', onClick: () => triggerImport(undefined) },
           ])
@@ -893,6 +947,7 @@ export function AssetBrowser() {
             {searchMatches.blueprints.map((bp) => renderBlueprint(bp, 0))}
             {searchMatches.dataAssets.map((asset) => renderDataAsset(asset, 0))}
             {searchMatches.materials.map((material) => renderMaterial(material, 0))}
+            {searchMatches.particleSystems.map((system) => renderParticleSystem(system, 0))}
             {searchMatches.uiDocuments.map((doc) => renderUIDocument(doc, 0))}
             {searchMatches.assets.map((asset) => renderAsset(asset, 0))}
             {searchMatches.prefabs.length === 0 &&

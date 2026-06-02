@@ -19,15 +19,60 @@ export interface GameBundle {
 }
 
 /** Read an asset's bytes (from its runtime `url`) into a self-contained data URL. */
-async function toDataUrl(url: string): Promise<string> {
-  const response = await fetch(url);
+/**
+ * Correct MIME type for an asset, by file extension. The Tauri asset server often reports binary
+ * assets (.glb, .mp3, …) as `text/html`, which then poisons the embedded data URL — the player's
+ * `<audio>`/texture decoders reject the wrong type. We re-stamp the data URL with this instead.
+ */
+function mimeForAsset(asset: AssetItem): string | null {
+  const ext = (asset.path ?? asset.name ?? '').toLowerCase().split('.').pop() ?? '';
+  switch (ext) {
+    case 'glb':
+      return 'model/gltf-binary';
+    case 'gltf':
+      return 'model/gltf+json';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    case 'ktx2':
+      return 'image/ktx2';
+    case 'hdr':
+      return 'image/vnd.radiance';
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'wav':
+      return 'audio/wav';
+    case 'ogg':
+      return 'audio/ogg';
+    case 'm4a':
+    case 'mp4':
+      return 'audio/mp4';
+    default:
+      return null;
+  }
+}
+
+/** Read an asset's bytes (from its runtime `url`) into a self-contained data URL with a correct MIME. */
+async function toDataUrl(asset: AssetItem): Promise<string> {
+  const response = await fetch(asset.url as string);
   const blob = await response.blob();
-  return await new Promise<string>((resolve, reject) => {
+  const raw = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read asset bytes'));
     reader.readAsDataURL(blob);
   });
+  // Re-stamp the MIME from the extension when known — the source server may have mislabeled it.
+  const mime = mimeForAsset(asset);
+  if (mime) {
+    const comma = raw.indexOf(',');
+    if (comma !== -1) return `data:${mime};base64,${raw.slice(comma + 1)}`;
+  }
+  return raw;
 }
 
 /**
@@ -40,7 +85,7 @@ export async function embedAssets(assets: AssetItem[]): Promise<AssetItem[]> {
     assets.map(async (asset) => {
       if (!asset.url) return { ...asset, unresolved: true };
       try {
-        return { ...asset, data: await toDataUrl(asset.url) };
+        return { ...asset, data: await toDataUrl(asset) };
       } catch {
         return { ...asset, unresolved: true };
       }

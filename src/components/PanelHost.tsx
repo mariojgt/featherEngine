@@ -4,8 +4,11 @@ import { InspectorPanel } from './InspectorPanel';
 import { AssetBrowser } from './AssetBrowser';
 import { VisualScriptingPanel } from './VisualScriptingPanel';
 import { MaterialEditorPanel } from './MaterialEditorPanel';
+import { ParticleSystemEditorPanel } from './ParticleSystemEditorPanel';
 import { AnimatorEditorPanel } from './AnimatorEditorPanel';
 import { UIEditorPanel } from './UIEditorPanel';
+import { SceneSettingsPanel } from './SceneSettingsPanel';
+import { CinematicPanel } from './CinematicPanel';
 import { broadcastPanelClosed, initStoreSync } from '../sync/storeSync';
 
 const PANELS: Record<string, () => JSX.Element> = {
@@ -14,8 +17,11 @@ const PANELS: Record<string, () => JSX.Element> = {
   project: AssetBrowser,
   scripting: VisualScriptingPanel,
   materials: MaterialEditorPanel,
+  particles: ParticleSystemEditorPanel,
   animator: AnimatorEditorPanel,
   ui: UIEditorPanel,
+  scene: SceneSettingsPanel,
+  cinematic: CinematicPanel,
 };
 
 /**

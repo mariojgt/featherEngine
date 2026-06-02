@@ -16,9 +16,21 @@ import { PROVIDERS, type ProviderId } from '../ai/providers';
 import { useAISettings } from '../store/aiSettingsStore';
 
 const SUGGESTIONS = [
-  'Create a red sphere with dynamic physics',
-  'Let me walk the Player with WASD, then attach it',
-  "What's in my scene?",
+  {
+    label: 'Polished HUD',
+    meta: 'UI template',
+    prompt: 'Create a polished HUD with health, score, ammo, and a clean readable layout',
+  },
+  {
+    label: 'Smart Debug',
+    meta: 'Inspect logic',
+    prompt: 'Inspect my selected object and explain what its blueprint and animation logic are doing',
+  },
+  {
+    label: 'Playable Room',
+    meta: 'Scene + pickups',
+    prompt: 'Build a small playable room with pickups, a counter HUD, lighting, and clear collision',
+  },
 ];
 
 function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -98,6 +110,9 @@ export function AIChatWidget() {
   const { messages, status, error, sendMessage, clearMessages, stop } = useAIChat();
   const logRef = useRef<HTMLDivElement>(null);
   const hasKey = useAISettings((state) => Boolean(state.apiKeys[state.provider]));
+  const provider = useAISettings((state) => state.provider);
+  const activeModel = useAISettings((state) => state.models[state.provider]);
+  const providerLabel = PROVIDERS[provider].label;
 
   useEffect(() => {
     if (!hasKey && open) setShowSettings(true);
@@ -144,9 +159,17 @@ export function AIChatWidget() {
           >
             <header className="ai-widget-header">
               <div className="ai-widget-title">
-                <Bot size={16} aria-hidden />
-                <strong>Feather Assistant</strong>
+                <span className="ai-avatar">
+                  <Bot size={15} aria-hidden />
+                </span>
+                <span className="ai-title-copy">
+                  <strong>Feather Assistant</strong>
+                  <span>{providerLabel} · {activeModel}</span>
+                </span>
               </div>
+              <span className={`ai-status-pill ${status === 'streaming' ? 'active' : ''}`}>
+                {status === 'streaming' ? 'Working' : 'Engine aware'}
+              </span>
               <div className="ai-widget-actions">
                 <button
                   className="icon-button compact"
@@ -174,12 +197,23 @@ export function AIChatWidget() {
             <div className="ai-log" ref={logRef}>
               {messages.length === 0 && !showSettings && (
                 <div className="ai-empty">
-                  <Sparkles size={20} aria-hidden />
-                  <p>Tell me what to build. I can create objects, set physics, and wire up blueprints for you.</p>
+                  <div className="ai-empty-card">
+                    <span className="ai-empty-icon">
+                      <Sparkles size={20} aria-hidden />
+                    </span>
+                    <h3>Build, polish, debug</h3>
+                    <p>Ask for a playable system, a sharper HUD, or a focused logic fix.</p>
+                  </div>
                   <div className="ai-suggestions">
                     {SUGGESTIONS.map((suggestion) => (
-                      <button key={suggestion} onClick={() => void sendMessage(suggestion)} disabled={!hasKey}>
-                        {suggestion}
+                      <button key={suggestion.label} onClick={() => void sendMessage(suggestion.prompt)} disabled={!hasKey}>
+                        <span className="ai-suggestion-icon">
+                          <Sparkles size={13} aria-hidden />
+                        </span>
+                        <span className="ai-suggestion-copy">
+                          <strong>{suggestion.label}</strong>
+                          <span>{suggestion.meta}</span>
+                        </span>
                       </button>
                     ))}
                   </div>

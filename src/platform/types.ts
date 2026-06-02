@@ -28,4 +28,25 @@ export interface Platform {
    * Returns a short human-readable destination label, or null if cancelled.
    */
   exportGame(name: string, bundle: unknown): Promise<string | null>;
+  /**
+   * Stage a game bundle for a production build (portable web folder + native app).
+   * On desktop, prompts for a save location and returns the absolute path of the
+   * written `game.json` (so the caller can show the exact build command). On web,
+   * downloads `game.json` and returns null.
+   */
+  stageProduction(name: string, bundle: unknown): Promise<string | null>;
+  /**
+   * Desktop only: actually run the production build (portable web folder + native app for
+   * the current OS) for an already-built bundle, streaming each output line via `onProgress`.
+   * Resolves to the bundle output directory. Undefined on platforms that can't build locally
+   * (web) — callers fall back to `stageProduction`.
+   */
+  buildProduction?(
+    bundleJson: string,
+    native: boolean,
+    onProgress: (line: string) => void,
+    outDir?: string,
+  ): Promise<string>;
+  /** Desktop only: prompt for a folder. Returns the absolute path, or null if cancelled. */
+  pickDirectory?(title?: string): Promise<string | null>;
 }

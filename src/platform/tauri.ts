@@ -1,4 +1,5 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { join } from '@tauri-apps/api/path';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists, mkdir, readTextFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs';
@@ -90,5 +91,33 @@ export const tauriPlatform: Platform = {
     if (typeof target !== 'string') return null;
     await writeTextFile(target, JSON.stringify(bundle, null, 2));
     return target;
+  },
+
+  async stageProduction(_name, bundle) {
+    const target = await save({
+      title: 'Stage game for production build',
+      defaultPath: 'game.json',
+      filters: [{ name: 'Game bundle', extensions: ['json'] }],
+    });
+    if (typeof target !== 'string') return null;
+    // Compact (no pretty-print) — production bundles inline asset data and get large.
+    await writeTextFile(target, JSON.stringify(bundle));
+    return target;
+  },
+
+  async buildProduction(bundleJson, native, onProgress, outDir) {
+    const unlisten = await listen<string>('production-build-progress', (event) =>
+      onProgress(event.payload),
+    );
+    try {
+      return await invoke<string>('run_production_build', { bundleJson, native, outDir });
+    } finally {
+      unlisten();
+    }
+  },
+
+  async pickDirectory(title) {
+    const dir = await open({ directory: true, multiple: false, title: title ?? 'Choose a folder' });
+    return typeof dir === 'string' ? dir : null;
   },
 };
