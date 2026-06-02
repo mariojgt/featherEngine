@@ -15,7 +15,13 @@ export function buildSceneSnapshot() {
     textureAssetId: object.renderer?.textureAssetId ?? null,
     materialId: object.renderer?.materialId ?? null,
     physics: object.physics?.enabled
-      ? { bodyType: object.physics.bodyType, collider: object.physics.collider }
+      ? {
+          bodyType: object.physics.bodyType,
+          collider: object.physics.collider,
+          isTrigger: object.physics.isTrigger ?? false,
+          collisionLayer: object.physics.collisionLayer ?? 0,
+          collisionMask: object.physics.collisionMask ?? 0xffff,
+        }
       : null,
     blueprintId: object.script?.enabled ? object.script.blueprintId : null,
     animator: object.animator?.enabled
@@ -32,6 +38,9 @@ export function buildSceneSnapshot() {
     attachment: object.attachment
       ? { targetObjectId: object.attachment.targetObjectId, boneName: object.attachment.boneName, socketName: object.attachment.socketName ?? null }
       : null,
+    // Anchored world-space UI widget, and per-instance variables (read by world UI as self.<key>).
+    worldUI: object.ui?.documentId ?? null,
+    variables: object.variables ?? null,
   }));
 
   const assets = state.assets.map((asset) => ({
@@ -67,10 +76,15 @@ export function buildSceneSnapshot() {
           compareOp: node.data.compareOp,
           saveSlot: node.data.saveSlot,
           eventName: node.data.eventName,
+          otherObjectId: node.data.otherObjectId,
+          targetObjectId: node.data.targetObjectId,
           assetId: node.data.assetId,
           spawnKind: node.data.spawnKind,
           materialColor: node.data.materialColor,
           materialProperty: node.data.materialProperty,
+          documentId: node.data.documentId,
+          elementId: node.data.elementId,
+          objectKey: node.data.objectKey,
         })) ?? [],
       edges:
         graph?.edges.map((edge) =>
@@ -138,6 +152,19 @@ export function buildSceneSnapshot() {
     name: skeleton.name,
     boneCount: skeleton.boneNames.length,
     sockets: (skeleton.sockets ?? []).map((socket) => ({ name: socket.name, boneName: socket.boneName })),
+    // Ragdoll tuning. Global defaults from set_ragdoll_settings; `bodies` are per-bone PhAT-style overrides
+    // (set_ragdoll_body) — summarized to {boneName, shape, enabled} to stay lean.
+    ragdoll: skeleton.ragdoll
+      ? {
+          capsuleRadius: skeleton.ragdoll.capsuleRadius,
+          density: skeleton.ragdoll.density,
+          linearDamping: skeleton.ragdoll.linearDamping,
+          angularDamping: skeleton.ragdoll.angularDamping,
+          groundY: skeleton.ragdoll.groundY,
+          excludePattern: skeleton.ragdoll.excludePattern,
+          bodies: (skeleton.ragdoll.bodies ?? []).map((b) => ({ boneName: b.boneName, shape: b.shape ?? 'capsule', enabled: b.enabled !== false })),
+        }
+      : null,
   }));
   const skeletalMeshes = state.skeletalMeshes.map((mesh) => ({
     id: mesh.id,
@@ -167,6 +194,28 @@ export function buildSceneSnapshot() {
     })),
   }));
 
+  // Game UI documents. Each element is flattened to (id, kind, parentId) plus its bindings so the
+  // model can target elements without re-fetching the tree. Kept lean — text/style omitted.
+  const flattenUI = (el: import('../types').UIElement, parentId: string | null): Array<Record<string, unknown>> => [
+    {
+      id: el.id,
+      kind: el.kind,
+      parentId,
+      bindings: el.bindings.length ? el.bindings.map((b) => `${b.target}=${b.expression}`) : undefined,
+      onClickEvent: el.onClickEvent,
+    },
+    ...el.children.flatMap((child) => flattenUI(child, el.id)),
+  ];
+  const uiDocuments = state.uiDocuments.map((doc) => ({
+    id: doc.id,
+    name: doc.name,
+    surface: doc.surface,
+    visibleOnStart: doc.visibleOnStart,
+    logicBlueprintId: doc.logicBlueprintId ?? null,
+    rootId: doc.root.id,
+    elements: flattenUI(doc.root, null),
+  }));
+
   return {
     activeSceneId: state.activeSceneId,
     scenes: state.scenes.map((scene) => ({ id: scene.id, name: scene.name, objectCount: scene.objects.length })),
@@ -181,6 +230,7 @@ export function buildSceneSnapshot() {
     skeletalMeshes,
     animations,
     animatorControllers,
+    uiDocuments,
     // `objects` below are the ACTIVE scene's objects — the ones your tools edit.
     objects,
     blueprints,
@@ -200,7 +250,9 @@ You help the user build their game by calling tools that directly modify their s
 - Each object has a transform (position [x,y,z], rotation in radians, scale), an optional mesh renderer (color hex, metalness, roughness, and an optional base-color texture), optional physics, and an optional attached script blueprint.
 - Physics: bodyType is "dynamic" (falls/moves, pushed by collisions), "fixed" (static, e.g. ground/walls), or "kinematic" (scripted mover that pushes dynamics but isn't pushed back). collider is box | sphere | capsule. During Play the engine runs a real Rapier rigid-body simulation: objects collide with the ground AND with each other (stacking, blocking, pushing), with gravity, mass, friction, linear/angular damping, and gravityScale all honored.
 - For solid object-to-object collisions, give each object physics (enabled:true) with a fitting bodyType and collider. Two "dynamic" objects bounce/push apart; a "dynamic" object cannot pass through a "fixed" or "kinematic" one. Objects with physics disabled are visual only and do not collide.
-- The "On Collision" event node (event.collisionEnter) fires on a scripted object the frame after it starts touching another collider — use it for pickups, damage, triggers, etc.
+- Trigger volumes / pickups: set_physics enabled:true, bodyType:"fixed", collider:"box" (or sphere/capsule), isTrigger:true. Trigger colliders fire "Trigger Enter" but do NOT block/push. Use a trigger object with a blueprint: Trigger Enter (optionally set otherObjectId to the Player id) -> Set Variable (e.g. HasKey true) -> Play Sound / Show UI -> Destroy Object (default self, so the pickup disappears). This is the Unity isTrigger / Godot Area3D / Unreal overlap style.
+- Collision filters: collisionLayer is 0-15; collisionMask is a 16-bit bitmask of layers this collider interacts with. Default layer 0 and mask 65535 means "interact with everything." For simple games, leave defaults and use event otherObjectId filters.
+- The "Collision Enter" event node (event.collisionEnter) fires on a scripted object the frame after it starts touching a SOLID collider. "Trigger Enter" (event.triggerEnter) fires when its object starts overlapping a trigger collider. Both can filter by otherObjectId.
 - A "fixed" "plane" acts as the ground floor. +Y is up. The ground plane is typically at y=0, so spawn dynamic objects a little above it.
 - **Static collision (walls/obstacles):** to make a wall or obstacle the character/objects collide with but that never moves, create the object and set_physics enabled:true, bodyType:"fixed". The character controller only collides with objects that have physics enabled — a visual-only object (no physics) is passed straight through.
 
@@ -217,12 +269,14 @@ You help the user build their game by calling tools that directly modify their s
 - **Attack & weapon-equipped:** the controller's attack key (keyAttack, default left mouse "Mouse0"; mouse buttons are "Mouse0"/"Mouse1"/"Mouse2") drives an "attacking" animator parameter; a "weaponEquipped" parameter source is true whenever something is attached to the character (via attach_to_bone). create_character_pawn builds a Sword Attack state (used when WeaponEquipped) and a Punch state (when unarmed). So: attach a sword → attacks swing the sword; detach → the same key throws a punch. Use these param sources to author your own armed/unarmed branches too.
 - **Jump sequences & exit time:** for multi-clip moves (Jump Start → Jump Loop → Jump Land), use a "grounded" parameter (source "grounded", true when the character controller is on the ground) to detect landing, and set hasExitTime:true on transitions out of one-shot clips (Jump Start, Jump Land) so they play fully before moving on. create_third_person_template / create_character_pawn build this automatically when the rig has those clips.
 - **Animator Controller (state machine):** for real characters, build a controller instead of a single clip. Recipe: (1) create_animator_controller with the mesh's skeletonId; (2) add_animator_parameter — e.g. a float "Speed" with source "speed" (auto-filled from the object's movement each frame — no scripting needed), or source "variable" to mirror a project variable, or "manual" for script/AI-set values; (3) add_animator_state for each clip (Idle/Walk/Jog…); first state is the default; (4) add_animator_transition between states with conditions (e.g. Speed > 0.1 to leave Idle, Speed < 0.1 to return); use from:"any" for global transitions; (5) set_object_controller to attach it. Controllers appear in \`animatorControllers\` with their parameters/states/transitions and ids.
-- **Scripting ↔ animation (both directions):** a blueprint WRITES animator parameters with "Set Anim Float/Bool/Trigger" (by name — e.g. Set Anim Trigger "Jump" on a key press) and READS them back with "Get Anim Param" (a value node returning a parameter's current value) and "Get Anim State" (value node → the active state's name, for Compare/Branch). So scripts drive the state machine and react to it. Combined with parameter sources "speed"/"verticalSpeed"/"crouching"/"variable", the animator can also read object motion + project variables directly — prefer those auto-sources over scripting when you just need locomotion.
+- **Scripting ↔ animation (both directions):** a blueprint WRITES animator parameters with "Set Anim Float/Bool/Trigger" (by name — e.g. Set Anim Trigger "Jump" on a key press) and READS them back with "Get Anim Param" (a value node returning a parameter's current value) and "Get Anim State" (value node → the active state's name, for Compare/Branch). These nodes act on the script's OWN object by default, or on another object via the node's Target field (so one character can drive another's animator). To flip a live parameter directly (e.g. a manual "WeaponEquipped" bool) during Play, use set_anim_parameter(objectId, paramName, value). IMPORTANT: Set/set_anim_parameter only PERSIST on parameters whose source is "manual" — auto-sourced params (speed, grounded, weaponEquipped, etc.) are recomputed every frame and will revert your write. To control a flag from script, give the parameter source "manual" (or bind it to a project variable). So scripts drive the state machine and react to it. Combined with parameter sources "speed"/"verticalSpeed"/"crouching"/"variable", the animator can also read object motion + project variables directly — prefer those auto-sources over scripting when you just need locomotion.
 - **Character controller:** set_character_controller adds the built-in third-person controller component. It **collides** with other objects' colliders (a Rapier kinematic character controller — slides along walls, stands on platforms, pushes dynamic bodies), supports **sprint** (keySprint, default Shift → faster, drives a Run state) and **crouch** (keyCrouch, default C → slower, drives a "crouching" animator parameter). Animator parameter sources include speed / verticalSpeed / moving / crouching / variable. Configurable: move/sprint/jump/gravity/turn; **rebindable keys** (keyForward/Backward/Left/Right/Jump/Sprint as KeyboardEvent.code, e.g. "KeyW"/"Space"/"ShiftLeft"); and a **mouse-look follow camera** (cameraFollow, cameraDistance, cameraHeight, cameraPitch, mouseLook, mouseSensitivity, cameraRelativeMovement). With mouseLook on, the player clicks the view to capture the pointer and orbits the camera; cameraRelativeMovement makes "forward" follow the camera. Two modes, auto-detected: with NO attached blueprint it self-drives from the bound keys (auto); WITH an attached blueprint the controller is "scripted" — movement/jump come from nodes while the component still supplies gravity/jump-height/camera. Either way the motion auto-feeds an animator's speed/verticalSpeed.
-- **Character logic nodes (editable controller):** "Get Move Input" (→ Vector3 from WASD), "Move" (move+turn the owner by a direction at a speed), "Jump", "Is Grounded" (→ bool), "Set Camera" (override follow distance/height). Wire these in a blueprint to fully customize the character: e.g. Update → Move(Get Move Input). This is how the user changes movement/camera/abilities — preset, then tweak.
+- **Character logic nodes (editable controller):** "Get Move Input" (→ Vector3 from WASD), "Move" (move+turn the owner by a direction at a speed), "Jump", "Is Grounded" (→ bool), "Set Camera" (override follow distance/height), "Set Ragdoll" (wire a bool into "On"; targets the owner or another object via Target). Wire these in a blueprint to fully customize the character: e.g. Update → Move(Get Move Input). This is how the user changes movement/camera/abilities — preset, then tweak.
+- **Ragdoll (any skeleton):** a full per-bone physics ragdoll — each major bone becomes a capsule rigid body linked by spherical joints, so the skeleton goes limp and falls under gravity while the animation mixer pauses. Three triggers, all equivalent: (1) the **"Set Ragdoll" node** in a blueprint, (2) the character's **Ragdoll test key** (keyRagdoll, default R, toggles during Play), and (3) **automatic on death** — entering an animator state whose name matches "death"/"dead"/"die" ragdolls the object. From chat use set_ragdoll(objectId, on) during Play. It clears when Play stops. **Tuning** lives on the Skeleton asset (shared by every character using it), edited in the Skeleton editor (click a Skeleton in the Project browser): GLOBAL DEFAULTS via set_ragdoll_settings(skeletonId, {capsuleRadius, density, linearDamping, angularDamping, groundY, excludePattern}); PER-BONE (Unreal PhAT-style) via set_ragdoll_body(skeletonId, boneName, {shape: capsule|box|sphere, radius, length, density, linearDamping, angularDamping, enabled}) — overrides the defaults for that one bone, enabled:false drops it from the sim. generate_ragdoll_bodies(skeletonId) seeds a default body per simulated bone to then fine-tune; remove_ragdoll_body reverts a bone to defaults. Get exact bone names with list_bones. Adjust when a ragdoll looks too floppy (raise damping/radius), too stiff (lower damping), or wrong shape for a limb (per-bone shape/size). NOTE: joints are free-swing with damping-based stiffness — there are no hard cone limits.
 - **Fastest path — bundled template:** if the user wants a third-person character/game from scratch (no model imported yet), call create_third_person_template — it uses the engine's built-in Quaternius rig to make a ground + animated "Player" pawn with a mouse-look follow camera, ready to Play.
 - **Camera & facing:** the follow camera is placed by cameraOffset [side, up, back] (negative back = behind a +Z-forward model); mouseLook orbits it, cameraPitch sets elevation. If a character faces the wrong way (moonwalks / camera shows the front), set modelYawOffset to Math.PI to flip it. Users can also drag a 3D gizmo in the viewport to place the camera.
 - **Fast path — third-person pawn (own model):** call create_character_pawn with a rigged model's assetId. It creates the object, auto-builds an Idle/Walk/Jog/Jump Animator Controller from the skeleton's clips, attaches the character controller, AND attaches a preset, editable controller blueprint (Update→Move + Space→Jump). Press Play to use it; then edit the blueprint nodes (movement/camera/abilities), the Animator Controller (which clips), or set_character_controller (tuning) to change "just what you need". Prefer this over hand-wiring unless the user wants something custom.
+- **Gameplay kits (ready-made systems):** add_gameplay_kit(objectId, kit) augments a character's Animator Controller with a whole system, matching clips from its skeleton. Kits: **'ranged'** (pistol — a manual "RangedMode" bool toggles into Pistol Idle; hold keyAim/RMB → Aim; keyAttack → Shoot; keyReload → Reload), **'health'** (creates a "Health" project variable, a Hit-reaction state fired by a manual "Hit" trigger param, and a Death state entered at Health<=0 that auto-drops into the physics ragdoll), **'interactions'** (Interact state on keyInteract/E), **'emotes'** (Emote/dance held on keyEmote/F). The bundled third-person template (create_third_person_template) already includes ALL FOUR. New animator param sources back these — aiming / reloading / interacting / emoting (auto-driven by the bound keys); set a param's source to one of these to react to player input without scripting. New controller keys: keyAim (Mouse1), keyReload (KeyR), keyInteract (KeyE), keyEmote (KeyF). To deal damage from script, lower the "Health" variable (Set Variable node) — at 0 the character dies + ragdolls; fire the "Hit" trigger (Set Anim Trigger) for a flinch.
 
 ## Materials (reusable)
 - A **material** is a reusable PBR surface (base color, metalness, roughness, emissive color + intensity, optional base-color and normal-map image textures) authored once and shared by many objects. They appear in the snapshot's \`materials\` list and in the Project browser; the Material panel edits them.
@@ -241,10 +295,11 @@ You help the user build their game by calling tools that directly modify their s
 ## Visual scripting (Blueprints)
 A blueprint is a reusable node graph you attach to objects. Execution flows along execution edges from event nodes. Typed value edges use handles: sourceHandle "value-out" into targetHandle "value", "condition", "amount", "vector", "message", "rowKey", "a", "b", "min", "max", or "t".
 Node types (label -> category):
-- Events: Start, Update, Key Down, Key Up, Custom Event, Collision Enter.
+- Events: Start, Update, Key Down, Key Up, Custom Event, Collision Enter, Trigger Enter.
   - "Key Down"/"Key Up" need a keyCode like KeyW, KeyA, KeyS, KeyD, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight.
   - "Custom Event" needs an eventName.
-  - "Collision Enter" fires on its owner object when that object (which must have physics enabled) starts touching another collider — wire it to actions for pickups, hits, triggers.
+  - "Collision Enter" fires on its owner object when that object (which must have physics enabled) starts touching another SOLID collider. Set otherObjectId to filter the other collider.
+  - "Trigger Enter" fires on its owner object when it starts overlapping a trigger collider (isTrigger:true). Set otherObjectId to filter the other object, e.g. the Player.
 - Logic: Branch, Compare, AND, OR.
 - Math: Add, Clamp, Lerp.
 - Values: Number, String, Boolean, Vector3.
@@ -254,17 +309,20 @@ Node types (label -> category):
 - Data: Data Asset Lookup.
   - create_data_asset, add_data_asset_column, add_data_asset_row, and set_data_asset_cell build typed Data Assets for inventory/items/dialogue/tuning. Users can also right-click the Project Browser to create one.
   - Data Asset Lookup outputs one cell; set dataAssetId/rowKey/columnId on the node. Connect a String node to targetHandle "rowKey" for dynamic rows, or set rowKey directly.
-- Runtime/Actions: Translate, Rotate, Fire Event, Spawn Object, Play Sound, Print.
+- Runtime/Actions: Translate, Rotate, Fire Event, Spawn Object, Destroy Object, Play Sound, Print.
   - "Translate"/"Rotate" need an axis ("x"|"y"|"z") and an amount (units or degrees per second; negative = opposite direction).
   - "Translate" can also consume a Vector3 on targetHandle "vector". Translate/Rotate/Apply Force can consume a Number on "amount".
   - "Fire Event" needs an eventName matching a "Custom Event".
   - "Spawn Object" creates a new dynamic object (set spawnKind: cube|sphere|capsule|plane) at the owner's position. Runtime-spawned objects are removed when Play stops. Wire it to a one-shot event (Start/Key Up/Custom Event), not Update, or it spawns every frame.
+  - "Destroy Object" removes its Target during Play; omit targetObjectId to destroy self. Use it at the end of pickup/collectible flows so the pickup object disappears. Authored objects are restored when Play stops.
   - "Play Sound" plays an audio asset — set its assetId to an audio asset id from the snapshot.
   - "Set Material Color" sets the owner object's material color at runtime (set \`materialColor\`); "Set Material Property" sets a numeric property (set \`materialProperty\` to metalness|roughness|emissiveIntensity and \`numberValue\`). Both are per-object (don't affect others sharing the material) and reset on Stop.
   - "Print" logs its \`message\` or a connected value on targetHandle "message" to the on-screen console during Play.
 - Physics: Apply Force. It works on dynamic physics objects.
 - Persistence: Save Game, Load Game, Clear Save. They use saveSlot (default "slot1") and persist variables marked persistent in browser/player localStorage.
-Runnable nodes now include events, Branch, Compare, AND/OR, Add/Clamp/Lerp, typed literals, Get/Set Variable, Data Asset Lookup, Translate, Rotate, Apply Force, Fire Event, Spawn Object, Play Sound, Print, Save Game, Load Game, and Clear Save.
+- UI: Show UI, Hide UI, Set UI Text. Set the node's documentId to a UI document; Set UI Text also needs an elementId, and takes the new text from a connected value on targetHandle "text" (or its stringValue). Show/Hide toggle a screen HUD during Play.
+- Variables (object/instance): Get Object Var / Set Object Var read and write a per-object variable named by \`objectKey\` (e.g. "health") — used for per-enemy state that a world UI shows via self.<key>. Set Object Var takes the value on targetHandle "value".
+Runnable nodes now include events, Branch, Compare, AND/OR, Add/Clamp/Lerp, typed literals, Get/Set Variable, Data Asset Lookup, Translate, Rotate, Apply Force, Fire Event, Spawn Object, Destroy Object, Play Sound, Print, Save Game, Load Game, and Clear Save.
 Wire an event node's output into an action node's input with connect_nodes to make the action fire on that event. For value wiring, call connect_nodes with sourceHandle:"value-out" and a targetHandle.
 - To start editing the script of a specific object, use open_object_script — it opens that object's attached blueprint, or creates and attaches a fresh one if the object has none, and reveals the Scripting panel. In the editor, double-clicking an object in the Hierarchy does the same thing.
 
@@ -272,6 +330,18 @@ Wire an event node's output into an action node's input with connect_nodes to ma
 - The whole project can be exported as a standalone **game bundle** (\`game.json\`) with export_game. On web it downloads the file; on desktop it prompts for a save location.
 - The bundle is run by the engine's separate **player runtime** (build it with \`npm run build:player\` → \`dist-player/\`); dropping \`game.json\` next to the built player launches the game with no editor UI. Native Windows/Mac/Linux packaging is a follow-up step.
 - Use export_game when the user wants to ship, build, package, or export their final game.
+
+## Game UI (HUD + world-space)
+- A **UI document** is a reusable tree of elements with a target **surface**: \`screen\` = a HUD drawn over the player's screen (health bar, score, crosshair); \`world\` = a widget anchored over a 3D object (health bar above an enemy, nameplate). They appear in the snapshot's \`uiDocuments\` and in the Project browser; the UI panel edits them.
+- **Fastest path — presets:** use add_ui_preset for common widgets: \`healthBar\` (labeled bar pre-bound to a number variable, auto-created, default "health"=100), \`counter\` (text pre-bound to a variable, default "score"), \`label\`, \`button\`, \`panel\`, \`image\`. Prefer this over composing primitives. Then tweak with update_ui_element / bind_ui_element and arrange with move_ui_element / duplicate_ui_element.
+- **Elements (manual):** panel (flex container), text, bar (a fill bar — bind its \`fill\` to a 0..1 value), button (set \`onClickEvent\` to fire a Custom Event on click), image (set \`assetId\` to an "image" asset). Build with create_ui_document → add_ui_element (returns ids) → update_ui_element (text/style/className) → bind_ui_element.
+- **Screen layout model:** a screen doc's root panel fills the player's viewport; children flow (flex) by default or can be pinned with absolute \`style.position:'absolute'\` + \`left\`/\`top\` (the user sets these by dragging the element on the viewport — the active screen HUD is editable directly over the 3D scene in edit mode). Set \`style.flexDirection\` row/column on a panel to arrange children.
+- **Behaviour = real nodes:** UI logic lives in a Blueprint. Call \`open_ui_logic(documentId)\` to get/create it (it returns a blueprintId and auto-creates a "UI Logic" object that runs it), then \`add_node\`/\`connect_nodes\` on that blueprint with the UI nodes (Show UI, Hide UI, Set UI Text) wired to events (Start, Update, Custom Event ← button \`onClickEvent\`).
+- **Data bindings** make UI live. bind_ui_element targets: \`text\`, \`fill\` (0..1, for bars), \`visible\`, \`color\`, \`background\`, \`width\`. The expression reads project **variables by NAME** (e.g. \`health / 100\`, \`score\`, \`ammo > 0\`) and, for world docs, the host object via \`self.<key>\` (e.g. \`self.health\`). Re-evaluated every frame during Play.
+- **Showing it:** screen docs with visibleOnStart show automatically on Play; otherwise toggle them with the Show UI / Hide UI script nodes. Buttons fire their \`onClickEvent\` as a Custom Event you can catch with a "Custom Event" node.
+- **CSS:** elements take inline style via update_ui_element; for full control set a \`className\` and put rules in the document's raw CSS (edited in the UI panel).
+- **World UI per-instance data:** attach a world doc to an object with attach_world_ui, seed instance data with set_object_variable (e.g. health=100), bind the widget to \`self.health\`, and update it in scripts with Set Object Var. Every instance shows its own value.
+- **Recipe — screen health bar (easy):** create_ui_document("HUD","screen") → add_ui_preset(doc, "healthBar"). That auto-creates a "health" number variable (=100) and a bar bound to \`health / 100\`. Press Play; as a script changes \`health\`, the bar shrinks. (Manual equivalent: create_variable + add_ui_element "bar" + bind_ui_element fill "health / 100".)
 
 ## How to fulfil requests
 - To "move/walk a character with WASD": create or reuse a blueprint, add Key Down nodes (KeyW/KeyA/KeyS/KeyD) and matching Translate nodes (W -> axis z negative, S -> z positive, A -> x negative, D -> x positive), connect each key to its translate, then attach the blueprint to the object. Suggest pressing Play to test.

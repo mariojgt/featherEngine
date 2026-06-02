@@ -12,6 +12,7 @@ import type {
   MeshRendererComponent,
   RigidBodyType,
   SceneObjectKind,
+  UIElement,
   Vector3Tuple,
 } from '../types';
 import { buildSceneSnapshot } from './systemPrompt';
@@ -33,6 +34,7 @@ const NODE_LABELS = [
   'Key Up',
   'Custom Event',
   'Collision Enter',
+  'Trigger Enter',
   'Branch',
   'Compare',
   'AND',
@@ -52,6 +54,7 @@ const NODE_LABELS = [
   'Fire Event',
   'Apply Force',
   'Spawn Object',
+  'Destroy Object',
   'Play Sound',
   'Set Material Color',
   'Set Material Property',
@@ -67,10 +70,16 @@ const NODE_LABELS = [
   'Jump',
   'Is Grounded',
   'Set Camera',
+  'Set Ragdoll',
   'Save Game',
   'Load Game',
   'Clear Save',
   'Print',
+  'Show UI',
+  'Hide UI',
+  'Set UI Text',
+  'Get Object Var',
+  'Set Object Var',
 ] as const;
 
 const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
@@ -80,6 +89,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Key Up': 'Events',
   'Custom Event': 'Events',
   'Collision Enter': 'Events',
+  'Trigger Enter': 'Events',
   Branch: 'Logic',
   Compare: 'Logic',
   AND: 'Logic',
@@ -99,6 +109,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Fire Event': 'Runtime',
   'Apply Force': 'Physics',
   'Spawn Object': 'Runtime',
+  'Destroy Object': 'Runtime',
   'Play Sound': 'Audio',
   'Set Material Color': 'Runtime',
   'Set Material Property': 'Runtime',
@@ -114,10 +125,16 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   Jump: 'Runtime',
   'Is Grounded': 'Runtime',
   'Set Camera': 'Runtime',
+  'Set Ragdoll': 'Runtime',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
   Print: 'Runtime',
+  'Show UI': 'UI',
+  'Hide UI': 'UI',
+  'Set UI Text': 'UI',
+  'Get Object Var': 'Variables',
+  'Set Object Var': 'Variables',
 };
 
 const KEY_CODES = [
@@ -139,6 +156,15 @@ const findAsset = (id: string) => store().assets.find((asset) => asset.id === id
 const findVariable = (id: string) => store().variables.find((variable) => variable.id === id);
 const findDataAsset = (id: string) => store().dataAssets.find((table) => table.id === id);
 const findMaterial = (id: string) => store().materials.find((material) => material.id === id);
+const findUIDocument = (id: string) => store().uiDocuments.find((doc) => doc.id === id);
+const findUIElement = (root: UIElement, id: string): UIElement | undefined => {
+  if (root.id === id) return root;
+  for (const child of root.children) {
+    const found = findUIElement(child, id);
+    if (found) return found;
+  }
+  return undefined;
+};
 const findController = (id: string) => store().animatorControllers.find((controller) => controller.id === id);
 
 export const engineTools = {
@@ -271,12 +297,15 @@ export const engineTools = {
   }),
 
   set_physics: tool({
-    description: 'Enable/configure physics (collision) on an object. For a STATIC collision wall/floor/obstacle that blocks the player but never moves or falls, set enabled:true and bodyType:"fixed" — that is the standard "static collider". Use "dynamic" for objects that fall/get pushed, "kinematic" for scripted movers. An object only collides once physics is enabled.',
+    description: 'Enable/configure physics on an object. For solid walls/floors set enabled:true, bodyType:"fixed", isTrigger:false. For pickups/overlap volumes set enabled:true, bodyType:"fixed", isTrigger:true so it fires Trigger Enter without blocking. collisionLayer is 0-15 and collisionMask is a 16-bit layer bitmask.',
     inputSchema: z.object({
       id: z.string(),
       enabled: z.boolean().optional(),
       bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
       collider: z.enum(['box', 'sphere', 'capsule']).optional(),
+      isTrigger: z.boolean().optional(),
+      collisionLayer: z.number().int().min(0).max(15).optional(),
+      collisionMask: z.number().int().min(0).max(0xffff).optional(),
       mass: z.number().optional(),
       gravityScale: z.number().optional(),
       friction: z.number().optional(),
@@ -367,7 +396,7 @@ export const engineTools = {
       name: z.string(),
       type: z.enum(['float', 'bool', 'trigger']),
       source: z
-        .enum(['manual', 'speed', 'verticalSpeed', 'moving', 'crouching', 'grounded', 'rolling', 'attacking', 'weaponEquipped', 'variable'])
+        .enum(['manual', 'speed', 'verticalSpeed', 'moving', 'crouching', 'grounded', 'rolling', 'attacking', 'aiming', 'reloading', 'interacting', 'emoting', 'weaponEquipped', 'variable'])
         .optional(),
       variableId: z.string().optional(),
     }),
@@ -449,6 +478,34 @@ export const engineTools = {
     },
   }),
 
+  set_anim_parameter: tool({
+    description:
+      'Set a live animator parameter value on an object during Play (e.g. flip a manual "WeaponEquipped" bool, set a float). Resolves the parameter by name on the object\'s controller. Auto-sourced params (speed, grounded, etc.) are recomputed each frame so setting them has no lasting effect — use for "manual" params and triggers.',
+    inputSchema: z.object({ objectId: z.string(), paramName: z.string(), value: z.union([z.number(), z.boolean()]) }),
+    execute: async ({ objectId, paramName, value }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      const controller = findController(object.animator?.controllerId ?? '');
+      const param = controller?.parameters.find((p) => p.name === paramName);
+      if (!param) return `No parameter "${paramName}" on ${objectId}'s animator.`;
+      if (!store().isPlaying) return `Set takes effect during Play; press play first.`;
+      store().setRuntimeAnimatorParam(objectId, param.id, value);
+      return `Set ${paramName} = ${value} on ${objectId}.`;
+    },
+  }),
+
+  set_ragdoll: tool({
+    description:
+      'Turn a physics ragdoll on or off for a character object during Play — its skeleton goes limp and falls under gravity (works on any rigged object). Takes effect immediately during Play; entering an animator state named "Death" auto-ragdolls. Use the "Set Ragdoll" node for in-graph triggers, or the character\'s Ragdoll test key.',
+    inputSchema: z.object({ objectId: z.string(), on: z.boolean().default(true) }),
+    execute: async ({ objectId, on }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      if (!store().isPlaying) return `Ragdoll only simulates during Play; press play first.`;
+      store().setObjectRagdoll(objectId, on);
+      return `${on ? 'Enabled' : 'Disabled'} ragdoll on ${objectId}.`;
+    },
+  }),
+
   set_object_controller: tool({
     description:
       'Assign an Animator Controller to an object\'s animator (enables it), or pass empty controllerId to detach. The object must render a rigged model whose skeleton matches the controller.',
@@ -487,6 +544,11 @@ export const engineTools = {
       rollSpeed: z.number().optional(),
       rollDuration: z.number().optional(),
       keyAttack: z.string().optional(),
+      keyAim: z.string().optional(),
+      keyReload: z.string().optional(),
+      keyInteract: z.string().optional(),
+      keyEmote: z.string().optional(),
+      keyRagdoll: z.string().optional(),
       // Camera.
       cameraFollow: z.boolean().optional(),
       cameraOffset: vec3.optional().describe('Resting camera position relative to the pawn: [side, up, back]. Negative Z is behind a +Z-forward model.'),
@@ -531,6 +593,19 @@ export const engineTools = {
       return id
         ? `Created character pawn "${findObject(id)?.name}" (objectId ${id}) with a locomotion controller and character controller. Press Play and use WASD.`
         : `Couldn't build a pawn — no usable locomotion clips found on that skeleton.`;
+    },
+  }),
+
+  add_gameplay_kit: tool({
+    description:
+      "Add a ready-made gameplay system to a character that already has an Animator Controller (e.g. from create_character_pawn) — augments its state machine with extra states/params/transitions matched from the skeleton's clips. Kits: 'ranged' (pistol aim/shoot/reload — toggle the RangedMode param to enter; aim=keyAim/RMB, shoot=keyAttack, reload=keyReload), 'health' (a Health project variable + Hit-reaction state fired by a manual 'Hit' trigger + a Death state that auto-drops into the ragdoll at Health<=0), 'interactions' (an Interact state on keyInteract/E), 'emotes' (a dance/wave Emote held on keyEmote/F). The bundled third-person template ships with all four.",
+    inputSchema: z.object({ objectId: z.string(), kit: z.enum(['ranged', 'health', 'interactions', 'emotes']) }),
+    execute: async ({ objectId, kit }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.animator?.controllerId) return `${objectId} has no Animator Controller — run create_character_pawn first.`;
+      const summary = store().addGameplayKit(objectId, kit);
+      return summary ? `Added ${summary} to ${object.name}.` : `Couldn't add the ${kit} kit — the skeleton has no matching clips.`;
     },
   }),
 
@@ -582,6 +657,74 @@ export const engineTools = {
       if (!skeleton.boneNames.includes(boneName)) return `Bone "${boneName}" not on this skeleton.`;
       const id = store().addSkeletonSocket(skeletonId, { name, boneName });
       return id ? `Added socket "${name}" on ${boneName}.` : `Couldn't add socket.`;
+    },
+  }),
+
+  set_ragdoll_settings: tool({
+    description:
+      "Tune a skeleton's physics-ragdoll definition (shared by every character using that skeleton). Adjust when a ragdoll looks too floppy/stiff/light. skeletonId comes from the snapshot's skeletalMeshes[].skeletonId or skeletons[].id. All fields optional. capsuleRadius (bone thickness, fatter=more stable), density (mass, heavier=swings slower), linearDamping/angularDamping (higher=less motion/stiffer), groundY (floor height it piles on), excludePattern (case-insensitive regex of bone names NOT simulated).",
+    inputSchema: z.object({
+      skeletonId: z.string(),
+      capsuleRadius: z.number().optional(),
+      density: z.number().optional(),
+      linearDamping: z.number().optional(),
+      angularDamping: z.number().optional(),
+      groundY: z.number().optional(),
+      excludePattern: z.string().optional(),
+    }),
+    execute: async ({ skeletonId, ...patch }) => {
+      if (!store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
+      const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      if (!Object.keys(clean).length) return `No ragdoll fields to update.`;
+      store().updateSkeletonRagdoll(skeletonId, clean);
+      return `Updated ragdoll tuning on skeleton ${skeletonId}: ${Object.keys(clean).join(', ')}.`;
+    },
+  }),
+
+  generate_ragdoll_bodies: tool({
+    description:
+      'Auto-generate a default capsule physics body for every simulated bone of a skeleton (Unreal "auto-generate bodies"). A starting point you then fine-tune per bone with set_ragdoll_body. skeletonId from snapshot skeletalMeshes[].skeletonId / skeletons[].id.',
+    inputSchema: z.object({ skeletonId: z.string() }),
+    execute: async ({ skeletonId }) => {
+      if (!store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
+      store().generateRagdollBodies(skeletonId);
+      const count = store().skeletons.find((s) => s.id === skeletonId)?.ragdoll?.bodies?.length ?? 0;
+      return `Generated ${count} ragdoll bodies on skeleton ${skeletonId}.`;
+    },
+  }),
+
+  set_ragdoll_body: tool({
+    description:
+      "Configure ONE bone's physics body in a skeleton's ragdoll, Unreal-PhAT-style (overrides the global ragdoll defaults for that bone). Use list_bones on a character to get exact bone names. enabled:false removes that bone from the simulation. shape: capsule|box|sphere. radius (capsule/sphere), length (capsule half-length; 0=auto from bone), density (mass), linearDamping, angularDamping (=joint stiffness, higher=stiffer). Omitted fields fall back to the skeleton defaults.",
+    inputSchema: z.object({
+      skeletonId: z.string(),
+      boneName: z.string(),
+      enabled: z.boolean().optional(),
+      shape: z.enum(['capsule', 'box', 'sphere']).optional(),
+      radius: z.number().optional(),
+      length: z.number().optional(),
+      density: z.number().optional(),
+      linearDamping: z.number().optional(),
+      angularDamping: z.number().optional(),
+    }),
+    execute: async ({ skeletonId, boneName, ...patch }) => {
+      const skeleton = store().skeletons.find((s) => s.id === skeletonId);
+      if (!skeleton) return `No skeleton with id ${skeletonId}.`;
+      if (!skeleton.boneNames.includes(boneName)) return `Bone "${boneName}" not on this skeleton.`;
+      const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      store().setRagdollBody(skeletonId, boneName, clean);
+      return `Set ragdoll body on "${boneName}" (${Object.keys(clean).join(', ') || 'defaults'}).`;
+    },
+  }),
+
+  remove_ragdoll_body: tool({
+    description:
+      "Remove a bone's per-bone ragdoll body override so it reverts to the skeleton's global defaults. To instead stop a bone from simulating at all, use set_ragdoll_body with enabled:false.",
+    inputSchema: z.object({ skeletonId: z.string(), boneName: z.string() }),
+    execute: async ({ skeletonId, boneName }) => {
+      if (!store().skeletons.some((s) => s.id === skeletonId)) return `No skeleton with id ${skeletonId}.`;
+      store().removeRagdollBody(skeletonId, boneName);
+      return `Removed ragdoll body override on "${boneName}".`;
     },
   }),
 
@@ -681,6 +824,183 @@ export const engineTools = {
       if (!findMaterial(id)) return `No material with id ${id}.`;
       store().deleteMaterial(id);
       return `Deleted material ${id}.`;
+    },
+  }),
+
+  create_ui_document: tool({
+    description:
+      'Create a Game UI document. surface "screen" = a HUD overlay drawn on the player\'s screen (health bars, score); "world" = a widget anchored over a 3D object (attach with attach_world_ui). It starts with an empty root Panel. Returns its uiDocumentId; add elements with add_ui_element.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      surface: z.enum(['screen', 'world']).optional().describe('Defaults to "screen".'),
+      folderId: z.string().optional(),
+    }),
+    execute: async ({ name, surface, folderId }) => {
+      const id = store().createUIDocument(name, surface ?? 'screen', folderId);
+      const doc = findUIDocument(id);
+      return `Created ${doc?.surface} UI "${doc?.name}" with uiDocumentId ${id}. Its root panel id is ${doc?.root.id}.`;
+    },
+  }),
+
+  add_ui_element: tool({
+    description:
+      'Add an element to a UI document under a parent element (omit parentId to add under the root panel). kind: panel (container), text, bar (a fill bar — bind its "fill" to a 0-1 value), button (set onClickEvent via update_ui_element), image. Returns the new elementId.',
+    inputSchema: z.object({
+      documentId: z.string(),
+      parentId: z.string().optional().describe('Parent element id; defaults to the root panel.'),
+      kind: z.enum(['panel', 'text', 'bar', 'button', 'image']),
+    }),
+    execute: async ({ documentId, parentId, kind }) => {
+      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
+      const id = store().addUIElement(documentId, parentId, kind);
+      return `Added ${kind} element ${id} to UI ${documentId}.`;
+    },
+  }),
+
+  update_ui_element: tool({
+    description:
+      "Update a UI element: text (text/button label), className (for raw CSS), onClickEvent (button → fires that custom event), assetId (image), and style (CSS-like: background, color hex; width/height/padding/fontSize/borderRadius as CSS strings e.g. '160px'; flexDirection 'row'|'column').",
+    inputSchema: z.object({
+      documentId: z.string(),
+      elementId: z.string(),
+      name: z.string().optional(),
+      text: z.string().optional(),
+      className: z.string().optional(),
+      onClickEvent: z.string().optional(),
+      assetId: z.string().optional(),
+      style: z
+        .object({
+          background: z.string().optional(),
+          color: z.string().optional(),
+          width: z.string().optional(),
+          height: z.string().optional(),
+          padding: z.string().optional(),
+          gap: z.string().optional(),
+          fontSize: z.string().optional(),
+          borderRadius: z.string().optional(),
+          flexDirection: z.enum(['row', 'column']).optional(),
+          textAlign: z.enum(['left', 'center', 'right']).optional(),
+        })
+        .optional(),
+    }),
+    execute: async ({ documentId, elementId, style, ...rest }) => {
+      const doc = findUIDocument(documentId);
+      if (!doc) return `No UI document with id ${documentId}.`;
+      const existing = findUIElement(doc.root, elementId);
+      if (!existing) return `No element ${elementId} in UI ${documentId}.`;
+      // Merge style onto the element's existing style so partial updates don't drop other fields.
+      store().updateUIElement(documentId, elementId, {
+        ...rest,
+        ...(style ? { style: { ...existing.style, ...style } } : {}),
+      });
+      return `Updated element ${elementId}.`;
+    },
+  }),
+
+  bind_ui_element: tool({
+    description:
+      'Bind a UI element property to a live expression evaluated every frame. target: "text" (element text), "fill" (a bar\'s 0-1 fill; e.g. health/maxHealth), "visible" (show/hide), "color"/"background" (CSS color), "width". The expression reads project variables BY NAME (e.g. "health / 100") and, for world UI, the host object via "self.<key>" (e.g. "self.health"). Pass an empty expression to remove the binding.',
+    inputSchema: z.object({
+      documentId: z.string(),
+      elementId: z.string(),
+      target: z.enum(['text', 'fill', 'visible', 'color', 'background', 'width']),
+      expression: z.string().describe('e.g. "score", "health / 100", "self.health > 0"'),
+    }),
+    execute: async ({ documentId, elementId, target, expression }) => {
+      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
+      store().setUIBinding(documentId, elementId, target, expression);
+      return expression.trim()
+        ? `Bound ${target} of ${elementId} to "${expression}".`
+        : `Removed the ${target} binding from ${elementId}.`;
+    },
+  }),
+
+  attach_world_ui: tool({
+    description:
+      'Anchor a "world" UI document over a 3D object (e.g. an enemy health bar). The object then shows the widget at its position; world UI bindings can read that object\'s instance variables via self.<key> (set with set_object_variable). Pass empty documentId to detach.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      documentId: z.string().optional().describe('A world UI document id, or empty to detach.'),
+    }),
+    execute: async ({ objectId, documentId }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      if (documentId) {
+        const doc = findUIDocument(documentId);
+        if (!doc) return `No UI document with id ${documentId}.`;
+        if (doc.surface !== 'world') return `UI ${documentId} is a screen document; only "world" docs can be anchored to objects.`;
+        store().attachUI(objectId, documentId);
+        return `Anchored world UI ${documentId} to ${objectId}.`;
+      }
+      store().detachUI(objectId);
+      return `Detached the world UI from ${objectId}.`;
+    },
+  }),
+
+  set_object_variable: tool({
+    description:
+      "Set a per-instance variable on an object (e.g. this enemy's health). Read by that object's world UI as self.<key> and by Get/Set Object Var script nodes. Use this to seed starting values like health=100.",
+    inputSchema: z.object({ objectId: z.string(), key: z.string(), value: graphValue }),
+    execute: async ({ objectId, key, value }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      store().setObjectVariable(objectId, key, asGraphValue(value));
+      return `Set ${objectId}.${key} = ${JSON.stringify(value)}.`;
+    },
+  }),
+
+  add_ui_preset: tool({
+    description:
+      'Insert a ready-made widget into a UI document — the FAST way to build common UI. "healthBar" = a labeled bar pre-bound to a number variable (auto-created if missing, default "health"=100); "counter" = a text pre-bound to a variable (default "score"); "label"/"button"/"panel"/"image" = styled primitives. Drops under parentId (or the root). Returns the inserted element id. Prefer this over composing primitives by hand.',
+    inputSchema: z.object({
+      documentId: z.string(),
+      preset: z.enum(['panel', 'label', 'healthBar', 'button', 'counter', 'image']),
+      parentId: z.string().optional().describe('Parent element id; defaults to the root panel.'),
+      variableName: z.string().optional().describe('For healthBar/counter: which variable to bind (created as a number if missing).'),
+    }),
+    execute: async ({ documentId, preset, parentId, variableName }) => {
+      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
+      const id = store().addUIPreset(documentId, parentId, preset, variableName ? { variableName } : undefined);
+      return `Added ${preset} preset (element ${id}) to UI ${documentId}.`;
+    },
+  }),
+
+  move_ui_element: tool({
+    description: 'Reorder a UI element among its siblings (up = earlier/before, down = later/after).',
+    inputSchema: z.object({ documentId: z.string(), elementId: z.string(), direction: z.enum(['up', 'down']) }),
+    execute: async ({ documentId, elementId, direction }) => {
+      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
+      store().moveUIElement(documentId, elementId, direction);
+      return `Moved ${elementId} ${direction}.`;
+    },
+  }),
+
+  duplicate_ui_element: tool({
+    description: 'Duplicate a UI element (and its children) next to itself. Returns the new element id.',
+    inputSchema: z.object({ documentId: z.string(), elementId: z.string() }),
+    execute: async ({ documentId, elementId }) => {
+      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
+      const id = store().duplicateUIElement(documentId, elementId);
+      return `Duplicated ${elementId} → ${id}.`;
+    },
+  }),
+
+  open_ui_logic: tool({
+    description:
+      "Get (or create) the Blueprint that holds a UI document's behaviour, and ensure it runs (an empty \"UI Logic\" object carrying it is auto-created). Returns its blueprintId — then use add_node / connect_nodes on it to wire behaviour (Show UI, Hide UI, Set UI Text, Custom Event ← button clicks, etc.).",
+    inputSchema: z.object({ documentId: z.string() }),
+    execute: async ({ documentId }) => {
+      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
+      const blueprintId = store().openUILogic(documentId);
+      return `UI logic blueprint is ${blueprintId}. Add nodes to it with add_node using blueprintId ${blueprintId}.`;
+    },
+  }),
+
+  delete_ui_document: tool({
+    description: 'Delete a UI document. Objects anchored to it (world UI) are detached.',
+    inputSchema: z.object({ id: z.string() }),
+    execute: async ({ id }) => {
+      if (!findUIDocument(id)) return `No UI document with id ${id}.`;
+      store().deleteUIDocument(id);
+      return `Deleted UI document ${id}.`;
     },
   }),
 
@@ -933,6 +1253,8 @@ export const engineTools = {
       compareOp: z.enum(['==', '!=', '>', '>=', '<', '<=']).optional(),
       saveSlot: z.string().optional(),
       eventName: z.string().optional(),
+      otherObjectId: z.string().optional().describe('Collision/Trigger Enter: optional id of the other object to filter against.'),
+      targetObjectId: z.string().optional().describe('Destroy Object / Set Ragdoll / animator nodes: target object; omit for self.'),
       assetId: z.string().optional().describe('Play Sound: id of an audio asset.'),
       spawnKind: z.enum(['cube', 'sphere', 'capsule', 'plane']).optional().describe('Spawn Object: what to spawn.'),
       message: z.string().optional().describe('Print: the text to log during Play.'),
@@ -970,9 +1292,13 @@ export const engineTools = {
       materialColor,
       materialColorTarget,
       materialProperty,
+      otherObjectId,
+      targetObjectId,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
+      if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
+      if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const nodeId = store().addGraphNodeToBlueprint(blueprintId, type, NODE_CATEGORY[type], {
@@ -990,6 +1316,8 @@ export const engineTools = {
         compareOp,
         saveSlot,
         eventName,
+        otherObjectId,
+        targetObjectId,
         assetId,
         spawnKind: spawnKind as SceneObjectKind | undefined,
         message,
@@ -1040,21 +1368,29 @@ export const engineTools = {
       compareOp: z.enum(['==', '!=', '>', '>=', '<', '<=']).optional(),
       saveSlot: z.string().optional(),
       eventName: z.string().optional(),
+      otherObjectId: z.string().optional().describe('Collision/Trigger Enter: optional id of the other object to filter against.'),
       assetId: z.string().optional(),
       spawnKind: z.enum(['cube', 'sphere', 'capsule', 'plane']).optional(),
       message: z.string().optional(),
       materialColor: z.string().optional(),
       materialColorTarget: z.enum(['base', 'emissive']).optional(),
       materialProperty: z.enum(['metalness', 'roughness', 'emissiveIntensity']).optional(),
+      // Set/Get Anim nodes: which animator parameter (by name, from the snapshot's controllers) and which object.
+      paramName: z.string().optional(),
+      targetObjectId: z.string().optional().describe('For Destroy Object, Set Ragdoll, and Set/Get Anim nodes: object to target; omit for self.'),
     }),
-    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, ...patch }) => {
+    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
+      if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
+      if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const updates: Partial<NodeForgeNodeData> = { ...patch };
       if (variableId !== undefined) updates.variableId = variableId;
       if (resolvedDataAssetId !== undefined) updates.tableId = resolvedDataAssetId;
+      if (otherObjectId !== undefined) updates.otherObjectId = otherObjectId || undefined;
+      if (targetObjectId !== undefined) updates.targetObjectId = targetObjectId || undefined;
       if (vectorValue !== undefined) updates.vectorValue = asVec3(vectorValue);
       store().setActiveBlueprint(blueprintId);
       store().updateGraphNodeData(nodeId, updates);

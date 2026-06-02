@@ -8,6 +8,7 @@ import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
+import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import type { SceneObject, Vector3Tuple } from '../types';
 
 /** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
@@ -173,6 +174,9 @@ function GameScene() {
           ),
         )}
       </group>
+
+      {/* World-space UI widgets (health bars, nameplates) anchored at each object's position. */}
+      {objects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
 
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
     </>

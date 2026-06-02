@@ -36,6 +36,10 @@ const PARAM_SOURCES: Array<{ value: AnimatorParameter['source']; label: string }
   { value: 'grounded', label: 'Is grounded' },
   { value: 'rolling', label: 'Is rolling' },
   { value: 'attacking', label: 'Is attacking' },
+  { value: 'aiming', label: 'Is aiming' },
+  { value: 'reloading', label: 'Is reloading' },
+  { value: 'interacting', label: 'Is interacting' },
+  { value: 'emoting', label: 'Is emoting' },
   { value: 'weaponEquipped', label: 'Weapon equipped' },
   { value: 'variable', label: 'Project variable' },
 ];

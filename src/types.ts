@@ -27,7 +27,8 @@ export type GraphNodeCategory =
   | 'Variables'
   | 'Data'
   | 'Persistence'
-  | 'Material';
+  | 'Material'
+  | 'UI';
 
 export type GraphNodeTone =
   | 'event'
@@ -40,7 +41,8 @@ export type GraphNodeTone =
   | 'variable'
   | 'data'
   | 'persistence'
-  | 'material';
+  | 'material'
+  | 'ui';
 
 export type GraphNodeKind =
   | 'event.start'
@@ -49,6 +51,7 @@ export type GraphNodeKind =
   | 'event.keyUp'
   | 'event.custom'
   | 'event.collisionEnter'
+  | 'event.triggerEnter'
   | 'logic.branch'
   | 'logic.compare'
   | 'logic.and'
@@ -68,6 +71,7 @@ export type GraphNodeKind =
   | 'action.applyForce'
   | 'action.fireEvent'
   | 'action.spawnObject'
+  | 'action.destroyObject'
   | 'action.playSound'
   | 'action.setMaterialColor'
   | 'action.setMaterialProperty'
@@ -83,6 +87,7 @@ export type GraphNodeKind =
   | 'action.move'
   | 'action.jump'
   | 'action.setCamera'
+  | 'action.setRagdoll'
   | 'material.output'
   | 'material.color'
   | 'material.scalar'
@@ -94,7 +99,12 @@ export type GraphNodeKind =
   | 'save.write'
   | 'save.load'
   | 'save.clear'
-  | 'action.print';
+  | 'action.print'
+  | 'ui.show'
+  | 'ui.hide'
+  | 'ui.setText'
+  | 'variable.getObject'
+  | 'variable.setObject';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -129,8 +139,18 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   spawnKind?: SceneObjectKind;
   /** action.print: message to log to the runtime console. */
   message?: string;
-  /** animator.setFloat/setBool/setTrigger: name of the animator parameter to write. */
+  /** animator.setFloat/setBool/setTrigger/getParam/getState: name of the animator parameter. */
   paramName?: string;
+  /** animator.* / action.destroyObject / action.setRagdoll: target object. Empty = the owning object (self). */
+  targetObjectId?: string;
+  /** event.collisionEnter/event.triggerEnter: optional filter for the other object that caused the event. */
+  otherObjectId?: string;
+  /** ui.show/hide/setText: id of the UI document to drive. */
+  documentId?: string;
+  /** ui.setText: id of the element within the document whose text to override. */
+  elementId?: string;
+  /** variable.getObject/setObject: key on the owning object's instance variables. */
+  objectKey?: string;
   hasInput?: boolean;
   hasOutput?: boolean;
 }
@@ -238,9 +258,63 @@ export interface SkeletonAsset {
   rootBone: string;
   /** Reusable named sockets placed on this skeleton (Unreal-style), referenced by attachments. */
   sockets?: SkeletonSocket[];
+  /** Physics-ragdoll tuning for this skeleton (global multipliers). Defaults applied when absent. */
+  ragdoll?: RagdollSettings;
   /** Containing folder id, or undefined for the project root. */
   folderId?: string;
   createdAt: number;
+}
+
+/** Collision primitive used for a ragdoll bone body (Unreal PhAT-style). */
+export type RagdollBodyShape = 'capsule' | 'box' | 'sphere';
+
+/**
+ * Per-bone physics body override (Unreal "Physics Asset" / PhAT style). Every field is optional and
+ * falls back to the skeleton's global `RagdollSettings` defaults (or auto-sizing from the bone length).
+ * Keyed by `boneName`. Set `enabled: false` to exclude a specific bone from the simulation.
+ */
+export interface RagdollBodyDef {
+  /** Bone this body is attached to (matches a name in SkeletonAsset.boneNames). */
+  boneName: string;
+  /** Simulate this bone? Defaults to true. False removes its body + joint. */
+  enabled?: boolean;
+  /** Collision shape. Defaults to 'capsule'. */
+  shape?: RagdollBodyShape;
+  /** Capsule/sphere radius (world units). Falls back to the global capsuleRadius. */
+  radius?: number;
+  /** Capsule half-length override; 0/undefined = auto from the distance to the child bone. */
+  length?: number;
+  /** Box half-extents [x,y,z] when shape is 'box'. */
+  halfExtents?: Vector3Tuple;
+  /** Mass density override. Falls back to the global density. */
+  density?: number;
+  /** Linear damping override. Falls back to the global linearDamping. */
+  linearDamping?: number;
+  /** Angular damping override — acts as this joint's stiffness (higher = stiffer). Falls back to global. */
+  angularDamping?: number;
+}
+
+/**
+ * Ragdoll definition saved on a SkeletonAsset and shared by every mesh/character using it. The top-level
+ * fields are GLOBAL DEFAULTS applied to every simulated bone; `bodies` holds optional Unreal-PhAT-style
+ * per-bone overrides. RagdollRig builds one rigid body per bone (capsule/box/sphere) linked by spherical
+ * joints at runtime from this definition.
+ */
+export interface RagdollSettings {
+  /** Default capsule radius (world units) for each bone body — fatter = more stable, less floppy. */
+  capsuleRadius: number;
+  /** Default mass density of the bone bodies — higher = heavier, swings slower. */
+  density: number;
+  /** Default linear damping — higher = bodies lose travel speed faster (less sliding). */
+  linearDamping: number;
+  /** Default angular damping — higher = joints stop spinning sooner (stiffer-looking). */
+  angularDamping: number;
+  /** Floor height the ragdoll piles up on (world Y). */
+  groundY: number;
+  /** Case-insensitive regex source: bone names matching this are NOT simulated (fingers, hair, etc.). */
+  excludePattern: string;
+  /** Per-bone overrides (Unreal PhAT-style). Bones without an entry use the defaults above. */
+  bodies?: RagdollBodyDef[];
 }
 
 /** A skinned mesh bound to a Skeleton. The geometry lives in `sourceAssetId`'s GLB. */
@@ -289,6 +363,10 @@ export type AnimatorParamSource =
   | 'rolling'
   | 'attacking'
   | 'weaponEquipped'
+  | 'aiming'
+  | 'reloading'
+  | 'interacting'
+  | 'emoting'
   | 'variable';
 
 export interface AnimatorParameter {
@@ -392,6 +470,16 @@ export interface CharacterControllerComponent {
   rollDuration: number;
   /** Attack key — fires the "attacking" animator parameter (punch unarmed, weapon attack when equipped). */
   keyAttack: string;
+  /** Aim key (held) — drives the "aiming" parameter (ranged-weapon aim pose). */
+  keyAim: string;
+  /** Reload key — pulses the "reloading" parameter (ranged-weapon reload). */
+  keyReload: string;
+  /** Interact key — pulses the "interacting" parameter (use/pick-up). */
+  keyInteract: string;
+  /** Emote key (held) — drives the "emoting" parameter (dance/wave). */
+  keyEmote: string;
+  /** Test key that toggles the physics ragdoll on this character during Play. */
+  keyRagdoll: string;
   // --- Camera ---
   /** Trail a third-person camera behind the character (game view / export). */
   cameraFollow: boolean;
@@ -417,6 +505,12 @@ export interface PhysicsComponent {
   enabled: boolean;
   bodyType: RigidBodyType;
   collider: ColliderType;
+  /** When true, the collider is a sensor/trigger: it fires trigger events but does not block or push. */
+  isTrigger: boolean;
+  /** Collision layer index, 0-15. */
+  collisionLayer: number;
+  /** Bit mask of layers this collider interacts with. */
+  collisionMask: number;
   mass: number;
   gravityScale: number;
   friction: number;
@@ -453,6 +547,18 @@ export interface SkeletonSocket {
   rotation: Vector3Tuple;
 }
 
+/** Anchors a world-space UI document above/around an object (Unreal widget-component style). */
+export interface UIComponent {
+  /** Id of the `surface: 'world'` UI document to render at this object. */
+  documentId: string;
+  /** Local offset from the object's origin, in world units. */
+  offset: Vector3Tuple;
+  /** Uniform scale of the rendered widget. */
+  scale: number;
+  /** When true the widget always faces the camera. */
+  billboard: boolean;
+}
+
 export interface SceneObject {
   id: string;
   name: string;
@@ -465,6 +571,9 @@ export interface SceneObject {
   animator?: AnimatorComponent;
   character?: CharacterControllerComponent;
   attachment?: AttachmentComponent;
+  ui?: UIComponent;
+  /** Per-instance data (e.g. this enemy's `health`), read/written by scripts and world UI bindings via `self.*`. */
+  variables?: Record<string, GraphValue>;
 }
 
 /** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */
@@ -549,8 +658,95 @@ export interface ProjectGraph {
   edges: Edge[];
 }
 
+/** Kinds of UI element a document can contain. */
+export type UIElementKind = 'panel' | 'text' | 'image' | 'bar' | 'button';
+
+/** Whether a UI document draws on the player's screen (HUD) or anchored in the 3D world. */
+export type UISurface = 'screen' | 'world';
+
+/** CSS-like style, flat and serializable. The inspector edits these; `custom` is the raw escape hatch. */
+export interface UIStyle {
+  width?: string;
+  height?: string;
+  padding?: string;
+  margin?: string;
+  display?: 'flex' | 'block' | 'none';
+  flexDirection?: 'row' | 'column';
+  alignItems?: string;
+  justifyContent?: string;
+  gap?: string;
+  background?: string;
+  color?: string;
+  opacity?: number;
+  border?: string;
+  borderRadius?: string;
+  fontSize?: string;
+  fontWeight?: string;
+  fontFamily?: string;
+  textAlign?: 'left' | 'center' | 'right';
+  /** Free placement within the parent — set when an element is dragged on the design canvas. */
+  position?: 'absolute' | 'relative';
+  left?: string;
+  top?: string;
+  /** Arbitrary CSS properties the inspector doesn't surface (camelCase keys). */
+  custom?: Record<string, string>;
+}
+
+/** One-click widget templates inserted by the UI editor / AI (addUIPreset). */
+export type UIPresetKind = 'panel' | 'label' | 'healthBar' | 'button' | 'counter' | 'image';
+
+/** Screen-space placement (Unity-style 9-slice anchor + pixel offset). */
+export interface UIAnchor {
+  h: 'left' | 'center' | 'right' | 'stretch';
+  v: 'top' | 'middle' | 'bottom' | 'stretch';
+  offsetX: number;
+  offsetY: number;
+}
+
+/** Drives one element property from a runtime expression (e.g. `health / maxHealth`). */
+export interface UIBinding {
+  target: 'text' | 'fill' | 'visible' | 'color' | 'background' | 'width';
+  expression: string;
+}
+
+export interface UIElement {
+  id: string;
+  kind: UIElementKind;
+  name: string;
+  /** Class for raw-CSS targeting. */
+  className?: string;
+  /** Static label for text/button elements. */
+  text?: string;
+  /** Image source asset id. */
+  assetId?: string;
+  style: UIStyle;
+  /** Screen surface only — placement of this element's subtree. */
+  anchor?: UIAnchor;
+  bindings: UIBinding[];
+  /** Button only — fires this custom runtime event on click (consumed by event.custom nodes). */
+  onClickEvent?: string;
+  children: UIElement[];
+}
+
+/** A reusable UI tree — a project asset like a material. Edited in the UI panel. */
+export interface UIDocument {
+  id: string;
+  name: string;
+  surface: UISurface;
+  /** Always a 'panel' element. */
+  root: UIElement;
+  /** Raw CSS escape hatch, scoped to this document. */
+  css?: string;
+  /** Screen docs shown automatically when Play starts. */
+  visibleOnStart: boolean;
+  /** Blueprint holding this UI's behaviour nodes (run by an auto-created "UI Logic" object). */
+  logicBlueprintId?: string;
+  folderId?: string;
+  createdAt: number;
+}
+
 /** Current project file format version. */
-export const PROJECT_VERSION = '0.6.0';
+export const PROJECT_VERSION = '0.7.0';
 
 /** Scene entry in the project manifest (project.json), pointing at its scene file. */
 export interface SceneRef {
@@ -582,6 +778,7 @@ export interface NodeForgeProject {
   animatorControllers: AnimatorController[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
+  uiDocuments: UIDocument[];
 }
 
 /** Contents of `project.json` — everything except scene objects (which live in scene files). */
@@ -602,6 +799,7 @@ export interface ProjectManifest {
   animatorControllers: AnimatorController[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
+  uiDocuments: UIDocument[];
 }
 
 /** The legacy single-scene format (v0.1.0) — migrated on load. */

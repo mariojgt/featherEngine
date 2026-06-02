@@ -1,16 +1,16 @@
 import { useMemo, useState } from 'react';
 import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type NodeTypes } from '@xyflow/react';
-import { Boxes, Database, GitBranch, LayoutGrid, MousePointer2, Plus, Save, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
+import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2, Plus, Save, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
-import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, Vector3Tuple } from '../types';
+import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, UIElement, Vector3Tuple } from '../types';
 
 const nodeTypes: NodeTypes = {
   nodeforge: NodeForgeGraphNode,
 };
 
-const nodeGroups: Array<{
+export const nodeGroups: Array<{
   title: GraphNodeCategory;
   icon: typeof Zap;
   nodes: string[];
@@ -18,7 +18,7 @@ const nodeGroups: Array<{
   {
     title: 'Events',
     icon: Zap,
-    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter'],
+    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Trigger Enter'],
   },
   {
     title: 'Logic',
@@ -38,7 +38,7 @@ const nodeGroups: Array<{
   {
     title: 'Variables',
     icon: Database,
-    nodes: ['New Variable', 'Get Variable', 'Set Variable'],
+    nodes: ['New Variable', 'Get Variable', 'Set Variable', 'Get Object Var', 'Set Object Var'],
   },
   {
     title: 'Data',
@@ -48,7 +48,7 @@ const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Fire Event', 'Spawn Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Get Anim Param', 'Get Anim State', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Fire Event', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Get Anim Param', 'Get Anim State', 'Print'],
   },
   {
     title: 'Physics',
@@ -60,9 +60,14 @@ const nodeGroups: Array<{
     icon: Save,
     nodes: ['Save Game', 'Load Game', 'Clear Save'],
   },
+  {
+    title: 'UI',
+    icon: LayoutDashboard,
+    nodes: ['Show UI', 'Hide UI', 'Set UI Text'],
+  },
 ];
 
-const baseNodeChoices: NodeChoice[] = nodeGroups.flatMap((group) =>
+export const baseNodeChoices: NodeChoice[] = nodeGroups.flatMap((group) =>
   group.nodes.map((label) => ({ label, category: group.title })),
 );
 
@@ -94,6 +99,12 @@ const emptyValue = (type: GraphValueType): GraphValue => {
   if (type === 'boolean') return false;
   return [0, 0, 0];
 };
+
+/** Flatten a UI element tree into a depth-prefixed list for the Set UI Text element picker. */
+const flattenUIElements = (root: UIElement, depth = 0): Array<{ id: string; label: string }> => [
+  { id: root.id, label: `${'— '.repeat(depth)}${root.name} (${root.kind})` },
+  ...root.children.flatMap((child) => flattenUIElements(child, depth + 1)),
+];
 
 const graphValueFromNode = (node: NodeForgeNode, type: GraphValueType): GraphValue => {
   if (type === 'number') return Number(node.data.numberValue ?? node.data.amount ?? 0);
@@ -316,7 +327,7 @@ function GraphDataLibrary() {
   );
 }
 
-function NodeInspector({ node }: { node?: NodeForgeNode }) {
+export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updateGraphNodeData = useEditorStore((state) => state.updateGraphNodeData);
   const fireCustomEvent = useEditorStore((state) => state.fireCustomEvent);
   const deleteGraphNode = useEditorStore((state) => state.deleteGraphNode);
@@ -324,6 +335,30 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const audioAssets = useEditorStore((state) => state.assets).filter((asset) => asset.type === 'audio');
   const variables = useEditorStore((state) => state.variables);
   const dataAssets = useEditorStore((state) => state.dataAssets);
+  const animatorControllers = useEditorStore((state) => state.animatorControllers);
+  const uiDocuments = useEditorStore((state) => state.uiDocuments);
+  const sceneObjects = useEditorStore(selectActiveObjects);
+  const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
+  const isAnimNode = Boolean(node?.data.nodeKind.startsWith('animator.'));
+
+  // Objects that actually have an animator controller — the choices for a Set/Get Anim node's Target.
+  const animObjects = useMemo(
+    () =>
+      sceneObjects
+        .filter((o) => o.animator?.controllerId)
+        .map((o) => ({ id: o.id, name: o.name, controllerName: animatorControllers.find((c) => c.id === o.animator?.controllerId)?.name })),
+    [sceneObjects, animatorControllers],
+  );
+  // The single controller this node reads from: the Target object's, or — for "self" — the owner's
+  // (the object this blueprint is attached to). Strictly one controller, so multiple animators never mix.
+  const targetController = useMemo(() => {
+    const controllerOf = (objId?: string) => sceneObjects.find((o) => o.id === objId)?.animator?.controllerId;
+    const id = node?.data.targetObjectId
+      ? controllerOf(node.data.targetObjectId)
+      : controllerOf(sceneObjects.find((o) => o.script?.blueprintId === activeBlueprintId)?.id);
+    return animatorControllers.find((c) => c.id === id);
+  }, [animatorControllers, sceneObjects, activeBlueprintId, node?.data.targetObjectId]);
+  const animParams = targetController?.parameters ?? [];
 
   if (!node) {
     return (
@@ -369,6 +404,14 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesMaterialProperty =
     node.data.nodeKind === 'action.setMaterialProperty' || node.data.nodeKind === 'action.getMaterialProperty';
   const updatesMaterialColorTarget = node.data.nodeKind === 'action.setMaterialColor';
+  const updatesUIDoc =
+    node.data.nodeKind === 'ui.show' || node.data.nodeKind === 'ui.hide' || node.data.nodeKind === 'ui.setText';
+  const updatesUIElement = node.data.nodeKind === 'ui.setText';
+  const updatesObjectKey =
+    node.data.nodeKind === 'variable.getObject' || node.data.nodeKind === 'variable.setObject';
+  const updatesOtherObject = node.data.nodeKind === 'event.collisionEnter' || node.data.nodeKind === 'event.triggerEnter';
+  const updatesTargetObject = node.data.nodeKind === 'action.destroyObject' || node.data.nodeKind === 'action.setRagdoll';
+  const selectedUIDoc = uiDocuments.find((doc) => doc.id === node.data.documentId);
   const eventName = node.data.eventName || 'CustomEvent';
   const selectedVariable = variables.find((variable) => variable.id === node.data.variableId);
   const selectedTable = dataAssets.find((table) => table.id === node.data.tableId);
@@ -411,6 +454,21 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
               value={eventName}
               onChange={(event) => updateGraphNodeData(node.id, { eventName: event.target.value })}
             />
+          </label>
+        )}
+
+        {updatesOtherObject && (
+          <label className="node-field">
+            <span>Other Object</span>
+            <select value={node.data.otherObjectId ?? ''} onChange={(event) => updateGraphNodeData(node.id, { otherObjectId: event.target.value || undefined })}>
+              <option value="">Any object</option>
+              {sceneObjects.map((object) => (
+                <option key={object.id} value={object.id}>
+                  {object.name}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">Leave blank to fire for any other collider; pick an object to filter the contact.</small>
           </label>
         )}
 
@@ -694,14 +752,71 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
           </label>
         )}
 
+        {updatesTargetObject && (
+          <label className="node-field">
+            <span>Target</span>
+            <select value={node.data.targetObjectId ?? ''} onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}>
+              <option value="">Self (this object)</option>
+              {sceneObjects.map((object) => (
+                <option key={object.id} value={object.id}>
+                  {object.name}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">
+              {node.data.nodeKind === 'action.destroyObject'
+                ? 'Self is the usual choice for pickups and temporary objects.'
+                : 'Leave blank to affect the object running this blueprint.'}
+            </small>
+          </label>
+        )}
+
+        {/* 1) Choose the Animator (which object), 2) then its parameters fill the dropdown below. */}
+        {isAnimNode && (
+          <label className="node-field">
+            <span>Animator</span>
+            <select value={node.data.targetObjectId ?? ''} onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}>
+              <option value="">Self (this object)</option>
+              {animObjects.map((object) => (
+                <option key={object.id} value={object.id}>
+                  {object.name}
+                  {object.controllerName ? ` · ${object.controllerName}` : ''}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">
+              {targetController ? `Reading from “${targetController.name}”.` : 'Pick an object with an Animator Controller.'}
+            </small>
+          </label>
+        )}
+
         {updatesParamName && (
           <label className="node-field">
-            <span>Animator Param</span>
-            <input
-              value={node.data.paramName ?? ''}
-              placeholder="e.g. Speed, Jump"
-              onChange={(event) => updateGraphNodeData(node.id, { paramName: event.target.value })}
-            />
+            <span>Parameter</span>
+            <select value={node.data.paramName ?? ''} onChange={(event) => updateGraphNodeData(node.id, { paramName: event.target.value })} disabled={animParams.length === 0}>
+              <option value="">Pick a parameter…</option>
+              {animParams.map((param) => (
+                <option key={param.id} value={param.name}>
+                  {param.name} · {param.type}
+                </option>
+              ))}
+              {/* Preserve a name not in the chosen controller (e.g. set before it existed). */}
+              {node.data.paramName && !animParams.some((p) => p.name === node.data.paramName) && (
+                <option value={node.data.paramName}>{node.data.paramName} (custom)</option>
+              )}
+            </select>
+            {animParams.length === 0 && <small className="node-hint">Choose an Animator above (one with parameters) to list its variables.</small>}
+            {(() => {
+              const selected = animParams.find((p) => p.name === node.data.paramName);
+              if (selected && selected.source !== 'manual' && node.data.nodeKind.startsWith('animator.set')) {
+                return (
+                  <small className="node-hint node-warn">
+                    “{selected.name}” is auto‑driven (source: {selected.source}) — the animator recomputes it every frame, so your Set won't stick. Set its Source to “Manual” in the Animator panel to control it from script.
+                  </small>
+                );
+              }
+              return null;
+            })()}
           </label>
         )}
 
@@ -737,6 +852,53 @@ function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 </option>
               ))}
             </select>
+          </label>
+        )}
+
+        {updatesUIDoc && (
+          <label className="node-field">
+            <span>UI Document</span>
+            <select
+              value={node.data.documentId ?? ''}
+              onChange={(event) => updateGraphNodeData(node.id, { documentId: event.target.value || undefined })}
+            >
+              <option value="">{uiDocuments.length ? 'Select UI…' : 'No UI documents'}</option>
+              {uiDocuments.map((doc) => (
+                <option key={doc.id} value={doc.id}>
+                  {doc.name} · {doc.surface}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {updatesUIElement && selectedUIDoc && (
+          <label className="node-field">
+            <span>Element</span>
+            <select
+              value={node.data.elementId ?? ''}
+              onChange={(event) => updateGraphNodeData(node.id, { elementId: event.target.value || undefined })}
+            >
+              <option value="">Select element…</option>
+              {flattenUIElements(selectedUIDoc.root).map((el) => (
+                <option key={el.id} value={el.id}>
+                  {el.label}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">Wire a value into the Text input, or set a literal String node.</small>
+          </label>
+        )}
+
+        {updatesObjectKey && (
+          <label className="node-field">
+            <span>Variable Key</span>
+            <input
+              value={node.data.objectKey ?? ''}
+              placeholder="e.g. health"
+              onChange={(event) => updateGraphNodeData(node.id, { objectKey: event.target.value })}
+            />
+            <small className="node-hint">A per-object instance variable, read by world UI as self.{node.data.objectKey || 'key'}.</small>
           </label>
         )}
 

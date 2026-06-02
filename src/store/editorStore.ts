@@ -32,6 +32,8 @@ import {
   type ScriptBlueprint,
   type SkeletonAsset,
   type SkeletonSocket,
+  type RagdollSettings,
+  type RagdollBodyDef,
   type SkeletalMeshAsset,
   type AnimationAsset,
   type AnimatorController,
@@ -42,9 +44,17 @@ import {
   type CharacterControllerComponent,
   type TransformComponent,
   type Vector3Tuple,
+  type UIDocument,
+  type UIElement,
+  type UIElementKind,
+  type UIBinding,
+  type UIComponent,
+  type UISurface,
+  type UIPresetKind,
 } from '../types';
-import { getActivePhysics, startPhysics, stopPhysics } from '../runtime/physicsWorld';
+import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent } from '../runtime/physicsWorld';
 import { cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
+import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { resolveMaterial } from '../three/materialResolve';
 import type { ModelInspection } from '../three/inspectModel';
 
@@ -95,6 +105,11 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   rollSpeed: 7,
   rollDuration: 0.7,
   keyAttack: 'Mouse0',
+  keyAim: 'Mouse1',
+  keyReload: 'KeyR',
+  keyInteract: 'KeyE',
+  keyEmote: 'KeyF',
+  keyRagdoll: 'KeyP',
   cameraFollow: true,
   // Behind (-Z) and above a +Z-forward character.
   cameraOffset: [0, 2.6, -6],
@@ -104,6 +119,16 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   cameraMinPitch: -0.2,
   cameraMaxPitch: 1.2,
   cameraRelativeMovement: true,
+});
+
+/** Default ragdoll tuning — the same conservative values RagdollRig was hardcoded with. */
+export const defaultRagdollSettings = (): RagdollSettings => ({
+  capsuleRadius: 0.06,
+  density: 1.2,
+  linearDamping: 0.1,
+  angularDamping: 0.8,
+  groundY: 0,
+  excludePattern: 'thumb|index|middle|ring|pinky|finger|toe|eye|jaw|tongue|teeth|hair|cloth|ik|pole|twist|root$',
 });
 
 export interface CreateObjectOptions {
@@ -136,11 +161,21 @@ const defaultPhysics = (bodyType: RigidBodyType = 'dynamic', collider: ColliderT
   enabled: false,
   bodyType,
   collider,
+  isTrigger: false,
+  collisionLayer: 0,
+  collisionMask: 0xffff,
   mass: 1,
   gravityScale: 1,
   friction: 0.6,
   linearDamping: 0,
   angularDamping: 0.05,
+});
+
+const withPhysicsDefaults = (physics: PhysicsComponent): PhysicsComponent => ({
+  ...defaultPhysics(physics.bodyType, physics.collider),
+  ...physics,
+  collisionLayer: Math.min(Math.max(Math.trunc(physics.collisionLayer ?? 0), 0), 15),
+  collisionMask: (physics.collisionMask ?? 0xffff) & 0xffff,
 });
 
 const defaultMaterial = (name: string, folderId?: string): MaterialDefinition => ({
@@ -155,6 +190,140 @@ const defaultMaterial = (name: string, folderId?: string): MaterialDefinition =>
   folderId,
   createdAt: Date.now(),
 });
+
+// --- Game UI helpers -------------------------------------------------------
+/** A blank element of a given kind, with sensible default styling per kind. */
+const makeUIElement = (kind: UIElementKind, name?: string): UIElement => {
+  const base: UIElement = {
+    id: makeId('uiel'),
+    kind,
+    name: name ?? kind.charAt(0).toUpperCase() + kind.slice(1),
+    style: {},
+    bindings: [],
+    children: [],
+  };
+  if (kind === 'panel') base.style = { display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px' };
+  if (kind === 'text' || kind === 'button') base.text = kind === 'button' ? 'Button' : 'Text';
+  if (kind === 'bar') base.style = { width: '160px', height: '16px', background: '#23262F', borderRadius: '8px' };
+  if (kind === 'button') base.style = { padding: '6px 12px', background: '#5B8CFF', color: '#fff', borderRadius: '8px' };
+  return base;
+};
+
+/** A fresh UI document with a root panel. Screen docs anchor top-left by default. */
+const makeUIDocument = (name: string, surface: UISurface, folderId?: string): UIDocument => {
+  const root = makeUIElement('panel', 'Root');
+  if (surface === 'screen') root.anchor = { h: 'left', v: 'top', offsetX: 16, offsetY: 16 };
+  return {
+    id: makeId('ui'),
+    name,
+    surface,
+    root,
+    css: '',
+    visibleOnStart: true,
+    folderId,
+    createdAt: Date.now(),
+  };
+};
+
+/** Depth-first search for an element by id within a tree. */
+const findUIElement = (root: UIElement, id: string): UIElement | undefined => {
+  if (root.id === id) return root;
+  for (const child of root.children) {
+    const found = findUIElement(child, id);
+    if (found) return found;
+  }
+  return undefined;
+};
+
+/** Return a new tree with `fn` applied to the element matching `id` (immutable). */
+const mapUIElement = (root: UIElement, id: string, fn: (el: UIElement) => UIElement): UIElement => {
+  if (root.id === id) return fn(root);
+  return { ...root, children: root.children.map((child) => mapUIElement(child, id, fn)) };
+};
+
+/** Return a new tree with the element matching `id` removed (root is never removed). */
+const removeUIElementFromTree = (root: UIElement, id: string): UIElement => ({
+  ...root,
+  children: root.children.filter((child) => child.id !== id).map((child) => removeUIElementFromTree(child, id)),
+});
+
+/** Deep-clone an element subtree with fresh ids (for duplicate / preset insertion). */
+const cloneUIElementFresh = (element: UIElement): UIElement => ({
+  ...element,
+  id: makeId('uiel'),
+  style: { ...element.style },
+  bindings: element.bindings.map((b) => ({ ...b })),
+  children: element.children.map(cloneUIElementFresh),
+});
+
+/** Find the parent element of `childId` (or undefined if it's the root / not found). */
+const findUIParent = (root: UIElement, childId: string): UIElement | undefined => {
+  for (const child of root.children) {
+    if (child.id === childId) return root;
+    const found = findUIParent(child, childId);
+    if (found) return found;
+  }
+  return undefined;
+};
+
+const defaultUIComponent = (documentId: string): UIComponent => ({
+  documentId,
+  offset: [0, 1.5, 0],
+  scale: 1,
+  billboard: true,
+});
+
+/**
+ * Build a preset widget subtree (returned root not yet inserted). Presets that show live data set a
+ * binding referencing `variableName` BY NAME — the caller ensures that project variable exists.
+ */
+const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElement => {
+  switch (preset) {
+    case 'healthBar': {
+      const container = makeUIElement('panel', 'Health Bar');
+      container.style = { display: 'flex', flexDirection: 'column', gap: '4px', width: '200px' };
+      const label = makeUIElement('text', 'Label');
+      label.text = 'Health';
+      label.style = { color: '#ffffff', fontSize: '12px', fontWeight: '600' };
+      const bar = makeUIElement('bar', 'Bar');
+      bar.style = { width: '200px', height: '16px', background: '#23262F', borderRadius: '8px' };
+      bar.bindings = [{ target: 'fill', expression: `${variableName} / 100` }];
+      container.children = [label, bar];
+      return container;
+    }
+    case 'counter': {
+      const text = makeUIElement('text', 'Counter');
+      text.text = '0';
+      text.style = { color: '#ffffff', fontSize: '20px', fontWeight: '700' };
+      text.bindings = [{ target: 'text', expression: variableName }];
+      return text;
+    }
+    case 'label': {
+      const text = makeUIElement('text', 'Label');
+      text.text = 'Label';
+      text.style = { color: '#ffffff', fontSize: '14px' };
+      return text;
+    }
+    case 'button': {
+      const button = makeUIElement('button', 'Button');
+      button.text = 'Click';
+      button.onClickEvent = 'buttonClick';
+      button.style = { padding: '8px 16px', background: '#5B8CFF', color: '#fff', borderRadius: '8px', fontWeight: '600' };
+      return button;
+    }
+    case 'image': {
+      const image = makeUIElement('image', 'Image');
+      image.style = { width: '64px', height: '64px' };
+      return image;
+    }
+    case 'panel':
+    default: {
+      const panel = makeUIElement('panel', 'Panel');
+      panel.style = { display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px', background: 'rgba(15,17,23,0.6)', borderRadius: '8px' };
+      return panel;
+    }
+  }
+};
 
 const defaultValueForType = (type: GraphValueType): GraphValue => {
   if (type === 'number') return 0;
@@ -299,6 +468,7 @@ const nodeToneByCategory: Record<GraphNodeCategory, GraphNodeTone> = {
   Data: 'data',
   Persistence: 'persistence',
   Material: 'material',
+  UI: 'ui',
 };
 
 const nodeDescriptions: Record<string, string> = {
@@ -311,6 +481,7 @@ const nodeDescriptions: Record<string, string> = {
   'Custom Event': 'A reusable entry point that can be fired by name.',
   'Fire Event': 'Triggers a custom event by name.',
   'Collision Enter': 'Fires when this object starts touching another collider.',
+  'Trigger Enter': 'Fires when this object starts overlapping a trigger collider.',
   Branch: 'Chooses a path from a boolean value.',
   Compare: 'Compares two values.',
   AND: 'Requires both inputs to be true.',
@@ -340,6 +511,7 @@ const nodeDescriptions: Record<string, string> = {
   Rotate: 'Rotates the attached object.',
   'Apply Force': 'Adds force to a rigid body.',
   'Spawn Object': 'Creates an object instance.',
+  'Destroy Object': 'Removes an object during Play.',
   'Play Sound': 'Plays an audio source.',
   'Set Material Color': 'Changes the attached object\'s material color at runtime (per-object).',
   'Set Material Property': 'Sets a numeric material property (metalness/roughness/glow) at runtime (per-object).',
@@ -379,6 +551,7 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Key Up': 'event.keyUp',
   'Custom Event': 'event.custom',
   'Collision Enter': 'event.collisionEnter',
+  'Trigger Enter': 'event.triggerEnter',
   Branch: 'logic.branch',
   Compare: 'logic.compare',
   AND: 'logic.and',
@@ -400,6 +573,7 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Apply Force': 'action.applyForce',
   'Fire Event': 'action.fireEvent',
   'Spawn Object': 'action.spawnObject',
+  'Destroy Object': 'action.destroyObject',
   'Play Sound': 'action.playSound',
   'Set Material Color': 'action.setMaterialColor',
   'Set Material Property': 'action.setMaterialProperty',
@@ -413,6 +587,7 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   Jump: 'action.jump',
   'Is Grounded': 'query.grounded',
   'Set Camera': 'action.setCamera',
+  'Set Ragdoll': 'action.setRagdoll',
   'Material Output': 'material.output',
   Color: 'material.color',
   Scalar: 'material.scalar',
@@ -427,6 +602,11 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Load Game': 'save.load',
   'Clear Save': 'save.clear',
   Print: 'action.print',
+  'Show UI': 'ui.show',
+  'Hide UI': 'ui.hide',
+  'Set UI Text': 'ui.setText',
+  'Get Object Var': 'variable.getObject',
+  'Set Object Var': 'variable.setObject',
 };
 
 const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
@@ -438,6 +618,7 @@ const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
   if (nodeKind.startsWith('data.')) return 'Data';
   if (nodeKind.startsWith('save.')) return 'Persistence';
   if (nodeKind.startsWith('material.')) return 'Material';
+  if (nodeKind.startsWith('ui.')) return 'UI';
   if (nodeKind === 'action.applyForce') return 'Physics';
   if (nodeKind === 'action.playSound') return 'Audio';
   return 'Runtime';
@@ -461,6 +642,20 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: `Key Up: ${keyLabel}`, description: `Fires once when ${keyLabel} is released.` };
     case 'event.custom':
       return { label: `Event: ${eventName}`, description: 'Custom event entry point fired by name.' };
+    case 'event.collisionEnter':
+      return {
+        label: 'Collision Enter',
+        description: data.otherObjectId
+          ? 'Fires when this object starts touching the selected other object.'
+          : 'Fires when this object starts touching any solid collider.',
+      };
+    case 'event.triggerEnter':
+      return {
+        label: 'Trigger Enter',
+        description: data.otherObjectId
+          ? 'Fires when this object starts overlapping the selected trigger participant.'
+          : 'Fires when this object starts overlapping any trigger collider.',
+      };
     case 'action.fireEvent':
       return { label: `Fire: ${eventName}`, description: 'Triggers matching custom event entry nodes.' };
     case 'action.translate':
@@ -518,6 +713,11 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: 'Get Material Color', description: "Reads this object's current material color at runtime." };
     case 'action.getMaterialProperty':
       return { label: `Get ${data.materialProperty ?? 'metalness'}`, description: "Reads this object's current numeric material property at runtime." };
+    case 'action.destroyObject':
+      return {
+        label: data.targetObjectId ? 'Destroy Object' : 'Destroy Self',
+        description: data.targetObjectId ? 'Removes the target object during Play.' : 'Removes the owning object during Play.',
+      };
     case 'animator.setFloat':
       return { label: `Set Anim Float: ${data.paramName || 'param'}`, description: 'Writes a float into an animator parameter.' };
     case 'animator.setBool':
@@ -538,8 +738,23 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: 'Is Grounded', description: 'True when the character is on the ground.' };
     case 'action.setCamera':
       return { label: 'Set Camera', description: 'Override follow-camera distance/height at runtime.' };
+    case 'action.setRagdoll':
+      return {
+        label: `Set Ragdoll ${data.booleanValue === false ? 'Off' : 'On'}`,
+        description: 'Switches the owner (or Target) into a physics ragdoll — bones go limp.',
+      };
     case 'action.print':
       return { label: `Print: ${data.message || 'message'}`, description: 'Logs its message to the on-screen console during Play.' };
+    case 'ui.show':
+      return { label: 'Show UI', description: 'Shows a screen UI document (HUD) during Play.' };
+    case 'ui.hide':
+      return { label: 'Hide UI', description: 'Hides a screen UI document during Play.' };
+    case 'ui.setText':
+      return { label: 'Set UI Text', description: "Overrides a UI element's text at runtime (wire a value into Text)." };
+    case 'variable.getObject':
+      return { label: `Get Object Var: ${data.objectKey || 'health'}`, description: "Reads one of this object's instance variables (self)." };
+    case 'variable.setObject':
+      return { label: `Set Object Var: ${data.objectKey || 'health'}`, description: "Writes one of this object's instance variables (self)." };
     default: {
       const label = data.label ?? 'Node';
       return { label, description: nodeDescriptions[label] ?? `${data.category ?? 'Graph'} node` };
@@ -669,7 +884,12 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
     nodeKind === 'input.move' ||
     nodeKind === 'query.grounded' ||
     nodeKind === 'animator.getParam' ||
-    nodeKind === 'animator.getState';
+    nodeKind === 'animator.getState' ||
+    nodeKind === 'variable.getObject';
+
+  if ((nodeKind === 'variable.getObject' || nodeKind === 'variable.setObject') && typeof normalized.objectKey !== 'string') {
+    normalized.objectKey = 'health';
+  }
 
   if (isPureValueNode) {
     normalized.hasInput = false;
@@ -970,9 +1190,13 @@ interface EditorState {
   animatorControllers: AnimatorController[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
+  uiDocuments: UIDocument[];
   activeBlueprintId: string;
   activeAnimatorControllerId: string;
   activeMaterialId: string;
+  activeUIDocumentId: string;
+  /** Editor-only: selected UI element id (shared between the UI panel and viewport overlay). */
+  selectedUIElementId: string;
   isPlaying: boolean;
   playSnapshot?: {
     sceneId: string;
@@ -994,12 +1218,24 @@ interface EditorState {
   runtimeRoll: Record<string, number>;
   /** Remaining attack time (seconds) per object — drives the "attacking" param. */
   runtimeAttack: Record<string, number>;
-  /** Object ids that started a contact in the previous physics step; drives event.collisionEnter. */
-  runtimeCollisions: string[];
+  /** Remaining reload time (seconds) per object — drives the "reloading" param. */
+  runtimeReload: Record<string, number>;
+  /** Remaining interact time (seconds) per object — drives the "interacting" param. */
+  runtimeInteract: Record<string, number>;
+  /** Solid-contact pairs that started in the previous physics step; drives event.collisionEnter. */
+  runtimeCollisions: PhysicsContactEvent[];
+  /** Trigger-overlap pairs that started in the previous physics step; drives event.triggerEnter. */
+  runtimeTriggers: PhysicsContactEvent[];
   /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
   runtimeSoundQueue: string[];
   /** Messages emitted by action.print during Play; shown by the on-screen console overlay. */
   runtimeLog: string[];
+  /** Screen UI documents currently shown during Play (keyed by doc id). Seeded from `visibleOnStart`. */
+  runtimeVisibleUI: Record<string, boolean>;
+  /** Per-object instance variables during Play (e.g. each enemy's health), read by world-UI `self.*` bindings. */
+  runtimeObjectVariables: Record<string, Record<string, GraphValue>>;
+  /** Runtime text overrides written by ui.setText, keyed by `${docId}:${elementId}`. Play-only. */
+  runtimeUITextOverrides: Record<string, string>;
   runtimeStarted: boolean;
   runtimeTime: number;
   assetSearch: string;
@@ -1031,6 +1267,10 @@ interface EditorState {
   toggleAnimator: (id: string) => void;
   /** Patch an object's animator component (clip, speed, loop). No-op if it has no animator. */
   updateAnimator: (id: string, patch: Partial<AnimatorComponent>) => void;
+  /** Live-set a running animator parameter value (for the in-Play parameters panel / testing). */
+  setRuntimeAnimatorParam: (objectId: string, paramId: string, value: number | boolean) => void;
+  /** Toggle a physics ragdoll on an object during Play (bones go limp). */
+  setObjectRagdoll: (objectId: string, on: boolean) => void;
   /**
    * Split an imported model into reusable Skeleton + Skeletal Mesh + Animation assets. Skeletons are
    * deduped by signature (so rigs sharing a skeleton reuse one), and clips are deduped by
@@ -1070,12 +1310,22 @@ interface EditorState {
   addSkeletonSocket: (skeletonId: string, socket: { name?: string; boneName: string }) => string | undefined;
   updateSkeletonSocket: (skeletonId: string, socketId: string, patch: Partial<Omit<SkeletonSocket, 'id'>>) => void;
   removeSkeletonSocket: (skeletonId: string, socketId: string) => void;
+  /** Tune a skeleton's global ragdoll defaults (shared by everything using that skeleton). */
+  updateSkeletonRagdoll: (skeletonId: string, patch: Partial<RagdollSettings>) => void;
+  /** Upsert a per-bone ragdoll body override (Unreal PhAT-style). */
+  setRagdollBody: (skeletonId: string, boneName: string, patch: Partial<Omit<RagdollBodyDef, 'boneName'>>) => void;
+  /** Remove a per-bone ragdoll body override (the bone reverts to the global defaults). */
+  removeRagdollBody: (skeletonId: string, boneName: string) => void;
+  /** Auto-generate a default capsule body for every non-excluded bone (Unreal "auto-generate bodies"). */
+  generateRagdollBodies: (skeletonId: string) => void;
   /**
    * One-click third-person pawn: from a rigged model asset, create an object that renders it, build a
    * locomotion Animator Controller (Idle/Walk/Jog/Jump from the skeleton's clips, matched by name) and
    * attach a character controller. Returns the new object's id, or undefined if the model isn't rigged.
    */
   createCharacterPawn: (modelAssetId: string, name?: string) => string | undefined;
+  /** Augment a character's animator with a gameplay kit (extra states/params/transitions). Returns a summary. */
+  addGameplayKit: (objectId: string, kit: 'ranged' | 'health' | 'interactions' | 'emotes') => string | undefined;
   attachScript: (id: string, nextBlueprintId?: string) => void;
   detachScript: (id: string) => void;
   setActiveBlueprint: (id: string) => void;
@@ -1089,7 +1339,7 @@ interface EditorState {
   createFolder: (name?: string, parentId?: string) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
-  moveToFolder: (kind: 'asset' | 'blueprint' | 'dataAsset' | 'material', id: string, folderId?: string) => void;
+  moveToFolder: (kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument', id: string, folderId?: string) => void;
   renameBlueprint: (id: string, name: string) => void;
   deleteBlueprint: (id: string) => void;
   renameAsset: (id: string, name: string) => void;
@@ -1116,6 +1366,39 @@ interface EditorState {
   deleteMaterial: (id: string) => void;
   setActiveMaterial: (id: string) => void;
   setObjectMaterial: (objectId: string, materialId?: string) => void;
+  // --- Game UI documents (HUD + world-space widgets). AI-friendly: explicit params, return ids. ---
+  createUIDocument: (name?: string, surface?: UISurface, folderId?: string) => string;
+  renameUIDocument: (id: string, name: string) => void;
+  updateUIDocument: (id: string, patch: Partial<Pick<UIDocument, 'name' | 'surface' | 'css' | 'visibleOnStart' | 'logicBlueprintId'>>) => void;
+  deleteUIDocument: (id: string) => void;
+  setActiveUIDocument: (id: string) => void;
+  /** Editor-only: which UI element is selected (shared by the panel tree and the viewport overlay). */
+  selectUIElement: (id: string) => void;
+  /** Ensure a UI document has a runnable behaviour blueprint (+ "UI Logic" controller object). Returns its id. */
+  openUILogic: (docId: string) => string;
+  /** Add a child element under `parentId` (or the doc root when omitted). Returns the new element id. */
+  addUIElement: (docId: string, parentId: string | undefined, kind: UIElementKind) => string;
+  updateUIElement: (docId: string, elementId: string, patch: Partial<Omit<UIElement, 'id' | 'children'>>) => void;
+  removeUIElement: (docId: string, elementId: string) => void;
+  /** Upsert a data binding (by target) on an element. Pass an empty expression to remove it. */
+  setUIBinding: (docId: string, elementId: string, target: UIBinding['target'], expression: string) => void;
+  /** Insert a prebuilt widget (pre-styled, pre-bound) under parentId (or root). Returns its element id. */
+  addUIPreset: (docId: string, parentId: string | undefined, preset: UIPresetKind, options?: { variableName?: string }) => string;
+  /** Reorder an element among its siblings. */
+  moveUIElement: (docId: string, elementId: string, dir: 'up' | 'down') => void;
+  /** Deep-clone an element next to itself (fresh ids). Returns the new element id. */
+  duplicateUIElement: (docId: string, elementId: string) => string;
+  /** Attach (or replace) a world-space UI document on an object. Seeds offset/scale/billboard defaults. */
+  attachUI: (objectId: string, documentId: string) => void;
+  detachUI: (objectId: string) => void;
+  updateUIComponent: (objectId: string, patch: Partial<UIComponent>) => void;
+  /** Author a per-instance object variable (read by world UI via `self.<key>`). */
+  setObjectVariable: (objectId: string, key: string, value: GraphValue) => void;
+  /** Runtime: show/hide a screen UI document (driven by ui.show/ui.hide nodes). */
+  showUI: (docId: string) => void;
+  hideUI: (docId: string) => void;
+  /** Runtime: override an element's text (driven by ui.setText nodes). */
+  setUIText: (docId: string, elementId: string, text: string) => void;
   ensureMaterialGraph: (materialId: string) => void;
   addMaterialNode: (
     label: string,
@@ -1218,8 +1501,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   animatorControllers: [],
   blueprints: starterBlueprints,
   graphs: [{ id: graphId, name: 'Player Controller', nodes: starterNodes, edges: starterEdges }],
+  uiDocuments: [],
   activeBlueprintId: blueprintId,
   activeMaterialId: '',
+  activeUIDocumentId: '',
+  selectedUIElementId: '',
   activeAnimatorControllerId: '',
   isPlaying: false,
   runtimeVelocities: {},
@@ -1232,9 +1518,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeGrounded: [],
   runtimeRoll: {},
   runtimeAttack: {},
+  runtimeReload: {},
+  runtimeInteract: {},
   runtimeCollisions: [],
+  runtimeTriggers: [],
   runtimeSoundQueue: [],
   runtimeLog: [],
+  runtimeVisibleUI: {},
+  runtimeObjectVariables: {},
+  runtimeUITextOverrides: {},
   runtimeStarted: false,
   runtimeTime: 0,
   assetSearch: '',
@@ -1319,7 +1611,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         next.renderer = { ...next.renderer, color: options.color };
       }
       if (options.physics) {
-        next.physics = { ...(next.physics ?? defaultPhysics()), ...options.physics };
+        next.physics = withPhysicsDefaults({ ...(next.physics ?? defaultPhysics()), ...options.physics });
       }
 
       return { ...mapActiveSceneObjects(state, (objects) => [...objects, next]), selectedObjectId: id };
@@ -1409,7 +1701,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) =>
       mapActiveSceneObjects(state, (objects) =>
         objects.map((object) =>
-          object.id === id && object.physics ? { ...object, physics: { ...object.physics, ...patch } } : object,
+          object.id === id && object.physics ? { ...object, physics: withPhysicsDefaults({ ...object.physics, ...patch }) } : object,
         ),
       ),
     ),
@@ -1418,7 +1710,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       mapActiveSceneObjects(state, (objects) =>
         objects.map((object) => {
           if (object.id !== id) return object;
-          const current = object.physics ?? defaultPhysics();
+          const current = withPhysicsDefaults(object.physics ?? defaultPhysics());
           return { ...object, physics: { ...current, enabled: !current.enabled } };
         }),
       ),
@@ -1441,6 +1733,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ),
       ),
     ),
+  setRuntimeAnimatorParam: (objectId, paramId, value) =>
+    set((state) => {
+      const live = state.runtimeAnimators[objectId];
+      if (!live) return state;
+      // Carried into next tick; manual params persist (auto-sourced ones get recomputed, as expected).
+      return { runtimeAnimators: { ...state.runtimeAnimators, [objectId]: { ...live, params: { ...live.params, [paramId]: value } } } };
+    }),
+  setObjectRagdoll: (objectId, on) => {
+    // Module-singleton flag (see ragdollState); the render layer (RagdollRig) reacts each frame.
+    setRagdoll(objectId, on);
+  },
   registerImportedModel: ({ assetId, assetName, folderId, inspection }) => {
     if (!inspection.skeleton) return undefined; // static model — nothing to split
     const baseName = assetName.replace(/\.(glb|gltf|fbx)$/i, '');
@@ -1755,6 +2058,55 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ),
       isDirty: true,
     })),
+  updateSkeletonRagdoll: (skeletonId, patch) =>
+    set((state) => ({
+      skeletons: state.skeletons.map((item) =>
+        item.id === skeletonId ? { ...item, ragdoll: { ...defaultRagdollSettings(), ...item.ragdoll, ...patch } } : item,
+      ),
+      isDirty: true,
+    })),
+  setRagdollBody: (skeletonId, boneName, patch) =>
+    set((state) => ({
+      skeletons: state.skeletons.map((item) => {
+        if (item.id !== skeletonId) return item;
+        if (!item.boneNames.includes(boneName)) return item;
+        const base = { ...defaultRagdollSettings(), ...item.ragdoll };
+        const bodies = base.bodies ?? [];
+        const existing = bodies.find((b) => b.boneName === boneName);
+        const nextBodies = existing
+          ? bodies.map((b) => (b.boneName === boneName ? { ...b, ...patch } : b))
+          : [...bodies, { boneName, ...patch }];
+        return { ...item, ragdoll: { ...base, bodies: nextBodies } };
+      }),
+      isDirty: true,
+    })),
+  removeRagdollBody: (skeletonId, boneName) =>
+    set((state) => ({
+      skeletons: state.skeletons.map((item) => {
+        if (item.id !== skeletonId || !item.ragdoll) return item;
+        return { ...item, ragdoll: { ...item.ragdoll, bodies: (item.ragdoll.bodies ?? []).filter((b) => b.boneName !== boneName) } };
+      }),
+      isDirty: true,
+    })),
+  generateRagdollBodies: (skeletonId) =>
+    set((state) => ({
+      skeletons: state.skeletons.map((item) => {
+        if (item.id !== skeletonId) return item;
+        const base = { ...defaultRagdollSettings(), ...item.ragdoll };
+        let exclude: RegExp;
+        try {
+          exclude = new RegExp(base.excludePattern, 'i');
+        } catch {
+          exclude = new RegExp(defaultRagdollSettings().excludePattern, 'i');
+        }
+        // One default capsule body per non-excluded bone — a starting point the user/AI can tweak.
+        const bodies = item.boneNames
+          .filter((name) => !exclude.test(name))
+          .map((boneName) => ({ boneName, enabled: true, shape: 'capsule' as const }));
+        return { ...item, ragdoll: { ...base, bodies } };
+      }),
+      isDirty: true,
+    })),
   createCharacterPawn: (modelAssetId, name) => {
     const state = get();
     const mesh = state.skeletalMeshes.find((item) => item.sourceAssetId === modelAssetId);
@@ -2000,6 +2352,134 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }));
     return objectId;
   },
+  addGameplayKit: (objectId, kit) => {
+    let summary = '';
+    set((draft) => {
+      const object = selectActiveObjects(draft).find((o) => o.id === objectId);
+      const controller = draft.animatorControllers.find((c) => c.id === object?.animator?.controllerId);
+      if (!object || !controller) return draft;
+      const clips = draft.animations.filter((a) => a.skeletonId === controller.skeletonId);
+      const pick = (...patterns: RegExp[]) => {
+        for (const p of patterns) {
+          const f = clips.find((c) => p.test(c.name));
+          if (f) return f.id;
+        }
+        return undefined;
+      };
+      const params = [...controller.parameters];
+      const states = [...controller.states];
+      const transitions = [...controller.transitions];
+      let nextVariables = draft.variables;
+      const C = (parameterId: string, op: AnimatorCondition['op'], value: number | boolean): AnimatorCondition => ({ parameterId, op, value });
+      const ensureParam = (name: string, type: AnimatorParameter['type'], source: AnimatorParameter['source'], defaultValue: number | boolean, variableId?: string) => {
+        let p = params.find((x) => x.name === name);
+        if (!p) {
+          p = { id: makeId('param'), name, type, source, defaultValue, ...(variableId ? { variableId } : {}) };
+          params.push(p);
+        }
+        return p.id;
+      };
+      // "Home" = the locomotion idle we return action states to.
+      const homeId = (
+        states.find((s) => /^idle$/i.test(s.name)) ??
+        states.find((s) => /idle/i.test(s.name) && !/pistol|crouch/i.test(s.name)) ??
+        states.find((s) => s.id === controller.defaultStateId) ??
+        states[0]
+      ).id;
+      let placeX = 60;
+      let placeY = 760;
+      const addState = (name: string, animationId: string | undefined, loop: boolean) => {
+        if (!animationId) return undefined;
+        const existing = states.find((s) => s.name === name);
+        if (existing) return existing.id;
+        const id = makeId('state');
+        states.push({ id, name, animationId, speed: 1, loop, position: { x: placeX, y: placeY } });
+        placeX += 240;
+        if (placeX > 820) {
+          placeX = 60;
+          placeY += 160;
+        }
+        return id;
+      };
+      const link = (from: string, to: string, conds: AnimatorCondition[], duration = 0.12) =>
+        transitions.push({ id: makeId('xition'), from, to, conditions: conds, duration });
+      const linkAny = (to: string, conds: AnimatorCondition[], duration = 0.12) =>
+        transitions.push({ id: makeId('xition'), from: 'any', to, conditions: conds, duration });
+      const linkExit = (from: string, to: string, conds: AnimatorCondition[] = [], exitTime = 0.9) =>
+        transitions.push({ id: makeId('xition'), from, to, conditions: conds, duration: 0.12, hasExitTime: true, exitTime });
+
+      if (kit === 'ranged') {
+        const aiming = ensureParam('Aiming', 'bool', 'aiming', false);
+        const reloading = ensureParam('Reloading', 'bool', 'reloading', false);
+        const attacking = ensureParam('Attacking', 'bool', 'attacking', false);
+        const ranged = ensureParam('RangedMode', 'bool', 'manual', false);
+        const pistolIdle = addState('Pistol Idle', pick(/pistol.*idle/i), true);
+        const aim = addState('Aim', pick(/pistol.*aim.*neutral/i, /pistol.*aim/i), true);
+        const shoot = addState('Shoot', pick(/pistol.*shoot/i), false);
+        const reload = addState('Reload', pick(/pistol.*reload/i), false);
+        if (pistolIdle) {
+          link(homeId, pistolIdle, [C(ranged, '==', true)]);
+          link(pistolIdle, homeId, [C(ranged, '==', false)]);
+          if (aim) {
+            link(pistolIdle, aim, [C(aiming, '==', true)]);
+            link(aim, pistolIdle, [C(aiming, '==', false)]);
+          }
+          if (shoot && aim) {
+            link(aim, shoot, [C(attacking, '==', true)]);
+            linkExit(shoot, aim);
+          }
+          if (reload) {
+            link(pistolIdle, reload, [C(reloading, '==', true)]);
+            if (aim) link(aim, reload, [C(reloading, '==', true)]);
+            linkExit(reload, pistolIdle);
+          }
+          summary = 'ranged pistol (aim/shoot/reload)';
+        }
+      } else if (kit === 'health') {
+        let healthVar = draft.variables.find((v) => v.name === 'Health');
+        if (!healthVar) {
+          healthVar = { id: makeId('var'), name: 'Health', type: 'number', defaultValue: 100, persistent: false, createdAt: Date.now() };
+          nextVariables = [...draft.variables, healthVar];
+        }
+        const health = ensureParam('Health', 'float', 'variable', 100, healthVar.id);
+        const hit = ensureParam('Hit', 'trigger', 'manual', false);
+        const hitState = addState('Hit React', pick(/hit.*chest/i, /hit.*head/i, /hit/i), false);
+        const deathState = addState('Death', pick(/death/i, /\bdie\b/i), false);
+        if (hitState) {
+          linkAny(hitState, [C(hit, '==', true)]);
+          linkExit(hitState, homeId);
+        }
+        // Entering a "Death" state auto-triggers the ragdoll (see tickRuntime).
+        if (deathState) linkAny(deathState, [C(health, '<=', 0)]);
+        summary = 'health + hit reactions + death→ragdoll';
+      } else if (kit === 'interactions') {
+        const interacting = ensureParam('Interacting', 'bool', 'interacting', false);
+        const interact = addState('Interact', pick(/^interact$/i, /pick.?up/i, /interact/i, /fixing/i), false);
+        if (interact) {
+          link(homeId, interact, [C(interacting, '==', true)]);
+          linkExit(interact, homeId);
+          summary = 'interactions (use / pick up)';
+        }
+      } else if (kit === 'emotes') {
+        const emoting = ensureParam('Emoting', 'bool', 'emoting', false);
+        const dance = addState('Emote', pick(/dance/i, /talk/i), true);
+        if (dance) {
+          link(homeId, dance, [C(emoting, '==', true)]);
+          link(dance, homeId, [C(emoting, '==', false)]);
+          summary = 'emote (dance/wave)';
+        }
+      }
+
+      if (!summary) return draft;
+      const nextController: AnimatorController = { ...controller, parameters: params, states, transitions };
+      return {
+        variables: nextVariables,
+        animatorControllers: draft.animatorControllers.map((c) => (c.id === controller.id ? nextController : c)),
+        isDirty: true,
+      };
+    });
+    return summary || undefined;
+  },
   attachScript: (id, nextBlueprintId) =>
     set((state) => {
       const blueprint = state.blueprints.find((item) => item.id === (nextBlueprintId ?? state.activeBlueprintId));
@@ -2169,6 +2649,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         : kind === 'material'
           ? {
               materials: state.materials.map((material) => (material.id === id ? { ...material, folderId } : material)),
+              isDirty: true,
+            }
+        : kind === 'uiDocument'
+          ? {
+              uiDocuments: state.uiDocuments.map((doc) => (doc.id === id ? { ...doc, folderId } : doc)),
               isDirty: true,
             }
         : {
@@ -2498,6 +2983,196 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     }),
   setActiveMaterial: (id) => set({ activeMaterialId: id }),
+  // --- Game UI documents ---
+  createUIDocument: (name, surface, folderId) => {
+    const docName = name ?? `UI ${useEditorStore.getState().uiDocuments.length + 1}`;
+    const doc = makeUIDocument(docName, surface ?? 'screen', folderId);
+    set((state) => ({
+      uiDocuments: [...state.uiDocuments, doc],
+      activeUIDocumentId: doc.id,
+      isDirty: true,
+    }));
+    return doc.id;
+  },
+  renameUIDocument: (id, name) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) => (doc.id === id ? { ...doc, name } : doc)),
+      isDirty: true,
+    })),
+  updateUIDocument: (id, patch) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) => (doc.id === id ? { ...doc, ...patch } : doc)),
+      isDirty: true,
+    })),
+  deleteUIDocument: (id) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.filter((doc) => doc.id !== id),
+      activeUIDocumentId:
+        state.activeUIDocumentId === id ? state.uiDocuments.find((doc) => doc.id !== id)?.id ?? '' : state.activeUIDocumentId,
+      // Clear dangling world-UI references so no object points at a removed document.
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        objects: scene.objects.map((object) =>
+          object.ui?.documentId === id ? { ...object, ui: undefined } : object,
+        ),
+      })),
+      isDirty: true,
+    })),
+  setActiveUIDocument: (id) => set({ activeUIDocumentId: id, selectedUIElementId: '' }),
+  selectUIElement: (id) => set({ selectedUIElementId: id }),
+  openUILogic: (docId) => {
+    const state = get();
+    const doc = state.uiDocuments.find((d) => d.id === docId);
+    if (!doc) return '';
+    // Reuse an existing logic blueprint if it's still around, else make one.
+    let blueprintId = doc.logicBlueprintId && state.blueprints.some((b) => b.id === doc.logicBlueprintId) ? doc.logicBlueprintId : '';
+    if (!blueprintId) {
+      blueprintId = get().createBlueprintNamed(`${doc.name} Logic`, 'UI behaviour graph.').blueprintId;
+      get().updateUIDocument(docId, { logicBlueprintId: blueprintId });
+    }
+    // Ensure something runs the graph: a tiny empty "UI Logic" object carrying this blueprint.
+    const objects = selectActiveObjects(get());
+    const hasController = objects.some((o) => o.script?.blueprintId === blueprintId);
+    if (!hasController) {
+      const objectId = get().createObjectWithProps('empty', { name: `${doc.name} UI Logic` });
+      get().attachScript(objectId, blueprintId);
+    }
+    get().setActiveBlueprint(blueprintId);
+    return blueprintId;
+  },
+  addUIElement: (docId, parentId, kind) => {
+    const element = makeUIElement(kind);
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) => {
+        if (doc.id !== docId) return doc;
+        const targetId = parentId ?? doc.root.id;
+        return { ...doc, root: mapUIElement(doc.root, targetId, (el) => ({ ...el, children: [...el.children, element] })) };
+      }),
+      isDirty: true,
+    }));
+    return element.id;
+  },
+  updateUIElement: (docId, elementId, patch) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) =>
+        doc.id === docId ? { ...doc, root: mapUIElement(doc.root, elementId, (el) => ({ ...el, ...patch })) } : doc,
+      ),
+      isDirty: true,
+    })),
+  removeUIElement: (docId, elementId) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) =>
+        // Never remove the root element.
+        doc.id === docId && doc.root.id !== elementId ? { ...doc, root: removeUIElementFromTree(doc.root, elementId) } : doc,
+      ),
+      isDirty: true,
+    })),
+  setUIBinding: (docId, elementId, target, expression) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) => {
+        if (doc.id !== docId) return doc;
+        return {
+          ...doc,
+          root: mapUIElement(doc.root, elementId, (el) => {
+            const rest = el.bindings.filter((b) => b.target !== target);
+            const bindings = expression.trim() ? [...rest, { target, expression }] : rest;
+            return { ...el, bindings };
+          }),
+        };
+      }),
+      isDirty: true,
+    })),
+  addUIPreset: (docId, parentId, preset, options) => {
+    // Data-bound presets reference a variable BY NAME; make sure it exists (create a number var if not).
+    let variableName = options?.variableName ?? (preset === 'healthBar' ? 'health' : preset === 'counter' ? 'score' : '');
+    if ((preset === 'healthBar' || preset === 'counter') && variableName) {
+      const existing = get().variables.find((v) => v.name === variableName);
+      if (!existing) {
+        const id = get().createVariable(variableName, 'number', false);
+        // Health defaults to 100 so the preview bar starts full.
+        get().updateVariable(id, { defaultValue: preset === 'healthBar' ? 100 : 0 });
+        variableName = get().variables.find((v) => v.id === id)?.name ?? variableName;
+      }
+    }
+    const subtree = makeUIPreset(preset, variableName);
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) => {
+        if (doc.id !== docId) return doc;
+        const targetId = parentId ?? doc.root.id;
+        return { ...doc, root: mapUIElement(doc.root, targetId, (el) => ({ ...el, children: [...el.children, subtree] })) };
+      }),
+      isDirty: true,
+    }));
+    return subtree.id;
+  },
+  moveUIElement: (docId, elementId, dir) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) => {
+        if (doc.id !== docId) return doc;
+        const parent = findUIParent(doc.root, elementId);
+        if (!parent) return doc; // root can't move
+        const index = parent.children.findIndex((c) => c.id === elementId);
+        const swap = dir === 'up' ? index - 1 : index + 1;
+        if (swap < 0 || swap >= parent.children.length) return doc;
+        const reordered = [...parent.children];
+        [reordered[index], reordered[swap]] = [reordered[swap], reordered[index]];
+        return { ...doc, root: mapUIElement(doc.root, parent.id, (el) => ({ ...el, children: reordered })) };
+      }),
+      isDirty: true,
+    })),
+  duplicateUIElement: (docId, elementId) => {
+    const doc = get().uiDocuments.find((d) => d.id === docId);
+    const original = doc ? findUIElement(doc.root, elementId) : undefined;
+    if (!doc || !original || doc.root.id === elementId) return elementId; // never duplicate the root
+    const clone = cloneUIElementFresh(original);
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((d) => {
+        if (d.id !== docId) return d;
+        const parent = findUIParent(d.root, elementId);
+        if (!parent) return d;
+        const index = parent.children.findIndex((c) => c.id === elementId);
+        const next = [...parent.children];
+        next.splice(index + 1, 0, clone);
+        return { ...d, root: mapUIElement(d.root, parent.id, (el) => ({ ...el, children: next })) };
+      }),
+      isDirty: true,
+    }));
+    return clone.id;
+  },
+  attachUI: (objectId, documentId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === objectId ? { ...object, ui: { ...defaultUIComponent(documentId), ...object.ui, documentId } } : object,
+        ),
+      ),
+    ),
+  detachUI: (objectId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === objectId ? { ...object, ui: undefined } : object)),
+      ),
+    ),
+  updateUIComponent: (objectId, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === objectId && object.ui ? { ...object, ui: { ...object.ui, ...patch } } : object)),
+      ),
+    ),
+  setObjectVariable: (objectId, key, value) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === objectId ? { ...object, variables: { ...(object.variables ?? {}), [key]: value } } : object,
+        ),
+      ),
+    ),
+  showUI: (docId) =>
+    set((state) => ({ runtimeVisibleUI: { ...state.runtimeVisibleUI, [docId]: true } })),
+  hideUI: (docId) =>
+    set((state) => ({ runtimeVisibleUI: { ...state.runtimeVisibleUI, [docId]: false } })),
+  setUIText: (docId, elementId, text) =>
+    set((state) => ({ runtimeUITextOverrides: { ...state.runtimeUITextOverrides, [`${docId}:${elementId}`]: text } })),
   ensureMaterialGraph: (materialId) => {
     const state = get();
     const material = state.materials.find((item) => item.id === materialId);
@@ -2805,9 +3480,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeGrounded: [],
           runtimeRoll: {},
           runtimeAttack: {},
+      runtimeReload: {},
+      runtimeInteract: {},
           runtimeCollisions: [],
+          runtimeTriggers: [],
           runtimeSoundQueue: [],
           runtimeLog: [],
+          // Show every screen HUD flagged visibleOnStart; world docs render whenever their object exists.
+          runtimeVisibleUI: Object.fromEntries(
+            state.uiDocuments.filter((doc) => doc.surface === 'screen' && doc.visibleOnStart).map((doc) => [doc.id, true]),
+          ),
+          // Seed per-instance object variables so world-UI `self.*` bindings have authored starting values.
+          runtimeObjectVariables: Object.fromEntries(
+            objects.filter((object) => object.variables).map((object) => [object.id, { ...object.variables }]),
+          ),
+          runtimeUITextOverrides: {},
           runtimeStarted: false,
           playSnapshot: {
             sceneId: state.activeSceneId,
@@ -2855,9 +3542,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeGrounded: [],
         runtimeRoll: {},
         runtimeAttack: {},
+      runtimeReload: {},
+      runtimeInteract: {},
         runtimeCollisions: [],
+        runtimeTriggers: [],
         runtimeSoundQueue: [],
         runtimeLog: [],
+        runtimeVisibleUI: {},
+        runtimeObjectVariables: {},
+        runtimeUITextOverrides: {},
         runtimeStarted: false,
         scenes,
         playSnapshot: undefined,
@@ -2881,11 +3574,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const runtimeTime = state.runtimeTime + delta;
       const nextVelocities = { ...state.runtimeVelocities };
       const nextVariableValues = { ...state.runtimeVariableValues };
+      // Per-object instance variables (read/written by self.* and the object-var nodes). Deep-copied per object.
+      const nextObjectVariables: Record<string, Record<string, GraphValue>> = {};
+      for (const [objId, vars] of Object.entries(state.runtimeObjectVariables)) nextObjectVariables[objId] = { ...vars };
+      // UI runtime side effects this frame.
+      const nextVisibleUI = { ...state.runtimeVisibleUI };
+      const nextUITextOverrides = { ...state.runtimeUITextOverrides };
       const firedEvents = new Set(state.runtimeEventQueue.map((eventName) => eventName.toLowerCase()));
       const currentKeys = state.runtimeKeys;
       const previousKeys = state.runtimePreviousKeys;
-      // Contacts detected by the previous physics step fire event.collisionEnter this frame.
-      const collidedObjects = new Set(state.runtimeCollisions);
+      // Contacts detected by the previous physics step fire event nodes this frame.
+      const contactMatches = (events: PhysicsContactEvent[], objectId: string, otherObjectId?: string) =>
+        events.some((event) => event.objectId === objectId && (!otherObjectId || event.otherObjectId === otherObjectId));
       // Transforms at the start of the tick — the diff after scripts run is the motion a
       // script applied, which the physics world turns into body inputs (velocity/teleport).
       const prevTransforms = new Map(
@@ -2899,19 +3599,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Side effects collected while executing graphs this frame.
       const sounds: string[] = [];
       const spawned: SceneObject[] = [];
+      const destroyedIds = new Set<string>();
       const prints: string[] = [];
       // Animator parameter writes requested by animator.setX nodes this frame, keyed by object id.
       const animatorWrites: Record<string, Array<{ name: string; value: number | boolean; trigger?: boolean }>> = {};
       // Character node requests this frame: object ids that fired a Jump node, and live camera overrides.
       const characterJumpRequests = new Set<string>();
       const nextCameraOverrides: Record<string, { distance: number; height: number }> = { ...state.runtimeCameraOverrides };
-      // Roll/dodge + attack timers carried frame-to-frame (started on their key, counted down here).
+      // Roll/dodge + attack/reload/interact timers carried frame-to-frame (started on their key, counted down here).
       const nextRoll: Record<string, number> = {};
       const nextAttack: Record<string, number> = {};
+      const nextReload: Record<string, number> = {};
+      const nextInteract: Record<string, number> = {};
 
       // Run each object's script graph. Physics-enabled objects are simulated by Rapier
       // in the post-pass below, so here we only collect scripted motion + side effects.
       const mappedObjects = activeObjects.map((object) => {
+          if (destroyedIds.has(object.id)) return object;
           const position = [...object.transform.position] as Vector3Tuple;
           const rotation = [...object.transform.rotation] as Vector3Tuple;
           const scale = [...object.transform.scale] as Vector3Tuple;
@@ -2984,17 +3688,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             if (node.data.nodeKind === 'animator.getParam') {
-              // Read the live animator parameter (previous frame) so the blueprint can react to it.
-              const controller = state.animatorControllers.find((c) => c.id === object.animator?.controllerId);
+              // Read the live animator parameter (previous frame) — from self, or another object's animator.
+              const targetId = node.data.targetObjectId || object.id;
+              const targetObj = targetId === object.id ? object : activeObjects.find((o) => o.id === targetId);
+              const controller = state.animatorControllers.find((c) => c.id === targetObj?.animator?.controllerId);
               const param = controller?.parameters.find((p) => p.name === node.data.paramName);
-              const live = state.runtimeAnimators[object.id];
+              const live = state.runtimeAnimators[targetId];
               if (param) return (live?.params[param.id] ?? param.defaultValue) as GraphValue;
               return 0;
             }
 
             if (node.data.nodeKind === 'animator.getState') {
-              const controller = state.animatorControllers.find((c) => c.id === object.animator?.controllerId);
-              const stateId = state.runtimeAnimators[object.id]?.stateId ?? controller?.defaultStateId;
+              const targetId = node.data.targetObjectId || object.id;
+              const targetObj = targetId === object.id ? object : activeObjects.find((o) => o.id === targetId);
+              const controller = state.animatorControllers.find((c) => c.id === targetObj?.animator?.controllerId);
+              const stateId = state.runtimeAnimators[targetId]?.stateId ?? controller?.defaultStateId;
               return controller?.states.find((s) => s.id === stateId)?.name ?? '';
             }
 
@@ -3002,6 +3710,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const variable = state.variables.find((item) => item.id === node.data.variableId);
               if (!variable) return undefined;
               return cloneGraphValue(nextVariableValues[variable.id] ?? variable.defaultValue);
+            }
+
+            if (node.data.nodeKind === 'variable.getObject') {
+              const key = node.data.objectKey || '';
+              return cloneGraphValue(nextObjectVariables[object.id]?.[key] ?? object.variables?.[key] ?? 0);
             }
 
             if (node.data.nodeKind === 'data.tableGet') {
@@ -3115,6 +3828,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
             }
 
+            if (node.data.nodeKind === 'variable.setObject') {
+              const key = node.data.objectKey || '';
+              if (key) {
+                (nextObjectVariables[object.id] ??= { ...(object.variables ?? {}) })[key] = coerceGraphValue(
+                  valueInput(node, 'value', node.data.numberValue ?? 0),
+                  'number',
+                );
+              }
+            }
+
+            if (node.data.nodeKind === 'ui.show' && node.data.documentId) {
+              nextVisibleUI[node.data.documentId] = true;
+            }
+
+            if (node.data.nodeKind === 'ui.hide' && node.data.documentId) {
+              nextVisibleUI[node.data.documentId] = false;
+            }
+
+            if (node.data.nodeKind === 'ui.setText' && node.data.documentId && node.data.elementId) {
+              const text = graphValueToString(valueInput(node, 'text', node.data.stringValue ?? ''));
+              nextUITextOverrides[`${node.data.documentId}:${node.data.elementId}`] = text;
+            }
+
             if (node.data.nodeKind === 'save.write') {
               const saved = Object.fromEntries(
                 state.variables
@@ -3166,6 +3902,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               spawned.push(makeSpawnedObject(node.data.spawnKind ?? 'cube', position));
             }
 
+            if (node.data.nodeKind === 'action.destroyObject') {
+              destroyedIds.add(node.data.targetObjectId || object.id);
+            }
+
             if (node.data.nodeKind === 'action.setMaterialColor') {
               if (nextRenderer) {
                 const color = graphValueToString(valueInput(node, 'color', node.data.materialColor ?? '#ffffff'));
@@ -3195,22 +3935,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               prints.push(`${object.name}: ${graphValueToString(valueInput(node, 'message', node.data.message ?? ''))}`);
             }
 
+            // Anim writes target the owning object by default, or another object via targetObjectId.
+            const animTargetId = node.data.targetObjectId || object.id;
+
             if (node.data.nodeKind === 'animator.setFloat' && node.data.paramName) {
-              (animatorWrites[object.id] ??= []).push({
+              (animatorWrites[animTargetId] ??= []).push({
                 name: node.data.paramName,
                 value: toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0))),
               });
             }
 
             if (node.data.nodeKind === 'animator.setBool' && node.data.paramName) {
-              (animatorWrites[object.id] ??= []).push({
+              (animatorWrites[animTargetId] ??= []).push({
                 name: node.data.paramName,
                 value: toBoolean(valueInput(node, 'value', Boolean(node.data.booleanValue))),
               });
             }
 
             if (node.data.nodeKind === 'animator.setTrigger' && node.data.paramName) {
-              (animatorWrites[object.id] ??= []).push({ name: node.data.paramName, value: true, trigger: true });
+              (animatorWrites[animTargetId] ??= []).push({ name: node.data.paramName, value: true, trigger: true });
             }
 
             if (node.data.nodeKind === 'action.move') {
@@ -3244,6 +3987,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               };
             }
 
+            if (node.data.nodeKind === 'action.setRagdoll') {
+              // Default On; wire/author a boolean into `on` to turn it off.
+              const target = node.data.targetObjectId || object.id;
+              const on = toBoolean(valueInput(node, 'on', node.data.booleanValue ?? true));
+              setRagdoll(target, on);
+            }
+
             return true;
           }
 
@@ -3260,7 +4010,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 return firedEvents.has((node.data.eventName || 'CustomEvent').toLowerCase());
               }
               if (node.data.nodeKind === 'event.collisionEnter') {
-                return collidedObjects.has(object.id);
+                return contactMatches(state.runtimeCollisions, object.id, node.data.otherObjectId);
+              }
+              if (node.data.nodeKind === 'event.triggerEnter') {
+                return contactMatches(state.runtimeTriggers, object.id, node.data.otherObjectId);
               }
               return false;
             })
@@ -3281,6 +4034,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Runs after scripts, before physics; the motion it produces feeds the animator's speed params.
       const movedObjects = mappedObjects.map((object) => {
         if (!object.character?.enabled) return object;
+        // Ragdolling: physics owns the bones; the controller must not drive motion (it goes limp).
+        // Track the limp body's pelvis so the follow camera stays on it instead of a frozen point.
+        if (isRagdoll(object.id)) {
+          const rootPos = getRagdollRoot(object.id);
+          return rootPos ? { ...object, transform: { ...object.transform, position: rootPos } } : object;
+        }
         // Backfill defaults so characters created before newer fields existed still work.
         const cc = { ...defaultCharacter(), ...object.character };
         // Scripted: a blueprint (Move/Jump nodes) drives horizontal motion + jump — Unreal Event-Graph
@@ -3339,6 +4098,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         else if (attackRemaining > 0) attackRemaining = Math.max(0, attackRemaining - delta);
         if (attackRemaining > 0) nextAttack[object.id] = attackRemaining;
 
+        // Reload: a longer pulse on the reload key (ranged weapon) → the "reloading" param.
+        let reloadRemaining = state.runtimeReload[object.id] ?? 0;
+        if (reloadRemaining <= 0 && currentKeys[cc.keyReload]) reloadRemaining = 1.2;
+        else if (reloadRemaining > 0) reloadRemaining = Math.max(0, reloadRemaining - delta);
+        if (reloadRemaining > 0) nextReload[object.id] = reloadRemaining;
+
+        // Interact: a short pulse on the interact key → the "interacting" param (use / pick up).
+        let interactRemaining = state.runtimeInteract[object.id] ?? 0;
+        if (interactRemaining <= 0 && currentKeys[cc.keyInteract]) interactRemaining = 0.9;
+        else if (interactRemaining > 0) interactRemaining = Math.max(0, interactRemaining - delta);
+        if (interactRemaining > 0) nextInteract[object.id] = interactRemaining;
+
         // Vertical motion: gravity + jump. Grounded comes from the physics character controller
         // (last frame) so the character can stand on real colliders, not just the ground plane.
         let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
@@ -3358,17 +4129,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Physics post-pass: step the Rapier world and let it own every physics body's
       // transform (object-to-object collisions, stacking, gravity). Non-physics objects
-      // keep whatever their script produced. Contacts are reported one frame later via
-      // runtimeCollisions, which drives event.collisionEnter on the next tick.
-      let collisions: string[] = [];
+      // keep whatever their script produced. Contacts/triggers are reported one frame later
+      // so graph events run from a stable, previous-step physics result.
+      let collisions: PhysicsContactEvent[] = [];
+      let triggers: PhysicsContactEvent[] = [];
       let groundedIds: string[] = [];
       let resolvedObjects = movedObjects;
       const physics = getActivePhysics();
       if (physics) {
         const result = physics.frame(movedObjects, prevTransforms, physicsImpulses, delta);
         collisions = result.collisions;
+        triggers = result.triggers;
         groundedIds = result.grounded;
         resolvedObjects = movedObjects.map((object) => {
+          // While ragdolling the limp body owns the transform (set from the pelvis above) — don't let
+          // the kinematic character capsule overwrite it back to a standing pose.
+          if (isRagdoll(object.id)) return object;
           // Physics bodies AND character controllers get their post-collision transform written back.
           if (!object.physics?.enabled && !object.character?.enabled) return object;
           const next = result.transforms.get(object.id);
@@ -3380,7 +4156,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         });
       }
 
-      const allObjects = [...resolvedObjects, ...spawned];
+      let allObjects = [...resolvedObjects, ...spawned];
+      for (const id of destroyedIds) allObjects = deleteWithChildren(allObjects, id);
+      const remainingObjectIds = new Set(allObjects.map((object) => object.id));
+      const remainingResolvedObjects = resolvedObjects.filter((object) => remainingObjectIds.has(object.id));
       const nextScenes = state.scenes.map((scene) =>
         scene.id !== state.activeSceneId ? scene : { ...scene, objects: allObjects },
       );
@@ -3388,7 +4167,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // --- Animator pass: feed object state into parameters, then run the state machine. ---
       // Runs after physics so "speed"/"verticalSpeed" reflect the object's final motion this frame.
       const nextAnimators: Record<string, RuntimeAnimator> = {};
-      for (const object of resolvedObjects) {
+      for (const object of remainingResolvedObjects) {
         const controllerId = object.animator?.enabled ? object.animator.controllerId : undefined;
         if (!controllerId) continue;
         const controller = state.animatorControllers.find((item) => item.id === controllerId);
@@ -3423,7 +4202,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           else if (param.source === 'grounded') params[param.id] = groundedIds.includes(object.id);
           else if (param.source === 'rolling') params[param.id] = (nextRoll[object.id] ?? 0) > 0;
           else if (param.source === 'attacking') params[param.id] = (nextAttack[object.id] ?? 0) > 0;
-          else if (param.source === 'weaponEquipped') params[param.id] = resolvedObjects.some((o) => o.attachment?.targetObjectId === object.id);
+          else if (param.source === 'aiming') params[param.id] = Boolean(object.character && currentKeys[object.character.keyAim]);
+          else if (param.source === 'reloading') params[param.id] = (nextReload[object.id] ?? 0) > 0;
+          else if (param.source === 'interacting') params[param.id] = (nextInteract[object.id] ?? 0) > 0;
+          else if (param.source === 'emoting') params[param.id] = Boolean(object.character && currentKeys[object.character.keyEmote]);
+          else if (param.source === 'weaponEquipped') params[param.id] = allObjects.some((o) => o.attachment?.targetObjectId === object.id);
           else if (param.source === 'variable' && param.variableId !== undefined) {
             const raw = nextVariableValues[param.variableId];
             params[param.id] = param.type === 'bool' ? toBoolean(raw) : toNumber(raw);
@@ -3473,6 +4256,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
 
         nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: nextStateId === fromStateId ? timeInState : 0 };
+
+        // Death → ragdoll: entering a state named like "death"/"dead"/"die" goes limp automatically.
+        const nextStateName = controller.states.find((s) => s.id === nextStateId)?.name ?? '';
+        if (/death|dead|\bdie\b/i.test(nextStateName)) setRagdoll(object.id, true);
       }
 
       return {
@@ -3484,12 +4271,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeGrounded: groundedIds,
         runtimeRoll: nextRoll,
         runtimeAttack: nextAttack,
+        runtimeReload: nextReload,
+        runtimeInteract: nextInteract,
         runtimeCollisions: collisions,
+        runtimeTriggers: triggers,
         runtimePreviousKeys: { ...currentKeys },
         runtimeEventQueue: [],
         runtimeStarted: true,
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
         runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
+        runtimeObjectVariables: nextObjectVariables,
+        runtimeVisibleUI: nextVisibleUI,
+        runtimeUITextOverrides: nextUITextOverrides,
         scenes: nextScenes,
       };
     }),
@@ -3582,19 +4375,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       skeletalMeshes: state.skeletalMeshes ?? [],
       animations: state.animations ?? [],
       animatorControllers: state.animatorControllers ?? [],
+      uiDocuments: state.uiDocuments ?? [],
       blueprints: state.blueprints,
       graphs: state.graphs,
     };
   },
   loadProject: (project) =>
     set(() => {
-      // Backfill character-controller defaults so older saves (pre-cameraOffset/keys) load safely.
+      // Backfill component defaults so older saves load safely.
       const rawScenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
       const scenes = rawScenes.map((scene) => ({
         ...scene,
-        objects: scene.objects.map((object) =>
-          object.character ? { ...object, character: { ...defaultCharacter(), ...object.character } } : object,
-        ),
+        objects: scene.objects.map((object) => ({
+          ...object,
+          character: object.character ? { ...defaultCharacter(), ...object.character } : object.character,
+          physics: object.physics ? withPhysicsDefaults(object.physics) : object.physics,
+        })),
       }));
       const activeSceneId = scenes.some((scene) => scene.id === project.activeSceneId)
         ? project.activeSceneId
@@ -3635,10 +4431,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         skeletalMeshes: project.skeletalMeshes ?? [],
         animations: project.animations ?? [],
         animatorControllers: project.animatorControllers ?? [],
+        uiDocuments: project.uiDocuments ?? [],
         blueprints: project.blueprints,
         graphs: normalizedGraphs,
         activeBlueprintId: project.blueprints[0]?.id ?? '',
         activeMaterialId: project.materials?.[0]?.id ?? '',
+        activeUIDocumentId: project.uiDocuments?.[0]?.id ?? '',
         selectedGraphNodeId: undefined,
         isPlaying: false,
         playSnapshot: undefined,
@@ -3647,8 +4445,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimePreviousKeys: {},
         runtimeEventQueue: [],
         runtimeVariableValues: {},
+        runtimeAnimators: {},
+        runtimeCameraOverrides: {},
+        runtimeGrounded: [],
+        runtimeRoll: {},
+        runtimeAttack: {},
+      runtimeReload: {},
+      runtimeInteract: {},
+        runtimeCollisions: [],
         runtimeSoundQueue: [],
         runtimeLog: [],
+        runtimeVisibleUI: {},
+        runtimeObjectVariables: {},
+        runtimeUITextOverrides: {},
+        runtimeTriggers: [],
         runtimeStarted: false,
         runtimeTime: 0,
         isDirty: false,

@@ -7,7 +7,7 @@ A browser-based 3D game engine editor with a node-based visual scripting system.
 ## Features
 
 - **3D Viewport** — Real-time scene rendering powered by [Three.js](https://threejs.org/) via [@react-three/fiber](https://github.com/pmndrs/react-three-fiber).
-- **Physics** — Rigid bodies, colliders, gravity, and damping through [@react-three/rapier](https://github.com/pmndrs/react-three-rapier).
+- **Physics** — Rigid bodies, colliders, trigger volumes, collision layers, gravity, and damping through [@react-three/rapier](https://github.com/pmndrs/react-three-rapier).
 - **Visual Scripting** — A node graph editor (built on [@xyflow/react](https://reactflow.dev/)) for wiring gameplay logic: events, branching, math, runtime actions, physics forces, and audio — no code required.
 - **Scene Hierarchy & Inspector** — Manage scene objects (cubes, spheres, capsules, planes, lights, cameras) with editable transform, mesh renderer, and physics components.
 - **Asset Browser** — Import and organize models, images, and audio.
@@ -22,11 +22,11 @@ The graph supports a growing palette of nodes across several categories:
 
 | Category | Nodes |
 |----------|-------|
-| **Events** | Start, Update, Key Down, Key Up, Custom Event, Collision Enter |
+| **Events** | Start, Update, Key Down, Key Up, Custom Event, Collision Enter, Trigger Enter |
 | **Logic** | Branch, Compare, And, Or |
 | **Math** | Add, Clamp, Lerp |
 | **Values** | Vector3 |
-| **Actions** | Translate, Rotate, Apply Force, Fire Event, Spawn Object, Play Sound |
+| **Actions** | Translate, Rotate, Apply Force, Fire Event, Spawn Object, Destroy Object, Play Sound |
 
 ## Tech Stack
 

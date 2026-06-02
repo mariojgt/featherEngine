@@ -5,6 +5,7 @@ import { AssetBrowser } from './AssetBrowser';
 import { VisualScriptingPanel } from './VisualScriptingPanel';
 import { MaterialEditorPanel } from './MaterialEditorPanel';
 import { AnimatorEditorPanel } from './AnimatorEditorPanel';
+import { UIEditorPanel } from './UIEditorPanel';
 import { broadcastPanelClosed, initStoreSync } from '../sync/storeSync';
 
 const PANELS: Record<string, () => JSX.Element> = {
@@ -14,6 +15,7 @@ const PANELS: Record<string, () => JSX.Element> = {
   scripting: VisualScriptingPanel,
   materials: MaterialEditorPanel,
   animator: AnimatorEditorPanel,
+  ui: UIEditorPanel,
 };
 
 /**

@@ -31,6 +31,7 @@ export function splitProject(project: NodeForgeProject): {
     skeletalMeshes: project.skeletalMeshes,
     animations: project.animations,
     animatorControllers: project.animatorControllers,
+    uiDocuments: project.uiDocuments,
     blueprints: project.blueprints,
     graphs: project.graphs,
   };
@@ -55,6 +56,7 @@ export function joinProject(manifest: ProjectManifest, scenes: Scene[]): NodeFor
     skeletalMeshes: manifest.skeletalMeshes ?? [],
     animations: manifest.animations ?? [],
     animatorControllers: manifest.animatorControllers ?? [],
+    uiDocuments: manifest.uiDocuments ?? [],
     blueprints: manifest.blueprints,
     graphs: manifest.graphs,
   };
@@ -88,6 +90,7 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       skeletalMeshes: (data.skeletalMeshes as NodeForgeProject['skeletalMeshes']) ?? [],
       animations: (data.animations as NodeForgeProject['animations']) ?? [],
       animatorControllers: (data.animatorControllers as NodeForgeProject['animatorControllers']) ?? [],
+      uiDocuments: (data.uiDocuments as NodeForgeProject['uiDocuments']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
     };
@@ -118,6 +121,7 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       skeletalMeshes: (data.skeletalMeshes as NodeForgeProject['skeletalMeshes']) ?? [],
       animations: (data.animations as NodeForgeProject['animations']) ?? [],
       animatorControllers: (data.animatorControllers as NodeForgeProject['animatorControllers']) ?? [],
+      uiDocuments: (data.uiDocuments as NodeForgeProject['uiDocuments']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
     };
@@ -143,6 +147,7 @@ export function blankProject(name: string): NodeForgeProject {
     skeletalMeshes: [],
     animations: [],
     animatorControllers: [],
+    uiDocuments: [],
     blueprints: [],
     graphs: [],
   };

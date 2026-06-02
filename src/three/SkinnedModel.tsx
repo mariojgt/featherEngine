@@ -1,9 +1,12 @@
 import { useGLTF, useAnimations } from '@react-three/drei';
-import { useEffect, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
+import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
+import { RagdollRig } from './RagdollRig';
 import type { SceneObject } from '../types';
 
 /**
@@ -51,7 +54,37 @@ export function SkinnedModel({
   const model = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, mixer } = useAnimations(animations, model);
 
+  // Ragdoll: mirror the shared ragdoll flag (set by key/node/death) into render state each frame.
+  const [ragdoll, setRagdollLocal] = useState(false);
+  const ragdollKeyCode = useEditorStore((state) =>
+    registerId ? state.scenes.flatMap((s) => s.objects).find((o) => o.id === registerId)?.character?.keyRagdoll : undefined,
+  );
+  const ragdollKey = useEditorStore((state) => (ragdollKeyCode ? state.runtimeKeys[ragdollKeyCode] : undefined));
+  // Resolve this object's skeleton → its ragdoll tuning (shared by everything on that skeleton).
+  const ragdollSettings = useEditorStore((state) => {
+    if (!registerId) return undefined;
+    const object = state.scenes.flatMap((s) => s.objects).find((o) => o.id === registerId);
+    const mesh = state.skeletalMeshes.find((m) => m.id === object?.animator?.skeletalMeshId);
+    const skeletonId = mesh?.skeletonId;
+    return skeletonId ? state.skeletons.find((sk) => sk.id === skeletonId)?.ragdoll : undefined;
+  });
+  const prevRagdollKey = useRef(false);
   useEffect(() => {
+    // Test key (default R): toggles ragdoll on the object running this skinned model.
+    if (registerId && ragdollKey && !prevRagdollKey.current) toggleRagdoll(registerId);
+    prevRagdollKey.current = Boolean(ragdollKey);
+  }, [ragdollKey, registerId]);
+  useFrame(() => {
+    const on = registerId ? isRagdoll(registerId) : false;
+    if (on !== ragdoll) setRagdollLocal(on);
+  });
+
+  useEffect(() => {
+    // While ragdolling, the physics owns the bones — keep the mixer quiet.
+    if (ragdoll) {
+      mixer.stopAllAction();
+      return;
+    }
     if (!clipName) return;
     // Clip names from DCC tools vary in case; match leniently, fall back to exact.
     const name = Object.keys(actions).find((key) => key.toLowerCase() === clipName.toLowerCase()) ?? clipName;
@@ -67,7 +100,7 @@ export function SkinnedModel({
     return () => {
       action.fadeOut(fade);
     };
-  }, [actions, clipName, loop, speed, fade]);
+  }, [actions, clipName, loop, speed, fade, ragdoll, mixer]);
 
   // Keep playback speed live without restarting the clip.
   useEffect(() => {
@@ -81,7 +114,12 @@ export function SkinnedModel({
     return () => unregisterSkinnedRoot(registerId, model);
   }, [registerId, model]);
 
-  return <primitive object={model} />;
+  return (
+    <>
+      <primitive object={model} />
+      {ragdoll && <RagdollRig root={model} active settings={ragdollSettings} objectId={registerId} />}
+    </>
+  );
 }
 
 /**

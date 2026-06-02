@@ -13,6 +13,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import type { Collider, KinematicCharacterController, RigidBody, World } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
+import { clearRagdolls } from './ragdollState';
 
 let ready = false;
 let initPromise: Promise<void> | null = null;
@@ -30,6 +31,7 @@ void initRapier();
 
 const RESTITUTION = 0;
 const EPSILON = 1e-5;
+const DEFAULT_COLLISION_MASK = 0xffff;
 
 const reuseEuler = new THREE.Euler();
 const reuseQuat = new THREE.Quaternion();
@@ -62,6 +64,15 @@ function halfScale(object: SceneObject): [number, number, number] {
   ];
 }
 
+function clampCollisionLayer(layer: number | undefined): number {
+  return Math.min(Math.max(Math.trunc(layer ?? 0), 0), 15);
+}
+
+function collisionGroups(layer: number | undefined, mask: number | undefined): number {
+  const membership = 1 << clampCollisionLayer(layer);
+  return ((membership & 0xffff) << 16) | ((mask ?? DEFAULT_COLLISION_MASK) & DEFAULT_COLLISION_MASK);
+}
+
 function colliderDescFor(object: SceneObject) {
   const [sx, sy, sz] = halfScale(object);
   const kind = colliderKindFor(object);
@@ -81,6 +92,10 @@ function colliderDescFor(object: SceneObject) {
   desc.setFriction(physics?.friction ?? 0.5);
   desc.setRestitution(RESTITUTION);
   desc.setMass(Math.max(physics?.mass ?? 1, 0.001));
+  desc.setSensor(Boolean(physics?.isTrigger));
+  const groups = collisionGroups(physics?.collisionLayer, physics?.collisionMask);
+  desc.setCollisionGroups(groups);
+  desc.setSolverGroups(groups);
   desc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
   return desc;
 }
@@ -107,6 +122,9 @@ function bodySignature(object: SceneObject): string {
     p?.linearDamping,
     p?.angularDamping,
     p?.gravityScale,
+    p?.isTrigger,
+    p?.collisionLayer,
+    p?.collisionMask,
   ].join('|');
 }
 
@@ -119,10 +137,17 @@ interface BodyEntry {
 export interface PhysicsFrameResult {
   /** Post-step world transforms for every physics body, keyed by object id. */
   transforms: Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>;
-  /** Object ids that *started* a contact this step (drives event.collisionEnter). */
-  collisions: string[];
+  /** Solid-contact pairs that started this step (drives event.collisionEnter). */
+  collisions: PhysicsContactEvent[];
+  /** Sensor/trigger pairs that started this step (drives event.triggerEnter). */
+  triggers: PhysicsContactEvent[];
   /** Character-controller object ids that are standing on the ground this frame. */
   grounded: string[];
+}
+
+export interface PhysicsContactEvent {
+  objectId: string;
+  otherObjectId: string;
 }
 
 /** A capsule sized to a (feet-origin) humanoid, scaled by the object. */
@@ -146,6 +171,7 @@ class PhysicsRuntime {
   private events = new RAPIER.EventQueue(true);
   private entries = new Map<string, BodyEntry>();
   private handleToId = new Map<number, string>();
+  private handleToTrigger = new Map<number, boolean>();
   private charEntries = new Map<string, CharacterEntry>();
 
   constructor() {
@@ -165,12 +191,14 @@ class PhysicsRuntime {
     const collider = this.world.createCollider(colliderDescFor(object), body);
     this.entries.set(object.id, { body, collider, signature: bodySignature(object) });
     this.handleToId.set(collider.handle, object.id);
+    this.handleToTrigger.set(collider.handle, Boolean(object.physics?.isTrigger));
   }
 
   private removeBody(id: string) {
     const entry = this.entries.get(id);
     if (!entry) return;
     this.handleToId.delete(entry.collider.handle);
+    this.handleToTrigger.delete(entry.collider.handle);
     this.world.removeRigidBody(entry.body); // also removes attached colliders
     this.entries.delete(id);
   }
@@ -184,7 +212,15 @@ class PhysicsRuntime {
     const p = object.transform.position;
     const { radius, halfHeight, centerY } = characterCapsule(object);
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(p[0], p[1], p[2]));
-    const collider = this.world.createCollider(RAPIER.ColliderDesc.capsule(halfHeight, radius).setTranslation(0, centerY, 0), body);
+    const groups = collisionGroups(0, DEFAULT_COLLISION_MASK);
+    const collider = this.world.createCollider(
+      RAPIER.ColliderDesc.capsule(halfHeight, radius)
+        .setTranslation(0, centerY, 0)
+        .setCollisionGroups(groups)
+        .setSolverGroups(groups)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      body,
+    );
     // offset keeps the capsule from jittering against surfaces; slide + autostep + ground snap.
     const controller = this.world.createCharacterController(0.02);
     controller.enableAutostep(0.4, 0.2, true);
@@ -193,12 +229,14 @@ class PhysicsRuntime {
     controller.setSlideEnabled(true);
     this.charEntries.set(object.id, { body, collider, controller, signature: this.characterSignature(object) });
     this.handleToId.set(collider.handle, object.id);
+    this.handleToTrigger.set(collider.handle, false);
   }
 
   private removeCharacter(id: string) {
     const entry = this.charEntries.get(id);
     if (!entry) return;
     this.handleToId.delete(entry.collider.handle);
+    this.handleToTrigger.delete(entry.collider.handle);
     this.world.removeCharacterController(entry.controller);
     this.world.removeRigidBody(entry.body);
     this.charEntries.delete(id);
@@ -321,7 +359,12 @@ class PhysicsRuntime {
       // Release snap-to-ground while rising, or jumps get snapped straight back to the floor.
       if (desired.y > 0.001) entry.controller.disableSnapToGround();
       else entry.controller.enableSnapToGround(0.3);
-      entry.controller.computeColliderMovement(entry.collider, desired);
+      entry.controller.computeColliderMovement(
+        entry.collider,
+        desired,
+        RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+        collisionGroups(0, DEFAULT_COLLISION_MASK),
+      );
       if (entry.controller.computedGrounded()) grounded.add(object.id);
       const move = entry.controller.computedMovement();
       const base = prev ? prev.position : cur;
@@ -330,13 +373,15 @@ class PhysicsRuntime {
 
     this.world.step(this.events);
 
-    const collided = new Set<string>();
+    const collisions: PhysicsContactEvent[] = [];
+    const triggers: PhysicsContactEvent[] = [];
     this.events.drainCollisionEvents((h1, h2, started) => {
       if (!started) return;
       const a = this.handleToId.get(h1);
       const b = this.handleToId.get(h2);
-      if (a) collided.add(a);
-      if (b) collided.add(b);
+      if (!a || !b) return;
+      const list = this.handleToTrigger.get(h1) || this.handleToTrigger.get(h2) ? triggers : collisions;
+      list.push({ objectId: a, otherObjectId: b }, { objectId: b, otherObjectId: a });
     });
 
     const transforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
@@ -358,7 +403,7 @@ class PhysicsRuntime {
       transforms.set(object.id, { position: [t.x, t.y, t.z], rotation: object.transform.rotation });
     }
 
-    return { transforms, collisions: [...collided], grounded: [...grounded] };
+    return { transforms, collisions, triggers, grounded: [...grounded] };
   }
 
   dispose() {
@@ -367,6 +412,7 @@ class PhysicsRuntime {
     this.entries.clear();
     this.charEntries.clear();
     this.handleToId.clear();
+    this.handleToTrigger.clear();
   }
 }
 
@@ -392,6 +438,7 @@ export function stopPhysics() {
     runtime.dispose();
     runtime = null;
   }
+  clearRagdolls();
 }
 
 /** The live world if Play is active and Rapier finished initializing, else null. */

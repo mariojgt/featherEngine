@@ -56,10 +56,24 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Added transition';
     case 'set_object_controller':
       return input.controllerId ? 'Assigned controller' : 'Detached controller';
+    case 'set_anim_parameter':
+      return `Set ${String(input.paramName ?? 'param')}`;
+    case 'set_ragdoll':
+      return input.on === false ? 'Ragdoll off' : 'Ragdoll on';
+    case 'set_ragdoll_settings':
+      return 'Tuned ragdoll';
+    case 'generate_ragdoll_bodies':
+      return 'Generated ragdoll bodies';
+    case 'set_ragdoll_body':
+      return `Set body "${String(input.boneName ?? 'bone')}"`;
+    case 'remove_ragdoll_body':
+      return 'Removed ragdoll body';
     case 'set_character_controller':
       return input.enabled === false ? 'Removed character control' : 'Set character controller';
     case 'create_character_pawn':
       return 'Created character pawn';
+    case 'add_gameplay_kit':
+      return `Added ${String(input.kit ?? 'gameplay')} kit`;
     case 'create_third_person_template':
       return 'Built third-person template';
     case 'list_bones':
@@ -87,7 +101,7 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'delete_material_node':
       return 'Removed material node';
     case 'set_physics':
-      return 'Configured physics';
+      return input.isTrigger ? 'Configured trigger' : 'Configured physics';
     case 'rename_object':
       return `Renamed to "${String(input.name ?? '')}"`;
     case 'select_object':
@@ -122,6 +136,28 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Attached blueprint';
     case 'open_object_script':
       return 'Opened object script';
+    case 'create_ui_document':
+      return `Created UI${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'add_ui_element':
+      return `Added ${String(input.kind ?? 'UI')} element`;
+    case 'add_ui_preset':
+      return `Added ${String(input.preset ?? 'UI')} preset`;
+    case 'move_ui_element':
+      return 'Moved UI element';
+    case 'duplicate_ui_element':
+      return 'Duplicated UI element';
+    case 'update_ui_element':
+      return 'Updated UI element';
+    case 'bind_ui_element':
+      return input.expression ? 'Bound UI element' : 'Cleared UI binding';
+    case 'attach_world_ui':
+      return input.documentId ? 'Attached world UI' : 'Detached world UI';
+    case 'set_object_variable':
+      return `Set ${String(input.key ?? 'variable')}`;
+    case 'open_ui_logic':
+      return 'Opened UI logic';
+    case 'delete_ui_document':
+      return 'Deleted UI document';
     case 'set_playing':
       return input.playing ? 'Started Play' : 'Stopped Play';
     case 'fire_event':

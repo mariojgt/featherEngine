@@ -13,6 +13,7 @@ import {
   Hash,
   Image,
   Keyboard,
+  LayoutDashboard,
   Move,
   Play,
   Plus,
@@ -61,6 +62,7 @@ const toneIcon: Record<GraphNodeTone, typeof Zap> = {
   data: Database,
   persistence: Save,
   material: Palette,
+  ui: LayoutDashboard,
 };
 
 const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
@@ -70,6 +72,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'event.keyUp': Keyboard,
   'event.custom': Radio,
   'event.collisionEnter': Crosshair,
+  'event.triggerEnter': Crosshair,
   'logic.branch': GitBranch,
   'logic.compare': Equal,
   'logic.and': Ampersand,
@@ -89,6 +92,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.applyForce': Wind,
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
+  'action.destroyObject': Trash2,
   'action.playSound': Volume2,
   'action.setMaterialColor': Palette,
   'action.setMaterialProperty': SlidersHorizontal,
@@ -116,6 +120,11 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'save.load': Database,
   'save.clear': Trash2,
   'action.print': Terminal,
+  'ui.show': LayoutDashboard,
+  'ui.hide': LayoutDashboard,
+  'ui.setText': TextIcon,
+  'variable.getObject': Database,
+  'variable.setObject': Database,
 };
 
 const valueProducerKinds = new Set<GraphNodeKind>([
@@ -130,6 +139,7 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'value.boolean',
   'value.vector3',
   'variable.get',
+  'variable.getObject',
   'data.tableGet',
   'material.color',
   'material.scalar',
@@ -171,7 +181,10 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 't', label: 'T' },
       ];
     case 'variable.set':
+    case 'variable.setObject':
       return [{ id: 'value', label: 'Value' }];
+    case 'ui.setText':
+      return [{ id: 'text', label: 'Text' }];
     case 'data.tableGet':
       return [{ id: 'rowKey', label: 'Row Key' }];
     case 'action.translate':
@@ -201,6 +214,8 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'distance', label: 'Distance' },
         { id: 'height', label: 'Height' },
       ];
+    case 'action.setRagdoll':
+      return [{ id: 'on', label: 'On' }];
     case 'material.output':
       return [
         { id: 'baseColor', label: 'Base Color' },

@@ -15,12 +15,13 @@ import { AssetBrowser } from './AssetBrowser';
 import { VisualScriptingPanel } from './VisualScriptingPanel';
 import { MaterialEditorPanel } from './MaterialEditorPanel';
 import { AnimatorEditorPanel } from './AnimatorEditorPanel';
+import { UIEditorPanel } from './UIEditorPanel';
 import { getWorkspaceApi, setWorkspaceApi } from './workspacePanels';
 import { onPanelClosed } from '../sync/storeSync';
 import { POPPABLE_PANELS, openPanelWindow } from '../sync/popoutWindow';
 
 const LAYOUT_KEY = 'nodeforge.layout';
-const LAYOUT_VERSION = 4;
+const LAYOUT_VERSION = 5;
 
 // Where each panel sits when (re)added to the dock — used to restore a panel after
 // its popped-out window closes.
@@ -34,6 +35,7 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   project: { component: 'project', title: 'Project', ref: 'hierarchy', direction: 'below' },
   materials: { component: 'materials', title: 'Material', ref: 'inspector', direction: 'below' },
   animator: { component: 'animator', title: 'Animator', ref: 'inspector', direction: 'below' },
+  ui: { component: 'ui', title: 'UI', ref: 'inspector', direction: 'below' },
 };
 
 // Each Dockview panel just renders the existing panel component (they read stores directly).
@@ -45,6 +47,7 @@ const components = {
   scripting: () => <VisualScriptingPanel />,
   materials: () => <MaterialEditorPanel />,
   animator: () => <AnimatorEditorPanel />,
+  ui: () => <UIEditorPanel />,
 };
 
 /** Re-add a panel to the dock (after its popped-out window closes), avoiding duplicates. */
@@ -112,6 +115,8 @@ function buildDefaultLayout(api: DockviewApi) {
   api.addPanel({ id: 'materials', component: 'materials', title: 'Material', position: { referencePanel: 'inspector', direction: 'below' } });
   // Animator shares the Material group as a tab (both author reusable assets next to the Inspector).
   api.addPanel({ id: 'animator', component: 'animator', title: 'Animator', position: { referencePanel: 'materials', direction: 'within' } });
+  // UI editor joins the same group as another tab.
+  api.addPanel({ id: 'ui', component: 'ui', title: 'UI', position: { referencePanel: 'materials', direction: 'within' } });
 }
 
 /** Rebuild the default layout (wired to the toolbar's View → Reset Layout). */

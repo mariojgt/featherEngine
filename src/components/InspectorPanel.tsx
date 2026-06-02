@@ -104,6 +104,38 @@ export function RangeField({
   );
 }
 
+const physicsLayers = Array.from({ length: 16 }, (_, index) => index);
+
+function LayerMaskField({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const mask = value & 0xffff;
+  return (
+    <div className="layer-mask-field">
+      <span>Collides With</span>
+      <div>
+        {physicsLayers.map((layer) => {
+          const bit = 1 << layer;
+          return (
+            <label key={layer} title={`Layer ${layer}`}>
+              <input
+                type="checkbox"
+                checked={Boolean(mask & bit)}
+                onChange={(event) => onChange(event.target.checked ? mask | bit : mask & ~bit)}
+              />
+              <em>{layer}</em>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function RendererSection({
   renderer,
   modelAssets,
@@ -249,6 +281,7 @@ function ClipOptions({ url }: { url: string }) {
 }
 
 function AnimatorSection({
+  objectId,
   animator,
   modelUrl,
   meshAsset,
@@ -260,6 +293,7 @@ function AnimatorSection({
   onControllerChange,
   onEditController,
 }: {
+  objectId: string;
   animator: AnimatorComponent | undefined;
   modelUrl?: string;
   /** The Skeletal Mesh asset for the assigned model, if it was split on import. */
@@ -276,6 +310,11 @@ function AnimatorSection({
   onEditController: () => void;
 }) {
   const usingController = Boolean(animator?.controllerId && controllers.some((c) => c.id === animator?.controllerId));
+  const isPlaying = useEditorStore((state) => state.isPlaying);
+  const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
+  const setRuntimeAnimatorParam = useEditorStore((state) => state.setRuntimeAnimatorParam);
+  const activeController = controllers.find((c) => c.id === animator?.controllerId);
+  const liveParams = runtimeAnimators[objectId]?.params;
   return (
     <section className="inspector-section">
       <h3>Animation</h3>
@@ -310,6 +349,37 @@ function AnimatorSection({
                 <span>{controllers.find((c) => c.id === animator?.controllerId)?.name}</span>
               </div>
               <p>State machine drives the animation.{liveStateName ? ` Now: ${liveStateName}` : ''}</p>
+              {isPlaying && activeController && (
+                <div className="anim-live">
+                  <span className="inspector-subhead">Live Parameters</span>
+                  {activeController.parameters.map((param) => {
+                    const value = liveParams?.[param.id] ?? param.defaultValue;
+                    const editable = param.source === 'manual';
+                    if (param.type === 'trigger') {
+                      return (
+                        <button key={param.id} className="full-button" onClick={() => setRuntimeAnimatorParam(objectId, param.id, true)}>
+                          Fire “{param.name}”
+                        </button>
+                      );
+                    }
+                    if (param.type === 'bool') {
+                      return (
+                        <label className="field-row" key={param.id}>
+                          <span>{param.name}{editable ? '' : ' (auto)'}</span>
+                          <input type="checkbox" checked={Boolean(value)} disabled={!editable} onChange={(event) => setRuntimeAnimatorParam(objectId, param.id, event.target.checked)} />
+                        </label>
+                      );
+                    }
+                    return (
+                      <label className="range-field" key={param.id}>
+                        <span>{param.name}{editable ? '' : ' (auto)'}</span>
+                        <input type="range" min={0} max={10} step={0.1} value={Number(value)} disabled={!editable} onChange={(event) => setRuntimeAnimatorParam(objectId, param.id, Number(event.target.value))} />
+                        <strong>{Number(value).toFixed(2)}</strong>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
               <div className="script-actions">
                 <button onClick={onEditController}>Edit</button>
               </div>
@@ -460,6 +530,104 @@ function AttachmentSection({ objectId }: { objectId: string }) {
   );
 }
 
+/** World-space UI (a widget anchored over this object) + per-instance variables for `self.*` bindings. */
+function UISection({ objectId }: { objectId: string }) {
+  const object = useEditorStore((state) => selectActiveObjects(state).find((o) => o.id === objectId));
+  const uiDocuments = useEditorStore((state) => state.uiDocuments);
+  const attachUI = useEditorStore((state) => state.attachUI);
+  const detachUI = useEditorStore((state) => state.detachUI);
+  const updateUIComponent = useEditorStore((state) => state.updateUIComponent);
+  const setActiveUIDocument = useEditorStore((state) => state.setActiveUIDocument);
+  const setObjectVariable = useEditorStore((state) => state.setObjectVariable);
+  const [newKey, setNewKey] = useState('');
+
+  const worldDocs = uiDocuments.filter((doc) => doc.surface === 'world');
+  const ui = object?.ui;
+  const variables = object?.variables ?? {};
+
+  return (
+    <section className="inspector-section">
+      <h3>UI (world widget)</h3>
+      {worldDocs.length === 0 ? (
+        <p className="field-hint">Create a “world” UI document in the UI panel to anchor a widget (e.g. a health bar) over this object.</p>
+      ) : (
+        <label className="field-row">
+          <span>Widget</span>
+          <select
+            value={ui?.documentId ?? ''}
+            onChange={(event) => (event.target.value ? attachUI(objectId, event.target.value) : detachUI(objectId))}
+          >
+            <option value="">None</option>
+            {worldDocs.map((doc) => (
+              <option key={doc.id} value={doc.id}>
+                {doc.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {ui && (
+        <>
+          <VectorField label="Offset" value={ui.offset} onChange={(offset) => updateUIComponent(objectId, { offset })} />
+          <label className="field-row">
+            <span>Scale</span>
+            <input
+              type="number"
+              step="0.1"
+              value={ui.scale}
+              onChange={(event) => updateUIComponent(objectId, { scale: Number(event.target.value) })}
+            />
+          </label>
+          <label className="field-row">
+            <span>Billboard</span>
+            <input type="checkbox" checked={ui.billboard} onChange={(event) => updateUIComponent(objectId, { billboard: event.target.checked })} />
+          </label>
+          <button
+            className="full-button"
+            onClick={() => {
+              setActiveUIDocument(ui.documentId);
+              focusWorkspacePanel('ui');
+            }}
+          >
+            Edit widget
+          </button>
+        </>
+      )}
+
+      <h3 style={{ marginTop: 10 }}>Instance Variables</h3>
+      <p className="field-hint">Per-object data read by world UI as <code>self.&lt;key&gt;</code> and by scripts.</p>
+      {Object.entries(variables).map(([key, value]) => (
+        <label className="field-row" key={key}>
+          <span>{key}</span>
+          <input
+            type={typeof value === 'number' ? 'number' : 'text'}
+            value={Array.isArray(value) ? value.join(',') : String(value)}
+            onChange={(event) =>
+              setObjectVariable(objectId, key, typeof value === 'number' ? Number(event.target.value) : event.target.value)
+            }
+          />
+        </label>
+      ))}
+      <div className="field-row">
+        <input placeholder="new key (e.g. health)" value={newKey} onChange={(event) => setNewKey(event.target.value)} />
+        <button
+          className="full-button"
+          onClick={() => {
+            const key = newKey.trim();
+            if (key) {
+              setObjectVariable(objectId, key, 100);
+              setNewKey('');
+            }
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </section>
+  );
+}
+
 /** A friendly label for a key/mouse binding code. */
 function bindingLabel(code: string): string {
   if (code === 'Mouse0') return 'Left Click';
@@ -549,14 +717,15 @@ function CharacterSection({
       </label>
       {cc && cc.enabled && (
         <>
-          <p className="field-hint">Feeds the animator’s Speed / VerticalSpeed. Click the view in Play to capture the mouse.</p>
+          <p className="field-hint">WASD move · Shift sprint · C crouch · Space jump · Q roll · Left‑click attack. Feeds the animator automatically.</p>
+
+          <h4 className="inspector-subhead">Movement</h4>
           {num('Move Speed', 'moveSpeed')}
           {num('Sprint ×', 'sprintMultiplier')}
           {num('Crouch ×', 'crouchMultiplier')}
-          {num('Roll Speed', 'rollSpeed')}
+          {num('Turn Speed', 'turnSpeed')}
           {num('Jump', 'jumpStrength')}
           {num('Gravity', 'gravity')}
-          {num('Turn Speed', 'turnSpeed')}
           {num('Ground Y', 'groundLevel')}
           <label className="field-row">
             <span>Flip Facing 180°</span>
@@ -566,6 +735,11 @@ function CharacterSection({
               onChange={(event) => onChange({ modelYawOffset: event.target.checked ? Math.PI : 0 })}
             />
           </label>
+
+          <h4 className="inspector-subhead">Roll / Dodge</h4>
+          {num('Roll Speed', 'rollSpeed')}
+          {num('Roll Duration', 'rollDuration', 0.05)}
+          <p className="field-hint">Roll distance ≈ {(cc.rollSpeed * cc.rollDuration).toFixed(1)} units (speed × duration).</p>
 
           <h4 className="inspector-subhead">Controls</h4>
           <KeyBinding label="Forward" value={cc.keyForward} onChange={(keyForward) => onChange({ keyForward })} />
@@ -577,6 +751,11 @@ function CharacterSection({
           <KeyBinding label="Crouch" value={cc.keyCrouch} onChange={(keyCrouch) => onChange({ keyCrouch })} />
           <KeyBinding label="Roll" value={cc.keyRoll} onChange={(keyRoll) => onChange({ keyRoll })} />
           <KeyBinding label="Attack" value={cc.keyAttack} onChange={(keyAttack) => onChange({ keyAttack })} />
+          <KeyBinding label="Aim" value={cc.keyAim} onChange={(keyAim) => onChange({ keyAim })} />
+          <KeyBinding label="Reload" value={cc.keyReload} onChange={(keyReload) => onChange({ keyReload })} />
+          <KeyBinding label="Interact" value={cc.keyInteract} onChange={(keyInteract) => onChange({ keyInteract })} />
+          <KeyBinding label="Emote" value={cc.keyEmote} onChange={(keyEmote) => onChange({ keyEmote })} />
+          <KeyBinding label="Ragdoll" value={cc.keyRagdoll} onChange={(keyRagdoll) => onChange({ keyRagdoll })} />
 
           <h4 className="inspector-subhead">Camera</h4>
           <label className="field-row">
@@ -659,6 +838,22 @@ function PhysicsSection({
           <option value="capsule">Capsule</option>
         </select>
       </label>
+      <label className="field-row">
+        <span>Trigger</span>
+        <input type="checkbox" checked={physics.isTrigger ?? false} onChange={(event) => onChange({ isTrigger: event.target.checked })} />
+      </label>
+      {physics.isTrigger && <p className="field-hint">Trigger colliders detect overlaps but do not block, push, or get pushed.</p>}
+      <label className="field-row">
+        <span>Layer</span>
+        <select value={physics.collisionLayer ?? 0} onChange={(event) => onChange({ collisionLayer: Number(event.target.value) })}>
+          {physicsLayers.map((layer) => (
+            <option key={layer} value={layer}>
+              Layer {layer}
+            </option>
+          ))}
+        </select>
+      </label>
+      <LayerMaskField value={physics.collisionMask ?? 0xffff} onChange={(collisionMask) => onChange({ collisionMask })} />
       <label className="field-row">
         <span>Mass</span>
         <NumberInput value={physics.mass} min={0} step={0.1} onChange={(mass) => onChange({ mass })} />
@@ -792,6 +987,7 @@ export function InspectorPanel() {
 
           {object.renderer && (
             <AnimatorSection
+              objectId={object.id}
               animator={object.animator}
               modelUrl={animatorModelUrl}
               meshAsset={animatorMeshAsset}
@@ -816,6 +1012,8 @@ export function InspectorPanel() {
           />
 
           <AttachmentSection objectId={object.id} />
+
+          <UISection objectId={object.id} />
 
           {object.physics ? (
             <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />

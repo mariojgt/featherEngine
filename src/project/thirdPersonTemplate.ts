@@ -49,5 +49,16 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
   store.updateTransform(groundId, 'scale', [24, 0.2, 24]);
 
   // The pawn: model + auto-built locomotion controller + character controller + editable blueprint.
-  return store.createCharacterPawn(modelAsset.id, 'Player');
+  const pawnId = store.createCharacterPawn(modelAsset.id, 'Player');
+  if (!pawnId) return undefined;
+
+  // Round it out with the full gameplay kit so the template is a real game starter out of the box:
+  // ranged pistol (aim/shoot/reload), health + hit reactions + death→ragdoll, interactions, and emotes.
+  const kit = useEditorStore.getState().addGameplayKit;
+  kit(pawnId, 'ranged');
+  kit(pawnId, 'health');
+  kit(pawnId, 'interactions');
+  kit(pawnId, 'emotes');
+
+  return pawnId;
 }

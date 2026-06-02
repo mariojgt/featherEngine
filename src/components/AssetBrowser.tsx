@@ -8,6 +8,7 @@ import {
   Folder,
   GitBranch,
   Image,
+  LayoutDashboard,
   Music,
   Palette,
   PersonStanding,
@@ -26,7 +27,7 @@ import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './Con
 import { SkeletonEditorModal } from './SkeletonEditorModal';
 import { ASSET_DRAG_TYPE, assetDrag, hasDragType } from './dragShared';
 import { focusWorkspacePanel } from './workspacePanels';
-import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset } from '../types';
+import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset, UIDocument } from '../types';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -49,7 +50,7 @@ const isAccepted = (name: string) => ACCEPTED_EXT.has(name.split('.').pop()?.toL
 
 const assetGlyph = (type: AssetType) => (type === 'audio' ? Music : type === 'image' ? Image : Box);
 
-type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material';
+type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument';
 type DragRef = { items: Array<{ kind: DragKind; id: string }> } | null;
 
 const itemKey = (kind: DragKind, id: string) => `${kind}:${id}`;
@@ -95,6 +96,12 @@ export function AssetBrowser() {
   const renameMaterial = useEditorStore((state) => state.renameMaterial);
   const deleteMaterial = useEditorStore((state) => state.deleteMaterial);
   const setActiveMaterial = useEditorStore((state) => state.setActiveMaterial);
+  const uiDocuments = useEditorStore((state) => state.uiDocuments);
+  const activeUIDocumentId = useEditorStore((state) => state.activeUIDocumentId);
+  const createUIDocument = useEditorStore((state) => state.createUIDocument);
+  const renameUIDocument = useEditorStore((state) => state.renameUIDocument);
+  const deleteUIDocument = useEditorStore((state) => state.deleteUIDocument);
+  const setActiveUIDocument = useEditorStore((state) => state.setActiveUIDocument);
   const skeletons = useEditorStore((state) => state.skeletons);
   const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
   const animationAssets = useEditorStore((state) => state.animations);
@@ -107,7 +114,7 @@ export function AssetBrowser() {
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedFolderId, setSelectedFolderId] = useState<string | undefined>(undefined);
-  const [renaming, setRenaming] = useState<{ kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material'; id: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument'; id: string } | null>(null);
   const [draft, setDraft] = useState('');
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
@@ -220,7 +227,7 @@ export function AssetBrowser() {
     }
   };
 
-  const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material', id: string, current: string) => {
+  const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument', id: string, current: string) => {
     setRenaming({ kind, id });
     setDraft(current);
   };
@@ -233,6 +240,7 @@ export function AssetBrowser() {
       else if (renaming.kind === 'blueprint') renameBlueprint(renaming.id, name);
       else if (renaming.kind === 'dataAsset') renameDataAsset(renaming.id, name);
       else if (renaming.kind === 'material') renameMaterial(renaming.id, name);
+      else if (renaming.kind === 'uiDocument') renameUIDocument(renaming.id, name);
       else renameAsset(renaming.id, name);
     }
     setRenaming(null);
@@ -270,6 +278,17 @@ export function AssetBrowser() {
   const openMaterial = (id: string) => {
     setActiveMaterial(id);
     focusWorkspacePanel('materials');
+  };
+
+  const newUIDocument = (folderId?: string) => {
+    const id = createUIDocument(undefined, 'screen', folderId);
+    if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
+    startRename('uiDocument', id, uiDocuments.length ? `UI ${uiDocuments.length + 1}` : 'UI 1');
+  };
+
+  const openUIDocument = (id: string) => {
+    setActiveUIDocument(id);
+    focusWorkspacePanel('ui');
   };
 
   const openMenu = (event: React.MouseEvent, items: ContextMenuState['items']) => {
@@ -336,6 +355,7 @@ export function AssetBrowser() {
       searchMatches.blueprints.forEach((b) => out.push(itemKey('blueprint', b.id)));
       searchMatches.dataAssets.forEach((d) => out.push(itemKey('dataAsset', d.id)));
       searchMatches.materials.forEach((m) => out.push(itemKey('material', m.id)));
+      searchMatches.uiDocuments.forEach((u) => out.push(itemKey('uiDocument', u.id)));
       searchMatches.assets.forEach((a) => out.push(itemKey('asset', a.id)));
       return out;
     }
@@ -346,6 +366,7 @@ export function AssetBrowser() {
       blueprints.filter((b) => b.folderId === parentId).forEach((b) => out.push(itemKey('blueprint', b.id)));
       dataAssets.filter((d) => d.folderId === parentId).forEach((d) => out.push(itemKey('dataAsset', d.id)));
       materials.filter((m) => m.folderId === parentId).forEach((m) => out.push(itemKey('material', m.id)));
+      uiDocuments.filter((u) => u.folderId === parentId).forEach((u) => out.push(itemKey('uiDocument', u.id)));
       assets.filter((a) => a.folderId === parentId).forEach((a) => out.push(itemKey('asset', a.id)));
     };
     walk(undefined);
@@ -441,7 +462,7 @@ export function AssetBrowser() {
   // Context-menu entries to move an item between folders. Membership is purely organizational —
   // scene objects/nodes reference the asset by id, so moving it never breaks those references.
   const moveEntries = (
-    kind: 'asset' | 'blueprint' | 'dataAsset' | 'material',
+    kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument',
     id: string,
     currentFolderId?: string,
   ): ContextMenuEntry[] => {
@@ -549,6 +570,34 @@ export function AssetBrowser() {
         <RenameInput onCommit={commitRename} />
       ) : (
         <span className="tree-label">{material.name}</span>
+      )}
+    </button>
+  );
+
+  const renderUIDocument = (doc: UIDocument, depth: number) => (
+    <button
+      key={doc.id}
+      className={rowClass('uiDocument', doc.id, activeUIDocumentId === doc.id && 'active')}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      {...rowDnd('uiDocument', doc.id, doc.folderId, doc.name)}
+      onDoubleClick={() => openUIDocument(doc.id)}
+      onClick={(event) => handleItemClick(event, 'uiDocument', doc.id, () => openUIDocument(doc.id))}
+      title={`UI · ${doc.surface === 'screen' ? 'screen HUD' : 'world space'}`}
+      onContextMenu={(event) =>
+        openMenu(event, [
+          { label: 'Edit in UI', onClick: () => openUIDocument(doc.id) },
+          { label: 'Rename', onClick: () => startRename('uiDocument', doc.id, doc.name) },
+          ...moveEntries('uiDocument', doc.id, doc.folderId),
+          'separator',
+          { label: 'Delete UI', danger: true, onClick: () => deleteUIDocument(doc.id) },
+        ])
+      }
+    >
+      <LayoutDashboard size={14} style={{ color: '#7DD3FC' }} aria-hidden />
+      {renaming?.kind === 'uiDocument' && renaming.id === doc.id ? (
+        <RenameInput onCommit={commitRename} />
+      ) : (
+        <span className="tree-label">{doc.name}</span>
       )}
     </button>
   );
@@ -677,6 +726,7 @@ export function AssetBrowser() {
               { label: 'Create Blueprint', onClick: () => newBlueprint(folder.id) },
               { label: 'Create Data Asset', onClick: () => newDataAsset(folder.id) },
               { label: 'Create Material', onClick: () => newMaterial(folder.id) },
+              { label: 'Create UI', onClick: () => newUIDocument(folder.id) },
               { label: 'Import Asset…', onClick: () => triggerImport(folder.id) },
               'separator',
               { label: 'Rename', onClick: () => startRename('folder', folder.id, folder.name) },
@@ -703,6 +753,7 @@ export function AssetBrowser() {
       {blueprints.filter((bp) => bp.folderId === parentId).map((bp) => renderBlueprint(bp, depth))}
       {dataAssets.filter((asset) => asset.folderId === parentId).map((asset) => renderDataAsset(asset, depth))}
       {materials.filter((material) => material.folderId === parentId).map((material) => renderMaterial(material, depth))}
+      {uiDocuments.filter((doc) => doc.folderId === parentId).map((doc) => renderUIDocument(doc, depth))}
       {animatorControllers.filter((controller) => controller.folderId === parentId).map((controller) => renderController(controller, depth))}
       {skeletons.filter((skeleton) => skeleton.folderId === parentId).map((skeleton) => renderSkeleton(skeleton, depth))}
       {skeletalMeshes.filter((mesh) => mesh.folderId === parentId).map((mesh) => renderSkeletalMesh(mesh, depth))}
@@ -718,6 +769,7 @@ export function AssetBrowser() {
         blueprints: blueprints.filter((bp) => bp.name.toLowerCase().includes(search)),
         dataAssets: dataAssets.filter((asset) => asset.name.toLowerCase().includes(search)),
         materials: materials.filter((material) => material.name.toLowerCase().includes(search)),
+        uiDocuments: uiDocuments.filter((doc) => doc.name.toLowerCase().includes(search)),
         controllers: animatorControllers.filter((controller) => controller.name.toLowerCase().includes(search)),
         animations: animationAssets.filter((anim) => anim.name.toLowerCase().includes(search)),
         assets: assets.filter((asset) => asset.name.toLowerCase().includes(search)),
@@ -774,6 +826,7 @@ export function AssetBrowser() {
             { label: 'Create Blueprint', onClick: () => newBlueprint(undefined) },
             { label: 'Create Data Asset', onClick: () => newDataAsset(undefined) },
             { label: 'Create Material', onClick: () => newMaterial(undefined) },
+            { label: 'Create UI', onClick: () => newUIDocument(undefined) },
             { label: 'Import Asset…', onClick: () => triggerImport(undefined) },
           ])
         }
@@ -783,10 +836,12 @@ export function AssetBrowser() {
             {searchMatches.blueprints.map((bp) => renderBlueprint(bp, 0))}
             {searchMatches.dataAssets.map((asset) => renderDataAsset(asset, 0))}
             {searchMatches.materials.map((material) => renderMaterial(material, 0))}
+            {searchMatches.uiDocuments.map((doc) => renderUIDocument(doc, 0))}
             {searchMatches.assets.map((asset) => renderAsset(asset, 0))}
             {searchMatches.blueprints.length === 0 &&
               searchMatches.dataAssets.length === 0 &&
               searchMatches.materials.length === 0 &&
+              searchMatches.uiDocuments.length === 0 &&
               searchMatches.assets.length === 0 && (
               <div className="empty-state wide">
                 <Search size={18} aria-hidden />

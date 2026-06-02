@@ -11,6 +11,7 @@ import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, readAssetDragId } from './dragShared';
+import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import type { SceneObject } from '../types';
 
 type DropContext = { camera: THREE.Camera; canvas: HTMLCanvasElement };
@@ -316,6 +317,8 @@ function SceneContent({ transformMode }: { transformMode: TransformMode }) {
           />
         ))}
       </group>
+      {/* World-space UI widgets anchored to objects (also shown in edit mode for placement). */}
+      {sceneObjects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
       {selectedTarget && !isPlaying && !cameraRigObject && (
         <TransformControls
           object={selectedTarget}
