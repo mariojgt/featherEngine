@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bone,
   Box,
+  Boxes,
   ChevronDown,
   ChevronRight,
   Film,
@@ -25,9 +26,9 @@ import { fbxToGlb } from '../three/convertModel';
 import { inspectModel, type ModelInspection } from '../three/inspectModel';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
 import { SkeletonEditorModal } from './SkeletonEditorModal';
-import { ASSET_DRAG_TYPE, assetDrag, hasDragType } from './dragShared';
+import { ASSET_DRAG_TYPE, PREFAB_DRAG_TYPE, assetDrag, hasDragType, prefabDrag } from './dragShared';
 import { focusWorkspacePanel } from './workspacePanels';
-import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset, UIDocument } from '../types';
+import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, Prefab, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset, UIDocument } from '../types';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -50,7 +51,7 @@ const isAccepted = (name: string) => ACCEPTED_EXT.has(name.split('.').pop()?.toL
 
 const assetGlyph = (type: AssetType) => (type === 'audio' ? Music : type === 'image' ? Image : Box);
 
-type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument';
+type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab';
 type DragRef = { items: Array<{ kind: DragKind; id: string }> } | null;
 
 const itemKey = (kind: DragKind, id: string) => `${kind}:${id}`;
@@ -110,11 +111,17 @@ export function AssetBrowser() {
   const setActiveAnimatorController = useEditorStore((state) => state.setActiveAnimatorController);
   const deleteAnimatorController = useEditorStore((state) => state.deleteAnimatorController);
   const createCharacterPawn = useEditorStore((state) => state.createCharacterPawn);
+  const prefabs = useEditorStore((state) => state.prefabs);
+  const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
+  const openPrefabEditor = useEditorStore((state) => state.openPrefabEditor);
+  const instantiatePrefab = useEditorStore((state) => state.instantiatePrefab);
+  const renamePrefab = useEditorStore((state) => state.renamePrefab);
+  const deletePrefab = useEditorStore((state) => state.deletePrefab);
   const projectDir = useProjectStore((state) => state.projectDir);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedFolderId, setSelectedFolderId] = useState<string | undefined>(undefined);
-  const [renaming, setRenaming] = useState<{ kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument'; id: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab'; id: string } | null>(null);
   const [draft, setDraft] = useState('');
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
@@ -227,7 +234,7 @@ export function AssetBrowser() {
     }
   };
 
-  const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument', id: string, current: string) => {
+  const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab', id: string, current: string) => {
     setRenaming({ kind, id });
     setDraft(current);
   };
@@ -241,6 +248,7 @@ export function AssetBrowser() {
       else if (renaming.kind === 'dataAsset') renameDataAsset(renaming.id, name);
       else if (renaming.kind === 'material') renameMaterial(renaming.id, name);
       else if (renaming.kind === 'uiDocument') renameUIDocument(renaming.id, name);
+      else if (renaming.kind === 'prefab') renamePrefab(renaming.id, name);
       else renameAsset(renaming.id, name);
     }
     setRenaming(null);
@@ -352,6 +360,7 @@ export function AssetBrowser() {
   const buildOrderedKeys = (): string[] => {
     const out: string[] = [];
     if (searching && searchMatches) {
+      searchMatches.prefabs.forEach((p) => out.push(itemKey('prefab', p.id)));
       searchMatches.blueprints.forEach((b) => out.push(itemKey('blueprint', b.id)));
       searchMatches.dataAssets.forEach((d) => out.push(itemKey('dataAsset', d.id)));
       searchMatches.materials.forEach((m) => out.push(itemKey('material', m.id)));
@@ -363,6 +372,7 @@ export function AssetBrowser() {
       (childFolders.get(parentId) ?? []).forEach((folder) => {
         if (!collapsed.has(folder.id)) walk(folder.id);
       });
+      prefabs.filter((p) => p.folderId === parentId).forEach((p) => out.push(itemKey('prefab', p.id)));
       blueprints.filter((b) => b.folderId === parentId).forEach((b) => out.push(itemKey('blueprint', b.id)));
       dataAssets.filter((d) => d.folderId === parentId).forEach((d) => out.push(itemKey('dataAsset', d.id)));
       materials.filter((m) => m.folderId === parentId).forEach((m) => out.push(itemKey('material', m.id)));
@@ -418,6 +428,16 @@ export function AssetBrowser() {
         /* some webviews block setData during dragstart — the shared holder covers it */
       }
     }
+    // Dragging a single prefab into the viewport instantiates it at the cursor (same holder trick).
+    const prefabItems = items.filter((item) => item.kind === 'prefab');
+    if (prefabItems.length === 1) {
+      prefabDrag.id = prefabItems[0].id;
+      try {
+        event.dataTransfer.setData(PREFAB_DRAG_TYPE, prefabItems[0].id);
+      } catch {
+        /* some webviews block setData during dragstart — the shared holder covers it */
+      }
+    }
     event.dataTransfer.effectAllowed = 'move';
     // A small labelled chip as the drag image.
     const chip = document.createElement('div');
@@ -430,6 +450,7 @@ export function AssetBrowser() {
 
   const handleItemDragEnd = () => {
     assetDrag.id = null;
+    prefabDrag.id = null;
     setDropTarget(null);
     setDropItemId(null);
     clearSpring();
@@ -462,7 +483,7 @@ export function AssetBrowser() {
   // Context-menu entries to move an item between folders. Membership is purely organizational —
   // scene objects/nodes reference the asset by id, so moving it never breaks those references.
   const moveEntries = (
-    kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument',
+    kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab',
     id: string,
     currentFolderId?: string,
   ): ContextMenuEntry[] => {
@@ -598,6 +619,39 @@ export function AssetBrowser() {
         <RenameInput onCommit={commitRename} />
       ) : (
         <span className="tree-label">{doc.name}</span>
+      )}
+    </button>
+  );
+
+  const renderPrefab = (prefab: Prefab, depth: number) => (
+    <button
+      key={prefab.id}
+      className={rowClass('prefab', prefab.id, editingPrefabId === prefab.id && 'active')}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      {...rowDnd('prefab', prefab.id, prefab.folderId, prefab.name)}
+      onDoubleClick={() => openPrefabEditor(prefab.id)}
+      onClick={(event) => handleItemClick(event, 'prefab', prefab.id, () => instantiatePrefab(prefab.id))}
+      title={`prefab · ${prefab.objects.length} object${prefab.objects.length > 1 ? 's' : ''} — double-click to edit, click to add to scene`}
+      onContextMenu={(event) =>
+        openMenu(event, [
+          { label: 'Add to Scene', onClick: () => instantiatePrefab(prefab.id) },
+          { label: 'Open in Prefab Editor', onClick: () => openPrefabEditor(prefab.id) },
+          { label: 'Rename', onClick: () => startRename('prefab', prefab.id, prefab.name) },
+          ...moveEntries('prefab', prefab.id, prefab.folderId),
+          'separator',
+          { label: 'Delete prefab', danger: true, onClick: () => deletePrefab(prefab.id) },
+        ])
+      }
+    >
+      {prefab.thumbnail ? (
+        <img className="tree-thumb prefab-thumb" src={prefab.thumbnail} alt="" />
+      ) : (
+        <Boxes size={14} style={{ color: '#FBBF77' }} aria-hidden />
+      )}
+      {renaming?.kind === 'prefab' && renaming.id === prefab.id ? (
+        <RenameInput onCommit={commitRename} />
+      ) : (
+        <span className="tree-label">{prefab.name}</span>
       )}
     </button>
   );
@@ -750,6 +804,7 @@ export function AssetBrowser() {
   const renderChildren = (parentId: string | undefined, depth: number) => (
     <>
       {(childFolders.get(parentId) ?? []).map((folder) => renderFolder(folder, depth))}
+      {prefabs.filter((prefab) => prefab.folderId === parentId).map((prefab) => renderPrefab(prefab, depth))}
       {blueprints.filter((bp) => bp.folderId === parentId).map((bp) => renderBlueprint(bp, depth))}
       {dataAssets.filter((asset) => asset.folderId === parentId).map((asset) => renderDataAsset(asset, depth))}
       {materials.filter((material) => material.folderId === parentId).map((material) => renderMaterial(material, depth))}
@@ -766,6 +821,7 @@ export function AssetBrowser() {
   const searching = search.length > 0;
   const searchMatches = searching
     ? {
+        prefabs: prefabs.filter((prefab) => prefab.name.toLowerCase().includes(search)),
         blueprints: blueprints.filter((bp) => bp.name.toLowerCase().includes(search)),
         dataAssets: dataAssets.filter((asset) => asset.name.toLowerCase().includes(search)),
         materials: materials.filter((material) => material.name.toLowerCase().includes(search)),
@@ -833,12 +889,14 @@ export function AssetBrowser() {
       >
         {searching && searchMatches ? (
           <>
+            {searchMatches.prefabs.map((prefab) => renderPrefab(prefab, 0))}
             {searchMatches.blueprints.map((bp) => renderBlueprint(bp, 0))}
             {searchMatches.dataAssets.map((asset) => renderDataAsset(asset, 0))}
             {searchMatches.materials.map((material) => renderMaterial(material, 0))}
             {searchMatches.uiDocuments.map((doc) => renderUIDocument(doc, 0))}
             {searchMatches.assets.map((asset) => renderAsset(asset, 0))}
-            {searchMatches.blueprints.length === 0 &&
+            {searchMatches.prefabs.length === 0 &&
+              searchMatches.blueprints.length === 0 &&
               searchMatches.dataAssets.length === 0 &&
               searchMatches.materials.length === 0 &&
               searchMatches.uiDocuments.length === 0 &&

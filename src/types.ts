@@ -52,6 +52,8 @@ export type GraphNodeKind =
   | 'event.custom'
   | 'event.collisionEnter'
   | 'event.triggerEnter'
+  | 'event.triggerExit'
+  | 'event.interact'
   | 'logic.branch'
   | 'logic.compare'
   | 'logic.and'
@@ -88,6 +90,9 @@ export type GraphNodeKind =
   | 'action.jump'
   | 'action.setCamera'
   | 'action.setRagdoll'
+  | 'action.spawnProjectile'
+  | 'action.setVisible'
+  | 'action.spawnAttached'
   | 'material.output'
   | 'material.color'
   | 'material.scalar'
@@ -151,6 +156,31 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   elementId?: string;
   /** variable.getObject/setObject: key on the owning object's instance variables. */
   objectKey?: string;
+  /** action.spawnProjectile: muzzle speed (units/sec) and hit damage. */
+  projectileSpeed?: number;
+  projectileDamage?: number;
+  /** action.spawnProjectile setup: appearance + flight of the spawned projectile. */
+  projectileSize?: number;
+  projectileColor?: string;
+  projectileLife?: number;
+  projectileGravity?: number;
+  /** action.spawnProjectile: id of a scene object to CLONE as the projectile (mesh/model/scale/color). */
+  projectileTemplateId?: string;
+  /** action.spawnProjectile: muzzle spawn offset in CAMERA space [right, up, forward] (first-person) —
+   *  e.g. [0.28, -0.26, 0.6] = down-right of the eye where a held gun's barrel sits. The shot still
+   *  converges on the crosshair so it hits where you aim. */
+  projectileMuzzle?: Vector3Tuple;
+  /** action.spawnProjectile: when true, log each spawn + hit to the runtime console. */
+  projectileDebug?: boolean;
+  /** action.setVisible: whether the target object is shown (false hides it during Play). */
+  visible?: boolean;
+  /** action.spawnAttached: weapon model asset to spawn + which bone/socket on the owner to attach it to,
+   *  and the local grip offset. Replaces any weapon already attached to that socket. */
+  attachBoneName?: string;
+  attachSocketName?: string;
+  attachOffsetPosition?: Vector3Tuple;
+  attachOffsetRotation?: Vector3Tuple;
+  attachOffsetScale?: Vector3Tuple;
   hasInput?: boolean;
   hasOutput?: boolean;
 }
@@ -169,6 +199,9 @@ export interface MeshRendererComponent {
   color: string;
   metalness: number;
   roughness: number;
+  /** Surface opacity 0–1 (1 = fully opaque, the default). Below 1 renders the mesh translucent — used for
+   *  water/glass volumes. Applies to built-in meshes; models honor it when `overrideMaterial` is on. */
+  opacity?: number;
   /** When set, render this imported glTF/GLB model asset instead of the built-in `mesh`. */
   modelAssetId?: string;
   /** Image asset used as the base-color (albedo) map — applies to built-in meshes and models. */
@@ -367,6 +400,11 @@ export type AnimatorParamSource =
   | 'reloading'
   | 'interacting'
   | 'emoting'
+  | 'crawling'
+  | 'swimming'
+  | 'climbing'
+  | 'moveX'
+  | 'moveY'
   | 'variable';
 
 export interface AnimatorParameter {
@@ -390,12 +428,25 @@ export interface AnimatorCondition {
 export interface AnimatorState {
   id: string;
   name: string;
-  /** Animation asset to play (AnimationAsset id). */
+  /** Animation asset to play (AnimationAsset id). Ignored when this is a blend space (see below). */
   animationId?: string;
   speed: number;
   loop: boolean;
   /** Position in the node-graph editor canvas. */
   position?: { x: number; y: number };
+  /** BLEND SPACE (Unreal-style): when set, this state blends `blendSamples` continuously by the value of
+   *  `blendParameterId` (1D, e.g. Speed → idle/walk/jog/sprint) — and, when `blendParameterIdY` is also set,
+   *  by a second axis too (2D, e.g. moveX × moveY → directional strafe), instead of playing one clip. */
+  blendParameterId?: string;
+  blendParameterIdY?: string;
+  blendSamples?: AnimatorBlendSample[];
+}
+
+/** One sample of a blend space: an animation placed at `value` on the X axis (and `y` on the Y axis for 2D). */
+export interface AnimatorBlendSample {
+  animationId: string;
+  value: number;
+  y?: number;
 }
 
 /** A directed edge between states; taken when all conditions pass. */
@@ -442,6 +493,13 @@ export interface CharacterControllerComponent {
   sprintMultiplier: number;
   /** Speed multiplier while the crouch key is held (also drives a "crouching" animator parameter). */
   crouchMultiplier: number;
+  /** Speed multiplier while the crawl key is held (drives a "crawling" animator parameter). */
+  crawlMultiplier?: number;
+  /**
+   * Strafe mode: the character faces the CAMERA (instead of turning to face movement) and moves in all 8
+   * directions — pairs with a 2D directional blend space via the "moveX"/"moveY" parameter sources.
+   */
+  strafe?: boolean;
   /** Initial upward velocity of a jump (units/sec). */
   jumpStrength: number;
   /** Downward acceleration (units/sec²). */
@@ -463,6 +521,8 @@ export interface CharacterControllerComponent {
   keyJump: string;
   keySprint: string;
   keyCrouch: string;
+  /** Crawl key — slows movement (crawlMultiplier) + drives the "crawling" animator parameter. */
+  keyCrawl?: string;
   keyRoll: string;
   /** Forward dash speed (units/sec) during a roll/dodge. */
   rollSpeed: number;
@@ -474,14 +534,32 @@ export interface CharacterControllerComponent {
   keyAim: string;
   /** Reload key — pulses the "reloading" parameter (ranged-weapon reload). */
   keyReload: string;
-  /** Interact key — pulses the "interacting" parameter (use/pick-up). */
+  /** Interact key — pulses the "interacting" parameter (use/pick-up) AND fires the focused interactable's
+   *  Interact event (Unreal-style). */
   keyInteract: string;
+  /** Max distance (world units) to focus an interactable object in front of the character. Default 3. */
+  interactRange?: number;
   /** Emote key (held) — drives the "emoting" parameter (dance/wave). */
   keyEmote: string;
   /** Test key that toggles the physics ragdoll on this character during Play. */
   keyRagdoll: string;
+  // --- Player sound effects (audio asset ids; played automatically by the runtime on the matching event). ---
+  /** Played on a stride cadence while this character moves on the ground (footsteps). */
+  footstepSoundId?: string;
+  /** Played when the character launches a jump. */
+  jumpSoundId?: string;
+  /** Played when the character touches down after being airborne. */
+  landSoundId?: string;
+  /** Played (as a splash) when the character first enters a water volume. */
+  swimSoundId?: string;
+  /** Played when the character starts an attack (punch / weapon swing). */
+  attackSoundId?: string;
+  /** Played when the character's `health` variable drops (took damage). */
+  hurtSoundId?: string;
   // --- Camera ---
-  /** Trail a third-person camera behind the character (game view / export). */
+  /** Follow style used by the runtime camera. */
+  cameraMode: 'thirdPerson' | 'firstPerson';
+  /** Use this character's runtime camera in game view / export. */
   cameraFollow: boolean;
   /**
    * Resting camera position relative to the character, as a local offset [side, up, back].
@@ -536,6 +614,39 @@ export interface AttachmentComponent {
   boneName: string;
   /** Optional named socket (on the target's Skeleton asset) — its offset is applied before this object's. */
   socketName?: string;
+  /** Explicit local attach offset from the bone/socket — used to seat the weapon in the hand. When set it
+   *  OVERRIDES the object's own transform as the offset, so a runtime-spawned weapon carries its grip
+   *  alignment with it. Rotation is radians (XYZ). */
+  offsetPosition?: Vector3Tuple;
+  offsetRotation?: Vector3Tuple;
+  offsetScale?: Vector3Tuple;
+}
+
+/** Configurable light on a `kind: 'light'` object. Defaults (no component) render as a directional light. */
+export interface LightComponent {
+  type: 'directional' | 'point' | 'spot';
+  color: string;
+  intensity: number;
+  /** point/spot falloff distance in world units (0 = no falloff limit). */
+  distance: number;
+  /** spot cone half-angle in radians (ignored for point/directional). */
+  angle: number;
+  castShadow: boolean;
+}
+
+/**
+ * Project-wide rendering / post-processing settings (bloom, vignette). Serialized in the manifest and
+ * editable in the editor; the AI can tune them too. Read by the GameView + editor viewport post-FX pass.
+ */
+export interface RenderSettings {
+  bloomEnabled: boolean;
+  /** Bloom strength (0–3+). */
+  bloomIntensity: number;
+  /** Luminance threshold above which pixels bloom (0–1). Lower = more glows. */
+  bloomThreshold: number;
+  /** Bloom smoothing/spread (0–1). */
+  bloomRadius: number;
+  vignetteEnabled: boolean;
 }
 
 /** A reusable named attach point on a skeleton (Unreal socket): a bone + a local offset. */
@@ -559,6 +670,14 @@ export interface UIComponent {
   billboard: boolean;
 }
 
+/**
+ * Renders this object as a first-person camera-space view model for its owner.
+ * The object's transform is interpreted as local camera offset/rotation/scale, not world transform.
+ */
+export interface ViewModelComponent {
+  ownerObjectId: string;
+}
+
 export interface SceneObject {
   id: string;
   name: string;
@@ -571,9 +690,51 @@ export interface SceneObject {
   animator?: AnimatorComponent;
   character?: CharacterControllerComponent;
   attachment?: AttachmentComponent;
+  viewModel?: ViewModelComponent;
   ui?: UIComponent;
   /** Per-instance data (e.g. this enemy's `health`), read/written by scripts and world UI bindings via `self.*`. */
   variables?: Record<string, GraphValue>;
+  /** Present on runtime-spawned projectiles (action.spawnProjectile): flies forward, damages on hit, despawns. */
+  projectile?: ProjectileComponent;
+  /** Present on a runtime-spawned particle burst (e.g. a bullet impact): a short-lived THREE.Points effect. */
+  effect?: EffectComponent;
+  /** Lighting for a `kind: 'light'` object — configurable point / spot / directional light. */
+  light?: LightComponent;
+  /** Set on the ROOT of an object stamped from a prefab — the source prefab's id. Lets the editor
+   * find all instances of a prefab. Instances are independent copies; this is just provenance. */
+  prefabSourceId?: string;
+}
+
+/** Marks a runtime-spawned projectile. The runtime moves it by `velocity`, despawns it after `life`
+ * seconds, and on contact with a non-owner reduces that object's `health` instance variable by `damage`. */
+export interface ProjectileComponent {
+  /** Object that fired it — never damaged by its own projectile. */
+  ownerId: string;
+  /** Hit-point damage subtracted from the struck object's `health` instance variable. */
+  damage: number;
+  /** Seconds left before it despawns on its own. */
+  life: number;
+  /** World-space travel velocity (units/sec). */
+  velocity: Vector3Tuple;
+  /** When true, the runtime logs this projectile's spawn + hits to the runtime console. */
+  debug?: boolean;
+}
+
+/** A runtime-spawned, self-despawning particle burst (bullet impacts, muzzle flashes). THREE.Points + a flash light. */
+export interface EffectComponent {
+  /** 'impact' = omni spark burst; 'muzzle' = brief forward flash; 'splash' = water droplets; 'damage' = a
+   *  floating combat damage number (uses `value`). */
+  kind: 'impact' | 'muzzle' | 'splash' | 'damage';
+  /** For kind 'damage': the number to display (the hit-point amount). */
+  value?: number;
+  /** Seconds remaining before it despawns. */
+  life: number;
+  /** Total lifetime (so the renderer can compute 0→1 progress for expansion + fade). */
+  maxLife: number;
+  /** Particle tint. */
+  color: string;
+  /** Particle count. */
+  count: number;
 }
 
 /** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */
@@ -581,6 +742,39 @@ export interface Scene {
   id: string;
   name: string;
   objects: SceneObject[];
+  /** Audio asset id looped quietly as the ambient bed (wind/room tone) while this scene plays. */
+  ambientSoundId?: string;
+  /** Audio asset id looped as background music while this scene plays. */
+  musicSoundId?: string;
+}
+
+/**
+ * The id of the transient scene used while editing a prefab. Opening a prefab swaps the active
+ * scene to this one (populated with a clone of the prefab's objects) so the whole editor — viewport,
+ * hierarchy, inspector, gizmos — can edit it like any scene. It is NEVER serialized or shown in the
+ * scene switcher; see `editingPrefabId`/`closePrefabEditor` in the store.
+ */
+export const PREFAB_EDIT_SCENE_ID = '__prefab_edit__';
+
+/**
+ * A reusable object template ("prefab"): a captured object subtree — a root plus all its
+ * descendants — with every component (transform, renderer, physics, script, animator, children…)
+ * baked in. Instantiating one stamps an independent copy into a scene; it is a one-time stamp, not
+ * a live link, so later edits to the prefab don't touch already-placed instances. Lives in the
+ * project browser alongside blueprints/materials and is editable in its own viewport.
+ */
+export interface Prefab {
+  id: string;
+  name: string;
+  /** Containing folder id, or undefined for the project root. */
+  folderId?: string;
+  /** The captured tree. Ids are prefab-local; `instantiatePrefab` re-ids them on stamp. */
+  objects: SceneObject[];
+  /** Id (within `objects`) of the root object — the one with no parent inside the prefab. */
+  rootId: string;
+  /** Small PNG data-URL preview rendered from the prefab's contents, shown in the Project browser. */
+  thumbnail?: string;
+  createdAt: number;
 }
 
 /** A folder in the project browser. Folders can hold assets, blueprints and other folders. */
@@ -779,6 +973,10 @@ export interface NodeForgeProject {
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   uiDocuments: UIDocument[];
+  /** Reusable object templates. See `Prefab`. */
+  prefabs: Prefab[];
+  /** Project-wide render / post-processing settings (bloom, vignette). */
+  renderSettings?: RenderSettings;
 }
 
 /** Contents of `project.json` — everything except scene objects (which live in scene files). */
@@ -800,6 +998,10 @@ export interface ProjectManifest {
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   uiDocuments: UIDocument[];
+  /** Reusable object templates. See `Prefab`. */
+  prefabs: Prefab[];
+  /** Project-wide render / post-processing settings (bloom, vignette). */
+  renderSettings?: RenderSettings;
 }
 
 /** The legacy single-scene format (v0.1.0) — migrated on load. */

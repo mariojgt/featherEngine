@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { AlertTriangle, FolderOpen, Gamepad2, PersonStanding, Plus, Sparkles } from 'lucide-react';
+import { AlertTriangle, Crosshair, FolderOpen, Gamepad2, PersonStanding, Plus, Sparkles } from 'lucide-react';
 import { isDesktop } from '../platform';
 import { useProjectStore } from '../store/projectStore';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
+import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 
 export function Launcher() {
   const [name, setName] = useState('My Game');
@@ -13,6 +14,15 @@ export function Launcher() {
   const recentProjects = useProjectStore((state) => state.recentProjects);
   const busy = useProjectStore((state) => state.busy);
   const error = useProjectStore((state) => state.error);
+  const createTemplateProject = async (builder: () => Promise<unknown>) => {
+    try {
+      await newProject(name.trim());
+      if (!useProjectStore.getState().hasProject) return;
+      await builder();
+    } catch (error) {
+      useProjectStore.setState({ error: error instanceof Error ? error.message : 'Template failed' });
+    }
+  };
 
   return (
     <div className="launcher">
@@ -44,17 +54,19 @@ export function Launcher() {
         <button
           className="launcher-primary template-button"
           disabled={busy || !name.trim()}
-          onClick={async () => {
-            try {
-              await newProject(name.trim());
-              await createThirdPersonTemplate();
-            } catch (error) {
-              useProjectStore.setState({ error: error instanceof Error ? error.message : 'Template failed' });
-            }
-          }}
+          onClick={() => void createTemplateProject(createThirdPersonTemplate)}
         >
           <PersonStanding size={16} aria-hidden />
           <span>New third-person template</span>
+        </button>
+
+        <button
+          className="launcher-primary template-button"
+          disabled={busy || !name.trim()}
+          onClick={() => void createTemplateProject(createFirstPersonTemplate)}
+        >
+          <Crosshair size={16} aria-hidden />
+          <span>New FPS template</span>
         </button>
 
         <div className="launcher-actions">

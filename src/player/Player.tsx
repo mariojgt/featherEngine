@@ -3,6 +3,7 @@ import { useEditorStore } from '../store/editorStore';
 import { GAME_BUNDLE_FILE, readGameBundle } from '../project/exportGame';
 import { useRuntimeAudio } from '../runtime/useRuntimeAudio';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
+import { GameHud } from '../ui/GameHud';
 import { GameView } from './GameView';
 
 type Status = 'loading' | 'ready' | 'needs-file' | 'error';
@@ -123,6 +124,7 @@ export function Player() {
       <>
         <GameView />
         <ScreenUILayer />
+        <GameHud />
       </>
     );
 

@@ -36,6 +36,26 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Renamed scene to "${String(input.name ?? '')}"`;
     case 'create_object':
       return `Created ${String(input.kind ?? 'object')}`;
+    case 'set_object_parent':
+      return input.parentId ? 'Nested object' : 'Detached object';
+    case 'create_prefab':
+      return 'Created prefab';
+    case 'inspect_prefab':
+      return 'Inspected prefab';
+    case 'instantiate_prefab':
+      return 'Added prefab to scene';
+    case 'open_prefab':
+      return 'Opened prefab editor';
+    case 'close_prefab':
+      return input.save === false ? 'Discarded prefab edits' : 'Saved prefab';
+    case 'rename_prefab':
+      return `Renamed prefab to "${String(input.name ?? '')}"`;
+    case 'delete_prefab':
+      return 'Deleted prefab';
+    case 'apply_instance_to_prefab':
+      return 'Applied changes to prefab';
+    case 'revert_instance_to_prefab':
+      return 'Reverted to prefab';
     case 'update_transform':
       return 'Moved object';
     case 'update_renderer':
@@ -54,6 +74,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Updated state';
     case 'add_animator_transition':
       return 'Added transition';
+    case 'set_blendspace':
+      return Array.isArray(input.samples) && input.samples.length ? 'Set blend space' : 'Cleared blend space';
     case 'set_object_controller':
       return input.controllerId ? 'Assigned controller' : 'Detached controller';
     case 'set_anim_parameter':
@@ -80,6 +102,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Listed bones';
     case 'attach_to_bone':
       return input.targetObjectId ? 'Attached to bone' : 'Detached';
+    case 'set_attachment_offset':
+      return 'Set attach offset';
     case 'add_skeleton_socket':
       return `Added socket "${String(input.name ?? '')}"`;
     case 'attach_to_socket':
@@ -102,12 +126,28 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Removed material node';
     case 'set_physics':
       return input.isTrigger ? 'Configured trigger' : 'Configured physics';
+    case 'set_light':
+      return `Configured ${String(input.type ?? '')} light`.replace('  ', ' ');
+    case 'set_render_settings':
+      return 'Updated post-processing';
     case 'rename_object':
       return `Renamed to "${String(input.name ?? '')}"`;
     case 'select_object':
       return 'Selected object';
     case 'delete_object':
       return 'Deleted object';
+    case 'duplicate_object':
+      return input.count && Number(input.count) > 1 ? `Duplicated ×${String(input.count)}` : 'Duplicated object';
+    case 'group_objects':
+      return `Grouped ${Array.isArray(input.ids) ? input.ids.length : ''} objects`.trim();
+    case 'spawn_grid':
+      return `Spawned ${String(input.rows ?? '')}×${String(input.cols ?? '')} grid`;
+    case 'align_objects':
+      return `Aligned on ${String(input.axis ?? '')}`;
+    case 'distribute_objects':
+      return `Distributed on ${String(input.axis ?? '')}`;
+    case 'batch_transform':
+      return 'Batch-transformed objects';
     case 'create_blueprint':
       return `Created blueprint${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'create_folder':

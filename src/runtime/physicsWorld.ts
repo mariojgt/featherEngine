@@ -141,6 +141,8 @@ export interface PhysicsFrameResult {
   collisions: PhysicsContactEvent[];
   /** Sensor/trigger pairs that started this step (drives event.triggerEnter). */
   triggers: PhysicsContactEvent[];
+  /** Sensor/trigger pairs that ENDED this step (drives event.triggerExit — proximity prompts). */
+  triggersExit: PhysicsContactEvent[];
   /** Character-controller object ids that are standing on the ground this frame. */
   grounded: string[];
 }
@@ -375,12 +377,18 @@ class PhysicsRuntime {
 
     const collisions: PhysicsContactEvent[] = [];
     const triggers: PhysicsContactEvent[] = [];
+    const triggersExit: PhysicsContactEvent[] = [];
     this.events.drainCollisionEvents((h1, h2, started) => {
-      if (!started) return;
       const a = this.handleToId.get(h1);
       const b = this.handleToId.get(h2);
       if (!a || !b) return;
-      const list = this.handleToTrigger.get(h1) || this.handleToTrigger.get(h2) ? triggers : collisions;
+      const isTrigger = this.handleToTrigger.get(h1) || this.handleToTrigger.get(h2);
+      // Exit events (started=false) feed event.triggerExit for proximity prompts; we only track sensor exits.
+      if (!started) {
+        if (isTrigger) triggersExit.push({ objectId: a, otherObjectId: b }, { objectId: b, otherObjectId: a });
+        return;
+      }
+      const list = isTrigger ? triggers : collisions;
       list.push({ objectId: a, otherObjectId: b }, { objectId: b, otherObjectId: a });
     });
 
@@ -403,7 +411,7 @@ class PhysicsRuntime {
       transforms.set(object.id, { position: [t.x, t.y, t.z], rotation: object.transform.rotation });
     }
 
-    return { transforms, collisions, triggers, grounded: [...grounded] };
+    return { transforms, collisions, triggers, triggersExit, grounded: [...grounded] };
   }
 
   dispose() {

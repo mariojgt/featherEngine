@@ -35,6 +35,8 @@ const NODE_LABELS = [
   'Custom Event',
   'Collision Enter',
   'Trigger Enter',
+  'Trigger Exit',
+  'Interact',
   'Branch',
   'Compare',
   'AND',
@@ -71,6 +73,9 @@ const NODE_LABELS = [
   'Is Grounded',
   'Set Camera',
   'Set Ragdoll',
+  'Spawn Projectile',
+  'Spawn Attached',
+  'Set Visible',
   'Save Game',
   'Load Game',
   'Clear Save',
@@ -90,6 +95,8 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Custom Event': 'Events',
   'Collision Enter': 'Events',
   'Trigger Enter': 'Events',
+  'Trigger Exit': 'Events',
+  Interact: 'Events',
   Branch: 'Logic',
   Compare: 'Logic',
   AND: 'Logic',
@@ -126,6 +133,9 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Is Grounded': 'Runtime',
   'Set Camera': 'Runtime',
   'Set Ragdoll': 'Runtime',
+  'Spawn Projectile': 'Runtime',
+  'Spawn Attached': 'Runtime',
+  'Set Visible': 'Runtime',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
@@ -166,6 +176,7 @@ const findUIElement = (root: UIElement, id: string): UIElement | undefined => {
   return undefined;
 };
 const findController = (id: string) => store().animatorControllers.find((controller) => controller.id === id);
+const findPrefab = (id: string) => store().prefabs.find((prefab) => prefab.id === id);
 
 export const engineTools = {
   list_scene: tool({
@@ -217,12 +228,13 @@ export const engineTools = {
   }),
 
   create_object: tool({
-    description: 'Create a new scene object. Returns its id. Spawn dynamic physics objects slightly above the ground (y > 0).',
+    description: 'Create a new scene object. Returns its id. Spawn dynamic physics objects slightly above the ground (y > 0). Pass parentId to nest it under another object (e.g. building a composite character).',
     inputSchema: z.object({
       kind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera']),
       name: z.string().optional(),
       position: vec3.optional(),
       color: z.string().optional().describe('Hex color, e.g. #FF6B6B'),
+      parentId: z.string().optional().describe('Nest the new object under this existing object.'),
       physics: z
         .object({
           enabled: z.boolean().optional(),
@@ -231,14 +243,27 @@ export const engineTools = {
         })
         .optional(),
     }),
-    execute: async ({ kind, name, position, color, physics }) => {
+    execute: async ({ kind, name, position, color, parentId, physics }) => {
+      if (parentId && !findObject(parentId)) return `No object with id ${parentId} to parent under.`;
       const id = store().createObjectWithProps(kind as SceneObjectKind, {
         name,
         position: position ? asVec3(position) : undefined,
         color,
+        parentId,
         physics: physics ? { ...physics, enabled: physics.enabled ?? true } : undefined,
       });
-      return `Created ${kind} "${findObject(id)?.name}" with id ${id}.`;
+      return `Created ${kind} "${findObject(id)?.name}" with id ${id}${parentId ? ` (nested under ${parentId})` : ''}.`;
+    },
+  }),
+
+  set_object_parent: tool({
+    description: 'Nest an object under a parent (it follows the parent and is deleted with it), or detach it to the scene root by omitting parentId. Used to build/edit composite object hierarchies.',
+    inputSchema: z.object({ id: z.string(), parentId: z.string().optional() }),
+    execute: async ({ id, parentId }) => {
+      if (!findObject(id)) return `No object with id ${id}.`;
+      if (parentId && !findObject(parentId)) return `No object with id ${parentId} to parent under.`;
+      store().setObjectParent(id, parentId);
+      return parentId ? `Nested ${id} under ${parentId}.` : `Detached ${id} to the scene root.`;
     },
   }),
 
@@ -267,6 +292,7 @@ export const engineTools = {
       color: z.string().optional(),
       metalness: z.number().min(0).max(1).optional(),
       roughness: z.number().min(0).max(1).optional(),
+      opacity: z.number().min(0).max(1).optional().describe('Surface opacity 0–1 (1 = opaque). Below 1 renders translucent — use ~0.5 for water/glass.'),
       textureAssetId: z
         .string()
         .optional()
@@ -276,7 +302,7 @@ export const engineTools = {
         .optional()
         .describe("For model objects: when true, color/metalness/roughness override the model's baked materials."),
     }),
-    execute: async ({ id, color, metalness, roughness, textureAssetId, overrideMaterial }) => {
+    execute: async ({ id, color, metalness, roughness, opacity, textureAssetId, overrideMaterial }) => {
       const object = findObject(id);
       if (!object) return `No object with id ${id}.`;
       if (!object.renderer) return `Object ${id} (${object.kind}) has no mesh renderer.`;
@@ -289,6 +315,7 @@ export const engineTools = {
       if (color !== undefined) patch.color = color;
       if (metalness !== undefined) patch.metalness = metalness;
       if (roughness !== undefined) patch.roughness = roughness;
+      if (opacity !== undefined) patch.opacity = opacity;
       if (textureAssetId !== undefined) patch.textureAssetId = textureAssetId || undefined;
       if (overrideMaterial !== undefined) patch.overrideMaterial = overrideMaterial;
       store().updateRenderer(id, patch);
@@ -396,7 +423,7 @@ export const engineTools = {
       name: z.string(),
       type: z.enum(['float', 'bool', 'trigger']),
       source: z
-        .enum(['manual', 'speed', 'verticalSpeed', 'moving', 'crouching', 'grounded', 'rolling', 'attacking', 'aiming', 'reloading', 'interacting', 'emoting', 'weaponEquipped', 'variable'])
+        .enum(['manual', 'speed', 'verticalSpeed', 'moving', 'crouching', 'grounded', 'rolling', 'attacking', 'aiming', 'reloading', 'interacting', 'emoting', 'crawling', 'swimming', 'climbing', 'moveX', 'moveY', 'weaponEquipped', 'variable'])
         .optional(),
       variableId: z.string().optional(),
     }),
@@ -445,6 +472,37 @@ export const engineTools = {
       if (Object.keys(patch).length) store().updateAnimatorState(controllerId, stateId, patch);
       if (makeDefault) store().updateAnimatorController(controllerId, { defaultStateId: stateId });
       return `Updated state ${stateId}.`;
+    },
+  }),
+
+  set_blendspace: tool({
+    description:
+      'Turn an animator state into a BLEND SPACE (Unreal-style): it blends `samples` continuously by parameter(s) instead of playing one clip — smooth, no popping. 1D (parameterName only): each sample {animationId, value} sits on one axis (e.g. Speed → idle@0/walk@1.5/jog@3.4/sprint@6.8). 2D (also pass parameterNameY): each sample also has `y`, placed on a plane (e.g. moveX × moveY → 8-way directional strafe; center sample = idle at 0,0). Pass empty samples to revert to a single-clip state.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      stateId: z.string(),
+      parameterName: z.string().describe('Float parameter for the X axis (e.g. "Speed" or "MoveX").'),
+      parameterNameY: z.string().optional().describe('Float parameter for the Y axis — makes it a 2D blend space.'),
+      samples: z.array(z.object({ animationId: z.string(), value: z.number(), y: z.number().optional() })),
+    }),
+    execute: async ({ controllerId, stateId, parameterName, parameterNameY, samples }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      if (!controller.states.some((s) => s.id === stateId)) return `No state ${stateId} in controller.`;
+      const param = controller.parameters.find((p) => p.name === parameterName);
+      if (!param) return `No parameter "${parameterName}" on this controller.`;
+      const paramY = parameterNameY ? controller.parameters.find((p) => p.name === parameterNameY) : undefined;
+      if (parameterNameY && !paramY) return `No parameter "${parameterNameY}" on this controller.`;
+      const bad = samples.find((s) => !store().animations.some((a) => a.id === s.animationId));
+      if (bad) return `No animation asset with id ${bad.animationId}.`;
+      store().updateAnimatorState(controllerId, stateId, {
+        blendParameterId: samples.length ? param.id : undefined,
+        blendParameterIdY: samples.length ? paramY?.id : undefined,
+        blendSamples: samples.length ? samples : undefined,
+      });
+      return samples.length
+        ? `State ${stateId} is now a ${paramY ? '2D' : '1D'} blend space (${samples.length} samples).`
+        : `Cleared blend space on ${stateId}.`;
     },
   }),
 
@@ -540,6 +598,9 @@ export const engineTools = {
       keyJump: z.string().optional(),
       keySprint: z.string().optional(),
       keyCrouch: z.string().optional(),
+      keyCrawl: z.string().optional(),
+      crawlMultiplier: z.number().optional(),
+      strafe: z.boolean().optional().describe('Face the camera + move 8-way (pairs with a 2D MoveX/MoveY blend space).'),
       keyRoll: z.string().optional(),
       rollSpeed: z.number().optional(),
       rollDuration: z.number().optional(),
@@ -547,8 +608,16 @@ export const engineTools = {
       keyAim: z.string().optional(),
       keyReload: z.string().optional(),
       keyInteract: z.string().optional(),
+      interactRange: z.number().optional().describe('Max distance (units) to focus an interactable object in front of the character (drives the Interact prompt/event). Default 3.'),
       keyEmote: z.string().optional(),
       keyRagdoll: z.string().optional(),
+      // Player sound effects — pass an "audio"-type asset id; the runtime plays each automatically on its event.
+      footstepSoundId: z.string().optional().describe('Audio asset id played on each stride while moving on the ground.'),
+      jumpSoundId: z.string().optional().describe('Audio asset id played when the character jumps.'),
+      landSoundId: z.string().optional().describe('Audio asset id played when the character lands after falling.'),
+      swimSoundId: z.string().optional().describe('Audio asset id played (splash) when the character enters a water volume.'),
+      attackSoundId: z.string().optional().describe('Audio asset id played when the character starts an attack/swing.'),
+      hurtSoundId: z.string().optional().describe("Audio asset id played when the character's health drops (took damage)."),
       // Camera.
       cameraFollow: z.boolean().optional(),
       cameraOffset: vec3.optional().describe('Resting camera position relative to the pawn: [side, up, back]. Negative Z is behind a +Z-forward model.'),
@@ -644,6 +713,27 @@ export const engineTools = {
       const bone = boneName && skeleton.boneNames.includes(boneName) ? boneName : skeleton.boneNames[0];
       store().setAttachment(objectId, { targetObjectId, boneName: bone });
       return `Attached ${objectId} to ${targetObjectId} bone "${bone}".`;
+    },
+  }),
+
+  set_attachment_offset: tool({
+    description:
+      "Set the local attach offset of an already-attached object (seat a weapon in the hand). position/scale are vec3, rotation is in DEGREES (XYZ). This offset overrides the object's own transform as the attach offset. Tip for the bundled rig (hand_r): the sword's blade is +Z and the pistol's barrel is +X, so a sword sits blade-up at rotation [0,90,0] and a pistol points forward at [0,-90,0].",
+    inputSchema: z.object({
+      objectId: z.string(),
+      position: z.array(z.number()).length(3).optional(),
+      rotation: z.array(z.number()).length(3).optional().describe('Euler degrees XYZ.'),
+      scale: z.array(z.number()).length(3).optional(),
+    }),
+    execute: async ({ objectId, position, rotation, scale }) => {
+      const object = findObject(objectId);
+      if (!object?.attachment) return `${objectId} isn't attached to anything.`;
+      const patch: Record<string, unknown> = { ...object.attachment };
+      if (position) patch.offsetPosition = position;
+      if (rotation) patch.offsetRotation = rotation.map((d) => (d * Math.PI) / 180);
+      if (scale) patch.offsetScale = scale;
+      store().setAttachment(objectId, patch as never);
+      return `Updated attach offset on ${object.name}.`;
     },
   }),
 
@@ -750,11 +840,130 @@ export const engineTools = {
 
   create_third_person_template: tool({
     description:
-      'Build a complete, ready-to-play third-person scene from the engine\'s BUNDLED Quaternius rig: imports + splits it, adds a ground plane, and spawns a "Player" pawn with an Idle/Walk/Jog/Jump animator, a mouse-look follow camera, and an editable controller blueprint. No asset import needed — use this when the user asks for a third-person character/template from scratch. Returns the pawn objectId.',
+      'Build a complete, ready-to-play third-person STARTER GAME from the engine\'s bundled Quaternius UAL rig (127 clips): a "Player" pawn with an Idle → Walk → Jog → Sprint locomotion animator (+jump/crouch/roll/punch/kick/sword), mouse-look follow camera, editable controller blueprint, and all four gameplay kits (ranged/health/interactions/emotes); a SWORD and PISTOL that are reusable PREFABS you EQUIP BY WALKING OVER them (spawn-attached to the hand, switching melee/ranged); click to shoot a projectile while the pistol is equipped; a HUD health bar; a damageable Target Dummy. Generated content is foldered (Weapons / UI / Player). No asset import needed — use when the user asks for a third-person character/game/template from scratch. Returns the pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createThirdPersonTemplate();
-      return id ? `Created third-person template — pawn objectId ${id}. Press Play and use WASD + mouse.` : `Couldn't build the template.`;
+      return id ? `Created third-person starter — pawn objectId ${id}. Press Play: WASD move (hold Shift to sprint), mouse look, walk over the sword/pistol to equip, click to shoot (pistol), E interact, F emote.` : `Couldn't build the template.`;
+    },
+  }),
+
+  create_prefab: tool({
+    description:
+      'Capture an object and ALL its descendants as a reusable prefab (object template) in the Project browser. Returns the prefabId. Use this to make something the user built reusable; stamp copies later with instantiate_prefab.',
+    inputSchema: z.object({ objectId: z.string(), name: z.string().optional(), folderId: z.string().optional() }),
+    execute: async ({ objectId, name, folderId }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      const id = store().createPrefabFromObject(objectId, name, folderId);
+      return id ? `Created prefab "${findPrefab(id)?.name}" with prefabId ${id}.` : `Couldn't create a prefab from ${objectId}.`;
+    },
+  }),
+
+  inspect_prefab: tool({
+    description:
+      "Read a prefab's full contents (its object tree with components) WITHOUT opening it for editing. Use this to see what's inside a prefab before instantiating or editing — the scene snapshot only lists prefabs by name/objectCount to stay lean.",
+    inputSchema: z.object({ prefabId: z.string() }),
+    execute: async ({ prefabId }) => {
+      const prefab = findPrefab(prefabId);
+      if (!prefab) return `No prefab with id ${prefabId}.`;
+      const objects = prefab.objects.map((object) => ({
+        id: object.id,
+        name: object.name,
+        kind: object.kind,
+        parentId: object.parentId ?? null,
+        position: object.transform.position,
+        color: object.renderer?.color ?? null,
+        modelAssetId: object.renderer?.modelAssetId ?? null,
+        materialId: object.renderer?.materialId ?? null,
+        physics: object.physics?.enabled ? { bodyType: object.physics.bodyType, collider: object.physics.collider } : null,
+        blueprintId: object.script?.enabled ? object.script.blueprintId : null,
+        animatorControllerId: object.animator?.controllerId ?? null,
+      }));
+      return JSON.stringify({ id: prefab.id, name: prefab.name, rootId: prefab.rootId, objects });
+    },
+  }),
+
+  instantiate_prefab: tool({
+    description:
+      'Stamp an independent copy of a prefab into the active scene (fresh ids). Returns the new root objectId. Instances are one-time stamps — editing the prefab later does not change them. Optionally place it at a position or nest it under a parent.',
+    inputSchema: z.object({ prefabId: z.string(), position: vec3.optional(), parentId: z.string().optional() }),
+    execute: async ({ prefabId, position, parentId }) => {
+      if (!findPrefab(prefabId)) return `No prefab with id ${prefabId}.`;
+      if (parentId && !findObject(parentId)) return `No object with id ${parentId} to parent under.`;
+      const id = store().instantiatePrefab(prefabId, {
+        position: position ? asVec3(position) : undefined,
+        parentId,
+      });
+      return id ? `Instantiated prefab ${prefabId} — new objectId ${id}.` : `Couldn't instantiate prefab ${prefabId}.`;
+    },
+  }),
+
+  open_prefab: tool({
+    description:
+      'Open a prefab for editing: the active scene becomes the prefab\'s contents so all object tools edit the prefab. The snapshot\'s editingPrefabId becomes non-null. Add/nest objects, then call close_prefab to finish. Blocked during Play.',
+    inputSchema: z.object({ prefabId: z.string() }),
+    execute: async ({ prefabId }) => {
+      if (!findPrefab(prefabId)) return `No prefab with id ${prefabId}.`;
+      if (store().isPlaying) return `Stop Play before editing a prefab.`;
+      store().openPrefabEditor(prefabId);
+      return `Editing prefab ${prefabId}. Object tools now edit its contents; call close_prefab(save:true) when done.`;
+    },
+  }),
+
+  close_prefab: tool({
+    description:
+      'Close the prefab editor. save:true (default) writes your edits back into the prefab (and all future instances); save:false discards them. Returns to the scene you were in before.',
+    inputSchema: z.object({ save: z.boolean().optional() }),
+    execute: async ({ save }) => {
+      if (!store().editingPrefabId) return `Not currently editing a prefab.`;
+      store().closePrefabEditor(save ?? true);
+      return save === false ? `Discarded prefab edits and closed the editor.` : `Saved prefab edits and closed the editor.`;
+    },
+  }),
+
+  rename_prefab: tool({
+    description: 'Rename a prefab.',
+    inputSchema: z.object({ id: z.string(), name: z.string() }),
+    execute: async ({ id, name }) => {
+      if (!findPrefab(id)) return `No prefab with id ${id}.`;
+      store().renamePrefab(id, name);
+      return `Renamed prefab to "${name}".`;
+    },
+  }),
+
+  delete_prefab: tool({
+    description: 'Delete a prefab from the library. Already-placed instances in scenes are unaffected.',
+    inputSchema: z.object({ id: z.string() }),
+    execute: async ({ id }) => {
+      if (!findPrefab(id)) return `No prefab with id ${id}.`;
+      store().deletePrefab(id);
+      return `Deleted prefab ${id}.`;
+    },
+  }),
+
+  apply_instance_to_prefab: tool({
+    description:
+      "Push a prefab-INSTANCE's current edits back into its source prefab so FUTURE instances inherit them. Pass the instance's root objectId (one whose snapshot prefabSourceId is set). Other already-placed instances are NOT changed (stamps are independent). Returns the updated prefabId.",
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.prefabSourceId) return `${objectId} isn't a prefab instance (no prefabSourceId).`;
+      const id = store().applyInstanceToPrefab(objectId);
+      return id ? `Applied ${objectId}'s changes to prefab ${id}.` : `Couldn't apply ${objectId} to its prefab.`;
+    },
+  }),
+
+  revert_instance_to_prefab: tool({
+    description:
+      "Discard a prefab-instance's local edits and replace it with a fresh copy of its prefab, keeping its position/parent. Pass the instance's root objectId (snapshot prefabSourceId set). Returns the new root objectId.",
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.prefabSourceId) return `${objectId} isn't a prefab instance (no prefabSourceId).`;
+      const id = store().revertInstanceToPrefab(objectId);
+      return id ? `Reverted instance to its prefab — new objectId ${id}.` : `Couldn't revert ${objectId}.`;
     },
   }),
 
@@ -947,6 +1156,48 @@ export const engineTools = {
     },
   }),
 
+  set_light: tool({
+    description:
+      'Turn an object into (or reconfigure) a light. point = an omni bulb that illuminates nearby surfaces (great for accent/mood lights); spot = a cone; directional = a sun (whole-scene, no falloff). Position it by moving the object. Pair bright lights/emissive colors with bloom (set_render_settings) for glow.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      type: z.enum(['point', 'spot', 'directional']).optional(),
+      color: z.string().optional().describe('Hex color, e.g. #ff8a3d.'),
+      intensity: z.number().optional().describe('Brightness. Point/spot ~4–20; directional ~1–3.'),
+      distance: z.number().optional().describe('point/spot falloff range in world units (0 = no limit).'),
+      angleDegrees: z.number().optional().describe('spot cone half-angle in degrees.'),
+      castShadow: z.boolean().optional(),
+    }),
+    execute: async ({ objectId, type, color, intensity, distance, angleDegrees, castShadow }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      store().setObjectLight(objectId, {
+        type,
+        color,
+        intensity,
+        distance,
+        ...(angleDegrees !== undefined ? { angle: (angleDegrees * Math.PI) / 180 } : {}),
+        castShadow,
+      });
+      return `Configured light on ${objectId}${type ? ` (${type})` : ''}.`;
+    },
+  }),
+
+  set_render_settings: tool({
+    description:
+      'Set project-wide post-processing (bloom + vignette) — the biggest "AAA" visual lever. Bloom makes emissive materials and additive tracers/muzzle flashes glow. Lower bloomThreshold = more things glow. Applies in Play and the exported game.',
+    inputSchema: z.object({
+      bloomEnabled: z.boolean().optional(),
+      bloomIntensity: z.number().optional().describe('Bloom strength, ~0.3–2.'),
+      bloomThreshold: z.number().optional().describe('Luminance cutoff 0–1; lower = more glow.'),
+      bloomRadius: z.number().optional().describe('Bloom spread/smoothing 0–1.'),
+      vignetteEnabled: z.boolean().optional(),
+    }),
+    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled }) => {
+      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled });
+      return 'Updated render/post-processing settings.';
+    },
+  }),
+
   add_ui_preset: tool({
     description:
       'Insert a ready-made widget into a UI document — the FAST way to build common UI. "healthBar" = a labeled bar pre-bound to a number variable (auto-created if missing, default "health"=100); "counter" = a text pre-bound to a variable (default "score"); "label"/"button"/"panel"/"image" = styled primitives. Drops under parentId (or the root). Returns the inserted element id. Prefer this over composing primitives by hand.',
@@ -1102,6 +1353,164 @@ export const engineTools = {
       if (!findObject(id)) return `No object with id ${id}.`;
       store().deleteObject(id);
       return `Deleted ${id}.`;
+    },
+  }),
+
+  duplicate_object: tool({
+    description:
+      'Clone an object (and all its children) one or more times. Each copy is offset from the previous one by `offset` (default [0.8,0,0.8]) — pass count + offset to lay out rows of identical objects fast (fences, pillars, crates). Returns the new root ids.',
+    inputSchema: z.object({
+      id: z.string(),
+      count: z.number().int().min(1).max(200).optional().describe('How many copies to make (default 1).'),
+      offset: vec3.optional().describe('Per-copy position step, added cumulatively. Default [0.8,0,0.8].'),
+    }),
+    execute: async ({ id, count, offset }) => {
+      if (!findObject(id)) return `No object with id ${id}.`;
+      const ids = store().duplicateObject(id, { count, offset: offset ? asVec3(offset) : undefined });
+      return `Created ${ids.length} copy(ies): ${ids.join(', ')}.`;
+    },
+  }),
+
+  group_objects: tool({
+    description:
+      'Group existing objects under a new empty parent (like Unreal folders / Unity empties). Creates an "empty" object at `position` (default origin) and parents every id under it. Great for keeping a level tidy (e.g. group all props, all lights). Returns the new group id.',
+    inputSchema: z.object({
+      ids: z.array(z.string()).min(1),
+      name: z.string().optional(),
+      position: vec3.optional(),
+    }),
+    execute: async ({ ids, name, position }) => {
+      const missing = ids.filter((id) => !findObject(id));
+      if (missing.length) return `No object(s) with id: ${missing.join(', ')}.`;
+      const groupId = store().createObjectWithProps('empty', {
+        name: name ?? 'Group',
+        position: position ? asVec3(position) : [0, 0, 0],
+      });
+      ids.forEach((id) => store().setObjectParent(id, groupId));
+      return `Grouped ${ids.length} object(s) under "${name ?? 'Group'}" (${groupId}).`;
+    },
+  }),
+
+  spawn_grid: tool({
+    description:
+      'Spawn a rectangular grid of identical primitives in one call — the fastest way to block out a level (tile a floor, build a wall of crates, scatter pillars). Lays `rows` × `cols` objects on the X/Z plane spaced by `spacing`, starting at `origin`. Returns the spawned ids.',
+    inputSchema: z.object({
+      kind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera']),
+      rows: z.number().int().min(1).max(40),
+      cols: z.number().int().min(1).max(40),
+      spacing: z.number().positive().optional().describe('Distance between grid cells (default 1.5).'),
+      origin: vec3.optional().describe('World position of the first cell (default [0,0,0]).'),
+      color: z.string().optional().describe('Hex color applied to every object.'),
+      physics: z
+        .object({
+          enabled: z.boolean().optional(),
+          bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
+          collider: z.enum(['box', 'sphere', 'capsule']).optional(),
+        })
+        .optional(),
+      namePrefix: z.string().optional(),
+    }),
+    execute: async ({ kind, rows, cols, spacing, origin, color, physics, namePrefix }) => {
+      const total = rows * cols;
+      if (total > 400) return `That grid is ${total} objects — keep rows × cols ≤ 400.`;
+      const step = spacing ?? 1.5;
+      const [ox, oy, oz] = origin ? asVec3(origin) : [0, 0, 0];
+      const ids: string[] = [];
+      for (let r = 0; r < rows; r += 1) {
+        for (let c = 0; c < cols; c += 1) {
+          const id = store().createObjectWithProps(kind as SceneObjectKind, {
+            name: `${namePrefix ?? kind[0].toUpperCase() + kind.slice(1)} ${r * cols + c + 1}`,
+            position: [ox + c * step, oy, oz + r * step],
+            color,
+            physics: physics ? { ...physics, enabled: physics.enabled ?? true } : undefined,
+          });
+          ids.push(id);
+        }
+      }
+      return `Spawned a ${rows}×${cols} grid of ${kind} (${ids.length} objects).`;
+    },
+  }),
+
+  align_objects: tool({
+    description:
+      'Align objects along one axis so they share a coordinate — e.g. line up props on the floor (axis "y", mode "min") or flush against a wall. mode: min/max/center snap to the group bounds; "first" matches the first id; "value" uses the explicit `value`.',
+    inputSchema: z.object({
+      ids: z.array(z.string()).min(2),
+      axis: z.enum(['x', 'y', 'z']),
+      mode: z.enum(['min', 'max', 'center', 'first', 'value']),
+      value: z.number().optional().describe('Required when mode is "value".'),
+    }),
+    execute: async ({ ids, axis, mode, value }) => {
+      const objects = ids.map(findObject);
+      const missing = ids.filter((_, i) => !objects[i]);
+      if (missing.length) return `No object(s) with id: ${missing.join(', ')}.`;
+      const a = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+      const coords = objects.map((o) => o!.transform.position[a]);
+      let target: number;
+      if (mode === 'value') {
+        if (value === undefined) return 'mode "value" requires a `value`.';
+        target = value;
+      } else if (mode === 'first') target = coords[0];
+      else if (mode === 'min') target = Math.min(...coords);
+      else if (mode === 'max') target = Math.max(...coords);
+      else target = (Math.min(...coords) + Math.max(...coords)) / 2;
+      objects.forEach((o) => {
+        const pos = [...o!.transform.position] as Vector3Tuple;
+        pos[a] = target;
+        store().updateTransform(o!.id, 'position', pos);
+      });
+      return `Aligned ${ids.length} objects on ${axis} to ${target.toFixed(2)}.`;
+    },
+  }),
+
+  distribute_objects: tool({
+    description:
+      'Evenly space objects along one axis (like Unreal\'s distribute). Sorts the ids by their current coordinate, then spreads them with equal `spacing` (or evenly between the current first and last when spacing is omitted).',
+    inputSchema: z.object({
+      ids: z.array(z.string()).min(3),
+      axis: z.enum(['x', 'y', 'z']),
+      spacing: z.number().optional().describe('Gap between objects; omit to spread evenly across the current span.'),
+    }),
+    execute: async ({ ids, axis, spacing }) => {
+      const objects = ids.map(findObject);
+      const missing = ids.filter((_, i) => !objects[i]);
+      if (missing.length) return `No object(s) with id: ${missing.join(', ')}.`;
+      const a = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+      const sorted = [...objects].sort((x, y) => x!.transform.position[a] - y!.transform.position[a]);
+      const start = sorted[0]!.transform.position[a];
+      const end = sorted[sorted.length - 1]!.transform.position[a];
+      const gap = spacing ?? (end - start) / (sorted.length - 1);
+      sorted.forEach((o, i) => {
+        const pos = [...o!.transform.position] as Vector3Tuple;
+        pos[a] = start + gap * i;
+        store().updateTransform(o!.id, 'position', pos);
+      });
+      return `Distributed ${ids.length} objects along ${axis} (gap ${gap.toFixed(2)}).`;
+    },
+  }),
+
+  batch_transform: tool({
+    description:
+      'Apply a transform change to many objects at once. `offset` is added to each position (relative move); `rotation` and `scale` are set absolutely on every id when provided. Use for nudging or uniformly orienting/scaling a selection.',
+    inputSchema: z.object({
+      ids: z.array(z.string()).min(1),
+      offset: vec3.optional().describe('Added to each object\'s position.'),
+      rotation: vec3.optional().describe('Set as each object\'s rotation (radians).'),
+      scale: vec3.optional().describe('Set as each object\'s scale.'),
+    }),
+    execute: async ({ ids, offset, rotation, scale }) => {
+      const missing = ids.filter((id) => !findObject(id));
+      if (missing.length) return `No object(s) with id: ${missing.join(', ')}.`;
+      ids.forEach((id) => {
+        const object = findObject(id)!;
+        if (offset) {
+          const p = object.transform.position;
+          store().updateTransform(id, 'position', [p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]]);
+        }
+        if (rotation) store().updateTransform(id, 'rotation', asVec3(rotation));
+        if (scale) store().updateTransform(id, 'scale', asVec3(scale));
+      });
+      return `Updated ${ids.length} objects.`;
     },
   }),
 
@@ -1267,6 +1676,15 @@ export const engineTools = {
         .enum(['metalness', 'roughness', 'emissiveIntensity'])
         .optional()
         .describe('Set/Get Material Property: which numeric property to read or write (Set uses numberValue).'),
+      projectileSpeed: z.number().optional().describe('Spawn Projectile: muzzle speed (units/sec). Default 20.'),
+      projectileDamage: z.number().optional().describe('Spawn Projectile: hit damage subtracted from the target\'s health. Default 25.'),
+      projectileSize: z.number().optional().describe('Spawn Projectile: radius of the built-in sphere bullet (ignored when projectileTemplateId is set). Default 0.18.'),
+      projectileColor: z.string().optional().describe('Spawn Projectile: hex color of the built-in sphere bullet (ignored when a template is set). Default #ffd166.'),
+      projectileLife: z.number().optional().describe('Spawn Projectile: seconds before the bullet auto-despawns. Default 3.'),
+      projectileGravity: z.number().optional().describe('Spawn Projectile: gravity scale. 0 = flies straight; raise for an arcing shot. Default 0.'),
+      projectileTemplateId: z.string().optional().describe('Spawn Projectile: id of a scene object to CLONE as the bullet (its mesh/model/scale/material). Omit for the built-in sphere.'),
+      projectileMuzzle: vec3.optional().describe('Spawn Projectile: first-person muzzle offset [right, up, forward] from the eye where the shot originates (default [0.28,-0.26,0.6] = down-right of center). The shot still converges on the crosshair.'),
+      projectileDebug: z.boolean().optional().describe('Spawn Projectile: when true, log every spawn + hit to the runtime console.'),
     }),
     execute: async ({
       blueprintId,
@@ -1292,6 +1710,15 @@ export const engineTools = {
       materialColor,
       materialColorTarget,
       materialProperty,
+      projectileSpeed,
+      projectileDamage,
+      projectileSize,
+      projectileColor,
+      projectileLife,
+      projectileGravity,
+      projectileTemplateId,
+      projectileMuzzle,
+      projectileDebug,
       otherObjectId,
       targetObjectId,
     }) => {
@@ -1299,6 +1726,7 @@ export const engineTools = {
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
       if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
+      if (projectileTemplateId && !findObject(projectileTemplateId)) return `No object with id ${projectileTemplateId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const nodeId = store().addGraphNodeToBlueprint(blueprintId, type, NODE_CATEGORY[type], {
@@ -1324,6 +1752,15 @@ export const engineTools = {
         materialColor,
         materialColorTarget,
         materialProperty,
+        projectileSpeed,
+        projectileDamage,
+        projectileSize,
+        projectileColor,
+        projectileLife,
+        projectileGravity,
+        projectileTemplateId,
+        projectileMuzzle: projectileMuzzle ? asVec3(projectileMuzzle) : undefined,
+        projectileDebug,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },
@@ -1375,15 +1812,25 @@ export const engineTools = {
       materialColor: z.string().optional(),
       materialColorTarget: z.enum(['base', 'emissive']).optional(),
       materialProperty: z.enum(['metalness', 'roughness', 'emissiveIntensity']).optional(),
+      projectileSpeed: z.number().optional().describe('Spawn Projectile: muzzle speed (units/sec).'),
+      projectileDamage: z.number().optional().describe('Spawn Projectile: hit damage.'),
+      projectileSize: z.number().optional().describe('Spawn Projectile: built-in sphere radius (ignored with a template).'),
+      projectileColor: z.string().optional().describe('Spawn Projectile: built-in sphere hex color (ignored with a template).'),
+      projectileLife: z.number().optional().describe('Spawn Projectile: seconds before auto-despawn.'),
+      projectileGravity: z.number().optional().describe('Spawn Projectile: gravity scale (0 = straight).'),
+      projectileTemplateId: z.string().optional().describe('Spawn Projectile: scene object id to clone as the bullet; empty string clears it.'),
+      projectileMuzzle: vec3.optional().describe('Spawn Projectile: first-person muzzle offset [right, up, forward] from the eye (default [0.28,-0.26,0.6]).'),
+      projectileDebug: z.boolean().optional().describe('Spawn Projectile: log spawns + hits to the runtime console.'),
       // Set/Get Anim nodes: which animator parameter (by name, from the snapshot's controllers) and which object.
       paramName: z.string().optional(),
       targetObjectId: z.string().optional().describe('For Destroy Object, Set Ragdoll, and Set/Get Anim nodes: object to target; omit for self.'),
     }),
-    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, ...patch }) => {
+    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
       if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
+      if (projectileTemplateId && !findObject(projectileTemplateId)) return `No object with id ${projectileTemplateId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const updates: Partial<NodeForgeNodeData> = { ...patch };
@@ -1391,6 +1838,8 @@ export const engineTools = {
       if (resolvedDataAssetId !== undefined) updates.tableId = resolvedDataAssetId;
       if (otherObjectId !== undefined) updates.otherObjectId = otherObjectId || undefined;
       if (targetObjectId !== undefined) updates.targetObjectId = targetObjectId || undefined;
+      if (projectileTemplateId !== undefined) updates.projectileTemplateId = projectileTemplateId || undefined;
+      if (projectileMuzzle !== undefined) updates.projectileMuzzle = asVec3(projectileMuzzle);
       if (vectorValue !== undefined) updates.vectorValue = asVec3(vectorValue);
       store().setActiveBlueprint(blueprintId);
       store().updateGraphNodeData(nodeId, updates);
@@ -1438,6 +1887,9 @@ export const engineTools = {
     description: 'Start or stop the runtime preview (Play mode).',
     inputSchema: z.object({ playing: z.boolean() }),
     execute: async ({ playing }) => {
+      if (playing && store().editingPrefabId) {
+        return 'Close the prefab editor first (close_prefab) — Play runs the game scene, not a prefab.';
+      }
       store().setPlaying(playing);
       return playing ? 'Started Play mode.' : 'Stopped Play mode.';
     },

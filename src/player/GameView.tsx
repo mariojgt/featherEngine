@@ -9,12 +9,26 @@ import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
+import { ImpactParticles } from '../three/ImpactParticles';
+import { DamageNumber } from '../three/DamageNumber';
+import { ProjectileVisual } from '../three/ProjectileVisual';
+import { PostFx } from '../three/PostFx';
 import type { SceneObject, Vector3Tuple } from '../types';
 
 /** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
-function GameMesh({ object }: { object: SceneObject }) {
+function GameMesh({ object, focused = false }: { object: SceneObject; focused?: boolean }) {
+  // Floating combat damage number.
+  if (object.effect?.kind === 'damage') return <DamageNumber effect={object.effect} />;
+  // Runtime particle burst (bullet impact, etc.).
+  if (object.effect) return <ImpactParticles effect={object.effect} />;
+  // Runtime projectile — glowing tracer + point light.
+  if (object.projectile) return <ProjectileVisual object={object} />;
   const renderer = object.renderer;
-  const resolved = useResolvedMaterial(renderer);
+  const baseResolved = useResolvedMaterial(renderer);
+  // Interaction focus highlight: warm emissive rim so the player sees what they can use (Unreal-style).
+  const resolved = focused
+    ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+    : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
   const resolvedAnimator = useResolvedAnimator(object);
@@ -22,7 +36,10 @@ function GameMesh({ object }: { object: SceneObject }) {
   const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
 
   if (object.kind === 'light') {
-    return <directionalLight intensity={2.4} castShadow position={[0, 0, 0]} />;
+    const l = object.light;
+    if (l?.type === 'point') return <pointLight color={l.color} intensity={l.intensity} distance={l.distance} decay={2} castShadow={l.castShadow} />;
+    if (l?.type === 'spot') return <spotLight color={l.color} intensity={l.intensity} distance={l.distance} angle={l.angle} penumbra={0.45} decay={2} castShadow={l.castShadow} />;
+    return <directionalLight color={l?.color ?? '#ffffff'} intensity={l?.intensity ?? 2.4} castShadow={l?.castShadow ?? true} position={[0, 0, 0]} />;
   }
 
   // Cameras and empties are invisible scaffolding at runtime.
@@ -38,6 +55,7 @@ function GameMesh({ object }: { object: SceneObject }) {
           meshUrl={resolvedAnimator.meshUrl}
           clipSourceUrls={resolvedAnimator.clipSourceUrls}
           clipName={resolvedAnimator.clipName}
+          blend={resolvedAnimator.blend}
           speed={resolvedAnimator.speed}
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}
@@ -77,6 +95,9 @@ function GameMesh({ object }: { object: SceneObject }) {
       emissiveIntensity={resolved.emissiveIntensity}
       map={builtinBaseTexture ?? null}
       normalMap={builtinNormalTexture ?? null}
+      transparent={resolved.opacity < 1}
+      opacity={resolved.opacity}
+      depthWrite={resolved.opacity >= 1}
     />
   );
 
@@ -125,7 +146,11 @@ function CameraTarget({ target }: { target: Vector3Tuple }) {
 }
 
 function GameScene() {
-  const objects = useEditorStore(selectActiveObjects);
+  const allObjects = useEditorStore(selectActiveObjects);
+  const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
+  const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
+  // Objects holstered/hidden at runtime (action.setVisible) aren't rendered.
+  const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id));
 
   // Camera priority: a character's follow camera, then an authored camera object, then free-orbit.
   const followTarget = useFollowTarget();
@@ -160,7 +185,7 @@ function GameScene() {
         {objects.map((object) =>
           object.attachment ? (
             <BoneAttachment key={object.id} object={object} onSelect={() => undefined}>
-              <GameMesh object={object} />
+              <GameMesh object={object} focused={object.id === focusId} />
             </BoneAttachment>
           ) : (
             <group
@@ -169,7 +194,7 @@ function GameScene() {
               rotation={object.transform.rotation}
               scale={object.transform.scale}
             >
-              <GameMesh object={object} />
+              <GameMesh object={object} focused={object.id === focusId} />
             </group>
           ),
         )}
@@ -179,6 +204,7 @@ function GameScene() {
       {objects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
 
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
+      <PostFx />
     </>
   );
 }

@@ -1,4 +1,5 @@
 import {
+  PREFAB_EDIT_SCENE_ID,
   PROJECT_VERSION,
   type NodeForgeProject,
   type ProjectManifest,
@@ -15,12 +16,18 @@ export function splitProject(project: NodeForgeProject): {
   manifest: ProjectManifest;
   sceneFiles: { path: string; scene: Scene }[];
 } {
+  // The prefab-editing scene is transient — never persist it. If it happens to be active (the user
+  // saved mid-edit), fall back the active id to the first real scene so reloads stay valid.
+  const realScenes = project.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID);
+  const activeSceneId = realScenes.some((scene) => scene.id === project.activeSceneId)
+    ? project.activeSceneId
+    : realScenes[0]?.id ?? project.activeSceneId;
   const manifest: ProjectManifest = {
     version: PROJECT_VERSION,
     name: project.name,
     savedAt: new Date().toISOString(),
-    activeSceneId: project.activeSceneId,
-    scenes: project.scenes.map((scene) => ({ id: scene.id, name: scene.name, file: sceneFile(scene.id) })),
+    activeSceneId,
+    scenes: realScenes.map((scene) => ({ id: scene.id, name: scene.name, file: sceneFile(scene.id) })),
     // Never persist runtime-only / bundle-only fields (url, unresolved, embedded data).
     assets: project.assets.map(({ url: _url, unresolved: _unresolved, data: _data, ...asset }) => asset),
     folders: project.folders,
@@ -34,8 +41,10 @@ export function splitProject(project: NodeForgeProject): {
     uiDocuments: project.uiDocuments,
     blueprints: project.blueprints,
     graphs: project.graphs,
+    prefabs: project.prefabs,
+    renderSettings: project.renderSettings,
   };
-  const sceneFiles = project.scenes.map((scene) => ({ path: sceneFile(scene.id), scene }));
+  const sceneFiles = realScenes.map((scene) => ({ path: sceneFile(scene.id), scene }));
   return { manifest, sceneFiles };
 }
 
@@ -59,6 +68,8 @@ export function joinProject(manifest: ProjectManifest, scenes: Scene[]): NodeFor
     uiDocuments: manifest.uiDocuments ?? [],
     blueprints: manifest.blueprints,
     graphs: manifest.graphs,
+    prefabs: manifest.prefabs ?? [],
+    renderSettings: manifest.renderSettings,
   };
 }
 
@@ -93,6 +104,7 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       uiDocuments: (data.uiDocuments as NodeForgeProject['uiDocuments']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
+      prefabs: (data.prefabs as NodeForgeProject['prefabs']) ?? [],
     };
   }
 
@@ -124,6 +136,7 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       uiDocuments: (data.uiDocuments as NodeForgeProject['uiDocuments']) ?? [],
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
+      prefabs: (data.prefabs as NodeForgeProject['prefabs']) ?? [],
     };
   }
 
@@ -150,5 +163,6 @@ export function blankProject(name: string): NodeForgeProject {
     uiDocuments: [],
     blueprints: [],
     graphs: [],
+    prefabs: [],
   };
 }

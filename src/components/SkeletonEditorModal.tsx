@@ -93,6 +93,22 @@ export function SkeletonEditorModal({ skeletonId, onClose }: { skeletonId: strin
     />
   );
 
+  // Rotation shown/edited in DEGREES (stored as radians) — this is what aligns a weapon's grip in the hand.
+  const rotationField = (socketId: string, axis: 0 | 1 | 2, radians: number) => (
+    <input
+      type="number"
+      step={15}
+      value={Math.round((radians * 180) / Math.PI)}
+      onChange={(event) => {
+        const socket = sockets.find((s) => s.id === socketId);
+        if (!socket) return;
+        const rotation = [...(socket.rotation ?? [0, 0, 0])] as [number, number, number];
+        rotation[axis] = (Number(event.target.value) * Math.PI) / 180;
+        updateSkeletonSocket(skeletonId, socketId, { rotation });
+      }}
+    />
+  );
+
   return createPortal(
     <div className="socket-backdrop" onPointerDown={onClose}>
       <div className="socket-dialog wide" onPointerDown={(event) => event.stopPropagation()}>
@@ -141,10 +157,17 @@ export function SkeletonEditorModal({ skeletonId, onClose }: { skeletonId: strin
                   </button>
                 </div>
                 <span className="field-hint">on {socket.boneName}</span>
+                <span className="field-hint">Offset (X Y Z)</span>
                 <div className="socket-offset">
                   {offsetField(socket.id, 0, socket.position[0])}
                   {offsetField(socket.id, 1, socket.position[1])}
                   {offsetField(socket.id, 2, socket.position[2])}
+                </div>
+                <span className="field-hint">Rotation° (X Y Z)</span>
+                <div className="socket-offset">
+                  {rotationField(socket.id, 0, socket.rotation?.[0] ?? 0)}
+                  {rotationField(socket.id, 1, socket.rotation?.[1] ?? 0)}
+                  {rotationField(socket.id, 2, socket.rotation?.[2] ?? 0)}
                 </div>
               </div>
             ))}

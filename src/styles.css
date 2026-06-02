@@ -324,6 +324,31 @@ button {
   background: rgba(61, 220, 151, 0.1);
 }
 
+.viewport-mode.editing-prefab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-color: rgba(251, 191, 119, 0.5);
+  color: #fbbf77;
+  background: rgba(251, 191, 119, 0.12);
+  font-weight: 600;
+}
+
+.viewport-mode.editing-prefab .prefab-done-btn {
+  border: 0;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1a1207;
+  background: #fbbf77;
+  cursor: pointer;
+}
+
+.viewport-mode.editing-prefab .prefab-done-btn:hover {
+  background: #ffcf94;
+}
+
 .segmented {
   padding: 3px;
   border: 1px solid var(--border);
@@ -347,6 +372,18 @@ button {
   background: rgba(91, 140, 255, 0.15);
 }
 
+.segmented .snap-step {
+  height: 28px;
+  margin-left: 2px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .scene-drop-zone,
 .scene-canvas {
   width: 100%;
@@ -357,6 +394,8 @@ button {
   position: relative;
   min-width: 0;
   min-height: 0;
+  /* Keep the player HUD overlay clipped inside the viewport (Unreal-style), never spilling onto panels. */
+  overflow: hidden;
 }
 
 .mouse-look-hint {
@@ -493,7 +532,7 @@ button {
 .hierarchy-row {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   width: 100%;
   min-height: 34px;
   padding: 0 10px;
@@ -505,7 +544,8 @@ button {
   text-align: left;
 }
 
-.hierarchy-row span {
+.hierarchy-row .hierarchy-label {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -519,6 +559,42 @@ button {
 
 .hierarchy-row.selected {
   border-color: rgba(91, 140, 255, 0.34);
+}
+
+/* Expand/collapse twisty for rows that have nested children. */
+.hierarchy-twisty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.hierarchy-twisty:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.hierarchy-twisty.placeholder {
+  pointer-events: none;
+}
+
+/* Prefab-instance roots get the amber box glyph the prefab uses elsewhere. */
+.hierarchy-instance-glyph {
+  color: #fbbf77;
+  flex: 0 0 auto;
+}
+
+.hierarchy-count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .inspector-content {
@@ -2407,6 +2483,23 @@ button {
   cursor: not-allowed;
 }
 
+/* Prefab-editing banner replaces the scene switcher while a prefab is open. */
+.scene-switcher.prefab-editing {
+  border-color: #fbbf77;
+  background: rgba(251, 191, 119, 0.14);
+  color: #fbbf77;
+}
+
+.scene-switcher.prefab-editing .prefab-editing-label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .project-pill {
   display: inline-flex;
   align-items: center;
@@ -2525,6 +2618,11 @@ button {
   height: 16px;
   border-radius: 3px;
   object-fit: cover;
+}
+
+.tree-thumb.prefab-thumb {
+  background: #11141c;
+  border: 1px solid rgba(251, 191, 119, 0.4);
 }
 
 .tree-unresolved {

@@ -1,9 +1,10 @@
 import { PerspectiveCamera } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
-import { useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLook } from '../runtime/mouseLook';
+import { SkinnedModel, useResolvedAnimator } from './SkinnedModel';
 import type { SceneObject } from '../types';
 
 /** The first active-scene object whose character controller wants a follow camera. */
@@ -12,21 +13,139 @@ export function useFollowTarget(): SceneObject | undefined {
   return objects.find((object) => object.character?.enabled && object.character.cameraFollow);
 }
 
+export interface CameraPose {
+  position: THREE.Vector3;
+  lookAt: THREE.Vector3;
+  fov: number;
+}
+
+/**
+ * The camera's RESTING pose from a character's controller settings — i.e. where the follow camera
+ * sits before any mouse-look is applied. This is the single source of truth shared by the live
+ * camera frustum in the editor (so adjusting Side/Up/Back/Pitch/Mode shows immediate feedback) and
+ * the Play / preview camera below, so the indicator and the real camera can never disagree.
+ */
+export function computeRestingCameraPose(target: SceneObject): CameraPose {
+  const cc = { ...defaultCharacter(), ...(target.character ?? {}) };
+  const [x, y, z] = target.transform.position;
+
+  if (cc.cameraMode === 'firstPerson') {
+    const yaw = target.transform.rotation[1] - cc.modelYawOffset;
+    const pitch = cc.cameraPitch;
+    const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    const position = new THREE.Vector3(x, y + cc.cameraOffset[1], z)
+      .addScaledVector(right, cc.cameraOffset[0])
+      .addScaledVector(forward, cc.cameraOffset[2]);
+    const look = new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+    return { position, lookAt: position.clone().add(look), fov: 68 };
+  }
+
+  const side = cc.cameraOffset[0];
+  const up = cc.cameraOffset[1];
+  const back = cc.cameraOffset[2];
+  const radius = Math.hypot(side, back) || 0.001;
+  const azimuth = Math.atan2(side, back);
+  const pitch = cc.cameraPitch;
+  const horizontal = radius * Math.cos(pitch);
+  const position = new THREE.Vector3(
+    x + Math.sin(azimuth) * horizontal,
+    y + up + Math.sin(pitch) * radius,
+    z + Math.cos(azimuth) * horizontal,
+  );
+  return { position, lookAt: new THREE.Vector3(x, y + up * 0.4, z), fov: 50 };
+}
+
+function CameraViewModel({ object }: { object: SceneObject }) {
+  const resolvedAnimator = useResolvedAnimator(object);
+  if (!object.animator?.enabled || !resolvedAnimator.meshUrl) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <SkinnedModel
+        meshUrl={resolvedAnimator.meshUrl}
+        clipSourceUrls={resolvedAnimator.clipSourceUrls}
+        clipName={resolvedAnimator.clipName}
+        speed={resolvedAnimator.speed}
+        loop={resolvedAnimator.loop}
+        fade={resolvedAnimator.fade}
+        registerId={object.id}
+      />
+    </Suspense>
+  );
+}
+
+function CameraViewModelMount({ object, owner }: { object: SceneObject; owner: SceneObject }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const runtimeKeys = useEditorStore((state) => state.runtimeKeys);
+
+  useFrame(({ clock }) => {
+    const group = groupRef.current;
+    if (!group) return;
+    const cc = { ...defaultCharacter(), ...(owner.character ?? {}) };
+    const moving = Boolean(
+      runtimeKeys[cc.keyForward] ||
+        runtimeKeys[cc.keyBackward] ||
+        runtimeKeys[cc.keyLeft] ||
+        runtimeKeys[cc.keyRight] ||
+        runtimeKeys.ArrowUp ||
+        runtimeKeys.ArrowDown ||
+        runtimeKeys.ArrowLeft ||
+        runtimeKeys.ArrowRight,
+    );
+    const sprinting = moving && Boolean(runtimeKeys[cc.keySprint]);
+    const time = clock.elapsedTime;
+    const bob = moving ? (sprinting ? 0.04 : 0.028) : 0.006;
+    const targetX = object.transform.position[0] + Math.sin(time * (sprinting ? 11 : 8)) * bob * 0.45;
+    const targetY = object.transform.position[1] + Math.cos(time * (sprinting ? 22 : 16)) * bob * 0.32;
+    const targetZ = object.transform.position[2] + (moving ? Math.sin(time * (sprinting ? 11 : 8)) * bob * 0.18 : 0);
+    group.position.lerp(new THREE.Vector3(targetX, targetY, targetZ), 0.22);
+    group.rotation.x = THREE.MathUtils.lerp(group.rotation.x, object.transform.rotation[0] + Math.cos(time * 8) * bob * 0.4, 0.18);
+    group.rotation.y = THREE.MathUtils.lerp(group.rotation.y, object.transform.rotation[1], 0.18);
+    group.rotation.z = THREE.MathUtils.lerp(group.rotation.z, object.transform.rotation[2] + Math.sin(time * 8) * bob * 0.35, 0.18);
+    group.scale.set(object.transform.scale[0], object.transform.scale[1], object.transform.scale[2]);
+  });
+
+  return (
+    <group
+      ref={groupRef}
+      position={object.transform.position}
+      rotation={object.transform.rotation}
+      scale={object.transform.scale}
+    >
+      <CameraViewModel object={object} />
+    </group>
+  );
+}
+
 /**
  * A third-person camera that trails the character controller's object. When the character has
  * `mouseLook`, clicking the view captures the pointer and the mouse orbits the camera (yaw/pitch);
  * the deltas live in the shared `mouseLook` module so the runtime can make movement camera-relative.
  * Otherwise it simply sits behind the character's facing. Renders nothing without a follow target.
  */
-export function FollowCamera() {
+export function FollowCamera({ preview = false }: { preview?: boolean }) {
   const target = useFollowTarget();
+  const objects = useEditorStore(selectActiveObjects);
+  const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
+  const allViewModels = target ? objects.filter((object) => object.viewModel?.ownerObjectId === target.id) : [];
+  // During Play, respect Set Visible so a weapon picker that holsters the others shows only the equipped
+  // one. In the editor preview the picker hasn't run (nothing hidden yet), so just show the first weapon.
+  const viewModels = preview ? allViewModels.slice(0, 1) : allViewModels.filter((object) => !runtimeHidden.includes(object.id));
   const overrides = useEditorStore((state) => state.runtimeCameraOverrides);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const desired = useRef(new THREE.Vector3());
   const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
+  // Spring-arm collision raycaster + smoothed aim-down-sights blend (0 = hip, 1 = aiming).
+  const springRay = useRef(new THREE.Raycaster());
+  const adsBlend = useRef(0);
 
   // Normalize so a controller created before `mouseLook` existed still enables the camera.
-  const wantsMouseLook = Boolean({ ...defaultCharacter(), ...(target?.character ?? {}) }.mouseLook) && Boolean(target);
+  // In `preview` mode (editor, not playing) we deliberately ignore mouse-look so tuning the camera
+  // offset/pitch shows a stable resting framing and never hijacks the editor pointer.
+  const useMouse = Boolean({ ...defaultCharacter(), ...(target?.character ?? {}) }.mouseLook) && Boolean(target) && !preview;
+  const wantsMouseLook = useMouse;
 
   // Mouse-look. Two ways, both supported so it always works: (1) click to capture the pointer
   // (Unreal-style free-look, ESC releases), or (2) click-drag in the view to orbit. Active only
@@ -73,22 +192,90 @@ export function FollowCamera() {
     const cc = { ...defaultCharacter(), ...target.character };
     const [x, y, z] = target.transform.position;
 
+    // Aim-down-sights: hold the aim key (keyAim) → smoothly zoom in + tuck the camera closer. Read keys
+    // via getState so the camera frame loop doesn't re-subscribe on every keypress.
+    const aiming = !preview && Boolean(useEditorStore.getState().runtimeKeys[cc.keyAim]);
+    adsBlend.current = THREE.MathUtils.lerp(adsBlend.current, aiming ? 1 : 0, 0.2);
+    const ads = adsBlend.current;
+
+    if (cc.cameraMode === 'firstPerson') {
+      const yaw = cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : target.transform.rotation[1] - cc.modelYawOffset;
+      const pitch = cc.mouseLook && useMouse ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
+      const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+      const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      desired.current
+        .set(x, y + cc.cameraOffset[1], z)
+        .addScaledVector(right, cc.cameraOffset[0])
+        .addScaledVector(forward, cc.cameraOffset[2]);
+
+      const look = new THREE.Vector3(
+        Math.sin(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.cos(yaw) * Math.cos(pitch),
+      );
+      camera.position.copy(desired.current);
+      camera.lookAt(desired.current.clone().add(look));
+      const fpFov = THREE.MathUtils.lerp(68, 50, ads);
+      if (Math.abs(camera.fov - fpFov) > 0.05) {
+        camera.fov = fpFov;
+        camera.updateProjectionMatrix();
+      }
+      return;
+    }
+
     // Resting offset [side, up, back]. The Set Camera node can override distance/height at runtime.
+    // ADS tucks the camera in + over the shoulder for an aimed shot.
     const override = overrides[target.id];
-    const side = cc.cameraOffset[0];
+    const baseSide = cc.cameraOffset[0];
     const up = override?.height ?? cc.cameraOffset[1];
-    const back = override ? -Math.abs(override.distance) : cc.cameraOffset[2];
+    const baseBack = override ? -Math.abs(override.distance) : cc.cameraOffset[2];
+    const side = THREE.MathUtils.lerp(baseSide, baseSide + 0.7, ads); // shift to the shoulder
+    const back = THREE.MathUtils.lerp(baseBack, baseBack * 0.5, ads); // pull in
 
     // Horizontal radius + base azimuth from the offset, then add mouse yaw; pitch raises/pulls in.
     const radius = Math.hypot(side, back) || 0.001;
-    const azimuth = Math.atan2(side, back) + (cc.mouseLook ? lookYaw(cc.mouseSensitivity) : 0);
-    const pitch = cc.mouseLook ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
+    const azimuth = Math.atan2(side, back) + (cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : 0);
+    const pitch = cc.mouseLook && useMouse ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
     const horizontal = radius * Math.cos(pitch);
     desired.current.set(x + Math.sin(azimuth) * horizontal, y + up + Math.sin(pitch) * radius, z + Math.cos(azimuth) * horizontal);
+
+    // Spring-arm: cast from the pivot (over the character) toward the desired camera spot; if a wall is in
+    // the way, pull the camera in to just before it so it never clips through geometry. Point-blank hits
+    // (the character's own body, < 0.6u) are ignored.
+    const pivot = new THREE.Vector3(x, y + up, z);
+    const toCam = desired.current.clone().sub(pivot);
+    const wanted = toCam.length();
+    if (wanted > 0.001) {
+      toCam.divideScalar(wanted);
+      springRay.current.set(pivot, toCam);
+      springRay.current.far = wanted;
+      const hits = springRay.current.intersectObjects(scene.children, true);
+      const wall = hits.find((h) => h.distance > 0.6);
+      if (wall) {
+        desired.current.copy(pivot).addScaledVector(toCam, Math.max(0.6, wall.distance - 0.3));
+      }
+    }
+
     camera.position.lerp(desired.current, 0.18);
     camera.lookAt(x, y + up * 0.4, z);
+    const tpFov = THREE.MathUtils.lerp(50, 40, ads);
+    if (Math.abs(camera.fov - tpFov) > 0.05) {
+      camera.fov = tpFov;
+      camera.updateProjectionMatrix();
+    }
   });
 
   if (!target) return null;
-  return <PerspectiveCamera ref={cameraRef} makeDefault fov={50} position={[0, 3, 6]} />;
+  const cc = { ...defaultCharacter(), ...target.character };
+  return (
+    <PerspectiveCamera ref={cameraRef} makeDefault fov={cc.cameraMode === 'firstPerson' ? 68 : 50} near={0.02} position={[0, 3, 6]}>
+      {/* First-person view-model (arms/weapon) — shown in Play AND in the editor camera preview, so you
+          can see the equipped weapon and its idle animation while looking through the player camera. */}
+      {cc.cameraMode === 'firstPerson'
+        ? viewModels.map((object) => (
+            <CameraViewModelMount key={object.id} object={object} owner={target} />
+          ))
+        : null}
+    </PerspectiveCamera>
+  );
 }

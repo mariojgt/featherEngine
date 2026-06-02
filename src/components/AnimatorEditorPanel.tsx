@@ -40,6 +40,11 @@ const PARAM_SOURCES: Array<{ value: AnimatorParameter['source']; label: string }
   { value: 'reloading', label: 'Is reloading' },
   { value: 'interacting', label: 'Is interacting' },
   { value: 'emoting', label: 'Is emoting' },
+  { value: 'crawling', label: 'Is crawling' },
+  { value: 'swimming', label: 'Is swimming' },
+  { value: 'climbing', label: 'Is climbing' },
+  { value: 'moveX', label: 'Move X (strafe −1…1)' },
+  { value: 'moveY', label: 'Move Y (fwd/back −1…1)' },
   { value: 'weaponEquipped', label: 'Weapon equipped' },
   { value: 'variable', label: 'Project variable' },
 ];
@@ -173,6 +178,104 @@ function StateInspector({ controller, stateId }: { controller: AnimatorControlle
           <span>Loop</span>
           <input type="checkbox" checked={state.loop} onChange={(event) => updateAnimatorState(controller.id, state.id, { loop: event.target.checked })} />
         </label>
+
+        {/* 1D blend space — blend several clips by a float parameter (Unreal-style smooth locomotion). */}
+        {(() => {
+          const floatParams = controller.parameters.filter((p) => p.type === 'float');
+          const isBlend = Boolean(state.blendSamples?.length);
+          const samples = state.blendSamples ?? [];
+          const setSamples = (next: typeof samples, paramId?: string) =>
+            updateAnimatorState(controller.id, state.id, {
+              blendSamples: next.length ? next : undefined,
+              blendParameterId: next.length ? paramId ?? state.blendParameterId ?? floatParams[0]?.id : undefined,
+            });
+          return (
+            <>
+              <label className="field-row">
+                <span>Blend space</span>
+                <input
+                  type="checkbox"
+                  checked={isBlend}
+                  disabled={!floatParams.length}
+                  onChange={(event) =>
+                    event.target.checked
+                      ? setSamples([{ animationId: state.animationId ?? clips[0]?.id ?? '', value: 0 }], floatParams[0]?.id)
+                      : setSamples([])
+                  }
+                />
+              </label>
+              {isBlend && (
+                <>
+                  <label className="field-row">
+                    <span>X axis</span>
+                    <select
+                      value={state.blendParameterId ?? ''}
+                      onChange={(event) => updateAnimatorState(controller.id, state.id, { blendParameterId: event.target.value })}
+                    >
+                      {floatParams.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field-row">
+                    <span>Y axis (2D)</span>
+                    <select
+                      value={state.blendParameterIdY ?? ''}
+                      onChange={(event) => updateAnimatorState(controller.id, state.id, { blendParameterIdY: event.target.value || undefined })}
+                    >
+                      <option value="">None (1D)</option>
+                      {floatParams.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="field-hint">Samples — clip @ X{state.blendParameterIdY ? ' , Y' : ''}, blended by the parameter{state.blendParameterIdY ? 's' : ''}.</span>
+                  {samples.map((sample, i) => (
+                    <div key={i} className="socket-offset" style={{ gridTemplateColumns: state.blendParameterIdY ? '1fr 56px 56px 28px' : '1fr 70px 28px' }}>
+                      <select
+                        value={sample.animationId}
+                        onChange={(event) => setSamples(samples.map((s, j) => (j === i ? { ...s, animationId: event.target.value } : s)))}
+                      >
+                        {clips.map((clip) => (
+                          <option key={clip.id} value={clip.id}>
+                            {clip.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        step={0.1}
+                        title="X"
+                        value={sample.value}
+                        onChange={(event) => setSamples(samples.map((s, j) => (j === i ? { ...s, value: Number(event.target.value) } : s)))}
+                      />
+                      {state.blendParameterIdY && (
+                        <input
+                          type="number"
+                          step={0.1}
+                          title="Y"
+                          value={sample.y ?? 0}
+                          onChange={(event) => setSamples(samples.map((s, j) => (j === i ? { ...s, y: Number(event.target.value) } : s)))}
+                        />
+                      )}
+                      <button className="icon-button compact danger" title="Remove sample" onClick={() => setSamples(samples.filter((_, j) => j !== i))}>
+                        <Trash2 size={12} aria-hidden />
+                      </button>
+                    </div>
+                  ))}
+                  <button className="text-button" onClick={() => setSamples([...samples, { animationId: clips[0]?.id ?? '', value: (samples[samples.length - 1]?.value ?? 0) + 1 }])}>
+                    + Add sample
+                  </button>
+                </>
+              )}
+            </>
+          );
+        })()}
+
         <label className="field-row">
           <span>Entry state</span>
           <input type="checkbox" checked={controller.defaultStateId === state.id} onChange={() => updateAnimatorController(controller.id, { defaultStateId: state.id })} />

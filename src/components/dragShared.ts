@@ -8,8 +8,11 @@
  * viewport (reader) can access directly. Cleared on dragend/drop.
  */
 export const ASSET_DRAG_TYPE = 'application/x-feather-asset';
+export const PREFAB_DRAG_TYPE = 'application/x-feather-prefab';
 
 export const assetDrag: { id: string | null } = { id: null };
+/** Same webview-safe holder pattern as `assetDrag`, but for dragging a prefab into the viewport. */
+export const prefabDrag: { id: string | null } = { id: null };
 
 export function hasDragType(dataTransfer: DataTransfer | null | undefined, type: string) {
   return Array.from(dataTransfer?.types ?? []).includes(type);
@@ -24,5 +27,17 @@ export function readAssetDragId(dataTransfer: DataTransfer | null | undefined) {
     return dataTransfer?.getData(ASSET_DRAG_TYPE) || assetDrag.id;
   } catch {
     return assetDrag.id;
+  }
+}
+
+export function isPrefabDrag(dataTransfer: DataTransfer | null | undefined) {
+  return Boolean(prefabDrag.id) || hasDragType(dataTransfer, PREFAB_DRAG_TYPE);
+}
+
+export function readPrefabDragId(dataTransfer: DataTransfer | null | undefined) {
+  try {
+    return dataTransfer?.getData(PREFAB_DRAG_TYPE) || prefabDrag.id;
+  } catch {
+    return prefabDrag.id;
   }
 }

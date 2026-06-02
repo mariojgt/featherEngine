@@ -3,6 +3,8 @@ import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
 import { create } from 'zustand';
 import {
   PROJECT_VERSION,
+  PREFAB_EDIT_SCENE_ID,
+  type Prefab,
   type AssetItem,
   type AssetType,
   type ColliderType,
@@ -24,6 +26,9 @@ import {
   type PhysicsComponent,
   type ProjectFolder,
   type ProjectGraph,
+  type ProjectileComponent,
+  type LightComponent,
+  type RenderSettings,
   type ProjectVariable,
   type RigidBodyType,
   type Scene,
@@ -32,6 +37,7 @@ import {
   type ScriptBlueprint,
   type SkeletonAsset,
   type SkeletonSocket,
+  type AttachmentComponent,
   type RagdollSettings,
   type RagdollBodyDef,
   type SkeletalMeshAsset,
@@ -53,12 +59,16 @@ import {
   type UIPresetKind,
 } from '../types';
 import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent } from '../runtime/physicsWorld';
-import { cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
+import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { resolveMaterial } from '../three/materialResolve';
 import type { ModelInspection } from '../three/inspectModel';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+/** Drop keys whose value is `undefined` so a partial patch never overwrites existing fields with undefined. */
+const stripUndefined = <T extends object>(patch: T): Partial<T> =>
+  Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<T>;
 
 /** Live state of one object's Animator Controller during Play. */
 export interface RuntimeAnimator {
@@ -84,6 +94,25 @@ const lerpAngle = (from: number, to: number, t: number): number => {
 };
 
 /** A factory for a fresh default character controller (sensible third-person defaults). */
+/** Default project render/post-processing settings — bloom on so emissive/tracers glow out of the box. */
+export const defaultRenderSettings = (): RenderSettings => ({
+  bloomEnabled: true,
+  bloomIntensity: 0.9,
+  bloomThreshold: 0.62,
+  bloomRadius: 0.6,
+  vignetteEnabled: true,
+});
+
+/** Default light tuning for a `kind: 'light'` object (point light — the most generally useful). */
+export const defaultLight = (): LightComponent => ({
+  type: 'point',
+  color: '#ffffff',
+  intensity: 8,
+  distance: 12,
+  angle: Math.PI / 6,
+  castShadow: false,
+});
+
 export const defaultCharacter = (): CharacterControllerComponent => ({
   enabled: false,
   moveSpeed: 3.4,
@@ -101,6 +130,9 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   keyJump: 'Space',
   keySprint: 'ShiftLeft',
   keyCrouch: 'KeyC',
+  keyCrawl: 'KeyZ',
+  crawlMultiplier: 0.4,
+  strafe: false,
   keyRoll: 'KeyQ',
   rollSpeed: 7,
   rollDuration: 0.7,
@@ -110,6 +142,7 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   keyInteract: 'KeyE',
   keyEmote: 'KeyF',
   keyRagdoll: 'KeyP',
+  cameraMode: 'thirdPerson',
   cameraFollow: true,
   // Behind (-Z) and above a +Z-forward character.
   cameraOffset: [0, 2.6, -6],
@@ -136,6 +169,8 @@ export interface CreateObjectOptions {
   position?: Vector3Tuple;
   color?: string;
   physics?: Partial<PhysicsComponent>;
+  /** Nest the new object under this object (sets `parentId`). */
+  parentId?: string;
 }
 
 const titleCase = (value: string) => `${value[0].toUpperCase()}${value.slice(1)}`;
@@ -482,6 +517,7 @@ const nodeDescriptions: Record<string, string> = {
   'Fire Event': 'Triggers a custom event by name.',
   'Collision Enter': 'Fires when this object starts touching another collider.',
   'Trigger Enter': 'Fires when this object starts overlapping a trigger collider.',
+  'Trigger Exit': 'Fires when this object stops overlapping a trigger collider.',
   Branch: 'Chooses a path from a boolean value.',
   Compare: 'Compares two values.',
   AND: 'Requires both inputs to be true.',
@@ -552,6 +588,8 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Custom Event': 'event.custom',
   'Collision Enter': 'event.collisionEnter',
   'Trigger Enter': 'event.triggerEnter',
+  'Trigger Exit': 'event.triggerExit',
+  Interact: 'event.interact',
   Branch: 'logic.branch',
   Compare: 'logic.compare',
   AND: 'logic.and',
@@ -588,6 +626,9 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Is Grounded': 'query.grounded',
   'Set Camera': 'action.setCamera',
   'Set Ragdoll': 'action.setRagdoll',
+  'Spawn Projectile': 'action.spawnProjectile',
+  'Set Visible': 'action.setVisible',
+  'Spawn Attached': 'action.spawnAttached',
   'Material Output': 'material.output',
   Color: 'material.color',
   Scalar: 'material.scalar',
@@ -655,6 +696,18 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
         description: data.otherObjectId
           ? 'Fires when this object starts overlapping the selected trigger participant.'
           : 'Fires when this object starts overlapping any trigger collider.',
+      };
+    case 'event.triggerExit':
+      return {
+        label: 'Trigger Exit',
+        description: data.otherObjectId
+          ? 'Fires when this object stops overlapping the selected trigger participant (e.g. walks away).'
+          : 'Fires when this object stops overlapping a trigger collider.',
+      };
+    case 'event.interact':
+      return {
+        label: 'Interact',
+        description: 'Fires when the player presses the interact key while focused on this object (Unreal-style). Mark the object interactable with an "interactable" instance variable; an "interactPrompt" variable sets the on-screen label.',
       };
     case 'action.fireEvent':
       return { label: `Fire: ${eventName}`, description: 'Triggers matching custom event entry nodes.' };
@@ -742,6 +795,21 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return {
         label: `Set Ragdoll ${data.booleanValue === false ? 'Off' : 'On'}`,
         description: 'Switches the owner (or Target) into a physics ragdoll — bones go limp.',
+      };
+    case 'action.spawnProjectile':
+      return {
+        label: 'Spawn Projectile',
+        description: 'Fires a projectile forward from the owner that damages whatever it hits, then despawns.',
+      };
+    case 'action.setVisible':
+      return {
+        label: `Set Visible ${data.visible === false ? 'Off' : 'On'}`,
+        description: 'Shows or hides the owner (or Target) object during Play — used to equip/holster weapons.',
+      };
+    case 'action.spawnAttached':
+      return {
+        label: 'Spawn Attached',
+        description: 'Spawns a model and attaches it to the owner (or Target) at a bone/socket — Unreal-style equip. Replaces any weapon already on that socket.',
       };
     case 'action.print':
       return { label: `Print: ${data.message || 'message'}`, description: 'Logs its message to the on-screen console during Play.' };
@@ -1089,6 +1157,126 @@ const axisIndex = (axis: NodeForgeNodeData['axis']) => {
   return 2;
 };
 
+/** Tunable setup for a spawned projectile (read from the Spawn Projectile node). */
+interface ProjectileSetup {
+  size?: number;
+  color?: string;
+  life?: number;
+  gravity?: number;
+  debug?: boolean;
+  /** Optional scene object to clone the look from (mesh/model/scale/material). */
+  template?: SceneObject;
+}
+
+/**
+ * Build a runtime projectile: by default a small fast sphere that flies straight (no gravity) and
+ * damages on hit. `setup` overrides its size/color/lifetime/gravity; a `template` object clones its
+ * mesh/model/scale/material so users can design a custom bullet (rocket, arrow, orb) in the scene.
+ */
+const makeProjectileObject = (
+  position: Vector3Tuple,
+  velocity: Vector3Tuple,
+  ownerId: string,
+  damage: number,
+  setup: ProjectileSetup = {},
+): SceneObject => {
+  const life = typeof setup.life === 'number' && setup.life > 0 ? setup.life : 3;
+  const gravityScale = typeof setup.gravity === 'number' ? setup.gravity : 0;
+  const projectile: ProjectileComponent = {
+    ownerId,
+    damage,
+    life,
+    velocity: [...velocity] as Vector3Tuple,
+    debug: setup.debug || undefined,
+  };
+
+  // Clone the look from a chosen template object (keep its mesh/model/material/scale), but force
+  // projectile physics + behaviour so it always flies + reports hits regardless of the template's setup.
+  if (setup.template) {
+    const t = setup.template;
+    const collider: ColliderType = t.kind === 'sphere' ? 'sphere' : t.kind === 'capsule' ? 'capsule' : 'box';
+    return {
+      id: makeId('proj'),
+      name: `${t.name} (projectile)`,
+      kind: t.kind === 'empty' || t.kind === 'light' || t.kind === 'camera' ? 'sphere' : t.kind,
+      transform: { position: [...position] as Vector3Tuple, rotation: [...t.transform.rotation] as Vector3Tuple, scale: [...t.transform.scale] as Vector3Tuple },
+      renderer: t.renderer ? { ...t.renderer } : { ...defaultRenderer('sphere'), color: setup.color ?? '#ffd166' },
+      physics: { ...defaultPhysics('dynamic', collider), enabled: true, gravityScale },
+      projectile,
+    };
+  }
+
+  const size = typeof setup.size === 'number' && setup.size > 0 ? setup.size : 0.18;
+  return {
+    id: makeId('proj'),
+    name: 'Projectile',
+    kind: 'sphere',
+    transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [size, size, size] },
+    renderer: { ...defaultRenderer('sphere'), color: setup.color ?? '#ffd166', metalness: 0.1, roughness: 0.4 },
+    // Dynamic + zero gravity (by default) so it flies straight AND generates contact events (kinematic
+    // bodies don't report contacts against static/dynamic targets in Rapier). The runtime drives its velocity.
+    physics: { ...defaultPhysics('dynamic', 'sphere'), enabled: true, gravityScale },
+    projectile,
+  };
+};
+
+/** A short-lived particle burst (THREE.Points) at a bullet-impact point. No physics; despawns itself. */
+const makeImpactObject = (position: Vector3Tuple, color = '#ffd27f'): SceneObject => ({
+  id: makeId('fx'),
+  name: 'Impact',
+  kind: 'empty',
+  transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
+  effect: { kind: 'impact', life: 0.45, maxLife: 0.45, color, count: 24 },
+});
+
+/** A floating combat damage number that rises + fades above a hit. */
+const makeDamageNumber = (position: Vector3Tuple, value: number, color = '#ffe08a'): SceneObject => ({
+  id: makeId('fx'),
+  name: 'Damage',
+  kind: 'empty',
+  transform: { position: [position[0], position[1] + 0.6, position[2]] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
+  effect: { kind: 'damage', life: 0.9, maxLife: 0.9, color, count: 1, value },
+});
+
+/** A water-entry splash: a crown of droplets that fountain up and arc back down. */
+const makeSplashObject = (position: Vector3Tuple, color = '#9fd8ff'): SceneObject => ({
+  id: makeId('fx'),
+  name: 'Splash',
+  kind: 'empty',
+  transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
+  effect: { kind: 'splash', life: 0.7, maxLife: 0.7, color, count: 40 },
+});
+
+/** A brief muzzle flash (bright forward spark + light) at the gun when a shot is fired. */
+const makeMuzzleFlash = (position: Vector3Tuple, color = '#fff1c2'): SceneObject => ({
+  id: makeId('fx'),
+  name: 'Muzzle Flash',
+  kind: 'empty',
+  transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
+  effect: { kind: 'muzzle', life: 0.07, maxLife: 0.07, color, count: 10 },
+});
+
+/** Build a runtime-spawned weapon actor attached to an owner's bone/socket (Unreal-style equip). The
+ *  grip alignment travels with it via the attachment offset, so it doesn't depend on any map object. */
+const makeAttachedWeapon = (
+  ownerId: string,
+  assetId: string,
+  boneName: string,
+  socketName: string | undefined,
+  offsetPosition?: Vector3Tuple,
+  offsetRotation?: Vector3Tuple,
+  offsetScale?: Vector3Tuple,
+): SceneObject => ({
+  id: makeId('weapon'),
+  name: 'Weapon',
+  kind: 'cube',
+  transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: offsetScale ?? [1, 1, 1] },
+  renderer: { ...defaultRenderer('cube'), modelAssetId: assetId },
+  attachment: { targetObjectId: ownerId, boneName, socketName, offsetPosition, offsetRotation, offsetScale },
+  // Marker so a later equip can find + replace the weapon already on this slot.
+  variables: { __attachedWeapon: socketName || boneName || '1' },
+});
+
 /** Build a runtime-spawned object (action.spawnObject) at a position, with dynamic physics on. */
 const makeSpawnedObject = (spawnKind: SceneObjectKind, position: Vector3Tuple): SceneObject => {
   const collider: ColliderType = spawnKind === 'sphere' ? 'sphere' : spawnKind === 'capsule' ? 'capsule' : 'box';
@@ -1181,6 +1369,8 @@ interface EditorState {
   isDirty: boolean;
   assets: AssetItem[];
   folders: ProjectFolder[];
+  /** Project-wide render / post-processing (bloom, vignette). */
+  renderSettings: RenderSettings;
   variables: ProjectVariable[];
   dataAssets: DataAsset[];
   materials: MaterialDefinition[];
@@ -1191,6 +1381,12 @@ interface EditorState {
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   uiDocuments: UIDocument[];
+  /** Reusable object templates (prefabs). */
+  prefabs: Prefab[];
+  /** Id of the prefab currently open in the prefab editor, or null when editing a normal scene. */
+  editingPrefabId: string | null;
+  /** While editing a prefab, the scene to return to when the editor closes. */
+  prefabReturnSceneId: string | null;
   activeBlueprintId: string;
   activeAnimatorControllerId: string;
   activeMaterialId: string;
@@ -1200,8 +1396,9 @@ interface EditorState {
   isPlaying: boolean;
   playSnapshot?: {
     sceneId: string;
-    transforms: Record<string, TransformComponent>;
-    renderers: Record<string, MeshRendererComponent | undefined>;
+    /** Deep clone of the scene's objects at play start — restored wholesale on Stop (re-adds destroyed
+     *  objects, drops runtime-spawned ones, resets transforms/renderers/instance variables). */
+    objects: SceneObject[];
   };
   runtimeVelocities: Record<string, Vector3Tuple>;
   runtimeKeys: Record<string, boolean>;
@@ -1214,6 +1411,10 @@ interface EditorState {
   runtimeCameraOverrides: Record<string, { distance: number; height: number }>;
   /** Character-controller object ids standing on the ground last frame (drives jump + grounded). */
   runtimeGrounded: string[];
+  /** Character ids currently inside a water volume (swim mode) / on a climb volume (climb mode). Maintained
+   *  via trigger enter/exit against objects whose `volume` instance variable is 'water' / 'climb'. */
+  runtimeSwimming: string[];
+  runtimeClimbing: string[];
   /** Remaining roll/dodge time (seconds) per object — drives the forward dash + "rolling" param. */
   runtimeRoll: Record<string, number>;
   /** Remaining attack time (seconds) per object — drives the "attacking" param. */
@@ -1222,10 +1423,28 @@ interface EditorState {
   runtimeReload: Record<string, number>;
   /** Remaining interact time (seconds) per object — drives the "interacting" param. */
   runtimeInteract: Record<string, number>;
+  /** Distance walked since the last footstep sound, per object — drives footstep audio cadence. */
+  runtimeFootstep: Record<string, number>;
+  /** Object ids hidden at runtime by action.setVisible (e.g. holstered weapons). */
+  runtimeHidden: string[];
+  /** The interactable object the local (camera-follow) player is currently focused on — highlighted +
+   *  prompted on screen; pressing the interact key fires its event.interact. Null when nothing is in range. */
+  runtimeInteractFocusId: string | null;
+  /** Monotonic counter bumped each time a player-owned projectile lands a hit — drives the HUD hit marker. */
+  runtimeHitMarker: number;
+  /** Monotonic counter bumped each time the local player takes damage — drives the HUD hurt flash. */
+  runtimeHurt: number;
+  /** Per-enemy attack cooldown (seconds remaining) so contact damage applies on a cadence, not every frame. */
+  runtimeEnemyCooldown: Record<string, number>;
+  /** Per-character footstep-sound override from the surface volume they're standing in (a trigger tagged with
+   *  a `footstepSound` instance variable). Empty → use the character's own footstepSoundId. */
+  runtimeSurfaceSound: Record<string, string>;
   /** Solid-contact pairs that started in the previous physics step; drives event.collisionEnter. */
   runtimeCollisions: PhysicsContactEvent[];
   /** Trigger-overlap pairs that started in the previous physics step; drives event.triggerEnter. */
   runtimeTriggers: PhysicsContactEvent[];
+  /** Trigger-overlap pairs that ENDED in the previous physics step; drives event.triggerExit. */
+  runtimeTriggersExit: PhysicsContactEvent[];
   /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
   runtimeSoundQueue: string[];
   /** Messages emitted by action.print during Play; shown by the on-screen console overlay. */
@@ -1244,6 +1463,7 @@ interface EditorState {
   selectedObject: () => SceneObject | undefined;
   createScene: (name?: string) => string;
   renameScene: (id: string, name: string) => void;
+  setSceneAudio: (id: string, patch: { ambientSoundId?: string; musicSoundId?: string }) => void;
   deleteScene: (id: string) => void;
   setActiveScene: (id: string) => void;
   duplicateScene: (id: string) => void;
@@ -1257,7 +1477,34 @@ interface EditorState {
   deleteObject: (id: string) => void;
   deleteSelectedObject: () => void;
   duplicateSelectedObject: () => void;
+  /** Clone an object (and its descendants) `count` times, each offset from the previous copy. Returns the new root ids. */
+  duplicateObject: (id: string, options?: { count?: number; offset?: Vector3Tuple }) => string[];
   renameObject: (id: string, name: string) => void;
+  /** Re-parent `id` under `parentId` (or detach to scene root when undefined). Cycle-safe. */
+  setObjectParent: (id: string, parentId?: string) => void;
+  // --- Prefabs (reusable objects) ---
+  /** Capture an object + all its descendants as a reusable prefab in the browser. Returns the prefab id. */
+  createPrefabFromObject: (objectId: string, name?: string, folderId?: string) => string | undefined;
+  /** Stamp an independent copy of a prefab into the active scene (fresh ids). Returns the new root object id. */
+  instantiatePrefab: (prefabId: string, options?: { position?: Vector3Tuple; parentId?: string }) => string | undefined;
+  /** Open a prefab in the editor: swaps the active scene to a transient edit scene built from it. */
+  openPrefabEditor: (prefabId: string) => void;
+  /** Close the prefab editor, optionally saving edits back into the prefab, and restore the prior scene. */
+  closePrefabEditor: (save?: boolean) => void;
+  renamePrefab: (id: string, name: string) => void;
+  deletePrefab: (id: string) => void;
+  /** Push a prefab-instance's current edits back into its source prefab (affects FUTURE instances only).
+   * `objectId` must be an instance root (carries prefabSourceId). Returns the updated prefab id. */
+  applyInstanceToPrefab: (objectId: string) => string | undefined;
+  /** Discard a prefab-instance's local edits and replace its subtree with a fresh copy of the prefab,
+   * keeping its world position/parent. `objectId` must be an instance root. Returns the new root id. */
+  revertInstanceToPrefab: (objectId: string) => string | undefined;
+  /** Prefab ids awaiting an offscreen-rendered thumbnail (drained by the PrefabThumbnailHost). */
+  prefabThumbnailQueue: string[];
+  /** Queue a prefab for (re)rendering its browser thumbnail. */
+  requestPrefabThumbnail: (prefabId: string) => void;
+  /** Store a freshly rendered thumbnail (PNG data URL) and drop the prefab from the render queue. */
+  setPrefabThumbnail: (prefabId: string, dataUrl: string) => void;
   updateTransform: (id: string, field: keyof TransformComponent, value: Vector3Tuple) => void;
   updateRenderer: (id: string, patch: Partial<MeshRendererComponent>) => void;
   setObjectModel: (id: string, modelAssetId?: string) => void;
@@ -1304,8 +1551,12 @@ interface EditorState {
   toggleCharacterController: (id: string) => void;
   /** Patch an object's character controller. No-op if it has none. */
   updateCharacterController: (id: string, patch: Partial<CharacterControllerComponent>) => void;
+  /** Update project-wide render/post-processing settings (bloom, vignette). */
+  updateRenderSettings: (patch: Partial<RenderSettings>) => void;
+  /** Configure a `kind: 'light'` object's light (type/color/intensity/distance/angle). Creates the component if absent. */
+  setObjectLight: (objectId: string, patch: Partial<LightComponent>) => void;
   /** Attach an object to a character's bone socket (or pass undefined target to detach). */
-  setAttachment: (objectId: string, attachment?: { targetObjectId: string; boneName: string; socketName?: string }) => void;
+  setAttachment: (objectId: string, attachment?: AttachmentComponent) => void;
   /** Add a named socket (bone + offset) to a Skeleton asset. Returns the socket id. */
   addSkeletonSocket: (skeletonId: string, socket: { name?: string; boneName: string }) => string | undefined;
   updateSkeletonSocket: (skeletonId: string, socketId: string, patch: Partial<Omit<SkeletonSocket, 'id'>>) => void;
@@ -1339,7 +1590,7 @@ interface EditorState {
   createFolder: (name?: string, parentId?: string) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
-  moveToFolder: (kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument', id: string, folderId?: string) => void;
+  moveToFolder: (kind: 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'uiDocument' | 'prefab', id: string, folderId?: string) => void;
   renameBlueprint: (id: string, name: string) => void;
   deleteBlueprint: (id: string) => void;
   renameAsset: (id: string, name: string) => void;
@@ -1466,6 +1717,49 @@ const deleteWithChildren = (objects: SceneObject[], id: string) => {
   return objects.filter((object) => !ids.has(object.id));
 };
 
+/** Collect `rootId` plus every descendant (following parentId), preserving document order. */
+const collectSubtree = (objects: SceneObject[], rootId: string): SceneObject[] => {
+  const ids = new Set<string>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    objects.forEach((object) => {
+      if (object.parentId && ids.has(object.parentId) && !ids.has(object.id)) {
+        ids.add(object.id);
+        changed = true;
+      }
+    });
+  }
+  return objects.filter((object) => ids.has(object.id));
+};
+
+/**
+ * Deep-clone a self-contained object tree with fresh ids, remapping every INTERNAL reference
+ * (parentId + the cross-object id fields attachment/viewModel hold) from old → new. References that
+ * point outside the tree are left untouched. Returns the cloned objects and the new root id.
+ */
+const cloneObjectTree = (
+  tree: SceneObject[],
+  rootId: string,
+): { objects: SceneObject[]; rootId: string } => {
+  const idMap = new Map<string, string>();
+  tree.forEach((object) => idMap.set(object.id, makeId('obj')));
+  const remap = (id: string | undefined) => (id && idMap.has(id) ? idMap.get(id)! : id);
+  const objects = tree.map((object) => {
+    const clone = structuredClone(object) as SceneObject;
+    clone.id = idMap.get(object.id)!;
+    if (clone.parentId) clone.parentId = remap(clone.parentId);
+    if (clone.attachment?.targetObjectId) {
+      clone.attachment = { ...clone.attachment, targetObjectId: remap(clone.attachment.targetObjectId)! };
+    }
+    if (clone.viewModel?.ownerObjectId) {
+      clone.viewModel = { ...clone.viewModel, ownerObjectId: remap(clone.viewModel.ownerObjectId)! };
+    }
+    return clone;
+  });
+  return { objects, rootId: idMap.get(rootId)! };
+};
+
 /** Stable selector for the active scene's objects. Use this in components, not an inline arrow. */
 export const selectActiveObjects = (state: EditorState): SceneObject[] =>
   state.scenes.find((scene) => scene.id === state.activeSceneId)?.objects ?? [];
@@ -1492,6 +1786,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   isDirty: false,
   assets: [],
   folders: [],
+  renderSettings: defaultRenderSettings(),
   variables: starterVariables,
   dataAssets: starterDataAssets,
   materials: [],
@@ -1502,6 +1797,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   blueprints: starterBlueprints,
   graphs: [{ id: graphId, name: 'Player Controller', nodes: starterNodes, edges: starterEdges }],
   uiDocuments: [],
+  prefabs: [],
+  editingPrefabId: null,
+  prefabReturnSceneId: null,
+  prefabThumbnailQueue: [],
   activeBlueprintId: blueprintId,
   activeMaterialId: '',
   activeUIDocumentId: '',
@@ -1516,12 +1815,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeAnimators: {},
   runtimeCameraOverrides: {},
   runtimeGrounded: [],
+  runtimeSwimming: [],
+  runtimeClimbing: [],
   runtimeRoll: {},
   runtimeAttack: {},
   runtimeReload: {},
   runtimeInteract: {},
+  runtimeFootstep: {},
+  runtimeHidden: [],
+  runtimeInteractFocusId: null,
+  runtimeHitMarker: 0,
+  runtimeHurt: 0,
+  runtimeEnemyCooldown: {},
+  runtimeSurfaceSound: {},
   runtimeCollisions: [],
   runtimeTriggers: [],
+  runtimeTriggersExit: [],
   runtimeSoundQueue: [],
   runtimeLog: [],
   runtimeVisibleUI: {},
@@ -1543,6 +1852,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   renameScene: (id, name) =>
     set((state) => ({
       scenes: state.scenes.map((scene) => (scene.id === id ? { ...scene, name } : scene)),
+      isDirty: true,
+    })),
+  setSceneAudio: (id, patch) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => (scene.id === id ? { ...scene, ...patch } : scene)),
       isDirty: true,
     })),
   deleteScene: (id) =>
@@ -1613,6 +1927,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (options.physics) {
         next.physics = withPhysicsDefaults({ ...(next.physics ?? defaultPhysics()), ...options.physics });
       }
+      // Nest under a parent when asked (only if that parent exists in the active scene).
+      if (options.parentId && selectActiveObjects(state).some((object) => object.id === options.parentId)) {
+        next.parentId = options.parentId;
+      }
 
       return { ...mapActiveSceneObjects(state, (objects) => [...objects, next]), selectedObjectId: id };
     });
@@ -1653,6 +1971,250 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
       return { ...mapActiveSceneObjects(state, (objects) => [...objects, copy]), selectedObjectId: id };
     }),
+  duplicateObject: (id, options = {}) => {
+    const count = Math.max(1, Math.min(Math.round(options.count ?? 1), 200));
+    const offset = options.offset ?? [0.8, 0, 0.8];
+    const newRootIds: string[] = [];
+    set((state) => {
+      const objects = selectActiveObjects(state);
+      const root = objects.find((object) => object.id === id);
+      if (!root) return state;
+      const subtree = collectSubtree(objects, id);
+      const additions: SceneObject[] = [];
+      for (let i = 1; i <= count; i += 1) {
+        const { objects: clones, rootId } = cloneObjectTree(subtree, id);
+        const placed = clones.map((object) => {
+          if (object.id !== rootId) return object;
+          return {
+            ...object,
+            name: `${root.name} Copy${count > 1 ? ` ${i}` : ''}`,
+            transform: {
+              ...object.transform,
+              position: [
+                root.transform.position[0] + offset[0] * i,
+                root.transform.position[1] + offset[1] * i,
+                root.transform.position[2] + offset[2] * i,
+              ] as Vector3Tuple,
+            },
+          };
+        });
+        newRootIds.push(rootId);
+        additions.push(...placed);
+      }
+      return {
+        ...mapActiveSceneObjects(state, (current) => [...current, ...additions]),
+        selectedObjectId: newRootIds[newRootIds.length - 1],
+      };
+    });
+    return newRootIds;
+  },
+  setObjectParent: (id, parentId) =>
+    set((state) => {
+      if (id === parentId) return state;
+      const objects = selectActiveObjects(state);
+      if (!objects.some((object) => object.id === id)) return state;
+      if (parentId && !objects.some((object) => object.id === parentId)) return state;
+      // Reject cycles: a node can't be parented under one of its own descendants.
+      if (parentId && collectSubtree(objects, id).some((object) => object.id === parentId)) return state;
+      return mapActiveSceneObjects(state, (current) =>
+        current.map((object) => (object.id === id ? { ...object, parentId: parentId || undefined } : object)),
+      );
+    }),
+  createPrefabFromObject: (objectId, name, folderId) => {
+    const objects = selectActiveObjects(get());
+    const root = objects.find((object) => object.id === objectId);
+    if (!root) return undefined;
+    // Capture the object + all descendants, then re-id to prefab-local ids so the stored template
+    // never collides with the live scene it was captured from.
+    const subtree = collectSubtree(objects, objectId);
+    const { objects: captured, rootId } = cloneObjectTree(subtree, objectId);
+    // The prefab root has no parent inside the prefab; strip instance-provenance so the template is clean.
+    const normalized = captured.map((object) => {
+      const { prefabSourceId: _drop, ...rest } = object;
+      return object.id === rootId ? { ...rest, parentId: undefined } : rest;
+    });
+    const id = makeId('prefab');
+    set((state) => ({
+      prefabs: [
+        ...state.prefabs,
+        { id, name: name ?? `${root.name} Prefab`, folderId, objects: normalized, rootId, createdAt: Date.now() },
+      ],
+      // Render a browser thumbnail for the new prefab.
+      prefabThumbnailQueue: [...state.prefabThumbnailQueue, id],
+      isDirty: true,
+    }));
+    return id;
+  },
+  requestPrefabThumbnail: (prefabId) =>
+    set((state) =>
+      state.prefabThumbnailQueue.includes(prefabId)
+        ? state
+        : { prefabThumbnailQueue: [...state.prefabThumbnailQueue, prefabId] },
+    ),
+  setPrefabThumbnail: (prefabId, dataUrl) =>
+    set((state) => ({
+      prefabs: state.prefabs.map((prefab) => (prefab.id === prefabId ? { ...prefab, thumbnail: dataUrl } : prefab)),
+      prefabThumbnailQueue: state.prefabThumbnailQueue.filter((id) => id !== prefabId),
+    })),
+  instantiatePrefab: (prefabId, options = {}) => {
+    const state = get();
+    const prefab = state.prefabs.find((item) => item.id === prefabId);
+    if (!prefab || !prefab.objects.length) return undefined;
+    const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
+    const capturedRoot = prefab.objects.find((object) => object.id === prefab.rootId);
+    // Without an explicit drop position, spread successive stamps diagonally so they don't pile up
+    // exactly on top of each other (one step per existing instance of this prefab in the active scene).
+    const existing = selectActiveObjects(state).filter((object) => object.prefabSourceId === prefabId).length;
+    const base = capturedRoot?.transform.position ?? ([0, 0, 0] as Vector3Tuple);
+    const spread: Vector3Tuple = [base[0] + existing * 1.2, base[1], base[2] + existing * 1.2];
+    const placed = clones.map((object) => {
+      if (object.id !== rootId) return object;
+      const next: SceneObject = { ...object, parentId: options.parentId, prefabSourceId: prefabId };
+      next.transform = { ...object.transform, position: options.position ?? spread };
+      return next;
+    });
+    set((current) => ({
+      ...mapActiveSceneObjects(current, (objects) => [...objects, ...placed]),
+      selectedObjectId: rootId,
+    }));
+    return rootId;
+  },
+  openPrefabEditor: (prefabId) =>
+    set((state) => {
+      const prefab = state.prefabs.find((item) => item.id === prefabId);
+      if (!prefab) return state;
+      if (state.isPlaying) return state; // don't enter the prefab editor mid-play
+      if (state.editingPrefabId === prefabId) return state; // already open
+
+      // If another prefab is already open, save its edits before switching so nothing is lost.
+      let prefabs = state.prefabs;
+      const openEditScene = state.scenes.find((scene) => scene.id === PREFAB_EDIT_SCENE_ID);
+      if (state.editingPrefabId && openEditScene) {
+        prefabs = prefabs.map((item) => {
+          if (item.id !== state.editingPrefabId) return item;
+          const objects = structuredClone(openEditScene.objects);
+          const root = objects.find((o) => o.id === item.rootId) ?? objects.find((o) => !o.parentId);
+          return { ...item, objects, rootId: root?.id ?? item.rootId };
+        });
+      }
+      const savedPrefab = prefabs.find((item) => item.id === prefabId)!;
+
+      // Build a fresh transient scene from a clone of the prefab so edits don't mutate it until saved.
+      const editScene: Scene = {
+        id: PREFAB_EDIT_SCENE_ID,
+        name: `Prefab: ${savedPrefab.name}`,
+        objects: structuredClone(savedPrefab.objects),
+      };
+      const scenes = [...state.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID), editScene];
+      return {
+        prefabs,
+        scenes,
+        activeSceneId: PREFAB_EDIT_SCENE_ID,
+        editingPrefabId: prefabId,
+        // Only remember a real scene to return to (never the edit scene itself).
+        prefabReturnSceneId:
+          state.activeSceneId === PREFAB_EDIT_SCENE_ID ? state.prefabReturnSceneId : state.activeSceneId,
+        selectedObjectId: savedPrefab.rootId,
+        isDirty: true,
+      };
+    }),
+  closePrefabEditor: (save = true) =>
+    set((state) => {
+      const editScene = state.scenes.find((scene) => scene.id === PREFAB_EDIT_SCENE_ID);
+      const editingPrefabId = state.editingPrefabId;
+      let prefabs = state.prefabs;
+      if (save && editScene && editingPrefabId) {
+        prefabs = state.prefabs.map((prefab) => {
+          if (prefab.id !== editingPrefabId) return prefab;
+          const objects = structuredClone(editScene.objects);
+          // The root is whichever object still has no parent (the original root, unless the user
+          // re-rooted the tree). Fall back to the stored rootId if it's still present.
+          const root =
+            objects.find((object) => object.id === prefab.rootId) ?? objects.find((object) => !object.parentId);
+          return { ...prefab, objects, rootId: root?.id ?? prefab.rootId };
+        });
+      }
+      const scenes = state.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID);
+      const activeSceneId =
+        state.prefabReturnSceneId && scenes.some((scene) => scene.id === state.prefabReturnSceneId)
+          ? state.prefabReturnSceneId
+          : scenes[0]?.id ?? '';
+      const activeObjects = scenes.find((scene) => scene.id === activeSceneId)?.objects ?? [];
+      // Re-render the thumbnail for the prefab we just saved.
+      const prefabThumbnailQueue =
+        save && editingPrefabId && !state.prefabThumbnailQueue.includes(editingPrefabId)
+          ? [...state.prefabThumbnailQueue, editingPrefabId]
+          : state.prefabThumbnailQueue;
+      return {
+        scenes,
+        prefabs,
+        activeSceneId,
+        editingPrefabId: null,
+        prefabReturnSceneId: null,
+        selectedObjectId: activeObjects[0]?.id ?? '',
+        prefabThumbnailQueue,
+        isDirty: true,
+      };
+    }),
+  renamePrefab: (id, name) =>
+    set((state) => ({
+      prefabs: state.prefabs.map((prefab) => (prefab.id === id ? { ...prefab, name } : prefab)),
+      isDirty: true,
+    })),
+  deletePrefab: (id) =>
+    set((state) => ({ prefabs: state.prefabs.filter((prefab) => prefab.id !== id), isDirty: true })),
+  applyInstanceToPrefab: (objectId) => {
+    const objects = selectActiveObjects(get());
+    const instance = objects.find((object) => object.id === objectId);
+    if (!instance?.prefabSourceId) return undefined;
+    const prefabId = instance.prefabSourceId;
+    if (!get().prefabs.some((prefab) => prefab.id === prefabId)) return undefined;
+    // Capture the instance's current subtree (re-id to prefab-local) and overwrite the source prefab.
+    // Other already-placed instances are untouched — only future stamps get the new layout.
+    const subtree = collectSubtree(objects, objectId);
+    const { objects: captured, rootId } = cloneObjectTree(subtree, objectId);
+    const normalized = captured.map((object) => {
+      const { prefabSourceId: _drop, ...rest } = object;
+      return object.id === rootId ? { ...rest, parentId: undefined } : rest;
+    });
+    set((state) => ({
+      prefabs: state.prefabs.map((prefab) =>
+        prefab.id === prefabId ? { ...prefab, objects: normalized, rootId } : prefab,
+      ),
+      prefabThumbnailQueue: state.prefabThumbnailQueue.includes(prefabId)
+        ? state.prefabThumbnailQueue
+        : [...state.prefabThumbnailQueue, prefabId],
+      isDirty: true,
+    }));
+    return prefabId;
+  },
+  revertInstanceToPrefab: (objectId) => {
+    const state = get();
+    const objects = selectActiveObjects(state);
+    const instance = objects.find((object) => object.id === objectId);
+    if (!instance?.prefabSourceId) return undefined;
+    const prefab = state.prefabs.find((item) => item.id === instance.prefabSourceId);
+    if (!prefab || !prefab.objects.length) return undefined;
+    // Drop the instance's current subtree, then stamp a fresh copy of the prefab at the same
+    // world position/parent so local tweaks are discarded.
+    const remaining = deleteWithChildren(objects, objectId);
+    const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
+    const placed = clones.map((object) =>
+      object.id === rootId
+        ? {
+            ...object,
+            parentId: instance.parentId,
+            prefabSourceId: prefab.id,
+            transform: { ...object.transform, position: instance.transform.position },
+          }
+        : object,
+    );
+    set((current) => ({
+      ...mapActiveSceneObjects(current, () => [...remaining, ...placed]),
+      selectedObjectId: rootId,
+    }));
+    return rootId;
+  },
   renameObject: (id, name) =>
     set((state) =>
       mapActiveSceneObjects(state, (objects) =>
@@ -2010,6 +2572,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ),
       ),
     ),
+  updateRenderSettings: (patch) =>
+    set((state) => ({ renderSettings: { ...state.renderSettings, ...stripUndefined(patch) }, isDirty: true })),
+  setObjectLight: (objectId, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === objectId
+            ? { ...object, kind: 'light', light: { ...defaultLight(), ...object.light, ...stripUndefined(patch) } }
+            : object,
+        ),
+      ),
+    ),
   setAttachment: (objectId, attachment) =>
     set((state) =>
       mapActiveSceneObjects(state, (objects) =>
@@ -2119,9 +2693,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       return undefined;
     };
-    const idleId = pick(/idle.*loop/i, /^idle/i, /loop/i);
-    const walkId = pick(/walk.*loop/i, /^walk/i);
-    const runId = pick(/sprint.*loop/i, /jog.*loop/i, /run.*loop/i, /run/i);
+    const idleId = pick(/^idle_loop/i, /idle.*loop/i, /^idle/i, /loop/i);
+    const walkId = pick(/^walk_loop/i, /walk.*loop/i, /^walk/i);
+    // Three move tiers: Walk (slow) → Jog (normal) → Sprint (fast). Falls back gracefully if some are absent.
+    const runId = pick(/jog.*fwd.*loop/i, /jog.*loop/i, /run.*loop/i, /run/i);
+    const sprintId = pick(/sprint.*loop/i, /sprint/i);
+    const kickId = pick(/^kick$/i, /kick/i);
     // Full jump sequence: take-off, airborne loop, landing. Falls back to a single jump clip.
     const jumpStartId = pick(/jump.*start/i, /jump.*up/i);
     const jumpLoopId = pick(/jump.*loop/i, /jump.*air/i, /^falling/i, /in.?air/i);
@@ -2156,12 +2733,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     ];
     const attackParamId = parameters[parameters.length - 2].id;
     const weaponParamId = parameters[parameters.length - 1].id;
+    // Directional + crawl sources (strafe blend space + crawl traversal). Added after the index lookups above.
+    const moveXParamId = makeId('param');
+    const moveYParamId = makeId('param');
+    const crawlParamId = makeId('param');
+    const swimParamId = makeId('param');
+    const climbParamId = makeId('param');
+    parameters.push(
+      { id: moveXParamId, name: 'MoveX', type: 'float', source: 'moveX', defaultValue: 0 },
+      { id: moveYParamId, name: 'MoveY', type: 'float', source: 'moveY', defaultValue: 0 },
+      { id: crawlParamId, name: 'Crawling', type: 'bool', source: 'crawling', defaultValue: false },
+      { id: swimParamId, name: 'Swimming', type: 'bool', source: 'swimming', defaultValue: false },
+      { id: climbParamId, name: 'Climbing', type: 'bool', source: 'climbing', defaultValue: false },
+    );
+    // PRECISE underscore-anchored picks so directional clips don't collide (loose /jog.*fwd.*loop/ matches
+    // BOTH "Jog_Fwd_Loop" and "Jog_Fwd_L_Loop" → duplicate samples → one overwrites the other's weight → A-pose).
+    // Each direction must resolve to a DISTINCT clip.
+    const jogFwd = pick(/jog_fwd_loop/i) ?? runId; // straight forward
+    const jogBwd = pick(/jog_bwd_loop/i);
+    const jogLeftId = pick(/jog_left_loop/i);
+    const jogRightId = pick(/jog_right_loop/i);
+    const jogFwdL = pick(/jog_fwd_l_loop/i, /jog_fwd_leanl_loop/i);
+    const jogFwdR = pick(/jog_fwd_r_loop/i, /jog_fwd_leanr_loop/i);
+    const jogBwdL = pick(/jog_bwd_l_loop/i);
+    const jogBwdR = pick(/jog_bwd_r_loop/i);
+    const crawlIdleId = pick(/crawl.*idle.*loop/i, /crawl.*idle/i);
+    const crawlFwdId = pick(/crawl.*fwd.*loop/i, /crawl.*loop/i);
+    // Traversal modes: swim (in a water volume) + climb (on a climb volume). Each is a BLEND SPACE so it
+    // eases between a stationary pose and the moving stroke/climb (no hard pop, idle when not moving).
+    const swimIdleId = pick(/swim.*idle.*loop/i, /tread.*water/i, /swim.*idle/i);
+    const swimFwdId = pick(/swim.*fwd.*loop/i, /swim.*forward/i, /swim.*loop/i);
+    const climbIdleId = pick(/climb.*idle.*loop/i, /climb.*idle/i, /hang.*idle/i);
+    const climbUpId = pick(/climb.*up.*loop/i, /climb.*up/i, /climb.*loop/i);
+    const climbDownId = pick(/climb.*down.*loop/i, /climb.*down/i);
+    // Strafe locomotion needs at least forward + the two sides; otherwise fall back to 1D speed locomotion.
+    const strafeMode = Boolean(jogFwd && jogLeftId && jogRightId);
     const states: AnimatorState[] = [];
     const stateId: Record<string, string> = {};
     const layout: Record<string, { x: number; y: number }> = {
       idle: { x: 60, y: 40 },
       walk: { x: 320, y: 40 },
       run: { x: 580, y: 40 },
+      sprint: { x: 840, y: 40 },
+      kick: { x: 60, y: 700 },
       jumpStart: { x: 320, y: 220 },
       jumpLoop: { x: 540, y: 220 },
       jumpLand: { x: 760, y: 220 },
@@ -2178,17 +2792,106 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       stateId[key] = id;
       states.push({ id, name, animationId, speed: 1, loop, position: layout[key] ?? { x: 60, y: 40 + states.length * 90 } });
     };
-    addState('idle', 'Idle', idleId);
-    addState('walk', 'Walk', walkId);
-    addState('run', 'Run', runId);
+    // Locomotion blend space. STRAFE mode (when 8-way jog clips exist): a 2D blend over MoveX × MoveY so the
+    // character faces the camera and blends directional jogs (Unreal-style). Otherwise a 1D blend over Speed
+    // (idle→walk→jog→sprint). Either way it's one smooth state with no popping.
+    if (strafeMode) {
+      const dir = [
+        idleId && { animationId: idleId, value: 0, y: 0 },
+        jogFwd && { animationId: jogFwd, value: 0, y: 1 },
+        jogBwd && { animationId: jogBwd, value: 0, y: -1 },
+        jogLeftId && { animationId: jogLeftId, value: -1, y: 0 },
+        jogRightId && { animationId: jogRightId, value: 1, y: 0 },
+        jogFwdL && { animationId: jogFwdL, value: -0.7, y: 0.7 },
+        jogFwdR && { animationId: jogFwdR, value: 0.7, y: 0.7 },
+        jogBwdL && { animationId: jogBwdL, value: -0.7, y: -0.7 },
+        jogBwdR && { animationId: jogBwdR, value: 0.7, y: -0.7 },
+      ].filter(Boolean) as { animationId: string; value: number; y: number }[];
+      const id = makeId('state');
+      stateId.locomotion = id;
+      states.push({
+        id,
+        name: 'Locomotion',
+        animationId: idleId ?? dir[0].animationId,
+        speed: 1,
+        loop: true,
+        position: layout.idle,
+        blendParameterId: moveXParamId,
+        blendParameterIdY: moveYParamId,
+        blendSamples: dir,
+      });
+    } else {
+      const locoSamples = [
+        idleId && { animationId: idleId, value: 0 },
+        walkId && { animationId: walkId, value: 1.5 },
+        runId && { animationId: runId, value: 3.4 },
+        sprintId && { animationId: sprintId, value: 6.8 },
+      ].filter(Boolean) as { animationId: string; value: number }[];
+      if (locoSamples.length) {
+        const id = makeId('state');
+        stateId.locomotion = id;
+        states.push({
+          id,
+          name: 'Locomotion',
+          animationId: idleId ?? locoSamples[0].animationId,
+          speed: 1,
+          loop: true,
+          position: layout.idle,
+          blendParameterId: speedParamId,
+          blendSamples: locoSamples,
+        });
+      }
+    }
     addState('jumpStart', 'Jump Start', jumpStartId, false);
     addState('jumpLoop', 'Jump Loop', jumpLoopId, true);
     addState('jumpLand', 'Jump Land', jumpLandId, false);
     addState('jump', 'Jump', jumpId, false);
     addState('crouchIdle', 'Crouch Idle', crouchIdleId);
     addState('crouchWalk', 'Crouch Walk', crouchWalkId);
+    addState('crawlIdle', 'Crawl Idle', crawlIdleId);
+    addState('crawlFwd', 'Crawl', crawlFwdId);
+    // Swim — 1D blend over Speed: float/tread when still, stroke forward as horizontal speed rises.
+    const swimSamples = [
+      swimIdleId && { animationId: swimIdleId, value: 0 },
+      swimFwdId && { animationId: swimFwdId, value: 3 },
+    ].filter(Boolean) as { animationId: string; value: number }[];
+    if (swimSamples.length) {
+      const id = makeId('state');
+      stateId.swim = id;
+      states.push({
+        id,
+        name: 'Swim',
+        animationId: swimIdleId ?? swimSamples[0].animationId,
+        speed: 1,
+        loop: true,
+        position: { x: 840, y: 380 },
+        blendParameterId: speedParamId,
+        blendSamples: swimSamples,
+      });
+    }
+    // Climb — 1D blend over VerticalSpeed: descend (−) ↔ cling (0) ↔ ascend (+), so it reverses on the way down.
+    const climbSamples = [
+      climbDownId && { animationId: climbDownId, value: -1.5 },
+      climbIdleId && { animationId: climbIdleId, value: 0 },
+      climbUpId && { animationId: climbUpId, value: 1.5 },
+    ].filter(Boolean) as { animationId: string; value: number }[];
+    if (climbSamples.length) {
+      const id = makeId('state');
+      stateId.climb = id;
+      states.push({
+        id,
+        name: 'Climb',
+        animationId: climbIdleId ?? climbSamples[0].animationId,
+        speed: 1,
+        loop: true,
+        position: { x: 840, y: 540 },
+        blendParameterId: vspeedParamId,
+        blendSamples: climbSamples,
+      });
+    }
     addState('roll', 'Roll', rollId, false);
     addState('punch', 'Punch', punchId, false);
+    addState('kick', 'Kick', kickId, false);
     addState('swordAttack', 'Sword Attack', swordAttackId, false);
     if (!states.length) return undefined; // no usable clips
 
@@ -2206,7 +2909,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     };
 
     // --- Jump (highest priority). Take off → airborne loop → land, detecting the ground via Grounded. ---
-    const groundStates = ['idle', 'walk', 'run', 'crouchIdle', 'crouchWalk'];
+    const groundStates = ['locomotion', 'crouchIdle', 'crouchWalk'];
     const airKey = stateId.jumpLoop ? 'jumpLoop' : stateId.jumpStart ? 'jumpStart' : undefined;
     if (stateId.jumpStart || stateId.jumpLoop) {
       // Take-off only from grounded states (not "any") so the airborne loop never bounces back to Start.
@@ -2216,52 +2919,70 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Blend to the airborne loop partway through the launch clip so it doesn't wait the full wind-up.
       if (stateId.jumpStart && stateId.jumpLoop) linkExit('jumpStart', 'jumpLoop', [], 0.12, 0.5);
       // Short hop: if we land while still in the start clip, recover instead of waiting.
-      if (stateId.jumpStart) link('jumpStart', stateId.jumpLand ? 'jumpLand' : 'idle', [C(groundedParamId, '==', true)], 0.1);
+      if (stateId.jumpStart) link('jumpStart', stateId.jumpLand ? 'jumpLand' : 'locomotion', [C(groundedParamId, '==', true)], 0.1);
       // Land when we touch ground again.
       if (stateId.jumpLand && airKey) link(airKey, 'jumpLand', [C(groundedParamId, '==', true)], 0.1);
-      // Land clip plays out, then back to idle. If there's no land clip, return on grounded.
-      if (stateId.jumpLand) linkExit('jumpLand', 'idle');
-      else if (airKey) link(airKey, 'idle', [C(groundedParamId, '==', true)]);
+      // Land clip plays out, then back to locomotion. If there's no land clip, return on grounded.
+      if (stateId.jumpLand) linkExit('jumpLand', 'locomotion');
+      else if (airKey) link(airKey, 'locomotion', [C(groundedParamId, '==', true)]);
     } else if (stateId.jump) {
       groundStates.forEach((from) => link(from, 'jump', [C(vspeedParamId, '>', 1)], 0.1));
-      link('jump', 'idle', [C(groundedParamId, '==', true)]);
+      link('jump', 'locomotion', [C(groundedParamId, '==', true)]);
     }
-    // --- Roll/dodge: enter from grounded states while Rolling, return to idle when it ends. ---
+    // --- Roll/dodge: enter from grounded states while Rolling, return to locomotion when it ends. ---
     if (stateId.roll) {
       groundStates.forEach((from) => link(from, 'roll', [C(rollParamId, '==', true)], 0.08));
-      link('roll', 'idle', [C(rollParamId, '==', false)]);
+      link('roll', 'locomotion', [C(rollParamId, '==', false)]);
     }
-    // --- Attack: sword swing when a weapon is equipped, otherwise a punch; clip plays out, then idle. ---
+    // --- Attack: sword swing when a weapon is equipped, otherwise a punch; clip plays out, then locomotion. ---
     if (stateId.swordAttack) {
       groundStates.forEach((from) => link(from, 'swordAttack', [C(attackParamId, '==', true), C(weaponParamId, '==', true)], 0.08));
-      linkExit('swordAttack', 'idle');
+      linkExit('swordAttack', 'locomotion');
+    }
+    // Unarmed: a running attack (moving fast) plays a Kick; standing plays a Punch. Evaluated before
+    // punch so the speed>4 case wins. Both require the weapon to be unequipped (when a sword exists).
+    const unarmed = stateId.swordAttack ? [C(weaponParamId, '==', false)] : [];
+    if (stateId.kick) {
+      groundStates.forEach((from) => link(from, 'kick', [C(attackParamId, '==', true), C(speedParamId, '>', 4), ...unarmed], 0.08));
+      linkExit('kick', 'locomotion');
     }
     if (stateId.punch) {
-      // Without a sword state, punch covers both; otherwise only when unarmed.
-      const conds = stateId.swordAttack ? [C(attackParamId, '==', true), C(weaponParamId, '==', false)] : [C(attackParamId, '==', true)];
-      groundStates.forEach((from) => link(from, 'punch', conds, 0.08));
-      linkExit('punch', 'idle');
+      groundStates.forEach((from) => link(from, 'punch', [C(attackParamId, '==', true), ...unarmed], 0.08));
+      linkExit('punch', 'locomotion');
     }
+    // Crouch: enter the crouch states while crouching, return to the locomotion blend space when released.
     if (stateId.crouchIdle || stateId.crouchWalk) {
       linkAny('crouchWalk', [C(crouchParamId, '==', true), C(speedParamId, '>', 0.1)]);
       linkAny('crouchIdle', [C(crouchParamId, '==', true), C(speedParamId, '<', 0.1)]);
       link('crouchIdle', 'crouchWalk', [C(speedParamId, '>', 0.1)]);
       link('crouchWalk', 'crouchIdle', [C(speedParamId, '<', 0.1)]);
-      link('crouchIdle', 'idle', [C(crouchParamId, '==', false)]);
-      link('crouchWalk', 'walk', [C(crouchParamId, '==', false)]);
+      link('crouchIdle', 'locomotion', [C(crouchParamId, '==', false)]);
+      link('crouchWalk', 'locomotion', [C(crouchParamId, '==', false)]);
     }
-    link('idle', 'walk', [C(speedParamId, '>', 0.1), C(crouchParamId, '==', false)]);
-    link('walk', 'idle', [C(speedParamId, '<', 0.1), C(crouchParamId, '==', false)]);
-    link('walk', 'run', [C(speedParamId, '>', 5), C(crouchParamId, '==', false)]);
-    link('run', 'walk', [C(speedParamId, '<', 5)]);
-    // Fallback when there's no walk clip: idle ↔ run directly.
-    if (!stateId.walk) {
-      link('idle', 'run', [C(speedParamId, '>', 0.1)]);
-      link('run', 'idle', [C(speedParamId, '<', 0.1)]);
+    // Crawl (traversal): hold the crawl key → drop to crawl idle/move, release → back to locomotion.
+    if (stateId.crawlIdle || stateId.crawlFwd) {
+      linkAny('crawlFwd', [C(crawlParamId, '==', true), C(speedParamId, '>', 0.1)]);
+      linkAny('crawlIdle', [C(crawlParamId, '==', true), C(speedParamId, '<', 0.1)]);
+      if (stateId.crawlIdle && stateId.crawlFwd) {
+        link('crawlIdle', 'crawlFwd', [C(speedParamId, '>', 0.1)]);
+        link('crawlFwd', 'crawlIdle', [C(speedParamId, '<', 0.1)]);
+      }
+      link('crawlIdle', 'locomotion', [C(crawlParamId, '==', false)]);
+      link('crawlFwd', 'locomotion', [C(crawlParamId, '==', false)]);
     }
+    // Swim / climb traversal modes (entered while inside a water / climb volume; highest priority via "any").
+    if (stateId.swim) {
+      linkAny('swim', [C(swimParamId, '==', true)], 0.15);
+      link('swim', 'locomotion', [C(swimParamId, '==', false)], 0.15);
+    }
+    if (stateId.climb) {
+      linkAny('climb', [C(climbParamId, '==', true)], 0.15);
+      link('climb', 'locomotion', [C(climbParamId, '==', false)], 0.15);
+    }
+    // (Speed tiers are handled inside the Locomotion blend space — no discrete tier transitions.)
 
     const controllerId = makeId('animctl');
-    const defaultStateId = stateId.idle ?? states[0].id;
+    const defaultStateId = stateId.locomotion ?? stateId.idle ?? states[0].id;
     const controller: AnimatorController = {
       id: controllerId,
       name: `${mesh.name} Locomotion`,
@@ -2337,7 +3058,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
       renderer: { ...defaultRenderer('cube'), modelAssetId },
       animator: { enabled: true, controllerId, speed: 1, loop: true },
-      character: { ...defaultCharacter(), enabled: true, rollDuration, rollSpeed, jumpStrength: 6 },
+      // Strafe mode (faces camera + 8-way move) when the rig has directional jogs for the 2D blend space.
+      character: { ...defaultCharacter(), enabled: true, rollDuration, rollSpeed, jumpStrength: 6, strafe: strafeMode },
       script: { blueprintId, graphId, enabled: true },
     };
 
@@ -2631,6 +3353,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         blueprints: state.blueprints.map((blueprint) =>
           blueprint.folderId === id ? { ...blueprint, folderId: parentId } : blueprint,
         ),
+        prefabs: state.prefabs.map((prefab) =>
+          prefab.folderId === id ? { ...prefab, folderId: parentId } : prefab,
+        ),
         isDirty: true,
       };
     }),
@@ -2654,6 +3379,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         : kind === 'uiDocument'
           ? {
               uiDocuments: state.uiDocuments.map((doc) => (doc.id === id ? { ...doc, folderId } : doc)),
+              isDirty: true,
+            }
+        : kind === 'prefab'
+          ? {
+              prefabs: state.prefabs.map((prefab) => (prefab.id === id ? { ...prefab, folderId } : prefab)),
               isDirty: true,
             }
         : {
@@ -3463,6 +4193,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setPlaying: (isPlaying) =>
     set((state) => {
       if (isPlaying === state.isPlaying) return state;
+      // Play runs the game scene, not a prefab being edited — block it while the prefab editor is open.
+      if (isPlaying && state.editingPrefabId) return state;
       if (isPlaying) {
         const objects = selectActiveObjects(state);
         // Spin up a fresh Rapier world to own the simulation for this play session.
@@ -3478,12 +4210,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeAnimators: {},
           runtimeCameraOverrides: {},
           runtimeGrounded: [],
+          runtimeSwimming: [],
+          runtimeClimbing: [],
           runtimeRoll: {},
           runtimeAttack: {},
       runtimeReload: {},
       runtimeInteract: {},
+      runtimeFootstep: {},
+      runtimeHidden: [],
+      runtimeInteractFocusId: null,
+      runtimeHitMarker: 0,
+      runtimeHurt: 0,
+      runtimeEnemyCooldown: {},
+      runtimeSurfaceSound: {},
           runtimeCollisions: [],
           runtimeTriggers: [],
+          runtimeTriggersExit: [],
           runtimeSoundQueue: [],
           runtimeLog: [],
           // Show every screen HUD flagged visibleOnStart; world docs render whenever their object exists.
@@ -3496,35 +4238,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           ),
           runtimeUITextOverrides: {},
           runtimeStarted: false,
-          playSnapshot: {
-            sceneId: state.activeSceneId,
-            transforms: Object.fromEntries(objects.map((object) => [object.id, structuredClone(object.transform)])),
-            // Snapshot renderers too so runtime material overrides ("Set Material" nodes) revert on Stop.
-            renderers: Object.fromEntries(
-              objects.map((object) => [object.id, object.renderer ? structuredClone(object.renderer) : undefined]),
-            ),
-          },
+          // Full deep clone so Stop fully resets the scene (restores picked-up/destroyed objects, removes
+          // spawned projectiles, reverts transforms/materials/instance variables).
+          playSnapshot: { sceneId: state.activeSceneId, objects: structuredClone(objects) },
         };
       }
 
-      // Restore the snapshot into the scene it was taken from (does NOT mark dirty).
-      // Objects with no snapshot entry were spawned at runtime (action.spawnObject) — drop them.
+      // Restore the snapshot wholesale into the scene it was taken from (does NOT mark dirty): the cloned
+      // objects re-appear (picked-up/destroyed ones come back, runtime-spawned ones are gone).
       const snapshot = state.playSnapshot;
       const scenes = snapshot
-        ? state.scenes.map((scene) =>
-            scene.id === snapshot.sceneId
-              ? {
-                  ...scene,
-                  objects: scene.objects
-                    .filter((object) => snapshot.transforms[object.id])
-                    .map((object) => ({
-                      ...object,
-                      transform: snapshot.transforms[object.id],
-                      renderer: snapshot.renderers[object.id] ?? object.renderer,
-                    })),
-                }
-              : scene,
-          )
+        ? state.scenes.map((scene) => (scene.id === snapshot.sceneId ? { ...scene, objects: snapshot.objects } : scene))
         : state.scenes;
 
       // Tear the physics world down so the next play session starts clean.
@@ -3540,12 +4264,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeAnimators: {},
         runtimeCameraOverrides: {},
         runtimeGrounded: [],
+        runtimeSwimming: [],
+        runtimeClimbing: [],
         runtimeRoll: {},
         runtimeAttack: {},
       runtimeReload: {},
       runtimeInteract: {},
+      runtimeFootstep: {},
+      runtimeHidden: [],
+      runtimeInteractFocusId: null,
+      runtimeHitMarker: 0,
+      runtimeHurt: 0,
+      runtimeEnemyCooldown: {},
+      runtimeSurfaceSound: {},
         runtimeCollisions: [],
         runtimeTriggers: [],
+        runtimeTriggersExit: [],
         runtimeSoundQueue: [],
         runtimeLog: [],
         runtimeVisibleUI: {},
@@ -3601,6 +4335,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const spawned: SceneObject[] = [];
       const destroyedIds = new Set<string>();
       const prints: string[] = [];
+      // Combat feedback counters (bumped on hits / when the local player is hurt) + per-enemy attack cooldowns.
+      let hitMarker = state.runtimeHitMarker;
+      let hurt = state.runtimeHurt;
+      const nextEnemyCd: Record<string, number> = {};
+      // The local player = the camera-follow character (drives hit marker / hurt flash / who enemies chase).
+      const playerId = activeObjects.find((o) => o.character?.enabled && o.character.cameraFollow)?.id;
+      // Objects hidden by action.setVisible — carried across frames so weapons stay holstered.
+      const nextHidden = new Set<string>(state.runtimeHidden);
       // Animator parameter writes requested by animator.setX nodes this frame, keyed by object id.
       const animatorWrites: Record<string, Array<{ name: string; value: number | boolean; trigger?: boolean }>> = {};
       // Character node requests this frame: object ids that fired a Jump node, and live camera overrides.
@@ -3611,6 +4353,47 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const nextAttack: Record<string, number> = {};
       const nextReload: Record<string, number> = {};
       const nextInteract: Record<string, number> = {};
+      // Distance-since-last-footstep per character (carried across frames) → footstep audio cadence.
+      const nextFootstep: Record<string, number> = { ...state.runtimeFootstep };
+
+      // --- Interaction focus (Unreal-style): each character looks for the nearest object tagged with an
+      //     `interactable` instance variable, within interactRange and roughly in front. The focused object
+      //     is highlighted + prompted on screen (camera-follow character only); a rising edge on the interact
+      //     key fires that object's event.interact this frame. ---
+      const interactedThisFrame = new Set<string>();
+      let interactFocusId: string | null = null;
+      {
+        const interactables = activeObjects.filter((o) => o.variables?.interactable);
+        if (interactables.length) {
+          for (const char of activeObjects) {
+            const cc = char.character;
+            if (!cc?.enabled || isRagdoll(char.id)) continue;
+            const range = cc.interactRange ?? 3;
+            const cp = char.transform.position;
+            const facing = char.transform.rotation[1] - (cc.modelYawOffset ?? 0);
+            const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
+            let best: { id: string; d: number } | null = null;
+            for (const it of interactables) {
+              if (it.id === char.id) continue;
+              const dx = it.transform.position[0] - cp[0];
+              const dz = it.transform.position[2] - cp[2];
+              const d = Math.hypot(dx, dz);
+              if (d > range) continue;
+              // Must be in front (wide cone) — unless we're basically on top of it.
+              if (d > 0.6) {
+                const dot = (dx / d) * fwd[0] + (dz / d) * fwd[1];
+                if (dot < 0.25) continue;
+              }
+              if (!best || d < best.d) best = { id: it.id, d };
+            }
+            if (best) {
+              if (cc.cameraFollow) interactFocusId = best.id;
+              const k = cc.keyInteract;
+              if (k && currentKeys[k] && !previousKeys[k]) interactedThisFrame.add(best.id);
+            }
+          }
+        }
+      }
 
       // Run each object's script graph. Physics-enabled objects are simulated by Rapier
       // in the post-pass below, so here we only collect scripted motion + side effects.
@@ -3780,6 +4563,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
 
+          // Resolve a node's target object id, supporting the "$trigger" sentinel = the object currently
+          // overlapping the owner (lets a pickup's own script act on whoever walked into it).
+          const resolveTarget = (raw: string | undefined): string | undefined =>
+            raw === '$trigger' ? state.runtimeTriggers.find((t) => t.objectId === object.id)?.otherObjectId : raw;
+
           function applyAction(node: NodeForgeNode, visited: Set<string>): boolean {
             if (node.data.nodeKind === 'logic.branch') {
               return toBoolean(valueInput(node, 'condition', node.data.booleanValue ?? true));
@@ -3935,8 +4723,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               prints.push(`${object.name}: ${graphValueToString(valueInput(node, 'message', node.data.message ?? ''))}`);
             }
 
-            // Anim writes target the owning object by default, or another object via targetObjectId.
-            const animTargetId = node.data.targetObjectId || object.id;
+            // Anim writes target the owning object by default, or another object via targetObjectId ($trigger = whoever triggered).
+            const animTargetId = resolveTarget(node.data.targetObjectId) || object.id;
 
             if (node.data.nodeKind === 'animator.setFloat' && node.data.paramName) {
               (animatorWrites[animTargetId] ??= []).push({
@@ -3994,6 +4782,108 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               setRagdoll(target, on);
             }
 
+            if (node.data.nodeKind === 'action.setVisible') {
+              // Hide/show the owner (or Target) — e.g. holster the inactive weapon.
+              const target = node.data.targetObjectId || object.id;
+              const visible = toBoolean(valueInput(node, 'visible', node.data.visible ?? true));
+              if (visible) nextHidden.delete(target);
+              else nextHidden.add(target);
+            }
+
+            if (node.data.nodeKind === 'action.spawnAttached' && node.data.assetId) {
+              // Equip: spawn the weapon model attached to the owner's bone/socket, replacing any weapon
+              // already on that slot. The grip offset rides on the attachment so it's map-independent.
+              // targetObjectId "$trigger" attaches to whoever walked into the pickup (self-contained pickups).
+              const owner = resolveTarget(node.data.targetObjectId) || object.id;
+              const socketName = node.data.attachSocketName;
+              const boneName = node.data.attachBoneName ?? '';
+              const slot = socketName || boneName;
+              for (const o of selectActiveObjects(state)) {
+                if (o.variables?.__attachedWeapon && o.attachment?.targetObjectId === owner && (o.attachment.socketName || o.attachment.boneName) === slot) {
+                  destroyedIds.add(o.id);
+                }
+              }
+              spawned.push(
+                makeAttachedWeapon(owner, node.data.assetId, boneName, socketName, node.data.attachOffsetPosition, node.data.attachOffsetRotation, node.data.attachOffsetScale),
+              );
+            }
+
+            if (node.data.nodeKind === 'action.spawnProjectile') {
+              // Ammo: if the shooter owns an `ammo` instance variable, each shot consumes one and an empty
+              // clip blocks the shot (reload — see the character pass — refills it to `ammoMax`).
+              const ammoNow = nextObjectVariables[object.id]?.ammo ?? object.variables?.ammo;
+              if (ammoNow !== undefined) {
+                const ammo = toNumber(ammoNow);
+                if (ammo <= 0) return true; // out of ammo — no shot
+                (nextObjectVariables[object.id] ??= { ...(object.variables ?? {}) }).ammo = ammo - 1;
+              }
+              const speed = toNumber(valueInput(node, 'speed', node.data.projectileSpeed ?? 20));
+              const damage = toNumber(valueInput(node, 'damage', node.data.projectileDamage ?? 25));
+              const template = node.data.projectileTemplateId
+                ? activeObjects.find((candidate) => candidate.id === node.data.projectileTemplateId)
+                : undefined;
+              const setup: ProjectileSetup = {
+                size: node.data.projectileSize,
+                color: node.data.projectileColor,
+                life: node.data.projectileLife,
+                gravity: node.data.projectileGravity,
+                debug: node.data.projectileDebug,
+                template,
+              };
+              const cc = object.character ? { ...defaultCharacter(), ...object.character } : undefined;
+              const facing = cc?.cameraMode === 'firstPerson' && cc.mouseLook
+                ? mouseCameraYaw(cc.mouseSensitivity)
+                : rotation[1] - (cc?.modelYawOffset ?? 0);
+              const pitch = cc?.cameraMode === 'firstPerson' && cc.mouseLook
+                ? mouseCameraPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch)
+                : 0;
+              const horizontal = Math.cos(pitch);
+              const dir: Vector3Tuple = [Math.sin(facing) * horizontal, Math.sin(pitch), Math.cos(facing) * horizontal];
+              const right: Vector3Tuple = [Math.cos(facing), 0, -Math.sin(facing)];
+              const fp = cc?.cameraMode === 'firstPerson';
+              // The eye/camera world position — where the crosshair ray starts.
+              const off = cc?.cameraOffset ?? [0, 1.4, 0];
+              const eye: Vector3Tuple = fp
+                ? [
+                    position[0] + right[0] * off[0] + dir[0] * off[2],
+                    position[1] + off[1] + dir[1] * off[2],
+                    position[2] + right[2] * off[0] + dir[2] * off[2],
+                  ]
+                : [position[0], position[1] + 1.4, position[2]];
+              // Spawn at the WEAPON MUZZLE: a configurable camera-space offset [right, up, forward] from
+              // the eye (default = down-right where a held gun's barrel sits).
+              const m = (fp && node.data.projectileMuzzle) || [0.12, -0.24, 0.8];
+              const muzzle: Vector3Tuple = fp
+                ? [
+                    eye[0] + right[0] * m[0] + dir[0] * m[2],
+                    eye[1] + m[1] + dir[1] * m[2],
+                    eye[2] + right[2] * m[0] + dir[2] * m[2],
+                  ]
+                : [position[0] + dir[0] * 0.8, position[1] + 1.4, position[2] + dir[2] * 0.8];
+              // Converge: aim from the muzzle toward a point far down the crosshair ray so the shot both
+              // LOOKS like it leaves the gun AND still hits where the player is aiming.
+              let velocity: Vector3Tuple = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
+              if (fp) {
+                const ax = eye[0] + dir[0] * 50 - muzzle[0];
+                const ay = eye[1] + dir[1] * 50 - muzzle[1];
+                const az = eye[2] + dir[2] * 50 - muzzle[2];
+                const len = Math.hypot(ax, ay, az) || 1;
+                velocity = [(ax / len) * speed, (ay / len) * speed, (az / len) * speed];
+              }
+              const projectileObj = makeProjectileObject(muzzle, velocity, object.id, damage, setup);
+              spawned.push(projectileObj);
+              // Muzzle flash at the barrel for punchy weapon feedback.
+              spawned.push(makeMuzzleFlash(muzzle));
+              if (setup.debug) {
+                prints.push(
+                  `${object.name}: 🔫 spawned ${projectileObj.name} [${projectileObj.id.slice(-4)}] ` +
+                    `at (${muzzle.map((n) => n.toFixed(1)).join(', ')}) ` +
+                    `vel (${velocity.map((n) => n.toFixed(1)).join(', ')}) speed ${speed} dmg ${damage}` +
+                    (template ? ` · template "${template.name}"` : ''),
+                );
+              }
+            }
+
             return true;
           }
 
@@ -4015,6 +4905,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if (node.data.nodeKind === 'event.triggerEnter') {
                 return contactMatches(state.runtimeTriggers, object.id, node.data.otherObjectId);
               }
+              if (node.data.nodeKind === 'event.triggerExit') {
+                return contactMatches(state.runtimeTriggersExit, object.id, node.data.otherObjectId);
+              }
+              if (node.data.nodeKind === 'event.interact') {
+                return interactedThisFrame.has(object.id);
+              }
               return false;
             })
             .map((node) => node.id);
@@ -4033,6 +4929,46 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Character controller pass: turn input into ground movement + jump for character objects.
       // Runs after scripts, before physics; the motion it produces feeds the animator's speed params.
       const movedObjects = mappedObjects.map((object) => {
+        // Particle bursts (impacts): count down their life; despawn when spent.
+        if (object.effect) {
+          const life = object.effect.life - delta;
+          if (life <= 0) {
+            destroyedIds.add(object.id);
+            return object;
+          }
+          return { ...object, effect: { ...object.effect, life } };
+        }
+        // Projectiles: fly straight along their stored velocity and count down their life.
+        if (object.projectile) {
+          const v = object.projectile.velocity;
+          const p = object.transform.position;
+          return {
+            ...object,
+            transform: { ...object.transform, position: [p[0] + v[0] * delta, p[1] + v[1] * delta, p[2] + v[2] * delta] as Vector3Tuple },
+            projectile: { ...object.projectile, life: object.projectile.life - delta },
+          };
+        }
+        // Enemy AI (Unreal-style behavior, no scripting): an object tagged with an `enemy` instance variable
+        // chases the local player when within `chaseRange` and otherwise drifts back toward its spawn. Contact
+        // damage is applied in the post-physics combat pass. Tunables: enemySpeed, chaseRange (instance vars).
+        if (object.variables?.enemy && !object.character?.enabled) {
+          const player = playerId ? activeObjects.find((o) => o.id === playerId) : undefined;
+          if (!player) return object;
+          const p = [...object.transform.position] as Vector3Tuple;
+          const r = [...object.transform.rotation] as Vector3Tuple;
+          const speed = toNumber(object.variables.enemySpeed ?? 2.6);
+          const chaseRange = toNumber(object.variables.chaseRange ?? 9);
+          const tp = player.transform.position;
+          const dx = tp[0] - p[0];
+          const dz = tp[2] - p[2];
+          const dist = Math.hypot(dx, dz);
+          if (dist < chaseRange && dist > 1.1) {
+            p[0] += (dx / dist) * speed * delta;
+            p[2] += (dz / dist) * speed * delta;
+            r[1] = Math.atan2(dx, dz); // face the player
+          }
+          return { ...object, transform: { ...object.transform, position: p, rotation: r } };
+        }
         if (!object.character?.enabled) return object;
         // Ragdolling: physics owns the bones; the controller must not drive motion (it goes limp).
         // Track the limp body's pelvis so the follow camera stays on it instead of a frozen point.
@@ -4065,7 +5001,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const length = Math.hypot(inputX, inputZ);
           const sprinting = Boolean(currentKeys[cc.keySprint]);
           const crouching = Boolean(currentKeys[cc.keyCrouch]);
-          const speed = cc.moveSpeed * (crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
+          const crawling = Boolean(cc.keyCrawl && currentKeys[cc.keyCrawl]);
+          const speed = cc.moveSpeed * (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
           if (length > 0) {
             let dirX = inputX / length;
             let dirZ = inputZ / length;
@@ -4078,9 +5015,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
             position[0] += dirX * speed * delta;
             position[2] += dirZ * speed * delta;
-            // Face the movement direction (+ the model's authored forward offset).
-            rotation[1] = lerpAngle(rotation[1], Math.atan2(dirX, dirZ) + cc.modelYawOffset, cc.turnSpeed * delta);
+            // Strafe mode faces the camera (set below); otherwise turn to face the movement direction.
+            if (!(cc.strafe && cc.mouseLook)) {
+              rotation[1] = lerpAngle(rotation[1], Math.atan2(dirX, dirZ) + cc.modelYawOffset, cc.turnSpeed * delta);
+            }
           }
+          // Strafe: always face the camera yaw so the character can move in all 8 directions (2D blend).
+          if (cc.strafe && cc.mouseLook) {
+            rotation[1] = mouseCameraYaw(cc.mouseSensitivity) + cc.modelYawOffset;
+          }
+        }
+
+        if (cc.cameraMode === 'firstPerson' && cc.mouseLook) {
+          rotation[1] = mouseCameraYaw(cc.mouseSensitivity) + cc.modelYawOffset;
         }
 
         // Roll dash: travel forward (the character's facing) regardless of input mode.
@@ -4094,14 +5041,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         // Attack: a short pulse on the attack key that the animator turns into a punch / weapon swing.
         let attackRemaining = state.runtimeAttack[object.id] ?? 0;
-        if (attackRemaining <= 0 && currentKeys[cc.keyAttack]) attackRemaining = 0.18;
-        else if (attackRemaining > 0) attackRemaining = Math.max(0, attackRemaining - delta);
+        if (attackRemaining <= 0 && currentKeys[cc.keyAttack]) {
+          attackRemaining = 0.18;
+          if (cc.attackSoundId) sounds.push(cc.attackSoundId); // swing/whoosh on the swing's first frame
+        } else if (attackRemaining > 0) attackRemaining = Math.max(0, attackRemaining - delta);
         if (attackRemaining > 0) nextAttack[object.id] = attackRemaining;
 
-        // Reload: a longer pulse on the reload key (ranged weapon) → the "reloading" param.
+        // Reload: a longer pulse on the reload key (ranged weapon) → the "reloading" param. On start it
+        // refills `ammo` to `ammoMax` (if the character owns those instance variables).
         let reloadRemaining = state.runtimeReload[object.id] ?? 0;
-        if (reloadRemaining <= 0 && currentKeys[cc.keyReload]) reloadRemaining = 1.2;
-        else if (reloadRemaining > 0) reloadRemaining = Math.max(0, reloadRemaining - delta);
+        if (reloadRemaining <= 0 && currentKeys[cc.keyReload]) {
+          reloadRemaining = 1.2;
+          const ammoMax = nextObjectVariables[object.id]?.ammoMax ?? object.variables?.ammoMax;
+          if (ammoMax !== undefined) (nextObjectVariables[object.id] ??= { ...(object.variables ?? {}) }).ammo = toNumber(ammoMax);
+        } else if (reloadRemaining > 0) reloadRemaining = Math.max(0, reloadRemaining - delta);
         if (reloadRemaining > 0) nextReload[object.id] = reloadRemaining;
 
         // Interact: a short pulse on the interact key → the "interacting" param (use / pick up).
@@ -4110,19 +5063,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         else if (interactRemaining > 0) interactRemaining = Math.max(0, interactRemaining - delta);
         if (interactRemaining > 0) nextInteract[object.id] = interactRemaining;
 
-        // Vertical motion: gravity + jump. Grounded comes from the physics character controller
-        // (last frame) so the character can stand on real colliders, not just the ground plane.
-        let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
-        const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]);
-        if (grounded && verticalVelocity < 0) verticalVelocity = 0;
-        if (grounded && wantsJump) verticalVelocity = cc.jumpStrength;
-        verticalVelocity -= cc.gravity * delta;
-        position[1] += verticalVelocity * delta;
-        if (position[1] <= cc.groundLevel) {
-          position[1] = cc.groundLevel;
-          if (verticalVelocity < 0) verticalVelocity = 0;
+        // Swim / climb modes override normal gravity-based vertical motion (one-frame-delayed from triggers).
+        const swimming = state.runtimeSwimming.includes(object.id);
+        const climbing = state.runtimeClimbing.includes(object.id);
+        if (climbing) {
+          // Lock horizontal to the wall (undo this frame's script/auto XZ move) and climb up/down with fwd/back keys.
+          const start = prevTransforms.get(object.id)?.position;
+          if (start) {
+            position[0] = start[0];
+            position[2] = start[2];
+          }
+          const climbDir = (currentKeys[cc.keyForward] ? 1 : 0) - (currentKeys[cc.keyBackward] ? 1 : 0);
+          position[1] += climbDir * cc.moveSpeed * 0.6 * delta;
+          nextVelocities[object.id] = [0, 0, 0];
+        } else if (swimming) {
+          // Buoyant: no gravity. Float (damp vertical), rise on jump key, sink on crouch key. Horizontal swims freely.
+          let vy = nextVelocities[object.id]?.[1] ?? 0;
+          if (currentKeys[cc.keyJump]) vy = cc.moveSpeed * 0.7;
+          else if (currentKeys[cc.keyCrouch]) vy = -cc.moveSpeed * 0.7;
+          else vy *= 0.85; // settle toward neutral buoyancy
+          position[1] += vy * delta;
+          nextVelocities[object.id] = [0, vy, 0];
+        } else {
+          // Vertical motion: gravity + jump. Grounded comes from the physics character controller
+          // (last frame) so the character can stand on real colliders, not just the ground plane.
+          let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
+          const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]);
+          if (grounded && verticalVelocity < 0) verticalVelocity = 0;
+          if (grounded && wantsJump) {
+            verticalVelocity = cc.jumpStrength;
+            if (cc.jumpSoundId) sounds.push(cc.jumpSoundId);
+          }
+          verticalVelocity -= cc.gravity * delta;
+          position[1] += verticalVelocity * delta;
+          if (position[1] <= cc.groundLevel) {
+            position[1] = cc.groundLevel;
+            if (verticalVelocity < 0) verticalVelocity = 0;
+          }
+          nextVelocities[object.id] = [0, verticalVelocity, 0];
         }
-        nextVelocities[object.id] = [0, verticalVelocity, 0];
+
+        // Footsteps: accumulate horizontal distance and play a footstep sound each stride while grounded.
+        // Surface-aware: a footstep volume the character stands in overrides the default sound (grass/stone/etc.).
+        const stepSound = state.runtimeSurfaceSound[object.id] || cc.footstepSoundId;
+        if (stepSound) {
+          const start = object.transform.position;
+          const stepped = Math.hypot(position[0] - start[0], position[2] - start[2]);
+          let acc = (nextFootstep[object.id] ?? 0) + stepped;
+          const stride = 2.1; // world units between footstep sounds
+          if (grounded && acc >= stride) {
+            sounds.push(stepSound);
+            acc = 0;
+          }
+          nextFootstep[object.id] = grounded ? acc : 0; // reset mid-air so landing doesn't dump a step
+        }
 
         return { ...object, transform: { ...object.transform, position, rotation } };
       });
@@ -4133,6 +5127,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // so graph events run from a stable, previous-step physics result.
       let collisions: PhysicsContactEvent[] = [];
       let triggers: PhysicsContactEvent[] = [];
+      let triggersExit: PhysicsContactEvent[] = [];
       let groundedIds: string[] = [];
       let resolvedObjects = movedObjects;
       const physics = getActivePhysics();
@@ -4140,6 +5135,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const result = physics.frame(movedObjects, prevTransforms, physicsImpulses, delta);
         collisions = result.collisions;
         triggers = result.triggers;
+        triggersExit = result.triggersExit;
         groundedIds = result.grounded;
         resolvedObjects = movedObjects.map((object) => {
           // While ragdolling the limp body owns the transform (set from the pelvis above) — don't let
@@ -4154,6 +5150,121 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             transform: { position: next.position, rotation: next.rotation, scale: object.transform.scale },
           };
         });
+      }
+
+      // Swim / climb modes: maintain the "inside a volume" sets from trigger enter/exit against objects
+      // tagged with a `volume` instance variable of 'water' or 'climb'. One frame delayed (like grounded).
+      const nextSwimming = new Set(state.runtimeSwimming);
+      const nextClimbing = new Set(state.runtimeClimbing);
+      const nextSurfaceSound: Record<string, string> = { ...state.runtimeSurfaceSound };
+      if (triggers.length || triggersExit.length) {
+        const otherObj = (id: string) => resolvedObjects.find((o) => o.id === id);
+        const volumeKind = (id: string) => {
+          const v = otherObj(id)?.variables?.volume;
+          return typeof v === 'string' ? v : undefined;
+        };
+        const isCharacter = (id: string) => Boolean(resolvedObjects.find((o) => o.id === id)?.character?.enabled);
+        const apply = (charId: string, otherId: string, entering: boolean) => {
+          if (!isCharacter(charId)) return;
+          const kind = volumeKind(otherId);
+          if (kind === 'water') entering ? nextSwimming.add(charId) : nextSwimming.delete(charId);
+          else if (kind === 'climb') entering ? nextClimbing.add(charId) : nextClimbing.delete(charId);
+          // Surface-aware footsteps: a footstep volume overrides the character's step sound while inside it.
+          const surface = otherObj(otherId)?.variables?.footstepSound;
+          if (typeof surface === 'string' && surface) {
+            if (entering) nextSurfaceSound[charId] = surface;
+            else if (nextSurfaceSound[charId] === surface) delete nextSurfaceSound[charId];
+          }
+        };
+        for (const t of triggers) apply(t.objectId, t.otherObjectId, true);
+        for (const t of triggersExit) apply(t.objectId, t.otherObjectId, false);
+      }
+      const swimmingIds = [...nextSwimming];
+      const climbingIds = [...nextClimbing];
+
+      // Water entry FX: when a character first enters a water volume, fountain a splash at its feet and
+      // play its swim/splash sound (if assigned). Detected as "newly in the swimming set this frame".
+      for (const id of swimmingIds) {
+        if (state.runtimeSwimming.includes(id)) continue;
+        const obj = resolvedObjects.find((o) => o.id === id);
+        if (!obj) continue;
+        spawned.push(makeSplashObject(obj.transform.position));
+        const splashSound = obj.character?.swimSoundId;
+        if (splashSound) sounds.push(splashSound);
+      }
+
+      // Landing sound: a character that became grounded this frame after falling (downward velocity last
+      // frame) plays its land sound. The velocity check skips the play-start frame (rests at rest).
+      for (const id of groundedIds) {
+        if (state.runtimeGrounded.includes(id)) continue;
+        const wasFalling = (state.runtimeVelocities[id]?.[1] ?? 0) < -1;
+        if (!wasFalling) continue;
+        const landSound = resolvedObjects.find((o) => o.id === id)?.character?.landSoundId;
+        if (landSound) sounds.push(landSound);
+      }
+
+      // Projectiles: on first contact with a non-owner, subtract from that object's `health` instance
+      // variable (if it has one) and despawn; also despawn when their life runs out.
+      for (const obj of resolvedObjects) {
+        const proj = obj.projectile;
+        if (!proj) continue;
+        if (proj.life <= 0) {
+          destroyedIds.add(obj.id);
+          continue;
+        }
+        for (const c of collisions) {
+          const other = c.objectId === obj.id ? c.otherObjectId : c.otherObjectId === obj.id ? c.objectId : undefined;
+          if (!other || other === proj.ownerId) continue;
+          const target = resolvedObjects.find((o) => o.id === other);
+          if (!target || target.projectile) continue; // ignore other projectiles
+          const hasHealth = nextObjectVariables[other]?.health !== undefined || target.variables?.health !== undefined;
+          if (hasHealth) {
+            const cur = toNumber(nextObjectVariables[other]?.health ?? target.variables?.health ?? 0);
+            const next = Math.max(0, cur - proj.damage);
+            (nextObjectVariables[other] ??= { ...(target.variables ?? {}) }).health = next;
+            // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
+            if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+            if (next <= 0) destroyedIds.add(other); // dummy/enemy dies
+            // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
+            // hurt flash if the LOCAL player was the one hit.
+            spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
+            if (proj.ownerId === playerId) hitMarker += 1;
+            if (other === playerId) hurt += 1;
+            if (proj.debug) prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name}: -${proj.damage} hp → ${next}${next <= 0 ? ' (destroyed)' : ''}`);
+          } else if (proj.debug) {
+            prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name} (no health var — no damage)`);
+          }
+          // Spawn a particle burst at the impact point (the projectile's current position).
+          spawned.push(makeImpactObject(obj.transform.position));
+          destroyedIds.add(obj.id);
+          break;
+        }
+      }
+
+      // Enemy contact damage: an enemy within `attackRange` of the local player drains its `health` on a
+      // ~1s cadence (per-enemy cooldown). Triggers the hurt flash + the player's hurt sound.
+      if (playerId) {
+        const player = resolvedObjects.find((o) => o.id === playerId);
+        if (player) {
+          const pp = player.transform.position;
+          const hasHealth = nextObjectVariables[playerId]?.health !== undefined || player.variables?.health !== undefined;
+          for (const e of resolvedObjects) {
+            if (!e.variables?.enemy) continue;
+            let cd = (state.runtimeEnemyCooldown[e.id] ?? 0) - delta;
+            const dx = pp[0] - e.transform.position[0];
+            const dz = pp[2] - e.transform.position[2];
+            const near = Math.hypot(dx, dz) < toNumber(e.variables.attackRange ?? 1.6);
+            if (near && cd <= 0 && hasHealth) {
+              const dmg = toNumber(e.variables.enemyDamage ?? 10);
+              const cur = toNumber(nextObjectVariables[playerId]?.health ?? player.variables?.health ?? 0);
+              (nextObjectVariables[playerId] ??= { ...(player.variables ?? {}) }).health = Math.max(0, cur - dmg);
+              hurt += 1;
+              if (player.character?.hurtSoundId) sounds.push(player.character.hurtSoundId);
+              cd = 1;
+            }
+            if (cd > 0) nextEnemyCd[e.id] = cd;
+          }
+        }
       }
 
       let allObjects = [...resolvedObjects, ...spawned];
@@ -4173,18 +5284,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const controller = state.animatorControllers.find((item) => item.id === controllerId);
         if (!controller || !controller.states.length) continue;
 
-        // Movement this frame (start-of-tick transform vs. final transform).
-        const before = prevTransforms.get(object.id);
-        const after = object.transform.position;
+        // A first-person view model (arms/weapon) is pinned to the camera and never moves, and has no
+        // character of its own — so its animator sources state from the OWNER pawn (speed, grounded,
+        // aim/fire/reload keys, etc.). This is what makes per-weapon arm rigs animate automatically.
+        const ownerId = object.viewModel?.ownerObjectId;
+        const sourceObj = (ownerId ? remainingResolvedObjects.find((o) => o.id === ownerId) : undefined) ?? object;
+        const sourceId = sourceObj.id;
+
+        // Movement this frame (start-of-tick transform vs. final transform) of the source object.
+        const before = prevTransforms.get(sourceId);
+        const after = sourceObj.transform.position;
         const dt = delta || 1 / 60;
         let horizontalSpeed = 0;
         let verticalSpeed = 0;
+        // Local move direction relative to the source's facing (for 2D directional/strafe blend spaces):
+        // moveY = forward (−1 back … +1 fwd), moveX = right (−1 left … +1 right); ~0 when idle.
+        let moveX = 0;
+        let moveY = 0;
         if (before) {
           const dx = after[0] - before.position[0];
           const dy = after[1] - before.position[1];
           const dz = after[2] - before.position[2];
           horizontalSpeed = Math.hypot(dx, dz) / dt;
           verticalSpeed = dy / dt;
+          const h = Math.hypot(dx, dz);
+          if (h > 1e-4) {
+            const facing = sourceObj.transform.rotation[1] - (sourceObj.character?.modelYawOffset ?? 0);
+            const wx = dx / h;
+            const wz = dz / h;
+            moveY = wx * Math.sin(facing) + wz * Math.cos(facing); // forward axis (sin,cos)
+            moveX = wx * Math.cos(facing) - wz * Math.sin(facing); // right axis (cos,−sin)
+          }
         }
 
         const prev = state.runtimeAnimators[object.id];
@@ -4198,15 +5328,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (param.source === 'speed') params[param.id] = horizontalSpeed;
           else if (param.source === 'verticalSpeed') params[param.id] = verticalSpeed;
           else if (param.source === 'moving') params[param.id] = horizontalSpeed > 0.1;
-          else if (param.source === 'crouching') params[param.id] = Boolean(object.character && currentKeys[object.character.keyCrouch]);
-          else if (param.source === 'grounded') params[param.id] = groundedIds.includes(object.id);
-          else if (param.source === 'rolling') params[param.id] = (nextRoll[object.id] ?? 0) > 0;
-          else if (param.source === 'attacking') params[param.id] = (nextAttack[object.id] ?? 0) > 0;
-          else if (param.source === 'aiming') params[param.id] = Boolean(object.character && currentKeys[object.character.keyAim]);
-          else if (param.source === 'reloading') params[param.id] = (nextReload[object.id] ?? 0) > 0;
-          else if (param.source === 'interacting') params[param.id] = (nextInteract[object.id] ?? 0) > 0;
-          else if (param.source === 'emoting') params[param.id] = Boolean(object.character && currentKeys[object.character.keyEmote]);
-          else if (param.source === 'weaponEquipped') params[param.id] = allObjects.some((o) => o.attachment?.targetObjectId === object.id);
+          else if (param.source === 'crouching') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyCrouch]);
+          else if (param.source === 'crawling') params[param.id] = Boolean(sourceObj.character?.keyCrawl && currentKeys[sourceObj.character.keyCrawl]);
+          else if (param.source === 'moveX') params[param.id] = moveX;
+          else if (param.source === 'moveY') params[param.id] = moveY;
+          else if (param.source === 'grounded') params[param.id] = groundedIds.includes(sourceId);
+          else if (param.source === 'swimming') params[param.id] = swimmingIds.includes(sourceId);
+          else if (param.source === 'climbing') params[param.id] = climbingIds.includes(sourceId);
+          else if (param.source === 'rolling') params[param.id] = (nextRoll[sourceId] ?? 0) > 0;
+          else if (param.source === 'attacking') params[param.id] = (nextAttack[sourceId] ?? 0) > 0;
+          else if (param.source === 'aiming') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyAim]);
+          else if (param.source === 'reloading') params[param.id] = (nextReload[sourceId] ?? 0) > 0;
+          else if (param.source === 'interacting') params[param.id] = (nextInteract[sourceId] ?? 0) > 0;
+          else if (param.source === 'emoting') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyEmote]);
+          else if (param.source === 'weaponEquipped') params[param.id] = allObjects.some((o) => o.attachment?.targetObjectId === sourceId);
           else if (param.source === 'variable' && param.variableId !== undefined) {
             const raw = nextVariableValues[param.variableId];
             params[param.id] = param.type === 'bool' ? toBoolean(raw) : toNumber(raw);
@@ -4269,12 +5404,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeAnimators: nextAnimators,
         runtimeCameraOverrides: nextCameraOverrides,
         runtimeGrounded: groundedIds,
+        runtimeSwimming: swimmingIds,
+        runtimeClimbing: climbingIds,
         runtimeRoll: nextRoll,
         runtimeAttack: nextAttack,
         runtimeReload: nextReload,
         runtimeInteract: nextInteract,
+        runtimeFootstep: nextFootstep,
+        runtimeHidden: [...nextHidden],
+        runtimeInteractFocusId: interactFocusId,
+        runtimeHitMarker: hitMarker,
+        runtimeHurt: hurt,
+        runtimeEnemyCooldown: nextEnemyCd,
+        runtimeSurfaceSound: nextSurfaceSound,
         runtimeCollisions: collisions,
         runtimeTriggers: triggers,
+        runtimeTriggersExit: triggersExit,
         runtimePreviousKeys: { ...currentKeys },
         runtimeEventQueue: [],
         runtimeStarted: true,
@@ -4364,8 +5509,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       version: PROJECT_VERSION,
       name: 'Untitled Project',
       savedAt: new Date().toISOString(),
-      activeSceneId: state.activeSceneId,
-      scenes: state.scenes,
+      // Exclude the transient prefab-editing scene; fall back active id to a real scene if needed.
+      activeSceneId:
+        state.activeSceneId === PREFAB_EDIT_SCENE_ID
+          ? state.prefabReturnSceneId ??
+            state.scenes.find((scene) => scene.id !== PREFAB_EDIT_SCENE_ID)?.id ??
+            state.activeSceneId
+          : state.activeSceneId,
+      scenes: state.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID),
       assets: state.assets.map(({ url: _url, ...asset }) => asset),
       folders: state.folders,
       variables: state.variables,
@@ -4378,6 +5529,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       uiDocuments: state.uiDocuments ?? [],
       blueprints: state.blueprints,
       graphs: state.graphs,
+      prefabs: state.prefabs ?? [],
     };
   },
   loadProject: (project) =>
@@ -4424,6 +5576,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedObjectId: activeScene.objects[0]?.id ?? '',
         assets: project.assets,
         folders: project.folders ?? [],
+        renderSettings: { ...defaultRenderSettings(), ...project.renderSettings },
         variables: project.variables ?? [],
         dataAssets: project.dataAssets ?? [],
         materials,
@@ -4434,6 +5587,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         uiDocuments: project.uiDocuments ?? [],
         blueprints: project.blueprints,
         graphs: normalizedGraphs,
+        prefabs: project.prefabs ?? [],
+        editingPrefabId: null,
+        prefabReturnSceneId: null,
+        // Regenerate thumbnails for any prefabs that were saved without one.
+        prefabThumbnailQueue: (project.prefabs ?? []).filter((prefab) => !prefab.thumbnail).map((prefab) => prefab.id),
         activeBlueprintId: project.blueprints[0]?.id ?? '',
         activeMaterialId: project.materials?.[0]?.id ?? '',
         activeUIDocumentId: project.uiDocuments?.[0]?.id ?? '',
@@ -4448,10 +5606,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeAnimators: {},
         runtimeCameraOverrides: {},
         runtimeGrounded: [],
+        runtimeSwimming: [],
+        runtimeClimbing: [],
         runtimeRoll: {},
         runtimeAttack: {},
       runtimeReload: {},
       runtimeInteract: {},
+      runtimeFootstep: {},
+      runtimeHidden: [],
+      runtimeInteractFocusId: null,
+      runtimeHitMarker: 0,
+      runtimeHurt: 0,
+      runtimeEnemyCooldown: {},
+      runtimeSurfaceSound: {},
         runtimeCollisions: [],
         runtimeSoundQueue: [],
         runtimeLog: [],
@@ -4459,6 +5626,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeObjectVariables: {},
         runtimeUITextOverrides: {},
         runtimeTriggers: [],
+        runtimeTriggersExit: [],
         runtimeStarted: false,
         runtimeTime: 0,
         isDirty: false,

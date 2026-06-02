@@ -1,7 +1,9 @@
 /**
- * Player-screen HUD: a full-viewport DOM overlay (sibling to the 3D canvas) that draws every
- * visible `surface: 'screen'` UI document during Play. Mounted in both the editor shell
- * (`App.tsx`) and the standalone player (`Player.tsx`); it only renders while `isPlaying`.
+ * Player-screen HUD: a DOM overlay (sibling to the 3D canvas) that draws every visible
+ * `surface: 'screen'` UI document during Play. Positioned `absolute` so it fills — and is
+ * clipped to — its nearest positioned ancestor: the editor mounts it inside the Viewport's
+ * `.scene-drop-zone` (so the HUD stays inside the viewport, Unreal-style), and the standalone
+ * player (`Player.tsx`) mounts it full-window. It only renders while `isPlaying`.
  *
  * The overlay itself is click-through (`pointerEvents: none`) so it never steals camera input;
  * buttons opt back in (`pointerEvents: auto`, set in `UIElementView`). Button clicks fire a
@@ -33,7 +35,7 @@ export function ScreenUILayer() {
   const overridesFor = (doc: UIDocument) => scopeOverrides(textOverrides, doc.id);
 
   return (
-    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 20 }}>
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 20 }}>
       {docs.map((doc) => (
         // Each screen doc's root fills the viewport (position: relative) so its children can flow
         // OR be absolutely placed by left/top — matching what the design canvas shows.

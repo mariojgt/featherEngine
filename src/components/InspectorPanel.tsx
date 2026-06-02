@@ -1,11 +1,11 @@
 import { Link2, Palette, Settings2, Unlink } from 'lucide-react';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { defaultCharacter, defaultLight, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useAssetUrl } from '../three/ModelAsset';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, MaterialDefinition, MeshRendererComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
 
 const axes = ['X', 'Y', 'Z'] as const;
 
@@ -18,17 +18,19 @@ function NumberInput({
   step = 0.1,
   min,
   max,
+  precision = 2,
 }: {
   value: number;
   onChange: (value: number) => void;
   step?: number;
   min?: number;
   max?: number;
+  precision?: number;
 }) {
   return (
     <input
       type="number"
-      value={Number.isInteger(value) ? value : Number(value.toFixed(2))}
+      value={Number.isInteger(value) ? value : Number(value.toFixed(precision))}
       min={min}
       max={max}
       step={step}
@@ -42,11 +44,17 @@ function VectorField({
   value,
   onChange,
   rotation,
+  step,
+  precision,
 }: {
   label: string;
   value: Vector3Tuple;
   onChange: (value: Vector3Tuple) => void;
   rotation?: boolean;
+  /** Override the per-axis input step (defaults: 1 for rotation, 0.1 otherwise). */
+  step?: number;
+  /** Decimal places shown — raise for fine values like scale 0.005. */
+  precision?: number;
 }) {
   const displayValue = rotation ? (value.map(toDegrees) as Vector3Tuple) : value;
 
@@ -59,7 +67,8 @@ function VectorField({
             <em>{axis}</em>
             <NumberInput
               value={displayValue[index]}
-              step={rotation ? 1 : 0.1}
+              step={step ?? (rotation ? 1 : 0.1)}
+              precision={precision ?? 2}
               onChange={(nextValue) => {
                 const next = [...displayValue] as Vector3Tuple;
                 next[index] = nextValue;
@@ -165,6 +174,7 @@ function RendererSection({
       </label>
       <RangeField label="Metalness" value={renderer.metalness} onChange={(metalness) => onChange({ metalness })} />
       <RangeField label="Roughness" value={renderer.roughness} onChange={(roughness) => onChange({ roughness })} />
+      <RangeField label="Opacity" value={renderer.opacity ?? 1} onChange={(opacity) => onChange({ opacity })} />
     </>
   );
 
@@ -510,7 +520,25 @@ function AttachmentSection({ objectId }: { objectId: string }) {
               <button className="full-button" onClick={() => setPicking(true)}>
                 Pick on skeleton…
               </button>
-              <p className="field-hint">The Transform above is the offset from the bone. {bones.length} bones available.</p>
+              <p className="field-hint">Attach offset — seat the weapon in the hand (overrides the Transform above).</p>
+              <VectorField
+                label="Offset Pos"
+                value={attachment.offsetPosition ?? object!.transform.position}
+                onChange={(offsetPosition) => setAttachment(objectId, { ...attachment, offsetPosition })}
+              />
+              <VectorField
+                label="Offset Rot"
+                rotation
+                value={attachment.offsetRotation ?? object!.transform.rotation}
+                onChange={(offsetRotation) => setAttachment(objectId, { ...attachment, offsetRotation })}
+              />
+              <VectorField
+                label="Offset Scale"
+                step={0.001}
+                precision={4}
+                value={attachment.offsetScale ?? object!.transform.scale}
+                onChange={(offsetScale) => setAttachment(objectId, { ...attachment, offsetScale })}
+              />
             </>
           )}
         </>
@@ -708,6 +736,24 @@ function CharacterSection({
       />
     </label>
   );
+  // Player-sound pickers (audio asset ids; the runtime plays each automatically on its event).
+  const audioAssets = useEditorStore((state) => state.assets).filter((asset) => asset.type === 'audio');
+  const sound = (label: string, key: keyof CharacterControllerComponent) => (
+    <label className="field-row">
+      <span>{label}</span>
+      <select
+        value={(cc?.[key] as string | undefined) ?? ''}
+        onChange={(event) => onChange({ [key]: event.target.value || undefined } as Partial<CharacterControllerComponent>)}
+      >
+        <option value="">None</option>
+        {audioAssets.map((asset) => (
+          <option key={asset.id} value={asset.id}>
+            {asset.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   return (
     <section className="inspector-section">
       <h3>Character Controller</h3>
@@ -749,6 +795,11 @@ function CharacterSection({
           <KeyBinding label="Jump" value={cc.keyJump} onChange={(keyJump) => onChange({ keyJump })} />
           <KeyBinding label="Sprint" value={cc.keySprint} onChange={(keySprint) => onChange({ keySprint })} />
           <KeyBinding label="Crouch" value={cc.keyCrouch} onChange={(keyCrouch) => onChange({ keyCrouch })} />
+          <KeyBinding label="Crawl" value={cc.keyCrawl ?? 'KeyZ'} onChange={(keyCrawl) => onChange({ keyCrawl })} />
+          <label className="field-row">
+            <span>Strafe (face camera)</span>
+            <input type="checkbox" checked={Boolean(cc.strafe)} onChange={(event) => onChange({ strafe: event.target.checked })} />
+          </label>
           <KeyBinding label="Roll" value={cc.keyRoll} onChange={(keyRoll) => onChange({ keyRoll })} />
           <KeyBinding label="Attack" value={cc.keyAttack} onChange={(keyAttack) => onChange({ keyAttack })} />
           <KeyBinding label="Aim" value={cc.keyAim} onChange={(keyAim) => onChange({ keyAim })} />
@@ -757,6 +808,15 @@ function CharacterSection({
           <KeyBinding label="Emote" value={cc.keyEmote} onChange={(keyEmote) => onChange({ keyEmote })} />
           <KeyBinding label="Ragdoll" value={cc.keyRagdoll} onChange={(keyRagdoll) => onChange({ keyRagdoll })} />
 
+          <h4 className="inspector-subhead">Sounds</h4>
+          <p className="field-hint">Played automatically on each event. Import audio assets (mp3/wav) into the project first.</p>
+          {sound('Footsteps', 'footstepSoundId')}
+          {sound('Jump', 'jumpSoundId')}
+          {sound('Land', 'landSoundId')}
+          {sound('Splash (water)', 'swimSoundId')}
+          {sound('Attack', 'attackSoundId')}
+          {sound('Hurt', 'hurtSoundId')}
+
           <h4 className="inspector-subhead">Camera</h4>
           <label className="field-row">
             <span>Follow Camera</span>
@@ -764,6 +824,16 @@ function CharacterSection({
           </label>
           {cc.cameraFollow && (
             <>
+              <label className="field-row">
+                <span>Mode</span>
+                <select
+                  value={cc.cameraMode}
+                  onChange={(event) => onChange({ cameraMode: event.target.value as CharacterControllerComponent['cameraMode'] })}
+                >
+                  <option value="thirdPerson">Third Person</option>
+                  <option value="firstPerson">First Person</option>
+                </select>
+              </label>
               <button
                 className={rigging ? 'full-button active' : 'full-button'}
                 onClick={() => setCameraRigTarget(rigging ? undefined : objectId)}
@@ -804,6 +874,84 @@ function CharacterSection({
           )}
         </>
       )}
+    </section>
+  );
+}
+
+/** Light tuning for a `kind: 'light'` object — point / spot / directional. */
+function LightSection({ light, onChange }: { light: LightComponent | undefined; onChange: (patch: Partial<LightComponent>) => void }) {
+  const l = { ...defaultLight(), ...light };
+  return (
+    <section className="inspector-section">
+      <h3>Light</h3>
+      <label className="field-row">
+        <span>Type</span>
+        <select value={l.type} onChange={(e) => onChange({ type: e.target.value as LightComponent['type'] })}>
+          <option value="point">Point</option>
+          <option value="spot">Spot</option>
+          <option value="directional">Directional (sun)</option>
+        </select>
+      </label>
+      <label className="field-row">
+        <span>Color</span>
+        <input type="color" value={l.color} onChange={(e) => onChange({ color: e.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>Intensity</span>
+        <input type="number" step={0.5} value={l.intensity} onChange={(e) => onChange({ intensity: Number(e.target.value) })} />
+      </label>
+      {l.type !== 'directional' && (
+        <label className="field-row">
+          <span>Range</span>
+          <input type="number" step={1} value={l.distance} onChange={(e) => onChange({ distance: Number(e.target.value) })} />
+        </label>
+      )}
+      {l.type === 'spot' && (
+        <label className="field-row">
+          <span>Cone°</span>
+          <input type="number" step={1} value={Math.round((l.angle * 180) / Math.PI)} onChange={(e) => onChange({ angle: (Number(e.target.value) * Math.PI) / 180 })} />
+        </label>
+      )}
+      <label className="field-row">
+        <span>Cast Shadow</span>
+        <input type="checkbox" checked={l.castShadow} onChange={(e) => onChange({ castShadow: e.target.checked })} />
+      </label>
+    </section>
+  );
+}
+
+/** Project-wide post-processing (bloom + vignette). Shown when nothing is selected (a "world" setting). */
+function RenderSettingsSection() {
+  const rs = useEditorStore((state) => state.renderSettings);
+  const update = useEditorStore((state) => state.updateRenderSettings);
+  return (
+    <section className="inspector-section">
+      <h3>Post-Processing</h3>
+      <p className="field-hint">Project-wide bloom + vignette — applies in Play and the exported game. Bloom makes neon/tracers glow.</p>
+      <label className="field-row">
+        <span>Bloom</span>
+        <input type="checkbox" checked={rs.bloomEnabled} onChange={(e) => update({ bloomEnabled: e.target.checked })} />
+      </label>
+      {rs.bloomEnabled && (
+        <>
+          <label className="field-row">
+            <span>Intensity</span>
+            <input type="number" step={0.1} value={rs.bloomIntensity} onChange={(e) => update({ bloomIntensity: Number(e.target.value) })} />
+          </label>
+          <label className="field-row">
+            <span>Threshold</span>
+            <input type="number" step={0.05} value={rs.bloomThreshold} onChange={(e) => update({ bloomThreshold: Number(e.target.value) })} />
+          </label>
+          <label className="field-row">
+            <span>Spread</span>
+            <input type="number" step={0.05} value={rs.bloomRadius} onChange={(e) => update({ bloomRadius: Number(e.target.value) })} />
+          </label>
+        </>
+      )}
+      <label className="field-row">
+        <span>Vignette</span>
+        <input type="checkbox" checked={rs.vignetteEnabled} onChange={(e) => update({ vignetteEnabled: e.target.checked })} />
+      </label>
     </section>
   );
 }
@@ -883,6 +1031,7 @@ export function InspectorPanel() {
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
   const toggleCharacterController = useEditorStore((state) => state.toggleCharacterController);
   const updateCharacterController = useEditorStore((state) => state.updateCharacterController);
+  const setObjectLight = useEditorStore((state) => state.setObjectLight);
   const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
   const animations = useEditorStore((state) => state.animations);
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
@@ -948,7 +1097,10 @@ export function InspectorPanel() {
       </div>
 
       {!object ? (
-        <div className="empty-state">No object selected</div>
+        <div className="inspector-content">
+          <div className="empty-state">No object selected</div>
+          <RenderSettingsSection />
+        </div>
       ) : (
         <div className="inspector-content">
           <section className="inspector-section title-section">
@@ -964,10 +1116,18 @@ export function InspectorPanel() {
                 label={label}
                 value={value}
                 rotation={field === 'rotation'}
+                // Scale needs fine control — some imported GLBs carry a 100× baked scale, so usable
+                // values are tiny (e.g. ~0.0015). 4 decimals + a small step make those representable.
+                step={field === 'scale' ? 0.001 : undefined}
+                precision={field === 'scale' ? 4 : undefined}
                 onChange={(nextValue) => updateTransform(object.id, field, nextValue)}
               />
             ))}
           </section>
+
+          {object.kind === 'light' && (
+            <LightSection light={object.light} onChange={(patch) => setObjectLight(object.id, patch)} />
+          )}
 
           {object.renderer && (
             <RendererSection

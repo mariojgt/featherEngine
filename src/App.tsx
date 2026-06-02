@@ -5,7 +5,7 @@ import { useProjectStore } from './store/projectStore';
 import { Toolbar } from './components/Toolbar';
 import { Workspace } from './components/Workspace';
 import { RuntimeConsole } from './components/RuntimeConsole';
-import { ScreenUILayer } from './ui/ScreenUILayer';
+import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
 import { useEditorStore } from './store/editorStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 
@@ -71,9 +71,9 @@ export default function App() {
       <RuntimePreviewLoop />
       <Toolbar />
       <Workspace />
-      <ScreenUILayer />
       <RuntimeConsole />
       <AIChatWidget />
+      <PrefabThumbnailHost />
     </div>
   );
 }

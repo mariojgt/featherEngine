@@ -18,7 +18,7 @@ export const nodeGroups: Array<{
   {
     title: 'Events',
     icon: Zap,
-    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Trigger Enter'],
+    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Trigger Enter', 'Trigger Exit', 'Interact'],
   },
   {
     title: 'Logic',
@@ -48,7 +48,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Fire Event', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Get Anim Param', 'Get Anim State', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Fire Event', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Get Anim Param', 'Get Anim State', 'Print'],
   },
   {
     title: 'Physics',
@@ -380,6 +380,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'action.applyForce';
   const updatesSound = node.data.nodeKind === 'action.playSound';
   const updatesSpawn = node.data.nodeKind === 'action.spawnObject';
+  const updatesProjectile = node.data.nodeKind === 'action.spawnProjectile';
   const updatesMessage = node.data.nodeKind === 'action.print';
   const updatesVariable = node.data.nodeKind === 'variable.get' || node.data.nodeKind === 'variable.set';
   const updatesDataAsset = node.data.nodeKind === 'data.tableGet';
@@ -853,6 +854,105 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               ))}
             </select>
           </label>
+        )}
+
+        {updatesProjectile && (
+          <>
+            <label className="node-field">
+              <span>Template Object</span>
+              <select
+                value={node.data.projectileTemplateId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileTemplateId: event.target.value || undefined })}
+              >
+                <option value="">Built-in sphere</option>
+                {sceneObjects.map((object) => (
+                  <option key={object.id} value={object.id}>
+                    {object.name}
+                  </option>
+                ))}
+              </select>
+              <small className="node-hint">
+                Pick a scene object to clone as the bullet (its mesh/model, scale &amp; material). Leave on “Built-in sphere” to use Size + Color below.
+              </small>
+            </label>
+
+            <label className="node-field">
+              <span>Speed</span>
+              <input
+                type="number"
+                step="0.5"
+                value={node.data.projectileSpeed ?? 20}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileSpeed: Number(event.target.value) })}
+              />
+            </label>
+
+            <label className="node-field">
+              <span>Damage</span>
+              <input
+                type="number"
+                step="1"
+                value={node.data.projectileDamage ?? 25}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileDamage: Number(event.target.value) })}
+              />
+              <small className="node-hint">Subtracted from the struck object’s <code>health</code> variable.</small>
+            </label>
+
+            {!node.data.projectileTemplateId && (
+              <>
+                <label className="node-field">
+                  <span>Size</span>
+                  <input
+                    type="number"
+                    step="0.02"
+                    min="0.01"
+                    value={node.data.projectileSize ?? 0.18}
+                    onChange={(event) => updateGraphNodeData(node.id, { projectileSize: Number(event.target.value) })}
+                  />
+                </label>
+
+                <label className="node-field">
+                  <span>Color</span>
+                  <input
+                    type="color"
+                    value={node.data.projectileColor ?? '#ffd166'}
+                    onChange={(event) => updateGraphNodeData(node.id, { projectileColor: event.target.value })}
+                  />
+                </label>
+              </>
+            )}
+
+            <label className="node-field">
+              <span>Lifetime (s)</span>
+              <input
+                type="number"
+                step="0.5"
+                min="0.1"
+                value={node.data.projectileLife ?? 3}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileLife: Number(event.target.value) })}
+              />
+              <small className="node-hint">Auto-despawns after this many seconds if it hits nothing.</small>
+            </label>
+
+            <label className="node-field">
+              <span>Gravity</span>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.projectileGravity ?? 0}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileGravity: Number(event.target.value) })}
+              />
+              <small className="node-hint">0 = flies straight. Raise it (e.g. 1) for an arcing grenade/arrow.</small>
+            </label>
+
+            <label className="library-check" title="Log every spawn and hit to the runtime console">
+              <input
+                type="checkbox"
+                checked={Boolean(node.data.projectileDebug)}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileDebug: event.target.checked })}
+              />
+              <span>Debug (log spawns + hits to console)</span>
+            </label>
+          </>
         )}
 
         {updatesUIDoc && (

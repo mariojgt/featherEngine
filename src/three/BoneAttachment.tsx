@@ -5,6 +5,13 @@ import { getBone } from './boneRegistry';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type { SceneObject } from '../types';
 
+// Reusable temporaries for stripping the bone's (often large, rig-baked) world scale each frame.
+const tmpPos = new THREE.Vector3();
+const tmpQuat = new THREE.Quaternion();
+const tmpScale = new THREE.Vector3();
+const tmpBoneMat = new THREE.Matrix4();
+const UNIT = new THREE.Vector3(1, 1, 1);
+
 /**
  * Renders an object attached to a bone "socket" of an animated character. Each frame it copies the
  * target bone's world matrix and applies this object's transform as a local offset, so the item
@@ -35,9 +42,11 @@ export function BoneAttachment({
   }, [attachment.socketName, attachment.targetObjectId, objects, skeletalMeshes, skeletons]);
 
   const boneName = socket?.boneName ?? attachment.boneName;
-  const [px, py, pz] = object.transform.position;
-  const [rx, ry, rz] = object.transform.rotation;
-  const [sx, sy, sz] = object.transform.scale;
+  // The attach offset: explicit attachment.offset* (carried by spawned weapons) wins; otherwise the
+  // object's own transform acts as the offset (back-compat).
+  const [px, py, pz] = attachment.offsetPosition ?? object.transform.position;
+  const [rx, ry, rz] = attachment.offsetRotation ?? object.transform.rotation;
+  const [sx, sy, sz] = attachment.offsetScale ?? object.transform.scale;
 
   // Effective offset = the skeleton socket's offset (reusable) × this object's own fine-tune transform.
   const offset = useMemo(() => {
@@ -69,7 +78,12 @@ export function BoneAttachment({
     }
     group.visible = true;
     bone.updateWorldMatrix(true, false);
-    group.matrix.copy(bone.matrixWorld).multiply(offset);
+    // Use ONLY the bone's world position + rotation — NOT its scale. Rigs (e.g. the Quaternius pawn) bake
+    // a large scale into bone world matrices; inheriting it would make attachments huge regardless of their
+    // own scale. Dropping it makes the attachment's size purely its own transform (predictable units).
+    bone.matrixWorld.decompose(tmpPos, tmpQuat, tmpScale);
+    tmpBoneMat.compose(tmpPos, tmpQuat, UNIT);
+    group.matrix.copy(tmpBoneMat).multiply(offset);
     group.matrixWorldNeedsUpdate = true;
   });
 

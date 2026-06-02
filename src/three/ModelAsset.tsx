@@ -94,6 +94,19 @@ export function ModelAsset({ url, material }: { url: string; material?: ModelMat
       };
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(cloneMat) : cloneMat(mesh.material);
     });
+
+    // Normalize an EXTREME baked scale (e.g. FBX→glTF exports that bake a 100× node matrix, making a
+    // model hundreds of units big). Wrapping it so its largest dimension ≈ 1 unit keeps the object's
+    // own transform.scale intuitive (scale 1 ≈ 1 unit). Normal-sized models (0.05–20u) are left as-is.
+    root.updateWorldMatrix(true, true);
+    const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 20 || (maxDim > 1e-6 && maxDim < 0.05)) {
+      const wrapper = new THREE.Group();
+      wrapper.scale.setScalar(1 / maxDim);
+      wrapper.add(root);
+      return wrapper;
+    }
     return root;
   }, [scene]);
 

@@ -106,6 +106,8 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.move': Move,
   'action.jump': Wind,
   'action.setCamera': Crosshair,
+  'action.spawnProjectile': Send,
+  'action.setVisible': Sparkles,
   'material.output': SlidersHorizontal,
   'material.color': Palette,
   'material.scalar': Hash,
@@ -216,6 +218,13 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       ];
     case 'action.setRagdoll':
       return [{ id: 'on', label: 'On' }];
+    case 'action.setVisible':
+      return [{ id: 'visible', label: 'Visible' }];
+    case 'action.spawnProjectile':
+      return [
+        { id: 'speed', label: 'Speed' },
+        { id: 'damage', label: 'Damage' },
+      ];
     case 'material.output':
       return [
         { id: 'baseColor', label: 'Base Color' },

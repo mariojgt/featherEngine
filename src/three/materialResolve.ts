@@ -7,6 +7,8 @@ export interface ResolvedMaterial {
   roughness: number;
   emissiveColor: string;
   emissiveIntensity: number;
+  /** Surface opacity 0–1 (1 = opaque). Below 1 renders translucent (water/glass). */
+  opacity: number;
   baseColorAssetId?: string;
   normalAssetId?: string;
   /** Whether these props should override an imported model's baked materials. */
@@ -195,6 +197,7 @@ export function resolveMaterial(
     roughness: renderer?.roughness ?? 0.65,
     emissiveColor: '#000000',
     emissiveIntensity: 0,
+    opacity: renderer?.opacity ?? 1,
     baseColorAssetId: renderer?.textureAssetId,
     normalAssetId: undefined,
     overrideModel: Boolean(renderer?.overrideMaterial),
@@ -209,6 +212,7 @@ export function resolveMaterial(
         roughness: material.roughness,
         emissiveColor: material.emissiveColor,
         emissiveIntensity: material.emissiveIntensity,
+        opacity: renderer.opacity ?? 1,
         baseColorAssetId: material.textureAssetId,
         normalAssetId: material.normalMapAssetId,
         overrideModel: true,

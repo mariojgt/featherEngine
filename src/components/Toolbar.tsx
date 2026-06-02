@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Box,
+  Boxes,
   Camera,
+  Check,
   Circle,
   Copy,
   FilePlus2,
@@ -16,8 +18,10 @@ import {
   Save,
   Square,
   Trash2,
+  X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { PREFAB_EDIT_SCENE_ID } from '../types';
 import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { resetWorkspaceLayout } from './Workspace';
@@ -140,6 +144,28 @@ function SceneSwitcher() {
   const setActiveScene = useEditorStore((state) => state.setActiveScene);
   const createScene = useEditorStore((state) => state.createScene);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
+  const prefabName = useEditorStore((state) =>
+    state.prefabs.find((prefab) => prefab.id === state.editingPrefabId)?.name ?? 'Prefab',
+  );
+  const closePrefabEditor = useEditorStore((state) => state.closePrefabEditor);
+
+  // While editing a prefab the active scene is the transient edit scene — show a dedicated banner
+  // with Save/Discard instead of the scene switcher (and never list the edit scene anywhere).
+  if (editingPrefabId) {
+    return (
+      <div className="scene-switcher prefab-editing" title={`Editing prefab "${prefabName}"`}>
+        <Boxes size={15} aria-hidden />
+        <span className="prefab-editing-label">Editing: {prefabName}</span>
+        <button className="icon-button compact" title="Save prefab & close" onClick={() => closePrefabEditor(true)}>
+          <Check size={14} aria-hidden />
+        </button>
+        <button className="icon-button compact danger" title="Discard changes & close" onClick={() => closePrefabEditor(false)}>
+          <X size={14} aria-hidden />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="scene-switcher" title={isPlaying ? 'Stop play to switch scenes' : 'Active scene'}>
@@ -149,11 +175,13 @@ function SceneSwitcher() {
         disabled={isPlaying}
         onChange={(event) => setActiveScene(event.target.value)}
       >
-        {scenes.map((scene) => (
-          <option key={scene.id} value={scene.id}>
-            {scene.name}
-          </option>
-        ))}
+        {scenes
+          .filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID)
+          .map((scene) => (
+            <option key={scene.id} value={scene.id}>
+              {scene.name}
+            </option>
+          ))}
       </select>
       <button
         className="icon-button compact"
@@ -174,7 +202,9 @@ export function Toolbar() {
   const createObject = useEditorStore((state) => state.createObject);
   const duplicateSelectedObject = useEditorStore((state) => state.duplicateSelectedObject);
   const deleteSelectedObject = useEditorStore((state) => state.deleteSelectedObject);
+  const createPrefabFromObject = useEditorStore((state) => state.createPrefabFromObject);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const editingPrefab = useEditorStore((state) => state.editingPrefabId !== null);
   const setPlaying = useEditorStore((state) => state.setPlaying);
   const selectedObject = useEditorStore((state) => state.selectedObject());
   const isDirty = useEditorStore((state) => state.isDirty);
@@ -224,6 +254,22 @@ export function Toolbar() {
         <button className="icon-button" title="Duplicate selected object" onClick={duplicateSelectedObject}>
           <Copy size={17} aria-hidden />
         </button>
+        <button
+          className="icon-button"
+          title="Save selected object as a reusable Prefab"
+          disabled={!selectedObject}
+          onClick={() => {
+            if (!selectedObject) return;
+            const id = createPrefabFromObject(selectedObject.id);
+            useProjectStore.setState({
+              toast: id
+                ? { kind: 'success', message: `Saved "${selectedObject.name}" as a prefab — see the Project browser.` }
+                : { kind: 'error', message: `Couldn't create a prefab from "${selectedObject.name}".` },
+            });
+          }}
+        >
+          <Boxes size={17} aria-hidden />
+        </button>
         <button className="icon-button danger" title="Delete selected object" onClick={deleteSelectedObject}>
           <Trash2 size={17} aria-hidden />
         </button>
@@ -255,7 +301,8 @@ export function Toolbar() {
       <div className="tool-group" aria-label="Runtime controls">
         <button
           className={isPlaying ? 'run-button active' : 'run-button'}
-          title={isPlaying ? 'Stop preview' : 'Play preview'}
+          title={editingPrefab ? 'Close the prefab editor to play' : isPlaying ? 'Stop preview' : 'Play preview'}
+          disabled={editingPrefab}
           onClick={() => setPlaying(!isPlaying)}
         >
           {isPlaying ? <Pause size={16} aria-hidden /> : <Play size={16} aria-hidden />}
