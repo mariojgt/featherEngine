@@ -229,6 +229,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Burst Particles': 'action.burstParticles',
   'Set Particles Emitting': 'action.setParticlesEmitting',
   'Spawn Particle System': 'action.spawnParticleSystem',
+  'Camera Shake': 'action.cameraShake',
+  'Move To': 'action.moveTo',
 };
 
 export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
@@ -425,6 +427,18 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         label: 'Spawn Prefab',
         description: 'Instantiates a prefab (a captured object tree, with its scripts/animator) at a position at runtime — use for enemy waves, breakables, hazards. Spawned objects clear when Play stops.',
       };
+    case 'action.moveTo':
+      return {
+        label: 'Move To',
+        description:
+          'Walks the owner toward a target position (wire Player Location or a waypoint into Target), steering around walls/pillars/cover with forward raycasts — Unreal "MoveTo" pathing for chasing & patrolling. Stops within the arrival radius. Add a Has Line Of Sight gate to stop shooting through walls.',
+      };
+    case 'action.cameraShake':
+      return {
+        label: `Camera Shake ${Number(data.shakeAmount ?? 0.6)}`,
+        description:
+          'Shakes the player camera (trauma 0..1, fades automatically) — explosions, big hits, impacts. The player firing/taking damage already adds shake; use this node for scripted punch.',
+      };
     case 'action.loadScene':
       return {
         label: 'Load Scene',
@@ -570,6 +584,14 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'logic.forLoop' && typeof normalized.loopCount !== 'number') {
     normalized.loopCount = 4;
+  }
+
+  if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
+    normalized.shakeAmount = 0.6;
+  }
+
+  if (nodeKind === 'action.moveTo' && typeof normalized.numberValue !== 'number') {
+    normalized.numberValue = 1.2; // arrival radius (units)
   }
 
   if (nodeKind === 'save.write' || nodeKind === 'save.load' || nodeKind === 'save.clear') {

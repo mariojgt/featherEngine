@@ -283,6 +283,9 @@ interface EditorState {
   runtimeAnimators: Record<string, RuntimeAnimator>;
   /** Per-object follow-camera overrides written by the Set Camera node. Play-only. */
   runtimeCameraOverrides: Record<string, { distance: number; height: number }>;
+  /** Camera-shake trauma (0..1). Bumped by the Camera Shake node, the player firing/being hurt, and
+   *  explosions; decayed every tick. The follow camera turns it into a positional + rotational jitter. */
+  runtimeCameraShake: number;
   /** Character-controller object ids standing on the ground last frame (drives jump + grounded). */
   runtimeGrounded: string[];
   /** Character ids currently inside a water volume (swim mode) / on a climb volume (climb mode). Maintained
@@ -836,6 +839,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVariableValues: {},
   runtimeAnimators: {},
   runtimeCameraOverrides: {},
+  runtimeCameraShake: 0,
   runtimeGrounded: [],
   runtimeSwimming: [],
   runtimeClimbing: [],
@@ -4199,6 +4203,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeVariableValues: makeRuntimeVariableMap(state.variables),
           runtimeAnimators: {},
           runtimeCameraOverrides: {},
+          runtimeCameraShake: 0,
           runtimeGrounded: [],
           runtimeSwimming: [],
           runtimeClimbing: [],
@@ -4283,6 +4288,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVariableValues: {},
         runtimeAnimators: {},
         runtimeCameraOverrides: {},
+        runtimeCameraShake: 0,
         runtimeGrounded: [],
         runtimeSwimming: [],
         runtimeClimbing: [],
@@ -4459,6 +4465,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // can't push a Rapier body, so it records a one-shot velocity here that the vertical pass applies instead.
       const characterLaunch: Record<string, Vector3Tuple> = {};
       const nextCameraOverrides: Record<string, { distance: number; height: number }> = { ...state.runtimeCameraOverrides };
+      // Camera-shake trauma decays ~2/sec (a full 1.0 hit settles in ~0.5s). The Camera Shake node, the
+      // player firing/being hurt, and explosions add to it below; the follow camera reads it and jitters.
+      let cameraShake = Math.max(0, state.runtimeCameraShake - delta * 2);
       // Roll/dodge + attack/reload/interact timers carried frame-to-frame (started on their key, counted down here).
       const nextRoll: Record<string, number> = {};
       const nextCoyote: Record<string, number> = {};
@@ -4916,15 +4925,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const force = Array.isArray(forceVector)
                 ? (forceVector as Vector3Tuple)
                 : ([0, 0, 0].map((value, index) => (index === axisIndex(node.data.axis) ? amount : value)) as Vector3Tuple);
-              if (object.character?.enabled) {
+              // Target another object (e.g. a jump pad launching $trigger / $player), else the graph's owner.
+              const forceTargetId = resolveTarget(node.data.targetObjectId) || object.id;
+              const forceTarget = activeObjectById.get(forceTargetId);
+              if (forceTarget?.character?.enabled) {
                 // A kinematic character can't take a Rapier impulse — record it as a one-shot LAUNCH velocity
                 // (jump pad / blast knockback). The vertical pass reads the Y; X/Z displace the body this frame.
-                const prevLaunch = characterLaunch[object.id] ?? [0, 0, 0];
-                characterLaunch[object.id] = [prevLaunch[0] + force[0], Math.max(prevLaunch[1], force[1]), prevLaunch[2] + force[2]];
-              } else if (object.physics?.enabled && object.physics.bodyType === 'dynamic') {
+                const prevLaunch = characterLaunch[forceTargetId] ?? [0, 0, 0];
+                characterLaunch[forceTargetId] = [prevLaunch[0] + force[0], Math.max(prevLaunch[1], force[1]), prevLaunch[2] + force[2]];
+              } else if (forceTarget?.physics?.enabled && forceTarget.physics.bodyType === 'dynamic') {
                 // Accumulate as an impulse (force over the frame); Rapier divides by mass on apply.
-                const accrued = physicsImpulses[object.id] ?? [0, 0, 0];
-                physicsImpulses[object.id] = [accrued[0] + force[0] * delta, accrued[1] + force[1] * delta, accrued[2] + force[2] * delta];
+                const accrued = physicsImpulses[forceTargetId] ?? [0, 0, 0];
+                physicsImpulses[forceTargetId] = [accrued[0] + force[0] * delta, accrued[1] + force[1] * delta, accrued[2] + force[2] * delta];
               }
             }
 
@@ -5028,6 +5040,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const target = resolveTarget(node.data.targetObjectId) || object.id;
               const count = Math.max(1, Math.round(toNumber(valueInput(node, 'count', Number(node.data.numberValue ?? 16)))));
               sendParticleCommand(target, { type: 'burst', count });
+            }
+
+            if (node.data.nodeKind === 'action.cameraShake') {
+              cameraShake = Math.min(1, cameraShake + Math.max(0, toNumber(valueInput(node, 'amount', Number(node.data.shakeAmount ?? 0.6)))));
             }
 
             if (node.data.nodeKind === 'action.setParticlesEmitting') {
@@ -5146,6 +5162,52 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
             }
 
+            // Move To: walk toward a target POSITION, steering around obstacles with forward raycasts
+            // (context steering). The dependency-free "navigate around walls" path for chase/patrol AI.
+            if (node.data.nodeKind === 'action.moveTo') {
+              const target = valueInput(node, 'target');
+              if (Array.isArray(target)) {
+                const cc = object.character;
+                const speed = toNumber(valueInput(node, 'speed', Number(node.data.amount ?? cc?.moveSpeed ?? 3.4)));
+                const arrival = Math.max(0.2, Number(node.data.numberValue ?? 1.2));
+                const dx = target[0] - position[0];
+                const dz = target[2] - position[2];
+                const dist = Math.hypot(dx, dz);
+                if (dist > arrival) {
+                  let yaw = Math.atan2(dx, dz); // desired heading toward the target
+                  const phys = getActivePhysics();
+                  const probe = 2.6; // how far ahead we look for obstacles (units)
+                  // Only steer around obstacles when we're farther than the probe — when close to the target
+                  // we head straight in, so the target itself (e.g. the player) isn't treated as a wall.
+                  if (phys && dist > probe + 0.5) {
+                    const hadSelf = aiLineOfSightExclude.has(object.id);
+                    if (!hadSelf) aiLineOfSightExclude.add(object.id);
+                    const oy = position[1] + 0.9;
+                    // Probe the desired heading plus fanned-out angles; pick the path that's clearest AND
+                    // closest to desired (penalty grows with the angle away from straight-at-target).
+                    let best: { yaw: number; score: number } | null = null;
+                    for (const off of [0, 0.44, -0.44, 0.88, -0.88, 1.4, -1.4]) {
+                      const yo = yaw + off;
+                      const hit = phys.castRay([position[0], oy, position[2]], [Math.sin(yo), 0, Math.cos(yo)], probe, aiLineOfSightExclude);
+                      const clear = hit ? hit.distance : probe;
+                      const score = clear - Math.abs(off) * 0.7;
+                      if (!best || score > best.score) best = { yaw: yo, score };
+                    }
+                    if (!hadSelf) aiLineOfSightExclude.delete(object.id);
+                    if (best) yaw = best.yaw;
+                  }
+                  const mvx = Math.sin(yaw);
+                  const mvz = Math.cos(yaw);
+                  position[0] += mvx * speed * delta;
+                  position[2] += mvz * speed * delta;
+                  const turn = cc?.turnSpeed ?? 10;
+                  const yawOffset = cc?.modelYawOffset ?? 0;
+                  rotation[1] = lerpAngle(rotation[1], Math.atan2(mvx, mvz) + yawOffset, turn * delta);
+                  changed = true;
+                }
+              }
+            }
+
             if (node.data.nodeKind === 'action.drive') {
               const v = valueInput(node, 'vector');
               if (Array.isArray(v)) vehicleScriptInputs[object.id] = { throttle: v[0] ?? 0, steer: v[1] ?? 0, handbrake: (v[2] ?? 0) > 0.5 };
@@ -5232,6 +5294,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 life: node.data.projectileLife,
                 gravity: node.data.projectileGravity,
                 knockback: node.data.projectileKnockback,
+                explosive: node.data.projectileExplosive,
+                blastRadius: node.data.projectileBlastRadius,
+                blastDamage: node.data.projectileBlastDamage,
+                blastSound: node.data.projectileBlastSound,
                 debug: node.data.projectileDebug,
                 template,
               };
@@ -5275,6 +5341,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 const len = Math.hypot(ax, ay, az) || 1;
                 velocity = [(ax / len) * speed, (ay / len) * speed, (az / len) * speed];
               }
+              // Spread/bloom: jitter the shot direction within a random cone (degrees) so automatic fire isn't
+              // a laser. Build a basis around the aim direction, offset by random angles, renormalize to speed.
+              const spreadDeg = toNumber(valueInput(node, 'spread', Number(node.data.projectileSpread ?? 0)));
+              if (spreadDeg > 0) {
+                const sp = Math.hypot(velocity[0], velocity[1], velocity[2]) || speed || 1;
+                const vn: Vector3Tuple = [velocity[0] / sp, velocity[1] / sp, velocity[2] / sp];
+                const upRef: Vector3Tuple = Math.abs(vn[1]) > 0.99 ? [1, 0, 0] : [0, 1, 0];
+                // rightB = normalize(vn × upRef); upB = rightB × vn  (orthonormal basis around the aim dir)
+                let rb: Vector3Tuple = [vn[1] * upRef[2] - vn[2] * upRef[1], vn[2] * upRef[0] - vn[0] * upRef[2], vn[0] * upRef[1] - vn[1] * upRef[0]];
+                const rl = Math.hypot(rb[0], rb[1], rb[2]) || 1;
+                rb = [rb[0] / rl, rb[1] / rl, rb[2] / rl];
+                const ub: Vector3Tuple = [rb[1] * vn[2] - rb[2] * vn[1], rb[2] * vn[0] - rb[0] * vn[2], rb[0] * vn[1] - rb[1] * vn[0]];
+                const rad = (spreadDeg * Math.PI) / 180;
+                const ta = Math.tan((Math.random() * 2 - 1) * rad);
+                const tb = Math.tan((Math.random() * 2 - 1) * rad);
+                const nd: Vector3Tuple = [vn[0] + rb[0] * ta + ub[0] * tb, vn[1] + rb[1] * ta + ub[1] * tb, vn[2] + rb[2] * ta + ub[2] * tb];
+                const nl = Math.hypot(nd[0], nd[1], nd[2]) || 1;
+                velocity = [(nd[0] / nl) * sp, (nd[1] / nl) * sp, (nd[2] / nl) * sp];
+              }
+              // Recoil punch: when the PLAYER fires, add a little camera-shake trauma for weighty feedback.
+              if (object.id === playerId) cameraShake = Math.min(1, cameraShake + 0.12);
               const projectileObj = makeProjectileObject(muzzle, velocity, object.id, damage, setup);
               spawned.push(projectileObj);
               // Muzzle flash at the barrel for punchy weapon feedback.
@@ -5968,7 +6055,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       for (const obj of resolvedObjects) {
         const proj = obj.projectile;
         if (!proj) continue;
+        // Detonate an explosive projectile (grenade/rocket) on impact OR when its fuse (life) runs out.
+        const detonate = () => {
+          explodeQueue.push({ pos: [...obj.transform.position] as Vector3Tuple, dmg: proj.blastDamage ?? 60, radius: proj.blastRadius ?? 4.5 });
+          if (proj.blastSound) sounds.push(proj.blastSound);
+        };
         if (proj.life <= 0) {
+          if (proj.explosive) detonate();
           destroyedIds.add(obj.id);
           continue;
         }
@@ -6023,8 +6116,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const k = Math.min(4, Math.max(1.5, sp * 0.045)) * knockMul;
           physics.applyImpulse(other, [(proj.velocity[0] / sp) * k, (proj.velocity[1] / sp) * k + 0.5 * knockMul, (proj.velocity[2] / sp) * k]);
         }
-        // Spawn a particle burst at the impact point and consume the bullet (a wall stops it too).
-        spawned.push(makeImpactObject(obj.transform.position));
+        // Consume the bullet (a wall stops it too): explosive rounds DETONATE (blast + area damage); the rest
+        // spawn a small particle burst at the impact point.
+        if (proj.explosive) detonate();
+        else spawned.push(makeImpactObject(obj.transform.position));
         destroyedIds.add(obj.id);
       }
 
@@ -6122,6 +6217,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       while (explodeQueue.length && blastGuard++ < 64) {
         const blast = explodeQueue.shift()!;
         spawned.push(makeExplosion(blast.pos));
+        // Explosions kick the camera, scaled down with distance from the player.
+        if (aiPlayer) {
+          const pp = aiPlayer.transform.position;
+          const bd = Math.hypot(pp[0] - blast.pos[0], pp[1] - blast.pos[1], pp[2] - blast.pos[2]);
+          cameraShake = Math.min(1, cameraShake + 0.6 * Math.max(0, 1 - bd / (blast.radius * 4)));
+        }
         for (const o of resolvedObjects) {
           if (o.projectile || o.effect || destroyedIds.has(o.id) || isRagdoll(o.id)) continue;
           const hasHp = nextObjectVariables[o.id]?.health !== undefined || o.variables?.health !== undefined;
@@ -6466,6 +6567,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (/death|dead|\bdie\b/i.test(nextStateName)) setRagdoll(object.id, true);
       }
 
+      // Taking damage this frame jolts the camera (the player's hurt counter rose since last frame).
+      if (hurt > state.runtimeHurt) cameraShake = Math.min(1, cameraShake + 0.45);
+
       // --- Load Scene transition --------------------------------------------------------------------
       // A Load Scene node fired this frame: swap to the target scene now that this tick's work is done.
       // Project variables (score, floor, unlocks) carry over; the scene we leave reverts to pristine; the
@@ -6508,6 +6612,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ),
             runtimeAnimators: {},
             runtimeCameraOverrides: {},
+            runtimeCameraShake: 0,
             runtimeGrounded: [],
             runtimeSwimming: [],
             runtimeClimbing: [],
@@ -6550,6 +6655,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVariableValues: nextVariableValues,
         runtimeAnimators: nextAnimators,
         runtimeCameraOverrides: nextCameraOverrides,
+        runtimeCameraShake: cameraShake,
         runtimeGrounded: groundedIds,
         runtimeSwimming: swimmingIds,
         runtimeClimbing: climbingIds,
@@ -6772,6 +6878,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVariableValues: {},
         runtimeAnimators: {},
         runtimeCameraOverrides: {},
+        runtimeCameraShake: 0,
         runtimeGrounded: [],
         runtimeSwimming: [],
         runtimeClimbing: [],

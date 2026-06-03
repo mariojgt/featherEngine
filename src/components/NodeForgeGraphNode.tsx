@@ -34,6 +34,7 @@ import {
   ToggleLeft,
   Trash2,
   Type as TextIcon,
+  Vibrate,
   Volume2,
   Waypoints,
   Wind,
@@ -97,6 +98,8 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.applyForce': Wind,
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
+  'action.cameraShake': Vibrate,
+  'action.moveTo': Waypoints,
   'action.loadScene': Layers,
   'action.destroyObject': Trash2,
   'action.playSound': Volume2,
@@ -264,6 +267,14 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       return [
         { id: 'speed', label: 'Speed' },
         { id: 'damage', label: 'Damage' },
+        { id: 'spread', label: 'Spread' },
+      ];
+    case 'action.cameraShake':
+      return [{ id: 'amount', label: 'Amount' }];
+    case 'action.moveTo':
+      return [
+        { id: 'target', label: 'Target' },
+        { id: 'speed', label: 'Speed' },
       ];
     case 'material.output':
       return [

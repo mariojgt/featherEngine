@@ -40,13 +40,20 @@ interface WeaponDef {
   key: string; // keyboard slot
   kind: WeaponKind;
   mag: number; // magazine size (0 = melee, no ammo)
+  // Per-weapon feel (AAA): fire cadence, punch, projectile speed, and knockback — each weapon plays distinctly.
+  fireRate: number; // seconds between shots / swings / throws
+  damage: number; // per-hit damage (melee/grenade use blast or swing values)
+  speed: number; // projectile muzzle speed
+  knockback: number; // shove on a dynamic prop
+  fireFile: string; // bundled shoot/swing/throw sound
+  reloadFile?: string; // bundled reload sound (guns only)
 }
 const WEAPONS: WeaponDef[] = [
-  { file: 'Arms_M416_Assault_Rifle.glb', name: 'M416 Rifle', key: 'Digit1', kind: 'ranged', mag: 30 },
-  { file: 'Arms_Glock_G48.glb', name: 'Glock G48', key: 'Digit2', kind: 'ranged', mag: 17 },
-  { file: 'Arms_AWM_Sniper.glb', name: 'AWM Sniper', key: 'Digit3', kind: 'sniper', mag: 5 },
-  { file: 'Arms_Combat_Knife.glb', name: 'Combat Knife', key: 'Digit4', kind: 'melee', mag: 0 },
-  { file: 'Arms_Grenade.glb', name: 'Grenade', key: 'Digit5', kind: 'grenade', mag: 1 },
+  { file: 'Arms_M416_Assault_Rifle.glb', name: 'M416 Rifle', key: 'Digit1', kind: 'ranged', mag: 30, fireRate: 0.1, damage: 28, speed: 95, knockback: 1.4, fireFile: 'fps_rifle_fire.mp3', reloadFile: 'fps_rifle_reload.mp3' },
+  { file: 'Arms_Glock_G48.glb', name: 'Glock G48', key: 'Digit2', kind: 'ranged', mag: 17, fireRate: 0.22, damage: 22, speed: 80, knockback: 1.2, fireFile: 'fps_pistol_fire.mp3', reloadFile: 'fps_pistol_reload.mp3' },
+  { file: 'Arms_AWM_Sniper.glb', name: 'AWM Sniper', key: 'Digit3', kind: 'sniper', mag: 5, fireRate: 1.1, damage: 120, speed: 170, knockback: 3.4, fireFile: 'fps_sniper_fire.mp3', reloadFile: 'fps_sniper_reload.mp3' },
+  { file: 'Arms_Combat_Knife.glb', name: 'Combat Knife', key: 'Digit4', kind: 'melee', mag: 0, fireRate: 0.4, damage: 40, speed: 0, knockback: 0, fireFile: 'fps_knife_swing.mp3' },
+  { file: 'Arms_Grenade.glb', name: 'Grenade', key: 'Digit5', kind: 'grenade', mag: 3, fireRate: 0.9, damage: 0, speed: 22, knockback: 0, fireFile: 'fps_grenade_throw.mp3', reloadFile: 'fps_pistol_reload.mp3' },
 ];
 
 const defaultRenderer = (mesh: MeshRendererComponent['mesh'], color: string): MeshRendererComponent => ({
@@ -106,45 +113,42 @@ const boundElement = (kind: UIElement['kind'], name: string, style: UIElement['s
   ...uiElement(kind, name, style, text), bindings,
 });
 
-/** Clean, bright minimal HUD: a bottom-right weapon + ammo readout (dark tabular count beside a dim
- *  "/ MAG") on a light glass chip, and a key-cap controls strip that auto-fades a few seconds after
- *  drop-in so the screen clears for play. Binds Weapon/Ammo/MagSize. No vignette, no health bar — the
- *  sandbox has no combat, so it stays calm and uncluttered.
- *  (The live crosshair is drawn by the engine's DynamicCrosshair overlay, not a static element.) */
+/** Cyberpunk neon HUD: a bottom-right weapon + ammo readout (glowing cyan name, big tabular count beside a
+ *  dim "/ MAG") on a dark glass chip with a cyan edge-glow, and a key-cap controls strip that auto-fades a
+ *  few seconds after drop-in. Binds Weapon/Ammo/MagSize. (The live crosshair is the engine's DynamicCrosshair.) */
 const createFpsHud = (): UIDocument => {
   const root = uiElement('panel', 'Root', { width: '100%', height: '100%', position: 'relative', padding: '0' });
 
-  // Bottom-right: small uppercase weapon name, then a big tabular ammo count beside a dim "/ MAG", on a
-  // light translucent chip with a soft blue edge.
+  // Bottom-right: glowing cyan weapon name, then a big tabular ammo count beside a dim "/ MAG", on a dark
+  // neon-glass chip.
   const weaponBox = uiElement('panel', 'Weapon Box', {
     position: 'absolute', display: 'flex', flexDirection: 'column',
     custom: {
       right: '32px', bottom: '28px', alignItems: 'flex-end', gap: '2px', pointerEvents: 'none',
-      background: 'rgba(255,255,255,0.78)', padding: '10px 18px', borderRadius: '14px',
-      border: '1px solid rgba(43,127,255,0.3)', boxShadow: '0 8px 24px rgba(40,70,120,0.18)',
+      background: 'rgba(10,8,22,0.62)', padding: '10px 18px', borderRadius: '12px',
+      border: '1px solid rgba(21,232,255,0.45)', boxShadow: '0 0 22px rgba(21,232,255,0.28), inset 0 0 12px rgba(21,232,255,0.08)',
     },
   });
   const weaponName = boundElement('text', 'Weapon', {
-    color: '#2b7fff', fontSize: '11px', fontWeight: '800', textAlign: 'right',
-    custom: { letterSpacing: '3px', textTransform: 'uppercase' },
+    color: '#15e8ff', fontSize: '11px', fontWeight: '800', textAlign: 'right',
+    custom: { letterSpacing: '3px', textTransform: 'uppercase', textShadow: '0 0 12px rgba(21,232,255,0.7)' },
   }, [{ target: 'text', expression: `Weapon` }], 'M416 RIFLE');
   const ammoRow = uiElement('panel', 'Ammo Row', { display: 'flex', custom: { alignItems: 'flex-end', gap: '6px' } });
   const ammoCurrent = boundElement('text', 'Ammo', {
-    color: '#16203a', fontSize: '38px', fontWeight: '800', textAlign: 'right',
-    custom: { lineHeight: '1', fontVariantNumeric: 'tabular-nums' },
+    color: '#FFFFFF', fontSize: '40px', fontWeight: '800', textAlign: 'right',
+    custom: { lineHeight: '1', fontVariantNumeric: 'tabular-nums', textShadow: '0 0 16px rgba(255,255,255,0.35)' },
   }, [
     { target: 'text', expression: `MagSize > 0 ? '' + Ammo : '—'` },
-    { target: 'color', expression: `Ammo == 0 && MagSize > 0 ? '#ff5a5f' : '#16203a'` },
+    { target: 'color', expression: `Ammo == 0 && MagSize > 0 ? '#ff2bd6' : '#FFFFFF'` },
   ], '30');
   const ammoMag = boundElement('text', 'Ammo Mag', {
-    color: 'rgba(22,32,58,0.42)', fontSize: '16px', fontWeight: '700', textAlign: 'left',
+    color: 'rgba(220,235,255,0.4)', fontSize: '16px', fontWeight: '700', textAlign: 'left',
     custom: { lineHeight: '1', paddingBottom: '4px', fontVariantNumeric: 'tabular-nums' },
   }, [{ target: 'text', expression: `MagSize > 0 ? '/ ' + MagSize : ''` }], '/ 30');
   ammoRow.children = [ammoCurrent, ammoMag];
   weaponBox.children = [weaponName, ammoRow];
 
-  // Quick-start controls strip — light key-cap chips, centered low. Pure CSS: holds visible then fades a
-  // few seconds after drop-in so the screen clears for play (pointerEvents none so it never eats clicks).
+  // Quick-start controls strip — dark neon key-cap chips, centered low. Holds then fades (pointerEvents none).
   const controls = uiElement('panel', 'Controls', {
     position: 'absolute', left: '50%', display: 'flex',
     custom: { bottom: '32px', transform: 'translateX(-50%)', gap: '14px', alignItems: 'center', pointerEvents: 'none', animation: 'nf-controls-fade 10s ease-in 0.5s forwards' },
@@ -152,10 +156,10 @@ const createFpsHud = (): UIDocument => {
   const chip = (key: string, label: string): UIElement => {
     const wrap = uiElement('panel', `Key ${key}`, { display: 'flex', custom: { alignItems: 'center', gap: '7px' } });
     const cap = uiElement('text', 'Cap', {
-      color: '#16203a', fontSize: '11px', fontWeight: '800',
-      custom: { letterSpacing: '1px', background: 'rgba(255,255,255,0.85)', border: '1px solid rgba(43,127,255,0.32)', borderRadius: '6px', padding: '3px 7px', boxShadow: '0 2px 8px rgba(40,70,120,0.12)' },
+      color: '#dffaff', fontSize: '11px', fontWeight: '800',
+      custom: { letterSpacing: '1px', background: 'rgba(10,8,22,0.7)', border: '1px solid rgba(21,232,255,0.4)', borderRadius: '6px', padding: '3px 7px', textShadow: '0 0 8px rgba(21,232,255,0.55)' },
     }, key);
-    const lab = uiElement('text', 'Label', { color: 'rgba(22,32,58,0.66)', fontSize: '11px', fontWeight: '600', custom: { letterSpacing: '0.5px' } }, label);
+    const lab = uiElement('text', 'Label', { color: 'rgba(220,235,255,0.66)', fontSize: '11px', fontWeight: '600', custom: { letterSpacing: '0.5px' } }, label);
     wrap.children = [cap, lab];
     return wrap;
   };
@@ -383,25 +387,28 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   const store = useEditorStore.getState();
   const armsFolder = store.createFolder('FPS Arms');
 
-  // --- Bright, clean daylight: a soft blue sky, strong ambient so every surface reads clearly, and a
-  //     high warm sun for gentle shadows. No fog — keep the room open and legible. (All tunable later in
-  //     Scene Settings → Environment and Render.) ---
+  // --- Cyberpunk night: a deep indigo/violet sky, low cool ambient, a dim magenta "moon" sun, and thick
+  //     neon-tinted fog so the cyan/magenta accents, muzzle flashes and grenade blasts BLOOM through the haze
+  //     for a cinematic AAA look. (All tunable later in Scene Settings → Environment and Render.) ---
   const sceneId = store.activeSceneId;
   store.updateSceneEnvironment(sceneId, {
     skyMode: 'procedural',
-    skyTopColor: '#8fb8e6',
-    skyHorizonColor: '#dbe7f2',
-    skyGroundColor: '#cfd6dd',
-    environmentIntensity: 1.15,
-    sunColor: '#fff3df',
-    sunIntensity: 1.7,
-    sunAzimuth: 135,
-    sunElevation: 58,
-    fogEnabled: false,
+    skyTopColor: '#070512',
+    skyHorizonColor: '#2a0f47',
+    skyGroundColor: '#05030c',
+    environmentIntensity: 0.5,
+    sunColor: '#ff4fd8',
+    sunIntensity: 0.5,
+    sunAzimuth: 210,
+    sunElevation: 16,
+    fogEnabled: true,
+    fogColor: '#0a0618',
+    fogNear: 10,
+    fogFar: 60,
   });
-  // Soft, restrained post: just a touch of bloom on the brightest accents, and NO vignette — the clean
-  // daylight look reads best without darkened corners.
-  store.updateRenderSettings({ bloomEnabled: true, bloomIntensity: 0.28, bloomThreshold: 0.9, bloomRadius: 0.5, vignetteEnabled: false });
+  // Punchy neon post: strong bloom (low threshold so the emissive trim + tracers + blasts glow) and a
+  // cinematic vignette to frame the dark arena.
+  store.updateRenderSettings({ bloomEnabled: true, bloomIntensity: 0.9, bloomThreshold: 0.62, bloomRadius: 0.7, vignetteEnabled: true });
 
   // --- Import every weapon arm rig + build its animator controller (locomotion + fire/aim/reload auto-
   //     sourced from the owner pawn's input — Unreal-style). ---
@@ -416,10 +423,21 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   }
   if (!built.length) throw new Error('Bundled FPS arm rigs not found under public/templates/fps/Arms.');
 
-  // --- Sounds: shot + reload (wired into the fire/reload graph), footsteps, and a low ambient room tone. ---
+  // --- Sounds: a DISTINCT shot + reload per weapon (generated FX), the grenade throw + boom, footsteps, and a
+  //     low ambient bed. Each unique file is imported once into a map the fire/reload graph wires per gun. ---
   const audioFolder = store.createFolder('FPS Audio');
-  const fireSound = await importAudio('fps_fire.mp3', audioFolder);
-  const reloadSound = await importAudio('fps_reload.mp3', audioFolder);
+  const soundByFile = new Map<string, string>(); // file → imported asset id
+  const loadSound = async (file: string): Promise<string | undefined> => {
+    if (soundByFile.has(file)) return soundByFile.get(file);
+    const asset = await importAudio(file, audioFolder);
+    if (asset) soundByFile.set(file, asset.id);
+    return asset?.id;
+  };
+  for (const w of WEAPONS) {
+    await loadSound(w.fireFile);
+    if (w.reloadFile) await loadSound(w.reloadFile);
+  }
+  const grenadeBoomId = await loadSound('fps_grenade_explode.mp3');
   const footstepSound = await importAudio('fps_footstep.mp3', audioFolder);
   const ambientSound = await importPublicAudio('ambient.mp3', audioFolder);
   store.setSceneAudio(sceneId, { ambientSoundId: ambientSound?.id });
@@ -433,6 +451,11 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   const slotVar: ProjectVariable = { id: slotVarId, name: 'WeaponSlot', type: 'number', defaultValue: 1, persistent: false, createdAt: Date.now() };
   const ammoVar: ProjectVariable = { id: ammoVarId, name: 'Ammo', type: 'number', defaultValue: built[0].mag, persistent: false, createdAt: Date.now() };
   const magVar: ProjectVariable = { id: magVarId, name: 'MagSize', type: 'number', defaultValue: built[0].mag, persistent: false, createdAt: Date.now() };
+  // Shooting-range score: TargetsAlive is a per-frame tally every LIVING breakable target re-adds itself to;
+  // the Range Director snapshots it into TargetsLeft (stable for the HUD) then zeroes it. A shot target is
+  // destroyed → stops ticking → drops out → TargetsLeft falls → "ALL CLEAR" at 0. (Same trick as enemy counts.)
+  const targetsLeftVarId = makeId('var');
+  const targetsAliveVarId = makeId('var');
 
   // --- Arms view-models (one per weapon), pinned to the player camera; only the first starts visible. ---
   const arms: SceneObject[] = built.map((w) => ({
@@ -499,50 +522,59 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     row();
   });
 
-  // Hold to shoot (full-auto) — fire while LMB is HELD, gated by a Cooldown so it fires at a steady rate.
-  // Only guns (slots 1–3) fire, and only when there's ammo; each shot spends a round and fires a built-in
-  // tracer that physically KNOCKS the light target cubes (no damage — they topple, they don't vanish).
-  {
-    const fireKey = add('Key Down: Mouse0', 'Events', 40, { nodeKind: 'event.keyDown', keyCode: 'Mouse0', hasInput: false, description: 'Hold to fire (auto).' });
-    const fireRate = add('Cooldown', 'Logic', 200, { nodeKind: 'logic.cooldown', numberValue: 0.12, description: 'Auto fire rate (seconds per shot).' });
-    const getSlot = add('Get Variable', 'Variables', 40 + 760, { nodeKind: 'variable.get', variableId: slotVarId, valueType: 'number', hasInput: false });
-    const slotCmp = add('Compare', 'Logic', 300, { nodeKind: 'logic.compare', compareOp: '<=', numberValue: 3, description: 'Guns only.' });
-    const slotBranch = add('Branch', 'Logic', 520, { nodeKind: 'logic.branch' });
-    const getAmmo = add('Get Variable', 'Variables', 40 + 1020, { nodeKind: 'variable.get', variableId: ammoVarId, valueType: 'number', hasInput: false });
-    const ammoCmp = add('Compare', 'Logic', 740, { nodeKind: 'logic.compare', compareOp: '>', numberValue: 0, description: 'Have ammo?' });
-    const ammoBranch = add('Branch', 'Logic', 960, { nodeKind: 'logic.branch' });
-    const getAmmo2 = add('Get Variable', 'Variables', 740 + 600, { nodeKind: 'variable.get', variableId: ammoVarId, valueType: 'number', hasInput: false });
-    const dec = add('Add', 'Math', 1180, { nodeKind: 'math.add', amount: -1, description: 'Spend a round.' });
-    const setAmmo = add('Set Variable', 'Variables', 1400, { nodeKind: 'variable.set', variableId: ammoVarId, valueType: 'number' });
-    const shoot = add('Spawn Projectile', 'Runtime', 1620, {
-      nodeKind: 'action.spawnProjectile', projectileSpeed: 80, projectileDamage: 0, projectileLife: 2,
-      projectileColor: '#bfe3ff', projectileSize: 0.14, projectileKnockback: 1.6, description: 'Fire a tracer that knocks the cubes flying.',
-    });
+  // Hold LMB to FIRE — one chain per weapon, each gated by its slot so only the equipped weapon acts, and each
+  // with its OWN Cooldown (distinct fire rate), damage, projectile, knockback, and shot sound. Guns fire a neon
+  // tracer (knocks no-health cubes, breaks health targets); the sniper hits hard + slow; the grenade lobs an
+  // arcing orb that DETONATES (blast + boom); the knife just swings (its melee anim auto-plays).
+  built.forEach((w, i) => {
+    const slot = i + 1;
+    const fireSfxId = soundByFile.get(w.fireFile);
+    const fireKey = add(`Key Down: Mouse0 — ${w.name}`, 'Events', 40, { nodeKind: 'event.keyDown', keyCode: 'Mouse0', hasInput: false, description: `Fire/use ${w.name}.` });
+    const rate = add('Cooldown', 'Logic', 240, { nodeKind: 'logic.cooldown', numberValue: w.fireRate, description: `${w.name} cadence (${w.fireRate}s).` });
+    const getSlot = add('Get Variable', 'Variables', 240, { nodeKind: 'variable.get', variableId: slotVarId, valueType: 'number', hasInput: false });
+    const slotCmp = add('Compare', 'Logic', 460, { nodeKind: 'logic.compare', compareOp: '==', numberValue: slot, description: `${w.name} equipped?` });
+    const slotBranch = add('Branch', 'Logic', 680, { nodeKind: 'logic.branch' });
+    edges.push(execEdge(fireKey, rate), valueEdge(getSlot, slotCmp, 'a'), valueEdge(slotCmp, slotBranch, 'condition'), execEdge(rate, slotBranch));
+    if (w.kind === 'melee') {
+      // Knife: no ammo, no projectile — the swing animation auto-plays (attacking param); just the swing SFX.
+      if (fireSfxId) edges.push(execEdge(slotBranch, add('Play Sound', 'Audio', 900, { nodeKind: 'action.playSound', assetId: fireSfxId, description: `${w.name} swing.` })));
+      row();
+      return;
+    }
+    // Ammo gate → spend a round → fire.
+    const getAmmo = add('Get Variable', 'Variables', 680, { nodeKind: 'variable.get', variableId: ammoVarId, valueType: 'number', hasInput: false });
+    const ammoCmp = add('Compare', 'Logic', 900, { nodeKind: 'logic.compare', compareOp: '>', numberValue: 0, description: 'Have ammo?' });
+    const ammoBranch = add('Branch', 'Logic', 1120, { nodeKind: 'logic.branch' });
+    const getAmmo2 = add('Get Variable', 'Variables', 1120, { nodeKind: 'variable.get', variableId: ammoVarId, valueType: 'number', hasInput: false });
+    const dec = add('Add', 'Math', 1340, { nodeKind: 'math.add', amount: -1, description: 'Spend a round.' });
+    const setAmmo = add('Set Variable', 'Variables', 1560, { nodeKind: 'variable.set', variableId: ammoVarId, valueType: 'number' });
     edges.push(
-      valueEdge(getSlot, slotCmp, 'a'), valueEdge(slotCmp, slotBranch, 'condition'), execEdge(fireKey, fireRate), execEdge(fireRate, slotBranch),
       valueEdge(getAmmo, ammoCmp, 'a'), valueEdge(ammoCmp, ammoBranch, 'condition'), execEdge(slotBranch, ammoBranch),
-      valueEdge(getAmmo2, dec, 'a'), valueEdge(dec, setAmmo, 'value'), execEdge(ammoBranch, setAmmo), execEdge(setAmmo, shoot),
+      valueEdge(getAmmo2, dec, 'a'), valueEdge(dec, setAmmo, 'value'), execEdge(ammoBranch, setAmmo),
     );
-    if (fireSound) {
-      const fireSfx = add('Play Sound', 'Audio', 1840, { nodeKind: 'action.playSound', assetId: fireSound.id, description: 'Gunshot.' });
-      edges.push(execEdge(shoot, fireSfx));
-    }
+    const shoot = add('Spawn Projectile', 'Runtime', 1780, w.kind === 'grenade'
+      ? { nodeKind: 'action.spawnProjectile', projectileSpeed: w.speed, projectileDamage: 0, projectileLife: 1.6, projectileGravity: 1.2, projectileSize: 0.24, projectileColor: '#aaff00', projectileKnockback: 2.2, projectileExplosive: true, projectileBlastRadius: 5, projectileBlastDamage: 90, projectileBlastSound: grenadeBoomId, description: 'Lob a grenade orb that detonates on impact (or fuse-out).' }
+      : { nodeKind: 'action.spawnProjectile', projectileSpeed: w.speed, projectileDamage: w.damage, projectileLife: 2, projectileColor: w.kind === 'sniper' ? '#ff2bd6' : '#39e0ff', projectileSize: w.kind === 'sniper' ? 0.2 : 0.14, projectileKnockback: w.knockback, description: `${w.name} shot.` });
+    edges.push(execEdge(setAmmo, shoot));
+    if (fireSfxId) edges.push(execEdge(shoot, add('Play Sound', 'Audio', 2000, { nodeKind: 'action.playSound', assetId: fireSfxId, description: `${w.name} sound.` })));
     row();
-  }
+  });
 
-  // Reload (R) — refill the magazine to MagSize. The Reload arm animation plays automatically (the reload
-  // key drives the 'reloading' animator param), so this just tops the ammo back up.
-  {
-    const reloadKey = add('Key Up: KeyR', 'Events', 40, { nodeKind: 'event.keyUp', keyCode: 'KeyR', hasInput: false, description: 'Reload.' });
-    const getMag = add('Get Variable', 'Variables', 40 + 600, { nodeKind: 'variable.get', variableId: magVarId, valueType: 'number', hasInput: false });
-    const setAmmoFull = add('Set Variable', 'Variables', 320, { nodeKind: 'variable.set', variableId: ammoVarId, valueType: 'number', description: 'Ammo = MagSize.' });
-    edges.push(valueEdge(getMag, setAmmoFull, 'value'), execEdge(reloadKey, setAmmoFull));
-    if (reloadSound) {
-      const reloadSfx = add('Play Sound', 'Audio', 560, { nodeKind: 'action.playSound', assetId: reloadSound.id, description: 'Reload sound.' });
-      edges.push(execEdge(setAmmoFull, reloadSfx));
-    }
+  // Reload (R) — one chain per gun, gated by slot, refilling its own magazine with its own reload sound. The
+  // reload arm animation plays automatically (the reload key drives the 'reloading' animator param).
+  built.forEach((w, i) => {
+    if (!w.reloadFile) return; // knife has nothing to reload
+    const slot = i + 1;
+    const reloadSfxId = soundByFile.get(w.reloadFile);
+    const rKey = add(`Key Up: KeyR — ${w.name}`, 'Events', 40, { nodeKind: 'event.keyUp', keyCode: 'KeyR', hasInput: false, description: `Reload ${w.name}.` });
+    const getSlot = add('Get Variable', 'Variables', 240, { nodeKind: 'variable.get', variableId: slotVarId, valueType: 'number', hasInput: false });
+    const cmp = add('Compare', 'Logic', 460, { nodeKind: 'logic.compare', compareOp: '==', numberValue: slot, description: `${w.name} equipped?` });
+    const br = add('Branch', 'Logic', 680, { nodeKind: 'logic.branch' });
+    const setFull = add('Set Variable', 'Variables', 900, { nodeKind: 'variable.set', variableId: ammoVarId, valueType: 'number', numberValue: w.mag, description: `Refill to ${w.mag}.` });
+    edges.push(execEdge(rKey, br), valueEdge(getSlot, cmp, 'a'), valueEdge(cmp, br, 'condition'), execEdge(br, setFull));
+    if (reloadSfxId) edges.push(execEdge(setFull, add('Play Sound', 'Audio', 1120, { nodeKind: 'action.playSound', assetId: reloadSfxId, description: `${w.name} reload.` })));
     row();
-  }
+  });
 
   const blueprint: ScriptBlueprint = { id: blueprintId, name: 'FPS Controller', description: 'First-person movement, weapon switching, and shooting.', graphId, color: '#3DDC97', createdAt: Date.now() };
   store.moveToFolder('blueprint', blueprintId, store.createFolder('FPS Player'));
@@ -614,35 +646,45 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     return obj;
   };
 
+  // Dark reflective "wet asphalt" floor — low roughness so the neon trim + lights streak across it.
   const ground: SceneObject = {
     id: makeId('obj'), name: 'Floor', kind: 'cube',
     transform: { position: [0, -0.1, 13], rotation: [0, 0, 0], scale: [30, 0.2, 36] },
-    renderer: { ...defaultRenderer('cube', '#cfd4db'), metalness: 0.1, roughness: 0.9 },
+    renderer: { ...defaultRenderer('cube', '#0c0a16'), metalness: 0.55, roughness: 0.32 },
     physics: fixedBox(),
   };
 
-  // Enclosing walls (off-white) + a glowing blue baseboard accent — the clean signature trim.
-  const WALL = '#e9edf2';
-  block('Wall Back', [0, 2, 31], [30, 4, 1], WALL, { roughness: 0.95 });
-  block('Wall Front', [0, 2, -5], [30, 4, 1], WALL, { roughness: 0.95 });
-  block('Wall Left', [-15, 2, 13], [1, 4, 36], WALL, { roughness: 0.95 });
-  block('Wall Right', [15, 2, 13], [1, 4, 36], WALL, { roughness: 0.95 });
-  const ACC = '#2b7fff';
-  block('Accent Left', [-14.4, 0.2, 13], [0.1, 0.14, 34], ACC, { emissive: ACC, intensity: 1.6, solid: false });
-  block('Accent Right', [14.4, 0.2, 13], [0.1, 0.14, 34], ACC, { emissive: ACC, intensity: 1.6, solid: false });
-  block('Accent Back', [0, 0.2, 30.4], [29, 0.14, 0.1], ACC, { emissive: ACC, intensity: 1.6, solid: false });
+  // Dark walls with GLOWING NEON baseboard + cap trim (cyan one side, magenta the other) — the cyberpunk
+  // signature. The strips are emissive + collision-free so they read as light, not geometry.
+  const WALL = '#15121f';
+  block('Wall Back', [0, 2, 31], [30, 4, 1], WALL, { roughness: 0.6, metalness: 0.3 });
+  block('Wall Front', [0, 2, -5], [30, 4, 1], WALL, { roughness: 0.6, metalness: 0.3 });
+  block('Wall Left', [-15, 2, 13], [1, 4, 36], WALL, { roughness: 0.6, metalness: 0.3 });
+  block('Wall Right', [15, 2, 13], [1, 4, 36], WALL, { roughness: 0.6, metalness: 0.3 });
+  const CYAN = '#15e8ff';
+  const MAGENTA = '#ff2bd6';
+  // Baseboard + waist-height neon runs along each side wall, plus a cap line on the back wall.
+  block('Neon Left Low', [-14.4, 0.25, 13], [0.08, 0.16, 34], CYAN, { emissive: CYAN, intensity: 2.4, solid: false });
+  block('Neon Left High', [-14.4, 2.6, 13], [0.08, 0.1, 34], CYAN, { emissive: CYAN, intensity: 2.0, solid: false });
+  block('Neon Right Low', [14.4, 0.25, 13], [0.08, 0.16, 34], MAGENTA, { emissive: MAGENTA, intensity: 2.4, solid: false });
+  block('Neon Right High', [14.4, 2.6, 13], [0.08, 0.1, 34], MAGENTA, { emissive: MAGENTA, intensity: 2.0, solid: false });
+  block('Neon Back', [0, 3.6, 30.4], [29, 0.12, 0.08], CYAN, { emissive: CYAN, intensity: 2.0, solid: false });
+  block('Neon Front', [0, 3.6, -4.4], [29, 0.12, 0.08], MAGENTA, { emissive: MAGENTA, intensity: 1.8, solid: false });
 
-  // Soft, neutral fill lights so the room is evenly, brightly lit (no dark corners).
+  // Colored neon point lights (cyan/magenta) that pool on the wet floor — moody, not flat. Kept moderate so
+  // the dark holds and the emissives + blasts still pop through bloom.
   const lights: Array<{ p: Vector3Tuple; c: string; i: number }> = [
-    { p: [-6, 5, 8], c: '#fff4e2', i: 5 },
-    { p: [6, 5, 18], c: '#eef4ff', i: 5 },
-    { p: [0, 5.5, 25], c: '#ffffff', i: 4 },
+    { p: [-10, 4, 6], c: CYAN, i: 7 },
+    { p: [10, 4, 10], c: MAGENTA, i: 7 },
+    { p: [-9, 4, 20], c: MAGENTA, i: 6 },
+    { p: [9, 4.5, 24], c: CYAN, i: 6 },
+    { p: [0, 5, 29], c: '#ff5a5f', i: 5 },
   ];
   lights.forEach((l, i) =>
     props.push({
-      id: makeId('obj'), name: `Fill Light ${i + 1}`, kind: 'light',
+      id: makeId('obj'), name: `Neon Light ${i + 1}`, kind: 'light',
       transform: { position: l.p, rotation: [0, 0, 0], scale: [1, 1, 1] },
-      light: { type: 'point', color: l.c, intensity: l.i, distance: 28, angle: Math.PI / 6, castShadow: false },
+      light: { type: 'point', color: l.c, intensity: l.i, distance: 26, angle: Math.PI / 6, castShadow: false },
     }),
   );
 
@@ -707,19 +749,19 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
       position: 'absolute', left: '50%', display: 'flex', flexDirection: 'column',
       custom: {
         top: '13%', transform: 'translateX(-50%)', alignItems: 'center', gap: '5px',
-        background: 'rgba(255,255,255,0.93)', padding: '14px 28px', borderRadius: '14px',
-        border: `1px solid ${color}44`, borderLeft: `3px solid ${color}`,
+        background: 'rgba(8,6,18,0.82)', padding: '14px 28px', borderRadius: '12px',
+        border: `1px solid ${color}66`, borderLeft: `3px solid ${color}`,
         width: 'max-content', maxWidth: 'min(560px, 86%)', pointerEvents: 'none',
-        boxShadow: '0 10px 30px rgba(40,70,120,0.22)', animation: 'nf-tip-in 0.26s ease-out',
+        boxShadow: `0 0 30px ${color}44, inset 0 0 16px ${color}14`, animation: 'nf-tip-in 0.26s ease-out',
       },
     });
     const headEl = uiElement('text', 'Tip Header', {
       color, fontSize: '13px', fontWeight: '800', textAlign: 'center',
-      custom: { letterSpacing: '3px', textTransform: 'uppercase' },
+      custom: { letterSpacing: '3px', textTransform: 'uppercase', textShadow: `0 0 12px ${color}aa` },
     }, header);
     const bodyEl = uiElement('text', 'Tip Body', {
-      color: 'rgba(22,32,58,0.86)', fontSize: '15px', fontWeight: '600', textAlign: 'center',
-      custom: { whiteSpace: 'pre-line', lineHeight: '1.45' },
+      color: 'rgba(226,238,255,0.92)', fontSize: '15px', fontWeight: '600', textAlign: 'center',
+      custom: { whiteSpace: 'pre-line', lineHeight: '1.45', textShadow: '0 2px 8px rgba(0,0,0,0.9)' },
     }, body);
     box.children = [headEl, bodyEl];
     root.children = [box];
@@ -759,10 +801,147 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     });
   };
 
-  makeSign('Move & Look', 'WASD to move   ·   Move the mouse to look\nSHIFT to sprint   ·   SPACE to jump', [0, 0, 3], '#2b7fff', 2);
-  makeSign('Shoot', 'Hold LEFT MOUSE to fire.\nKnock the stacked cubes flying!', [0, 0, 8], '#ff8a3d', 2);
-  makeSign('Weapons', 'Press 1–5 to swap weapons   ·   R to reload\nHold RIGHT MOUSE to aim down sights.', [0, 0, 14], '#2b7fff', 2);
-  makeSign('Climb', 'Walk up the steps onto the platform,\nthen clear the targets from the high ground.', [0, 0, 19], '#22b07a', 2);
+  makeSign('Move & Look', 'WASD to move   ·   Move the mouse to look\nSHIFT to sprint   ·   SPACE to jump', [0, 0, 3], '#15e8ff', 2);
+  makeSign('Shoot', 'Hold LEFT MOUSE to fire.\nKnock the cubes flying — or topple the tower on the right!', [0, 0, 8], '#ff8a3d', 2);
+  makeSign('Weapons', 'Press 1–5 to swap weapons (5 = grenade)   ·   R to reload\nHold RIGHT MOUSE to aim. Try the bounce pad on the left!', [0, 0, 14], '#15e8ff', 2);
+  makeSign('The Range', 'Up the steps, then SHOOT THE RED TARGETS to clear the range.\nLob a grenade (5) into them for a chain blast!', [0, 0, 19], '#ff2bd6', 2);
+
+  // ============================================================================================
+  // EXTRAS — a scoring shooting range (breakable red targets + a HUD counter), a sliding moving target, a
+  // bounce/launch pad, and a tall physics tower to topple. Optional playground; nothing here is required.
+  // ============================================================================================
+
+  // --- BREAKABLE TARGETS + score. Red plates with a `health` var: a shot DESTROYS them (the tracer deals
+  //     damage; the knock-over cubes have no health, so they just get shoved). Every LIVING target re-adds 1
+  //     to TargetsAlive each frame; the Range Director snapshots that into TargetsLeft then zeroes it — so the
+  //     HUD shows how many remain and flips to "ALL CLEAR" once the last one is down. ---
+  const targetBp = miniBlueprint('Range Target', '#ff5a5f', (n, e) => {
+    const upd = makeId('node');
+    const get = makeId('node');
+    const inc = makeId('node');
+    const set = makeId('node');
+    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Each frame.' }));
+    n.push(graphNode(get, 'Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: targetsAliveVarId, valueType: 'number', hasInput: false }));
+    n.push(graphNode(inc, 'Add', 'Math', 300, 200, { nodeKind: 'math.add', amount: 1, description: 'Count myself as still standing.' }));
+    n.push(graphNode(set, 'Set Variable', 'Variables', 540, 40, { nodeKind: 'variable.set', variableId: targetsAliveVarId, valueType: 'number', description: 'Re-assert each frame.' }));
+    e.push(execEdge(upd, set), valueEdge(get, inc, 'a'), valueEdge(inc, set, 'value'));
+  });
+  block('Range Backboard', [0, 1.7, 30.7], [11, 3.4, 0.3], '#c2c8d2', { roughness: 0.85 });
+  const breakSpots: Vector3Tuple[] = [[-4.5, 1.4, 30.4], [-2.7, 2.1, 30.4], [-0.9, 1.4, 30.4], [0.9, 2.1, 30.4], [2.7, 1.4, 30.4], [4.5, 2.1, 30.4]];
+  breakSpots.forEach((p, i) =>
+    tutorialObjects.push({
+      id: makeId('obj'), name: `Range Target ${i + 1}`, kind: 'cube',
+      transform: { position: p, rotation: [0, 0, 0], scale: [0.7, 0.7, 0.2] },
+      renderer: { ...defaultRenderer('cube', '#ff5a5f'), metalness: 0.05, roughness: 0.55, materialOverrides: { emissiveColor: '#ff5a5f', emissiveIntensity: 0.7 } },
+      physics: fixedBox('box'),
+      script: { blueprintId: targetBp.blueprintId, graphId: targetBp.graphId, enabled: true },
+      variables: { health: 30 },
+    }),
+  );
+  const targetCount = breakSpots.length;
+  const targetsLeftVar: ProjectVariable = { id: targetsLeftVarId, name: 'TargetsLeft', type: 'number', defaultValue: targetCount, persistent: false, createdAt: Date.now() };
+  const targetsAliveVar: ProjectVariable = { id: targetsAliveVarId, name: 'TargetsAlive', type: 'number', defaultValue: targetCount, persistent: false, createdAt: Date.now() };
+  // Range Director (an empty — it never dies, so it always ticks): snapshot the tally → zero it. Unshifted to
+  // the FRONT of tutorialObjects so it runs BEFORE the targets re-add each frame, keeping the count crisp.
+  const rangeDirector = miniBlueprint('Range Director', '#ffd082', (n, e) => {
+    const upd = makeId('node');
+    const get = makeId('node');
+    const setLeft = makeId('node');
+    const reset = makeId('node');
+    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Tally watcher.' }));
+    n.push(graphNode(get, 'Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: targetsAliveVarId, valueType: 'number', hasInput: false }));
+    n.push(graphNode(setLeft, 'Set Variable', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: targetsLeftVarId, valueType: 'number', description: 'Stable count for the HUD.' }));
+    n.push(graphNode(reset, 'Set Variable', 'Variables', 560, 40, { nodeKind: 'variable.set', variableId: targetsAliveVarId, valueType: 'number', numberValue: 0, description: 'Living targets re-add themselves.' }));
+    e.push(execEdge(upd, setLeft), valueEdge(get, setLeft, 'value'), execEdge(setLeft, reset));
+  });
+  tutorialObjects.unshift({
+    id: makeId('obj'), name: 'Range Director', kind: 'empty',
+    transform: { position: [0, 4, 29], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    script: { blueprintId: rangeDirector.blueprintId, graphId: rangeDirector.graphId, enabled: true },
+  });
+  // Objective pill (top-center): "TARGETS LEFT: N" → "ALL CLEAR". Its own screen doc; root is a full-screen
+  // container so the pill sizes to its content (same reason as the tip cards).
+  {
+    const objRoot = uiElement('panel', 'Objective Root', { width: '100%', height: '100%', position: 'relative', padding: '0' });
+    const pill = uiElement('panel', 'Objective', {
+      position: 'absolute', left: '50%', display: 'flex',
+      custom: { top: '20px', transform: 'translateX(-50%)', background: 'rgba(8,6,18,0.66)', padding: '7px 20px', borderRadius: '999px', border: '1px solid rgba(255,43,214,0.4)', boxShadow: '0 0 20px rgba(255,43,214,0.3)', pointerEvents: 'none' },
+    });
+    const objText = boundElement('text', 'Objective Text', {
+      color: '#ff7be0', fontSize: '12px', fontWeight: '800', textAlign: 'center',
+      custom: { whiteSpace: 'nowrap', letterSpacing: '2px', textTransform: 'uppercase', textShadow: '0 0 12px rgba(255,43,214,0.7)' },
+    }, [
+      { target: 'text', expression: `TargetsLeft > 0 ? '◎  Targets Left  ' + TargetsLeft : '✓  Range Cleared'` },
+      { target: 'color', expression: `TargetsLeft > 0 ? '#ff7be0' : '#39ff9e'` },
+    ], '◎  Targets Left  6');
+    pill.children = [objText];
+    objRoot.children = [pill];
+    extraUIDocs.push({ id: makeId('ui'), name: 'Objective', surface: 'screen', root: objRoot, css: '', visibleOnStart: true, createdAt: Date.now() });
+  }
+
+  // --- MOVING TARGET — a kinematic purple plate that slides between two invisible bound sensors (teaches
+  //     kinematic motion + triggers). Its `vx` instance var is its signed speed; each bound flips it. The
+  //     sensors carry the flip logic (a sensor's graph receives Trigger Enter), the plate just reads its vx. ---
+  const moverId = makeId('obj');
+  const slider = miniBlueprint('Slider', '#7c5cff', (n, e) => {
+    const upd = makeId('node');
+    const getVx = makeId('node');
+    const move = makeId('node');
+    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Slide each frame.' }));
+    n.push(graphNode(getVx, 'Get Object Var', 'Variables', 40, 200, { nodeKind: 'variable.getObject', objectKey: 'vx', hasInput: false, description: 'Signed slide speed.' }));
+    n.push(graphNode(move, 'Translate', 'Runtime', 300, 40, { nodeKind: 'action.translate', axis: 'x', description: 'Move along X by vx.' }));
+    e.push(execEdge(upd, move), valueEdge(getVx, move, 'amount'));
+  });
+  const boundBp = (dir: number) =>
+    miniBlueprint(dir > 0 ? 'Bound → Right' : 'Bound → Left', '#7c5cff', (n, e) => {
+      const tIn = makeId('node');
+      const set = makeId('node');
+      n.push(graphNode(tIn, 'Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: moverId, hasInput: false, description: 'Slider reaches this end.' }));
+      n.push(graphNode(set, 'Set Object Var', 'Variables', 300, 40, { nodeKind: 'variable.setObject', objectKey: 'vx', targetObjectId: moverId, numberValue: dir * 3, description: `Send it ${dir > 0 ? 'right' : 'left'}.` }));
+      e.push(execEdge(tIn, set));
+    });
+  const leftBp = boundBp(1); // entering the LEFT bound sends it back to the right
+  const rightBp = boundBp(-1);
+  tutorialObjects.push({
+    id: moverId, name: 'Moving Target', kind: 'cube',
+    transform: { position: [0, 1.7, 28], rotation: [0, 0, 0], scale: [0.7, 0.7, 0.2] },
+    renderer: { ...defaultRenderer('cube', '#7c5cff'), metalness: 0.1, roughness: 0.45, materialOverrides: { emissiveColor: '#7c5cff', emissiveIntensity: 0.6 } },
+    physics: { ...fixedBox('box'), bodyType: 'kinematic' },
+    script: { blueprintId: slider.blueprintId, graphId: slider.graphId, enabled: true },
+    variables: { vx: 3 },
+  });
+  ([[leftBp, -5.5], [rightBp, 5.5]] as Array<[{ blueprintId: string; graphId: string }, number]>).forEach(([bp, x]) =>
+    tutorialObjects.push({
+      id: makeId('obj'), name: x < 0 ? 'Slider Bound L' : 'Slider Bound R', kind: 'empty',
+      transform: { position: [x, 1.7, 28], rotation: [0, 0, 0], scale: [0.6, 2, 1.4] },
+      physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+      script: { blueprintId: bp.blueprintId, graphId: bp.graphId, enabled: true },
+    }),
+  );
+
+  // --- JUMP PAD — a glowing pad; stepping on it LAUNCHES the player up (Apply Force on $trigger, which the
+  //     engine turns into a launch velocity for the kinematic character). Teaches triggers + Apply Force. ---
+  const padBp = miniBlueprint('Jump Pad', '#27e0c0', (n, e) => {
+    const tIn = makeId('node');
+    const launch = makeId('node');
+    n.push(graphNode(tIn, 'Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: pawnId, hasInput: false, description: 'Player steps on the pad.' }));
+    n.push(graphNode(launch, 'Apply Force', 'Physics', 300, 40, { nodeKind: 'action.applyForce', targetObjectId: '$trigger', axis: 'y', amount: 9, description: 'Launch the player up.' }));
+    e.push(execEdge(tIn, launch));
+  });
+  block('Bounce Pad', [-7, 0.08, 12], [2.2, 0.16, 2.2], '#27e0c0', { emissive: '#27e0c0', intensity: 1.4, solid: false });
+  tutorialObjects.push({
+    id: makeId('obj'), name: 'Bounce Pad Trigger', kind: 'empty',
+    transform: { position: [-7, 0.7, 12], rotation: [0, 0, 0], scale: [2.2, 1.2, 2.2] },
+    physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+    script: { blueprintId: padBp.blueprintId, graphId: padBp.graphId, enabled: true },
+  });
+
+  // --- PHYSICS TOWER — a tall stack of light cubes to spray down in one burst (pure physics spectacle). ---
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 3; c++) {
+      target('Tower Cube', [7 + (c - 1) * 0.62, 0.3 + r * 0.62, 12], r % 2 ? '#f2f5f8' : '#dbe7f5', c === 1 ? '#2b7fff' : undefined);
+    }
+  }
 
   const hud = createFpsHud();
 
@@ -770,7 +949,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   useEditorStore.setState((draft) => ({
     animatorControllers: [...draft.animatorControllers, ...built.map((w) => w.controller)],
     activeAnimatorControllerId: built[0].controller.id,
-    variables: [...draft.variables, weaponVar, slotVar, ammoVar, magVar],
+    variables: [...draft.variables, weaponVar, slotVar, ammoVar, magVar, targetsLeftVar, targetsAliveVar],
     blueprints: [...draft.blueprints, blueprint, ...extraBlueprints],
     graphs: [...draft.graphs, graph, ...extraGraphs],
     activeBlueprintId: blueprintId,

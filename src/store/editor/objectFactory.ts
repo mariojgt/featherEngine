@@ -153,6 +153,11 @@ export interface ProjectileSetup {
   gravity?: number;
   /** Knockback multiplier for shoving a struck dynamic prop (0 = none, default ~1). */
   knockback?: number;
+  /** Detonate on impact / lifetime expiry (grenades, rockets) — blast + area damage. */
+  explosive?: boolean;
+  blastRadius?: number;
+  blastDamage?: number;
+  blastSound?: string;
   debug?: boolean;
   /** Optional scene object to clone the look from (mesh/model/scale/material). */
   template?: SceneObject;
@@ -178,6 +183,10 @@ export const makeProjectileObject = (
     life,
     velocity: [...velocity] as Vector3Tuple,
     knockback: typeof setup.knockback === 'number' ? setup.knockback : undefined,
+    explosive: setup.explosive || undefined,
+    blastRadius: typeof setup.blastRadius === 'number' ? setup.blastRadius : undefined,
+    blastDamage: typeof setup.blastDamage === 'number' ? setup.blastDamage : undefined,
+    blastSound: setup.blastSound || undefined,
     debug: setup.debug || undefined,
   };
 

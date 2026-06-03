@@ -131,7 +131,9 @@ export type GraphNodeKind =
   | 'action.burstParticles'
   | 'action.setParticlesEmitting'
   | 'action.spawnParticleSystem'
-  | 'action.loadScene';
+  | 'action.loadScene'
+  | 'action.cameraShake'
+  | 'action.moveTo';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -193,6 +195,14 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   /** action.spawnProjectile: how hard a hit shoves a DYNAMIC prop along the shot (0 = no knockback). The
    *  applied impulse scales with the projectile's speed; this is the multiplier. Defaults to a light shove. */
   projectileKnockback?: number;
+  /** action.spawnProjectile: when true, the projectile DETONATES on impact (and on lifetime expiry) — a fiery
+   *  blast + area damage to every health object in projectileBlastRadius — instead of a plain hit. For
+   *  grenades/rockets. projectileBlastDamage (default 60) + projectileBlastRadius (default 4.5) tune the blast;
+   *  projectileBlastSound is an audio asset id played on detonation. Pair with projectileGravity for an arc. */
+  projectileExplosive?: boolean;
+  projectileBlastRadius?: number;
+  projectileBlastDamage?: number;
+  projectileBlastSound?: string;
   /** action.spawnProjectile: id of a scene object to CLONE as the projectile (mesh/model/scale/color). */
   projectileTemplateId?: string;
   /** action.spawnProjectile: muzzle spawn offset in CAMERA space [right, up, forward] (first-person) —
@@ -201,6 +211,12 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   projectileMuzzle?: Vector3Tuple;
   /** action.spawnProjectile: when true, log each spawn + hit to the runtime console. */
   projectileDebug?: boolean;
+  /** action.spawnProjectile: random firing-cone half-angle in degrees (0 = pin-accurate). Each shot's
+   *  direction is jittered within this cone — bloom/recoil inaccuracy for automatic fire. */
+  projectileSpread?: number;
+  /** action.cameraShake: trauma to add (0..1). The runtime decays it; the follow camera turns it into a
+   *  positional + rotational jitter. The player firing/being hurt and explosions also add trauma. */
+  shakeAmount?: number;
   /** action.setVisible: whether the target object is shown (false hides it during Play). */
   visible?: boolean;
   /** action.spawnAttached: weapon model asset to spawn + which bone/socket on the owner to attach it to,
@@ -1055,6 +1071,13 @@ export interface ProjectileComponent {
   velocity: Vector3Tuple;
   /** Multiplier for the knockback impulse applied to a struck DYNAMIC prop (0 = none). Default ~1. */
   knockback?: number;
+  /** When true, the projectile detonates (area-damage blast + VFX) on impact / lifetime expiry. */
+  explosive?: boolean;
+  /** Blast radius + damage for an explosive projectile (defaults 4.5 / 60). */
+  blastRadius?: number;
+  blastDamage?: number;
+  /** Audio asset id played when an explosive projectile detonates. */
+  blastSound?: string;
   /** When true, the runtime logs this projectile's spawn + hits to the runtime console. */
   debug?: boolean;
 }

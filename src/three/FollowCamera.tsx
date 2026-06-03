@@ -271,6 +271,21 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // Framerate-independent smoothing factor for a given responsiveness `k` (higher = snappier).
     const smooth = (k: number) => 1 - Math.exp(-k * Math.min(delta, 0.1));
 
+    // Camera shake: the runtime owns a decaying trauma scalar (fire/hurt/explosions/Camera Shake node).
+    // Turn it into a positional jitter + a roll/pitch kick, applied AFTER the camera is positioned each
+    // frame (call applyShake() at every exit). Eased by t² so small trauma is subtle, big trauma snaps.
+    const shakeT = preview ? 0 : useEditorStore.getState().runtimeCameraShake;
+    const applyShake = () => {
+      if (shakeT <= 0.0001) return;
+      const t = shakeT * shakeT;
+      const ti = performance.now() * 0.001;
+      camera.position.x += (Math.sin(ti * 54.7) + Math.sin(ti * 97.3)) * t * 0.16;
+      camera.position.y += (Math.sin(ti * 63.1) + Math.sin(ti * 108.9)) * t * 0.16;
+      camera.position.z += Math.sin(ti * 71.3) * t * 0.1;
+      camera.rotateX(Math.sin(ti * 73.9) * t * 0.035);
+      camera.rotateZ(Math.sin(ti * 46.1) * t * 0.05);
+    };
+
     // Aim-down-sights: hold the aim key (keyAim) → smoothly zoom in + tuck the camera closer. Read keys
     // via getState so the camera frame loop doesn't re-subscribe on every keypress.
     const aiming = !preview && Boolean(useEditorStore.getState().runtimeKeys[cc.keyAim]);
@@ -299,6 +314,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
         camera.fov = fpFov;
         camera.updateProjectionMatrix();
       }
+      applyShake();
       return;
     }
 
@@ -392,6 +408,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       camera.fov = tpFov;
       camera.updateProjectionMatrix();
     }
+    applyShake();
   });
 
   if (!target) return null;

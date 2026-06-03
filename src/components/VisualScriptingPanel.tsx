@@ -48,7 +48,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -492,6 +492,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesRandom = node.data.nodeKind === 'value.random';
   const updatesLoop = node.data.nodeKind === 'logic.forLoop';
   const updatesLoadScene = node.data.nodeKind === 'action.loadScene';
+  const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
+  const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
   const updatesCast = node.data.nodeKind === 'logic.cast';
   // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
   // dropdown of THAT blueprint's declared instance variables (Unreal "Cast → As BP_X → pick its variable"):
@@ -661,6 +663,35 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               onChange={(event) => updateGraphNodeData(node.id, { loopCount: Math.max(0, Math.floor(Number(event.target.value))) })}
             />
             <small className="node-hint">Fires "Body" this many times (index on the value-out), then "Completed". Capped at 10000.</small>
+          </label>
+        )}
+
+        {updatesMoveTo && (
+          <label className="node-field">
+            <span>Arrival radius</span>
+            <input
+              type="number"
+              step="0.1"
+              min="0.2"
+              value={node.data.numberValue ?? 1.2}
+              onChange={(event) => updateGraphNodeData(node.id, { numberValue: Math.max(0.2, Number(event.target.value)) })}
+            />
+            <small className="node-hint">Stops this far from the Target. Wire Player Location (chase) or a waypoint position into Target; Speed is optional.</small>
+          </label>
+        )}
+
+        {updatesCameraShake && (
+          <label className="node-field">
+            <span>Shake amount</span>
+            <input
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={node.data.shakeAmount ?? 0.6}
+              onChange={(event) => updateGraphNodeData(node.id, { shakeAmount: Math.max(0, Math.min(1, Number(event.target.value))) })}
+            />
+            <small className="node-hint">Trauma 0–1 added to the camera (fades automatically). 0.6 ≈ a solid hit; 1 = a big explosion.</small>
           </label>
         )}
 
@@ -1110,6 +1141,18 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               <small className="node-hint">Subtracted from the struck object’s <code>health</code> variable.</small>
             </label>
 
+            <label className="node-field">
+              <span>Spread (°)</span>
+              <input
+                type="number"
+                step="0.5"
+                min="0"
+                value={node.data.projectileSpread ?? 0}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileSpread: Math.max(0, Number(event.target.value)) })}
+              />
+              <small className="node-hint">Random firing-cone half-angle. 0 = pin-accurate; 2–5° = rifle bloom; 8–12° = shotgun/SMG.</small>
+            </label>
+
             {!node.data.projectileTemplateId && (
               <>
                 <label className="node-field">
@@ -1168,6 +1211,41 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               />
               <small className="node-hint">How hard a hit shoves a dynamic prop (box/crate/barrel). 0 = no push, 1 = default, higher = harder.</small>
             </label>
+
+            <label className="library-check" title="Detonate on impact / fuse-out instead of a plain hit (grenades, rockets)">
+              <input
+                type="checkbox"
+                checked={Boolean(node.data.projectileExplosive)}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileExplosive: event.target.checked })}
+              />
+              <span>Explosive (detonate on impact)</span>
+            </label>
+
+            {node.data.projectileExplosive && (
+              <>
+                <label className="node-field">
+                  <span>Blast Radius</span>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={node.data.projectileBlastRadius ?? 4.5}
+                    onChange={(event) => updateGraphNodeData(node.id, { projectileBlastRadius: Number(event.target.value) })}
+                  />
+                  <small className="node-hint">Everything with health within this radius takes the blast.</small>
+                </label>
+                <label className="node-field">
+                  <span>Blast Damage</span>
+                  <input
+                    type="number"
+                    step="5"
+                    min="0"
+                    value={node.data.projectileBlastDamage ?? 60}
+                    onChange={(event) => updateGraphNodeData(node.id, { projectileBlastDamage: Number(event.target.value) })}
+                  />
+                </label>
+              </>
+            )}
 
             <label className="library-check" title="Log every spawn and hit to the runtime console">
               <input
