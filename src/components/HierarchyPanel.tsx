@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Square, Trash2 } from 'lucide-react';
+import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
@@ -15,6 +15,7 @@ const objectIcon: Record<SceneObjectKind, typeof Box> = {
   plane: Square,
   light: LampDesk,
   camera: Camera,
+  terrain: Mountain,
 };
 
 // Kinds offered in the "Add child" context-menu submenu (flat — ContextMenu has no nesting).
@@ -23,6 +24,7 @@ const childKinds: Array<{ kind: SceneObjectKind; label: string }> = [
   { kind: 'cube', label: 'Cube' },
   { kind: 'sphere', label: 'Sphere' },
   { kind: 'capsule', label: 'Capsule' },
+  { kind: 'terrain', label: 'Terrain' },
   { kind: 'light', label: 'Light' },
   { kind: 'camera', label: 'Camera' },
 ];

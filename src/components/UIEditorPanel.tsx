@@ -80,13 +80,38 @@ interface Parsed {
   raw?: string;
 }
 
+const IDENTIFIER_RE = /^[A-Za-z_]\w*$/;
+
+function quoteExpressionString(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function variableRef(name: string | undefined): string {
+  if (!name) return '';
+  return IDENTIFIER_RE.test(name) ? name : `vars[${quoteExpressionString(name)}]`;
+}
+
+function unquoteExpressionString(value: string): string {
+  return value.replace(/\\(['"\\])/g, '$1');
+}
+
+function parseVariableRef(ref: string, knownVars: Set<string>): string | undefined {
+  const trimmed = ref.trim();
+  if (IDENTIFIER_RE.test(trimmed) && knownVars.has(trimmed)) return trimmed;
+  const quoted = trimmed.match(/^vars\[(["'])(.*)\1\]$/);
+  if (!quoted) return undefined;
+  const name = unquoteExpressionString(quoted[2]);
+  return knownVars.has(name) ? name : undefined;
+}
+
 function parseBinding(expression: string | undefined, knownVars: Set<string>): Parsed {
   const expr = (expression ?? '').trim();
   if (!expr) return { source: 'fixed' };
-  let m = expr.match(/^([A-Za-z_]\w*)\s*\/\s*(\d+(?:\.\d+)?)$/);
-  if (m && knownVars.has(m[1])) return { source: 'variable', name: m[1], max: m[2] };
-  m = expr.match(/^([A-Za-z_]\w*)$/);
-  if (m && knownVars.has(m[1])) return { source: 'variable', name: m[1] };
+  let m = expr.match(/^(.+?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+  const dividedName = m ? parseVariableRef(m[1], knownVars) : undefined;
+  if (dividedName) return { source: 'variable', name: dividedName, max: m?.[2] };
+  const name = parseVariableRef(expr, knownVars);
+  if (name) return { source: 'variable', name };
   m = expr.match(/^self\.([A-Za-z_]\w*)\s*\/\s*(\d+(?:\.\d+)?)$/);
   if (m) return { source: 'self', name: m[1], max: m[2] };
   m = expr.match(/^self\.([A-Za-z_]\w*)$/);
@@ -97,7 +122,7 @@ function parseBinding(expression: string | undefined, knownVars: Set<string>): P
 function buildExpression(p: Parsed, target: UIBinding['target']): string {
   if (p.source === 'fixed') return '';
   if (p.source === 'expression') return p.raw ?? '';
-  const ref = p.source === 'self' ? `self.${p.name ?? ''}` : p.name ?? '';
+  const ref = p.source === 'self' ? `self.${p.name ?? ''}` : variableRef(p.name);
   if (!ref || ref === 'self.') return '';
   if (target === 'fill' && p.max && Number(p.max) > 0) return `${ref} / ${p.max}`;
   return ref;

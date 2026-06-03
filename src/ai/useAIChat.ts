@@ -50,6 +50,18 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Renamed scene to "${String(input.name ?? '')}"`;
     case 'create_object':
       return `Created ${String(input.kind ?? 'object')}`;
+    case 'create_terrain':
+      return 'Created terrain';
+    case 'update_terrain':
+      return 'Updated terrain';
+    case 'sculpt_terrain':
+      return 'Sculpted terrain';
+    case 'paint_terrain':
+      return 'Painted terrain';
+    case 'add_terrain_layer':
+      return 'Added terrain layer';
+    case 'update_terrain_layer':
+      return 'Updated terrain layer';
     case 'set_object_parent':
       return input.parentId ? 'Nested object' : 'Detached object';
     case 'create_prefab':
@@ -76,6 +88,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.textureAssetId ? 'Applied texture' : input.opacity !== undefined ? 'Set opacity' : 'Updated material';
     case 'set_scene_audio':
       return 'Set scene audio';
+    case 'set_scene_environment':
+      return 'Set scene environment';
     case 'set_inventory':
       return 'Set inventory';
     case 'equip_slot':
@@ -112,6 +126,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Removed ragdoll body';
     case 'set_character_controller':
       return input.enabled === false ? 'Removed character control' : 'Set character controller';
+    case 'set_vehicle':
+      return input.enabled === false ? 'Removed vehicle control' : 'Set vehicle controller';
+    case 'create_driving_template':
+      return 'Built driving template';
     case 'create_character_pawn':
       return 'Created character pawn';
     case 'add_gameplay_kit':
@@ -126,6 +144,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'add_cinematic_action':
       return 'Added cinematic action';
+    case 'add_cinematic_shot':
+      return 'Added camera shot';
+    case 'set_cinematic_look':
+      return 'Set film look';
     case 'animate_on_timeline':
       return 'Animated on timeline';
     case 'play_cinematic':
@@ -198,6 +220,12 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Created variable${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'update_variable':
       return 'Updated variable';
+    case 'add_blueprint_variable':
+      return `Added instance variable${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'update_blueprint_variable':
+      return 'Updated instance variable';
+    case 'remove_blueprint_variable':
+      return 'Removed instance variable';
     case 'create_data_asset':
       return `Created Data Asset${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'add_data_asset_column':

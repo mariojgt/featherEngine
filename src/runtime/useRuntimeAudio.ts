@@ -51,4 +51,65 @@ export function useRuntimeAudio() {
       loops.current = [];
     };
   }, [isPlaying]);
+
+  // Driven-vehicle audio: a looping engine whose playback rate rises with rpm + a looping tire-skid bed whose
+  // volume tracks slip. Updated imperatively from runtimeVehicleSound (set every tick) via a store subscription
+  // so it never triggers a React re-render. Created lazily once a car starts driving; torn down on Stop.
+  useEffect(() => {
+    if (!isPlaying) return;
+    let engine: HTMLAudioElement | null = null;
+    let skid: HTMLAudioElement | null = null;
+    let engineId: string | undefined;
+    let skidId: string | undefined;
+    const teardown = (audio: HTMLAudioElement | null) => {
+      if (!audio) return;
+      audio.pause();
+      audio.src = '';
+    };
+    const apply = (vs: { engineId?: string; skidId?: string; rpm: number; slip: number } | null) => {
+      const assets = useEditorStore.getState().assets;
+      const urlFor = (id?: string) => (id ? assets.find((asset) => asset.id === id)?.url : undefined);
+      // Engine loop.
+      const engineUrl = urlFor(vs?.engineId);
+      if (vs && engineUrl) {
+        if (!engine || engineId !== vs.engineId) {
+          teardown(engine);
+          engine = new Audio(engineUrl);
+          engine.loop = true;
+          engine.volume = 0.3;
+          engine.playbackRate = 0.85;
+          void engine.play().catch(() => {});
+          engineId = vs.engineId;
+        }
+        const targetRate = 0.82 + vs.rpm * 1.05;
+        engine.playbackRate += (targetRate - engine.playbackRate) * 0.2;
+        engine.volume = 0.28 + vs.rpm * 0.32;
+      } else if (engine && !engine.paused) {
+        engine.pause();
+      }
+      // Tire-skid loop (volume ∝ slip; kept playing at low volume so it fades in smoothly).
+      const skidUrl = urlFor(vs?.skidId);
+      if (vs && skidUrl) {
+        if (!skid || skidId !== vs.skidId) {
+          teardown(skid);
+          skid = new Audio(skidUrl);
+          skid.loop = true;
+          skid.volume = 0;
+          void skid.play().catch(() => {});
+          skidId = vs.skidId;
+        }
+        const target = Math.min(0.7, vs.slip * 0.7);
+        skid.volume += (target - skid.volume) * 0.3;
+      } else if (skid && !skid.paused) {
+        skid.pause();
+      }
+    };
+    apply(useEditorStore.getState().runtimeVehicleSound);
+    const unsubscribe = useEditorStore.subscribe((state) => apply(state.runtimeVehicleSound));
+    return () => {
+      unsubscribe();
+      teardown(engine);
+      teardown(skid);
+    };
+  }, [isPlaying]);
 }

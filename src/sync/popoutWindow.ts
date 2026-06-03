@@ -7,6 +7,7 @@ export const POPPABLE_PANELS: Record<string, string> = {
   project: 'Project',
   scripting: 'Scripting',
   materials: 'Material',
+  terrain: 'Terrain',
   particles: 'Particle System',
   animator: 'Animator',
   ui: 'UI',

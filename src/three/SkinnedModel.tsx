@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
+import { useFootIK } from './footIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
 import { RagdollRig } from './RagdollRig';
 import type { SceneObject } from '../types';
@@ -28,6 +29,7 @@ export function SkinnedModel({
   loop = true,
   fade = 0.2,
   registerId,
+  tint,
 }: {
   meshUrl: string;
   /** Distinct GLB urls whose clips should be available on the mixer (all the controller's states). */
@@ -41,6 +43,9 @@ export function SkinnedModel({
   fade?: number;
   /** Object id to register this clone under, so bone-socket attachments can follow its bones. */
   registerId?: string;
+  /** Optional material override applied to every skinned mesh — recolors the rig (per-enemy tints) and
+   *  drives the runtime hit-flash / interact-focus glow. Cleared values restore the model's baked look. */
+  tint?: { color?: string; emissiveColor?: string; emissiveIntensity?: number };
 }) {
   const { scene } = useGLTF(meshUrl);
   // Load every clip source. A stable, de-duped list keeps the loader from re-suspending each frame.
@@ -56,6 +61,38 @@ export function SkinnedModel({
   // Independent skinned clone per instance. Memoized on the cached source scene.
   const model = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, mixer } = useAnimations(animations, model);
+
+  // SkeletonUtils.clone shares material references with the cached source scene, so we must own a private
+  // copy of every material before recoloring — otherwise tinting one enemy would tint every instance of the
+  // rig (including the player). Capture each material's baked color/emissive so a cleared tint restores it.
+  const tintMats = useMemo(() => {
+    const mats: { mat: THREE.MeshStandardMaterial; color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity: number }[] = [];
+    model.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) return;
+      const own = (m: THREE.Material) => {
+        const c = m.clone() as THREE.MeshStandardMaterial;
+        mats.push({ mat: c, color: c.color?.clone(), emissive: c.emissive?.clone(), emissiveIntensity: c.emissiveIntensity ?? 1 });
+        return c;
+      };
+      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
+    });
+    return mats;
+  }, [model]);
+
+  useEffect(() => {
+    for (const t of tintMats) {
+      if (tint?.color) t.mat.color?.set(tint.color);
+      else if (t.color) t.mat.color?.copy(t.color);
+      if (tint?.emissiveColor) {
+        t.mat.emissive?.set(tint.emissiveColor);
+        t.mat.emissiveIntensity = tint.emissiveIntensity ?? 1;
+      } else if (t.emissive) {
+        t.mat.emissive?.copy(t.emissive);
+        t.mat.emissiveIntensity = t.emissiveIntensity;
+      }
+    }
+  }, [tintMats, tint?.color, tint?.emissiveColor, tint?.emissiveIntensity]);
 
   // Ragdoll: mirror the shared ragdoll flag (set by key/node/death) into render state each frame.
   const [ragdoll, setRagdollLocal] = useState(false);
@@ -143,6 +180,10 @@ export function SkinnedModel({
     registerSkinnedRoot(registerId, model);
     return () => unregisterSkinnedRoot(registerId, model);
   }, [registerId, model]);
+
+  // Terrain foot IK — plant feet on uneven ground. Called last so it post-processes the mixer's pose this
+  // frame; fully guarded (Play + grounded + over terrain) so it's a no-op everywhere else.
+  useFootIK(model, registerId);
 
   return (
     <>

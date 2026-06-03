@@ -11,6 +11,7 @@ import {
   Gamepad2,
   LampDesk,
   Layers,
+  Mountain,
   Package,
   Pause,
   Play,
@@ -33,6 +34,7 @@ const creationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof 
   { kind: 'cube', label: 'Cube', icon: Box },
   { kind: 'sphere', label: 'Sphere', icon: Circle },
   { kind: 'plane', label: 'Plane', icon: Square },
+  { kind: 'terrain', label: 'Terrain', icon: Mountain },
   { kind: 'light', label: 'Light', icon: LampDesk },
   { kind: 'camera', label: 'Camera', icon: Camera },
 ];

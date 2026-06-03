@@ -21,6 +21,11 @@ import {
   sphereRadius,
 } from './colliderShape';
 import { getModelGeometry } from './meshGeometryCache';
+import {
+  buildTerrainHeightfield,
+  terrainChunkKeysAroundWorld,
+  withTerrainDefaults,
+} from '../terrain/terrain';
 
 let ready = false;
 let initPromise: Promise<void> | null = null;
@@ -105,6 +110,10 @@ function colliderDescFor(object: SceneObject) {
   desc.setCollisionGroups(groups);
   desc.setSolverGroups(groups);
   desc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+  // Generate contact/intersection events for EVERY body-type pairing. Rapier's default only reports pairs
+  // that involve a DYNAMIC body, so a FIXED trigger (e.g. a collectible/checkpoint) would never fire against
+  // the KINEMATIC player character — the cause of "walk onto the pickup, nothing happens". ALL fixes that.
+  desc.setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL);
   return desc;
 }
 
@@ -151,6 +160,10 @@ interface BodyEntry {
   signature: string;
 }
 
+interface TerrainEntry extends BodyEntry {
+  terrainId: string;
+}
+
 export interface PhysicsFrameResult {
   /** Post-step world transforms for every physics body, keyed by object id. */
   transforms: Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>;
@@ -192,6 +205,7 @@ class PhysicsRuntime {
   private handleToId = new Map<number, string>();
   private handleToTrigger = new Map<number, boolean>();
   private charEntries = new Map<string, CharacterEntry>();
+  private terrainEntries = new Map<string, TerrainEntry>();
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -222,6 +236,64 @@ class PhysicsRuntime {
     this.entries.delete(id);
   }
 
+  private createTerrainChunk(object: SceneObject, chunkX: number, chunkZ: number, key: string, signature: string) {
+    if (!object.terrain) return;
+    const terrain = withTerrainDefaults(object.terrain);
+    const heightfield = buildTerrainHeightfield(terrain, chunkX, chunkZ);
+    const rotation = quatFromEuler(object.transform.rotation);
+    const center = new THREE.Vector3(
+      heightfield.center[0] * object.transform.scale[0],
+      0,
+      heightfield.center[2] * object.transform.scale[2],
+    ).applyQuaternion(reuseQuat);
+    const body = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed()
+        .setTranslation(
+          object.transform.position[0] + center.x,
+          object.transform.position[1] + center.y,
+          object.transform.position[2] + center.z,
+        )
+        .setRotation(rotation),
+    );
+    const groups = collisionGroups(object.physics?.collisionLayer, object.physics?.collisionMask);
+    // Rapier's heightfield takes the number of SUBDIVISIONS (nrows/ncols) and expects exactly
+    // (nrows+1)*(ncols+1) height samples. buildTerrainHeightfield reports nrows/ncols as the SAMPLE
+    // count (segments+1), so subtract one here — otherwise Rapier panics ("unreachable") on the
+    // mismatched matrix size.
+    const hfRows = Math.max(1, heightfield.nrows - 1);
+    const hfCols = Math.max(1, heightfield.ncols - 1);
+    const collider = this.world.createCollider(
+      RAPIER.ColliderDesc.heightfield(
+        hfRows,
+        hfCols,
+        heightfield.heights,
+        {
+          x: heightfield.scale.x * Math.abs(object.transform.scale[0] || 1),
+          y: Math.abs(object.transform.scale[1] || 1),
+          z: heightfield.scale.z * Math.abs(object.transform.scale[2] || 1),
+        },
+      )
+        .setFriction(object.physics?.friction ?? 0.85)
+        .setRestitution(RESTITUTION)
+        .setCollisionGroups(groups)
+        .setSolverGroups(groups)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+      body,
+    );
+    this.terrainEntries.set(key, { terrainId: object.id, body, collider, signature });
+    this.handleToId.set(collider.handle, object.id);
+    this.handleToTrigger.set(collider.handle, false);
+  }
+
+  private removeTerrainChunk(key: string) {
+    const entry = this.terrainEntries.get(key);
+    if (!entry) return;
+    this.handleToId.delete(entry.collider.handle);
+    this.handleToTrigger.delete(entry.collider.handle);
+    this.world.removeRigidBody(entry.body);
+    this.terrainEntries.delete(key);
+  }
+
   private characterSignature(object: SceneObject): string {
     const { radius, halfHeight } = characterCapsule(object);
     return `${radius.toFixed(3)}|${halfHeight.toFixed(3)}`;
@@ -237,7 +309,10 @@ class PhysicsRuntime {
         .setTranslation(0, centerY, 0)
         .setCollisionGroups(groups)
         .setSolverGroups(groups)
-        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
+        // The player capsule is a KINEMATIC body — without ALL it wouldn't raise trigger events against
+        // FIXED sensors (collectibles, checkpoints, doors), so walking onto a fixed pickup did nothing.
+        .setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL),
       body,
     );
     // offset keeps the capsule from jittering against surfaces; slide + autostep + ground snap.
@@ -282,6 +357,7 @@ class PhysicsRuntime {
   private syncBodies(objects: SceneObject[]) {
     const present = new Set<string>();
     for (const object of objects) {
+      if (object.terrain?.enabled) continue;
       if (!object.physics?.enabled) continue;
       present.add(object.id);
       const entry = this.entries.get(object.id);
@@ -298,6 +374,62 @@ class PhysicsRuntime {
     }
   }
 
+  private terrainSignature(object: SceneObject, chunkX: number, chunkZ: number): string {
+    const terrain = withTerrainDefaults(object.terrain);
+    return [
+      object.id,
+      chunkX,
+      chunkZ,
+      object.transform.position.map((v) => v.toFixed(3)).join(','),
+      object.transform.scale.map((v) => v.toFixed(3)).join(','),
+      terrain.size,
+      terrain.chunkSize,
+      terrain.resolution,
+      terrain.seed,
+      terrain.heightScale,
+      terrain.frequency,
+      terrain.octaves,
+      terrain.persistence,
+      terrain.lacunarity,
+      object.physics?.enabled,
+      object.physics?.friction,
+      object.physics?.collisionLayer,
+      object.physics?.collisionMask,
+    ].join('|');
+  }
+
+  private syncTerrainChunks(objects: SceneObject[]) {
+    const terrains = objects.filter((object) => object.terrain?.enabled && object.physics?.enabled !== false);
+    const focus = objects
+      .filter((object) => object.character?.enabled || (object.physics?.enabled && object.physics.bodyType === 'dynamic'))
+      .map((object) => object.transform.position);
+    if (focus.length === 0) focus.push([0, 0, 0]);
+
+    const desired = new Map<string, { object: SceneObject; chunkX: number; chunkZ: number; signature: string }>();
+    for (const terrainObject of terrains) {
+      const terrain = withTerrainDefaults(terrainObject.terrain);
+      for (const point of focus) {
+        for (const chunk of terrainChunkKeysAroundWorld(terrainObject, point, terrain.physicsRadius)) {
+          const key = `${terrainObject.id}:${chunk.id}`;
+          desired.set(key, {
+            object: terrainObject,
+            chunkX: chunk.x,
+            chunkZ: chunk.z,
+            signature: this.terrainSignature(terrainObject, chunk.x, chunk.z),
+          });
+        }
+      }
+    }
+
+    for (const [key, entry] of [...this.terrainEntries]) {
+      const next = desired.get(key);
+      if (!next || next.signature !== entry.signature) this.removeTerrainChunk(key);
+    }
+    for (const [key, next] of desired) {
+      if (!this.terrainEntries.has(key)) this.createTerrainChunk(next.object, next.chunkX, next.chunkZ, key, next.signature);
+    }
+  }
+
   /**
    * Advance one frame. `objects` are the post-script transforms; `prevTransforms`
    * are the transforms at the start of the tick — the difference is the motion a
@@ -311,6 +443,7 @@ class PhysicsRuntime {
   ): PhysicsFrameResult {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     this.world.timestep = dt;
+    this.syncTerrainChunks(objects);
     this.syncBodies(objects);
     this.syncCharacters(objects);
 
@@ -427,6 +560,14 @@ class PhysicsRuntime {
       const t = entry.body.translation();
       transforms.set(object.id, { position: [t.x, t.y, t.z], rotation: object.transform.rotation });
     }
+    // Kinematic bodies are script-driven: keep the EULER rotation the script set, instead of the
+    // quaternion→Euler readback — that round-trip hits gimbal lock when yaw passes ±90° and would
+    // explode pitch/roll, flipping a script-steered car. (Position still comes from the body.)
+    for (const object of objects) {
+      if (object.physics?.bodyType !== 'kinematic') continue;
+      const t = transforms.get(object.id);
+      if (t) t.rotation = object.transform.rotation;
+    }
 
     return { transforms, collisions, triggers, triggersExit, grounded: [...grounded] };
   }
@@ -436,6 +577,7 @@ class PhysicsRuntime {
     this.world.free();
     this.entries.clear();
     this.charEntries.clear();
+    this.terrainEntries.clear();
     this.handleToId.clear();
     this.handleToTrigger.clear();
   }

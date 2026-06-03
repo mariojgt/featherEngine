@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { ContactShadows, Edges, Environment, Lightformer, TransformControls } from '@react-three/drei';
+import { ContactShadows, Edges, TransformControls } from '@react-three/drei';
 import { Camera, Globe, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
 import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -9,6 +9,7 @@ import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget, computeRestingCameraPose } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
+import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
 import { EditorCamera, editorNav } from '../three/EditorCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
@@ -23,6 +24,10 @@ import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
 import { PostFx } from '../three/PostFx';
+import { CinematicOverlay } from './CinematicOverlay';
+import { SceneEnvironment } from '../three/SceneEnvironment';
+import { Terrain } from '../three/Terrain';
+import { highestTerrainWorldHeight } from '../terrain/terrain';
 import type { SceneObject } from '../types';
 
 type DropContext = { camera: THREE.Camera; canvas: HTMLCanvasElement };
@@ -64,6 +69,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   if (object.effect) return <ImpactParticles effect={object.effect} />;
   // Runtime projectile — glowing tracer + point light instead of a dull sphere.
   if (object.projectile) return <ProjectileVisual object={object} />;
+  if (object.terrain?.enabled) return <Terrain object={object} />;
   const renderer = object.renderer;
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.
@@ -96,6 +102,18 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}
           registerId={object.id}
+          tint={
+            // Recolor the rig only when the renderer itself overrides material (e.g. a per-enemy color tint) —
+            // NOT for the transient hit-flash/focus glow, which must keep the model's baked color and just add
+            // emissive. `baseResolved` is pre-flash, so it isolates the persistent color-override intent.
+            baseResolved.overrideModel || resolved.emissiveIntensity > 0
+              ? {
+                  color: baseResolved.overrideModel ? resolved.color : undefined,
+                  emissiveColor: resolved.emissiveIntensity > 0 ? resolved.emissiveColor : undefined,
+                  emissiveIntensity: resolved.emissiveIntensity > 0 ? resolved.emissiveIntensity : undefined,
+                }
+              : undefined
+          }
         />
       </Suspense>
     );
@@ -222,10 +240,19 @@ export function SceneObjectView({
   object,
   selected,
   registerObject,
+  isGizmoEngaged,
+  drawSelf = true,
+  children,
 }: {
   object: SceneObject;
   selected: boolean;
   registerObject: (id: string, object: THREE.Group | null) => void;
+  /** True when the pointer is over (or dragging) a transform-gizmo handle — selection must yield to it. */
+  isGizmoEngaged?: () => boolean;
+  /** Hide the object's own mesh while still positioning it (e.g. an empty group during Play). */
+  drawSelf?: boolean;
+  /** Nested child objects — rendered inside this object's group so they inherit its transform. */
+  children?: ReactNode;
 }) {
   const selectObject = useEditorStore((state) => state.selectObject);
   const isPlaying = useEditorStore((state) => state.isPlaying);
@@ -234,8 +261,9 @@ export function SceneObjectView({
   if (object.attachment) {
     return (
       <BoneAttachment object={object} onSelect={() => !isPlaying && selectObject(object.id)}>
-        <Primitive object={object} selected={selected} />
+        {drawSelf && <Primitive object={object} selected={selected} />}
         {object.particles && <ParticleSystem object={object} />}
+        {children}
       </BoneAttachment>
     );
   }
@@ -252,14 +280,86 @@ export function SceneObjectView({
         if (isPlaying) return;
         // Alt+LMB drives the orbit camera; don't hijack it for selection.
         if (event.nativeEvent.altKey || event.nativeEvent.button !== 0) return;
+        // Pointer is on a transform-gizmo handle (which raycasts separately): let the gizmo grab it
+        // instead of reselecting whatever mesh happens to sit behind the handle.
+        if (isGizmoEngaged?.()) return;
         event.stopPropagation();
         selectObject(object.id);
       }}
     >
-      <Primitive object={object} selected={selected} />
+      {drawSelf && <Primitive object={object} selected={selected} />}
       {object.particles && <ParticleSystem object={object} />}
+      {children}
     </group>
   );
+}
+
+type TreeRenderOpts = {
+  isPlaying: boolean;
+  recording: boolean;
+  draggingGizmo: boolean;
+  previewingCinematic: boolean;
+  cinematicPreviewTransforms: Record<string, SceneObject['transform']>;
+  selectedObjectId: string;
+  registerObject: (id: string, object: THREE.Group | null) => void;
+  isGizmoEngaged: () => boolean;
+};
+
+/**
+ * Render the scene's objects as a true parent/child graph: each object is a <group> nested inside
+ * its parent's group, so a child's stored transform is LOCAL (relative to the parent) and moving /
+ * rotating / scaling a parent carries every descendant with it.
+ *
+ * Two objects render at the world root even when parented:
+ *  - their parent isn't in the visible set (e.g. a hidden parent) — so the child still shows;
+ *  - during Play, a physics/character object — the Rapier world owns its WORLD transform, so it
+ *    must not also inherit a parent's matrix (which would double-transform it).
+ */
+function renderObjectTree(objects: SceneObject[], opts: TreeRenderOpts): ReactNode {
+  const visible = new Set(objects.map((o) => o.id));
+  const detached = (o: SceneObject) =>
+    !o.parentId ||
+    !visible.has(o.parentId) ||
+    (opts.isPlaying && (o.physics?.enabled || o.character?.enabled));
+
+  const childrenByParent = new Map<string, SceneObject[]>();
+  const roots: SceneObject[] = [];
+  for (const object of objects) {
+    if (detached(object)) {
+      roots.push(object);
+    } else {
+      const list = childrenByParent.get(object.parentId!) ?? [];
+      list.push(object);
+      childrenByParent.set(object.parentId!, list);
+    }
+  }
+
+  const renderNode = (object: SceneObject): ReactNode => {
+    // While recording, the object being dragged uses its live transform (not the keyframe
+    // sample) so the gizmo edit is what you see and key.
+    const suppressOverride = opts.recording && opts.draggingGizmo && object.id === opts.selectedObjectId;
+    const previewTransform =
+      opts.previewingCinematic && !suppressOverride ? opts.cinematicPreviewTransforms[object.id] : undefined;
+    const visibleObject = previewTransform ? { ...object, transform: previewTransform } : object;
+    // Empties are organizational; hide their gizmo box during Play but keep the group so children
+    // (and authored particle/effect empties) still position correctly.
+    const drawSelf = !(opts.isPlaying && object.kind === 'empty' && !object.effect && !object.particles);
+    const kids = childrenByParent.get(object.id);
+    return (
+      <SceneObjectView
+        key={object.id}
+        object={visibleObject}
+        selected={object.id === opts.selectedObjectId}
+        registerObject={opts.registerObject}
+        isGizmoEngaged={opts.isGizmoEngaged}
+        drawSelf={drawSelf}
+      >
+        {kids?.map(renderNode)}
+      </SceneObjectView>
+    );
+  };
+
+  return roots.map(renderNode);
 }
 
 /** A draggable handle for placing a character's follow-camera offset, with a line back to the pawn. */
@@ -346,6 +446,7 @@ function SceneContent({
   previewCamera: boolean;
 }) {
   const allSceneObjects = useEditorStore(selectActiveObjects);
+  const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectObject = useEditorStore((state) => state.selectObject);
@@ -357,15 +458,14 @@ function SceneContent({
   const cinematicPreviewTransforms = useEditorStore((state) => state.editorCinematicPreviewTransforms);
   const cinematicPreviewHidden = useEditorStore((state) => state.editorCinematicPreviewHidden);
   const recording = useEditorStore((state) => state.cinematicRecording);
+  const editingKeyframe = useEditorStore((state) => Boolean(state.selectedCinematicKeyframe));
   const previewingCinematic = !isPlaying && Boolean(cinematicPreview);
   // Camera-space view-models are hidden from the world viewport; select them from the Hierarchy
   // and edit their transform in the Inspector when their first-person placement needs tuning.
   const sceneObjects = allSceneObjects.filter(
     (object) =>
       !object.viewModel &&
-      // Hide empties during Play — EXCEPT particle effects (impact/muzzle bursts + authored emitters live on empties).
-      !((isPlaying ? runtimeHidden : cinematicPreviewHidden).includes(object.id)) &&
-      !(isPlaying && object.kind === 'empty' && !object.effect && !object.particles),
+      !((isPlaying ? runtimeHidden : cinematicPreviewHidden).includes(object.id)),
   );
   const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
   const followTarget = useFollowTarget();
@@ -380,6 +480,14 @@ function SceneContent({
   );
   const objectRefs = useRef(new Map<string, THREE.Group>());
   const [selectedTarget, setSelectedTarget] = useState<THREE.Group | null>(null);
+  // Ref to the live three TransformControls. `axis` is non-null while the pointer hovers a handle
+  // (set on pointer-move, before the press), and `dragging` is true mid-drag — either means a click
+  // belongs to the gizmo, not to editor selection.
+  const controlsRef = useRef<{ axis: string | null; dragging: boolean } | null>(null);
+  const isGizmoEngaged = useCallback(
+    () => Boolean(controlsRef.current && (controlsRef.current.axis || controlsRef.current.dragging)),
+    [],
+  );
 
   const registerObject = useCallback(
     (id: string, object: THREE.Group | null) => {
@@ -443,39 +551,28 @@ function SceneContent({
 
   return (
     <>
-      <color attach="background" args={['#0F1117']} />
-      <fog attach="fog" args={['#0F1117', 14, 28]} />
-      <ambientLight intensity={0.62} />
-      <directionalLight position={[6, 9, 4]} intensity={1.1} />
-      {/* Self-contained environment (no external HDRI fetch) so it works offline and under the desktop CSP. */}
-      <Environment resolution={256}>
-        <Lightformer intensity={1.2} position={[0, 6, 0]} scale={[10, 10, 1]} />
-        <Lightformer intensity={0.7} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
-        <Lightformer intensity={0.5} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
-      </Environment>
+      <SceneEnvironment environment={sceneEnvironment} />
       <group
         onPointerMissed={(event: MouseEvent) => {
           // While playing, clicks belong to the game, not editor selection.
           if (isPlaying) return;
           // Ignore the click that ends an Alt-orbit / right-drag navigation gesture.
           if (event.altKey || event.button !== 0) return;
+          // Grabbing a gizmo handle over empty space hits no mesh and would otherwise fire here and
+          // deselect the object — bail so the gizmo keeps the selection while you drag.
+          if (isGizmoEngaged()) return;
           selectObject('');
         }}
       >
-        {sceneObjects.map((object) => {
-          // While recording, the object being dragged uses its live transform (not the keyframe
-          // sample) so the gizmo edit is what you see and key.
-          const suppressOverride = recording && draggingGizmo && object.id === selectedObjectId;
-          const previewTransform = previewingCinematic && !suppressOverride ? cinematicPreviewTransforms[object.id] : undefined;
-          const visibleObject = previewTransform ? { ...object, transform: previewTransform } : object;
-          return (
-          <SceneObjectView
-            key={object.id}
-            object={visibleObject}
-            selected={object.id === selectedObjectId}
-            registerObject={registerObject}
-          />
-          );
+        {renderObjectTree(sceneObjects, {
+          isPlaying,
+          recording,
+          draggingGizmo,
+          previewingCinematic,
+          cinematicPreviewTransforms,
+          selectedObjectId,
+          registerObject,
+          isGizmoEngaged,
         })}
       </group>
       {/* World-space UI widgets anchored to objects (edit + play). Use the UNFILTERED list so signs on
@@ -483,9 +580,10 @@ function SceneContent({
       {allSceneObjects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
       {selectedTarget && !isPlaying && !cameraRigObject && (!previewingCinematic || recording) && (
         <TransformControls
+          ref={controlsRef as never}
           object={selectedTarget}
           mode={transformMode}
-          size={0.95}
+          size={1.1}
           onObjectChange={syncSelectedTransform}
           onMouseDown={beginGizmoDrag}
           onMouseUp={endGizmoDrag}
@@ -504,23 +602,28 @@ function SceneContent({
       {/* Wireframe preview of the selected object's true collider (edit + Play), so the
           actual physics shape — which often differs from the visual mesh — is visible. */}
       {selectedColliderObject && <ColliderGizmo object={selectedColliderObject} />}
-      <gridHelper args={[24, 24, '#30394D', '#202737']} position={[0, 0.01, 0]} />
-      <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
+      {/* Film Mode: draggable spline + keyframe handles so camera/object paths are built in 3D. */}
+      <CinematicPathGizmo />
+      {/* Editor ground aids — hidden during Play so they don't show up (or sit at the origin over terrain) in
+          the running game. */}
+      {!isPlaying && <gridHelper args={[24, 24, '#30394D', '#202737']} position={[0, 0.01, 0]} />}
+      {!isPlaying && <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />}
       {/* During Play (or when previewing) a character's follow camera takes over the view; otherwise free-orbit.
           Preview mode (editor, not playing) frames the resting camera so offset/pitch tuning is visible live. */}
       {isPlaying && cinematicCamera ? (
         <CinematicCamera />
-      ) : !isPlaying && cinematicPreviewCamera && !recording ? (
-        // While recording you stay on the free editor camera so you can fly to frame each shot —
-        // navigating the viewport auto-keys the cinematic camera track.
+      ) : !isPlaying && cinematicPreviewCamera && !recording && !editingKeyframe ? (
+        // While recording (or editing a keyframe handle) you stay on the free editor camera so you can
+        // fly to frame / drag the path; navigating the viewport auto-keys the cinematic camera track.
         <CinematicCamera pose={cinematicPreviewCamera} />
       ) : (isPlaying || previewCamera) && followTarget ? (
         <FollowCamera preview={!isPlaying} />
       ) : (
         <EditorCamera focusNonce={focusNonce} />
       )}
-      {/* Post-FX (bloom/vignette) during Play so the editor preview matches the shipped game look. */}
-      {isPlaying && <PostFx />}
+      {/* Post-FX (bloom/vignette + cinematic grade/DoF) during Play so the editor matches the shipped
+          game look — and also while scrubbing a cinematic preview so grading/focus are visible there. */}
+      {(isPlaying || previewingCinematic) && <PostFx />}
     </>
   );
 }
@@ -581,6 +684,7 @@ export function ViewportPanel() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
   const cinematicPreviewFade = useEditorStore((state) => state.editorCinematicPreviewFade);
+  const cinematicPreviewLook = useEditorStore((state) => state.editorCinematicPreviewLook);
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const editingPrefabName = useEditorStore((state) =>
     state.prefabs.find((prefab) => prefab.id === state.editingPrefabId)?.name ?? 'Prefab',
@@ -673,7 +777,9 @@ export function ViewportPanel() {
       raycaster.setFromCamera(ndc, ctx.camera);
       const hit = new THREE.Vector3();
       if (raycaster.ray.intersectPlane(groundPlane, hit)) {
-        return [Number(hit.x.toFixed(2)), 0, Number(hit.z.toFixed(2))];
+        const sceneObjects = selectActiveObjects(useEditorStore.getState());
+        const terrainY = highestTerrainWorldHeight(sceneObjects, hit.x, hit.z);
+        return [Number(hit.x.toFixed(2)), Number((terrainY ?? 0).toFixed(2)), Number(hit.z.toFixed(2))];
       }
       return [0, 0, 0];
     },
@@ -845,13 +951,10 @@ export function ViewportPanel() {
         {!isPlaying && !previewCamera && !cinematicPreview && (
           <div className="mouse-look-hint">RMB + WASD/QE fly · Alt+LMB orbit · MMB pan · F focus · W/E/R gizmo · Ctrl+D dupe</div>
         )}
-        {/* Player HUD overlay — clipped to the viewport (Unreal-style "Game View"), not the whole window. */}
-        {!isPlaying && cinematicPreviewFade && cinematicPreviewFade.opacity > 0.001 && (
-          <div
-            className="cinematic-viewport-fade"
-            style={{ background: cinematicPreviewFade.color, opacity: Math.min(1, Math.max(0, cinematicPreviewFade.opacity)) }}
-          />
-        )}
+        {/* Cinematic film look (letterbox / grade / grain) + fade — clipped to the viewport (Unreal-style
+            "Game View"), not the whole window. During Play it reads the live runtime cinematic; while
+            scrubbing in the editor it's driven by the preview look/fade. */}
+        {isPlaying ? <CinematicOverlay /> : <CinematicOverlay look={cinematicPreviewLook} fade={cinematicPreviewFade} />}
         <ScreenUILayer />
         <DynamicCrosshair />
         <GameHud />

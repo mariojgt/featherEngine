@@ -1,6 +1,11 @@
 import { Canvas } from '@react-three/fiber';
-import { ContactShadows, Environment, Lightformer, OrbitControls, PerspectiveCamera } from '@react-three/drei';
-import { Suspense, useLayoutEffect, useMemo } from 'react';
+import {
+  ContactShadows,
+  OrbitControls,
+  PerformanceMonitor,
+  PerspectiveCamera,
+} from '@react-three/drei';
+import { Suspense, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 import { useThree } from '@react-three/fiber';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
@@ -15,6 +20,8 @@ import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { PostFx } from '../three/PostFx';
+import { SceneEnvironment } from '../three/SceneEnvironment';
+import { Terrain } from '../three/Terrain';
 import type { SceneObject, Vector3Tuple } from '../types';
 
 /** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
@@ -25,6 +32,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   if (object.effect) return <ImpactParticles effect={object.effect} />;
   // Runtime projectile — glowing tracer + point light.
   if (object.projectile) return <ProjectileVisual object={object} />;
+  if (object.terrain?.enabled) return <Terrain object={object} />;
   const renderer = object.renderer;
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight: warm emissive rim so the player sees what they can use (Unreal-style).
@@ -67,6 +75,18 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}
           registerId={object.id}
+          tint={
+            // Recolor the rig only when the renderer itself overrides material (e.g. a per-enemy color tint) —
+            // NOT for the transient hit-flash/focus glow, which must keep the model's baked color and just add
+            // emissive. `baseResolved` is pre-flash, so it isolates the persistent color-override intent.
+            baseResolved.overrideModel || resolved.emissiveIntensity > 0
+              ? {
+                  color: baseResolved.overrideModel ? resolved.color : undefined,
+                  emissiveColor: resolved.emissiveIntensity > 0 ? resolved.emissiveColor : undefined,
+                  emissiveIntensity: resolved.emissiveIntensity > 0 ? resolved.emissiveIntensity : undefined,
+                }
+              : undefined
+          }
         />
       </Suspense>
     );
@@ -153,8 +173,60 @@ function CameraTarget({ target }: { target: Vector3Tuple }) {
   return null;
 }
 
+/**
+ * Render the running game's objects as a parent/child scene graph — children sit inside their
+ * parent's <group> so they inherit its transform (matches the editor viewport). Physics/character
+ * objects render at the world root: the simulation owns their world transform, so they must not
+ * also inherit a parent's matrix.
+ */
+function renderGameTree(objects: SceneObject[], focusId: string | null): ReactNode {
+  const visible = new Set(objects.map((o) => o.id));
+  const childrenByParent = new Map<string, SceneObject[]>();
+  const roots: SceneObject[] = [];
+  for (const object of objects) {
+    const detached =
+      !object.parentId || !visible.has(object.parentId) || object.physics?.enabled || object.character?.enabled;
+    if (detached) {
+      roots.push(object);
+    } else {
+      const list = childrenByParent.get(object.parentId!) ?? [];
+      list.push(object);
+      childrenByParent.set(object.parentId!, list);
+    }
+  }
+
+  const renderNode = (object: SceneObject): ReactNode => {
+    const kids = childrenByParent.get(object.id)?.map(renderNode);
+    const body = (
+      <>
+        <GameMesh object={object} focused={object.id === focusId} />
+        {object.particles && <ParticleSystem object={object} />}
+        {kids}
+      </>
+    );
+    return object.attachment ? (
+      <BoneAttachment key={object.id} object={object} onSelect={() => undefined}>
+        {body}
+      </BoneAttachment>
+    ) : (
+      <group
+        key={object.id}
+        userData={{ nfObjectId: object.id }}
+        position={object.transform.position}
+        rotation={object.transform.rotation}
+        scale={object.transform.scale}
+      >
+        {body}
+      </group>
+    );
+  };
+
+  return roots.map(renderNode);
+}
+
 function GameScene() {
   const allObjects = useEditorStore(selectActiveObjects);
+  const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
   const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
@@ -168,16 +240,7 @@ function GameScene() {
 
   return (
     <>
-      <color attach="background" args={['#0F1117']} />
-      <fog attach="fog" args={['#0F1117', 14, 28]} />
-      <ambientLight intensity={0.62} />
-      <directionalLight position={[6, 9, 4]} intensity={1.1} castShadow />
-      {/* Self-contained lighting (no external HDRI) so the export runs offline and under the desktop CSP. */}
-      <Environment resolution={256}>
-        <Lightformer intensity={1.2} position={[0, 6, 0]} scale={[10, 10, 1]} />
-        <Lightformer intensity={0.7} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
-        <Lightformer intensity={0.5} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
-      </Environment>
+      <SceneEnvironment environment={sceneEnvironment} shadows />
 
       {cinematicCamera ? (
         <CinematicCamera />
@@ -192,27 +255,7 @@ function GameScene() {
         <OrbitControls makeDefault enableDamping dampingFactor={0.07} minDistance={2.5} maxDistance={24} />
       )}
 
-      <group>
-        {objects.map((object) =>
-          object.attachment ? (
-            <BoneAttachment key={object.id} object={object} onSelect={() => undefined}>
-              <GameMesh object={object} focused={object.id === focusId} />
-              {object.particles && <ParticleSystem object={object} />}
-            </BoneAttachment>
-          ) : (
-            <group
-              key={object.id}
-              userData={{ nfObjectId: object.id }}
-              position={object.transform.position}
-              rotation={object.transform.rotation}
-              scale={object.transform.scale}
-            >
-              <GameMesh object={object} focused={object.id === focusId} />
-              {object.particles && <ParticleSystem object={object} />}
-            </group>
-          ),
-        )}
-      </group>
+      <group>{renderGameTree(objects, focusId)}</group>
 
       {/* World-space UI widgets (health bars, nameplates) anchored at each object's position. */}
       {objects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
@@ -224,8 +267,21 @@ function GameScene() {
 }
 
 export function GameView() {
+  // Adaptive resolution. The exported game runs full-window/fullscreen, which on a Retina display
+  // is up to ~4x the fragments of the editor's small docked viewport — the usual cause of FPS drops
+  // after export. Start at a capped DPR and let PerformanceMonitor lower it when the frame rate dips,
+  // then restore it once there's headroom again (smoothness over a slightly softer image under load).
+  const [dpr, setDpr] = useState(1.5);
   return (
-    <Canvas className="game-canvas" shadows camera={{ position: [6, 4.2, 7], fov: 50 }}>
+    <Canvas
+      className="game-canvas"
+      shadows
+      dpr={dpr}
+      gl={{ powerPreference: 'high-performance' }}
+      performance={{ min: 0.5 }}
+      camera={{ position: [6, 4.2, 7], fov: 50 }}
+    >
+      <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
       <GameScene />
     </Canvas>
   );

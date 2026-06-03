@@ -14,7 +14,9 @@ import type {
   MaterialDefinition,
   MeshRendererComponent,
   RigidBodyType,
+  SceneEnvironmentSettings,
   SceneObjectKind,
+  TerrainComponent,
   UIElement,
   Vector3Tuple,
 } from '../types';
@@ -22,6 +24,7 @@ import { buildSceneSnapshot, type SceneSnapshotDetail } from './systemPrompt';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
+import { createDrivingTemplate } from '../project/drivingTemplate';
 
 const store = () => useEditorStore.getState();
 
@@ -31,6 +34,67 @@ const VALUE_TYPES = ['number', 'string', 'boolean', 'vector3'] as const;
 const graphValue = z.union([z.number(), z.string(), z.boolean(), vec3]);
 const asGraphValue = (value: string | number | boolean | number[]) =>
   (Array.isArray(value) ? asVec3(value) : value) as GraphValue;
+const terrainFoliagePatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  mode: z.enum(['grass', 'trees', 'mixed']).optional(),
+  density: z.number().min(0).max(1).optional().describe('Grass/shrub density 0..1.'),
+  treeDensity: z.number().min(0).max(1).optional().describe('Tree density 0..1.'),
+  minScale: z.number().min(0.1).max(12).optional(),
+  maxScale: z.number().min(0.1).max(16).optional(),
+  slopeLimit: z.number().min(0).max(1).optional().describe('Minimum normal Y for placement; higher avoids steep slopes.'),
+  grassMesh: z.enum(['blade', 'cross', 'tuft']).optional(),
+  treeMesh: z.enum(['cone', 'round']).optional(),
+  grassModelAssetId: z.string().optional().describe('Optional model asset id to render custom grass/clumps, or "" to clear.'),
+  treeModelAssetId: z.string().optional().describe('Optional model asset id to render custom trees, or "" to clear.'),
+  grassColor: z.string().optional(),
+  trunkColor: z.string().optional(),
+  treeColor: z.string().optional(),
+});
+const terrainMaterialLayerPatchSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  color: z.string().optional(),
+  textureAssetId: z.string().optional().describe('Optional image asset id for the layer base texture, or "" to clear.'),
+  normalMapAssetId: z.string().optional().describe('Optional image asset id for the layer normal map, or "" to clear.'),
+});
+const terrainPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  size: z.number().min(32).max(8192).optional().describe('Total terrain width/depth in world units.'),
+  chunkSize: z.number().min(8).max(512).optional().describe('Streamed chunk width/depth in world units.'),
+  resolution: z.number().int().min(4).max(64).optional().describe('Segments per chunk edge. Higher = more detail/cost.'),
+  streamRadius: z.number().int().min(1).max(10).optional().describe('Render chunk rings around the camera/player.'),
+  physicsRadius: z.number().int().min(1).max(5).optional().describe('Physics chunk rings around characters/dynamic bodies.'),
+  seed: z.number().int().optional(),
+  heightScale: z.number().min(0).max(256).optional(),
+  frequency: z.number().min(0.001).max(0.25).optional(),
+  octaves: z.number().int().min(1).max(8).optional(),
+  persistence: z.number().min(0.05).max(0.95).optional(),
+  lacunarity: z.number().min(1.1).max(4).optional(),
+  editSpacing: z.number().min(0.5).max(16).optional().describe('World units between persistent sculpt/paint samples.'),
+  lowColor: z.string().optional(),
+  midColor: z.string().optional(),
+  highColor: z.string().optional(),
+  materialLayers: z.array(terrainMaterialLayerPatchSchema).min(1).max(8).optional(),
+  foliage: terrainFoliagePatchSchema.optional(),
+});
+const environmentPatchSchema = z.object({
+  skyMode: z.enum(['color', 'procedural', 'image']).optional(),
+  backgroundColor: z.string().optional().describe('Flat/fallback background hex color.'),
+  skyTopColor: z.string().optional().describe('Procedural sky zenith hex color.'),
+  skyHorizonColor: z.string().optional().describe('Procedural horizon hex color.'),
+  skyGroundColor: z.string().optional().describe('Procedural lower-sky/ground-tint hex color.'),
+  skyTextureAssetId: z.string().optional().describe('Image asset id for an equirectangular panorama, or "" to clear.'),
+  skyRotation: z.number().optional().describe('Sky dome yaw in degrees.'),
+  environmentIntensity: z.number().min(0).optional().describe('Built-in ambient/environment light strength.'),
+  sunColor: z.string().optional().describe('Directional sun hex color.'),
+  sunIntensity: z.number().min(0).optional().describe('Directional sun strength.'),
+  sunAzimuth: z.number().optional().describe('Sun compass angle in degrees.'),
+  sunElevation: z.number().optional().describe('Sun height in degrees.'),
+  fogEnabled: z.boolean().optional(),
+  fogColor: z.string().optional(),
+  fogNear: z.number().min(0).optional(),
+  fogFar: z.number().min(1).optional(),
+});
 const cinematicActionSchema = z.object({
   type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade']),
   time: z.number().min(0).describe('Seconds from cinematic start.'),
@@ -44,6 +108,8 @@ const cinematicActionSchema = z.object({
         position: vec3,
         lookAt: vec3,
         fov: z.number().min(10).max(140),
+        focusDistance: z.number().min(0).optional().describe('Depth-of-field focus distance (world units ahead of camera). Splines across keyframes for rack-focus pulls.'),
+        aperture: z.number().min(0).max(12).optional().describe('Depth-of-field blur strength (bokeh). 0 = sharp, 3–6 = shallow cinematic focus.'),
       }),
     )
     .optional()
@@ -62,7 +128,7 @@ const cinematicActionSchema = z.object({
   label: z.string().optional(),
   objectId: z.string().optional().describe('Target scene object id for transform/visibility/animation.'),
   prefabId: z.string().optional().describe('Prefab to instantiate temporarily during the cinematic.'),
-  spawnKind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera']).optional(),
+  spawnKind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'terrain', 'light', 'camera']).optional(),
   name: z.string().optional(),
   fromPosition: vec3.optional(),
   toPosition: vec3.optional(),
@@ -75,6 +141,8 @@ const cinematicActionSchema = z.object({
   scale: vec3.optional(),
   lookAt: vec3.optional(),
   fov: z.number().min(10).max(140).optional(),
+  focusDistance: z.number().min(0).optional().describe('Camera beats only: depth-of-field focus distance (world units ahead of camera). Blends with the next shot for rack-focus pulls. Needs aperture > 0.'),
+  aperture: z.number().min(0).max(12).optional().describe('Camera beats only: depth-of-field blur strength (bokeh). 0 = everything sharp, 3–6 = shallow cinematic focus.'),
   visible: z.boolean().optional(),
   animationId: z.string().optional(),
   animationSpeed: z.number().min(0.05).max(5).optional(),
@@ -100,7 +168,7 @@ function normalizeCinematicAction(input: z.infer<typeof cinematicActionSchema>):
     scale: input.scale ? asVec3(input.scale) : undefined,
     lookAt: input.lookAt ? asVec3(input.lookAt) : undefined,
     keyframes: input.keyframes
-      ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov }))
+      ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov, focusDistance: frame.focusDistance, aperture: frame.aperture }))
       : undefined,
     transformKeyframes: input.transformKeyframes
       ? input.transformKeyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), rotation: asVec3(frame.rotation), scale: asVec3(frame.scale) }))
@@ -149,7 +217,10 @@ const NODE_LABELS = [
   'Get Anim Param',
   'Get Anim State',
   'Get Move Input',
+  'Get Drive Input',
+  'Get Vehicle Speed',
   'Move',
+  'Drive',
   'Jump',
   'Is Grounded',
   'Set Camera',
@@ -216,7 +287,10 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Get Anim Param': 'Runtime',
   'Get Anim State': 'Runtime',
   'Get Move Input': 'Runtime',
+  'Get Drive Input': 'Runtime',
+  'Get Vehicle Speed': 'Runtime',
   Move: 'Runtime',
+  Drive: 'Runtime',
   Jump: 'Runtime',
   'Is Grounded': 'Runtime',
   'Set Camera': 'Runtime',
@@ -419,11 +493,12 @@ export const engineTools = {
   create_object: tool({
     description: 'Create a new scene object. Returns its id. Spawn dynamic physics objects slightly above the ground (y > 0). Pass parentId to nest it under another object (e.g. building a composite character).',
     inputSchema: z.object({
-      kind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera']),
+      kind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'terrain', 'light', 'camera']),
       name: z.string().optional(),
       position: vec3.optional(),
       color: z.string().optional().describe('Hex color, e.g. #FF6B6B'),
       parentId: z.string().optional().describe('Nest the new object under this existing object.'),
+      terrain: terrainPatchSchema.optional().describe('Only for kind:"terrain": procedural terrain/chunk/foliage settings.'),
       physics: z
         .object({
           enabled: z.boolean().optional(),
@@ -432,21 +507,150 @@ export const engineTools = {
         })
         .optional(),
     }),
-    execute: async ({ kind, name, position, color, parentId, physics }) => {
+    execute: async ({ kind, name, position, color, parentId, physics, terrain }) => {
       if (parentId && !findObject(parentId)) return `No object with id ${parentId} to parent under.`;
       const id = store().createObjectWithProps(kind as SceneObjectKind, {
         name,
         position: position ? asVec3(position) : undefined,
         color,
         parentId,
+        terrain: terrain as Partial<TerrainComponent> | undefined,
         physics: physics ? { ...physics, enabled: physics.enabled ?? true } : undefined,
       });
       return `Created ${kind} "${findObject(id)?.name}" with id ${id}${parentId ? ` (nested under ${parentId})` : ''}.`;
     },
   }),
 
+  create_terrain: tool({
+    description:
+      'Create the MVP open-world terrain actor: procedural streamed terrain chunks, heightfield physics near active bodies, and optional instanced foliage. Returns the terrain object id.',
+    inputSchema: terrainPatchSchema.extend({
+      name: z.string().optional(),
+      position: vec3.optional().describe('Terrain origin. Default [0,0,0].'),
+    }),
+    execute: async ({ name, position, ...terrain }) => {
+      const id = store().createObjectWithProps('terrain', {
+        name: name ?? 'Open World Terrain',
+        position: position ? asVec3(position) : [0, 0, 0],
+        terrain: terrain as Partial<TerrainComponent>,
+        physics: { enabled: true, bodyType: 'fixed', collider: 'mesh' },
+      });
+      return `Created streamed terrain "${findObject(id)?.name}" with id ${id}.`;
+    },
+  }),
+
+  update_terrain: tool({
+    description:
+      'Update a terrain object created with create_terrain/create_object kind:"terrain". Controls chunk streaming, procedural height, editable material layers, and instanced/custom foliage.',
+    inputSchema: terrainPatchSchema.extend({ objectId: z.string() }),
+    execute: async ({ objectId, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      store().updateTerrain(objectId, patch as Partial<TerrainComponent>);
+      return `Updated terrain ${objectId}.`;
+    },
+  }),
+
+  sculpt_terrain: tool({
+    description:
+      'Apply one terrain sculpt brush stroke at a world-space point. Use this for authored hills, paths, flat pads, ramps, and smoothing after create_terrain.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      worldPosition: vec3.describe('World-space brush center [x,y,z]. The y value is ignored; x/z choose the terrain point.'),
+      operation: z.enum(['raise', 'lower', 'flatten', 'smooth']).optional(),
+      radius: z.number().min(0.5).max(256).optional(),
+      strength: z.number().min(0).max(64).optional(),
+      flattenHeight: z.number().optional().describe('Local terrain height used by flatten.'),
+    }),
+    execute: async ({ objectId, worldPosition, operation, radius, strength, flattenHeight }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      store().sculptTerrainAt(objectId, asVec3(worldPosition), { operation, radius, strength, flattenHeight });
+      return `Sculpted terrain ${objectId}.`;
+    },
+  }),
+
+  paint_terrain: tool({
+    description:
+      'Paint one terrain material layer at a world-space point. Use the layer id/name from the snapshot or create/update layers first.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      worldPosition: vec3.describe('World-space brush center [x,y,z]. The y value is ignored; x/z choose the terrain point.'),
+      layerId: z.string().optional(),
+      layerName: z.string().optional(),
+      radius: z.number().min(0.5).max(256).optional(),
+    }),
+    execute: async ({ objectId, worldPosition, layerId, layerName, radius }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      const layers = object.terrain.materialLayers ?? [];
+      const layer =
+        layers.find((item) => item.id === layerId) ??
+        layers.find((item) => layerName && item.name.toLowerCase() === layerName.toLowerCase()) ??
+        layers[0];
+      if (!layer) return `Terrain ${objectId} has no material layers.`;
+      store().paintTerrainAt(objectId, asVec3(worldPosition), { layerId: layer.id, radius });
+      return `Painted terrain ${objectId} with layer ${layer.name} (${layer.id}).`;
+    },
+  }),
+
+  add_terrain_layer: tool({
+    description: 'Add a paintable material layer to a terrain object. Returns the layer id.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      name: z.string().optional(),
+      color: z.string().optional(),
+      textureAssetId: z.string().optional(),
+      normalMapAssetId: z.string().optional(),
+    }),
+    execute: async ({ objectId, name, color, textureAssetId, normalMapAssetId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      for (const assetId of [textureAssetId, normalMapAssetId].filter(Boolean) as string[]) {
+        const asset = findAsset(assetId);
+        if (!asset) return `No asset with id ${assetId}.`;
+        if (asset.type !== 'image') return `Asset ${assetId} is a ${asset.type}, not an image.`;
+      }
+      const id = store().addTerrainMaterialLayer(objectId);
+      if (!id) return `Could not add a terrain layer to ${objectId}.`;
+      store().updateTerrainMaterialLayer(objectId, id, {
+        ...(name ? { name } : {}),
+        ...(color ? { color } : {}),
+        ...(textureAssetId !== undefined ? { textureAssetId: textureAssetId || undefined } : {}),
+        ...(normalMapAssetId !== undefined ? { normalMapAssetId: normalMapAssetId || undefined } : {}),
+      });
+      return `Added terrain layer ${name ?? id} with id ${id}.`;
+    },
+  }),
+
+  update_terrain_layer: tool({
+    description: 'Update one paintable terrain material layer by layer id.',
+    inputSchema: terrainMaterialLayerPatchSchema.extend({ objectId: z.string(), layerId: z.string() }),
+    execute: async ({ objectId, layerId, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      if (!object.terrain.materialLayers?.some((layer) => layer.id === layerId)) return `Terrain ${objectId} has no layer ${layerId}.`;
+      for (const assetId of [patch.textureAssetId, patch.normalMapAssetId].filter(Boolean) as string[]) {
+        const asset = findAsset(assetId);
+        if (!asset) return `No asset with id ${assetId}.`;
+        if (asset.type !== 'image') return `Asset ${assetId} is a ${asset.type}, not an image.`;
+      }
+      store().updateTerrainMaterialLayer(objectId, layerId, {
+        ...patch,
+        textureAssetId: patch.textureAssetId || undefined,
+        normalMapAssetId: patch.normalMapAssetId || undefined,
+      });
+      return `Updated terrain layer ${layerId}.`;
+    },
+  }),
+
   set_object_parent: tool({
-    description: 'Nest an object under a parent (it follows the parent and is deleted with it), or detach it to the scene root by omitting parentId. Used to build/edit composite object hierarchies.',
+    description: "Nest an object under a parent (true scene graph: it inherits the parent's position/rotation/scale and is deleted with it), or detach it to the scene root by omitting parentId. The object KEEPS its world pose across the move — its transform is recomputed into the parent's LOCAL space, so set its position to [0,0,0] afterward to snap it onto the parent. Used to build/edit composite object hierarchies.",
     inputSchema: z.object({ id: z.string(), parentId: z.string().optional() }),
     execute: async ({ id, parentId }) => {
       if (!findObject(id)) return `No object with id ${id}.`;
@@ -535,6 +739,25 @@ export const engineTools = {
         ...(musicSoundId !== undefined ? { musicSoundId: musicSoundId || undefined } : {}),
       });
       return `Updated scene audio (ambient/music).`;
+    },
+  }),
+
+  set_scene_environment: tool({
+    description:
+      'Set the active scene sky/fog/base lighting. Use this for mood, time of day, sunset/night/daylight, panorama skyboxes, and fog. This is scene-level World Settings, not a Blueprint node.',
+    inputSchema: environmentPatchSchema,
+    execute: async ({ skyTextureAssetId, ...patch }) => {
+      if (skyTextureAssetId) {
+        const asset = findAsset(skyTextureAssetId);
+        if (!asset) return `No asset with id ${skyTextureAssetId}.`;
+        if (asset.type !== 'image') return `Asset ${skyTextureAssetId} is a ${asset.type}, not an image — sky panoramas must be image assets.`;
+      }
+      const environmentPatch: Partial<SceneEnvironmentSettings> = {
+        ...patch,
+        ...(skyTextureAssetId !== undefined ? { skyTextureAssetId: skyTextureAssetId || undefined } : {}),
+      };
+      store().updateSceneEnvironment(store().activeSceneId, environmentPatch);
+      return `Updated scene environment (${Object.keys(environmentPatch).join(', ') || 'defaults'}).`;
     },
   }),
 
@@ -1208,22 +1431,22 @@ export const engineTools = {
 
   create_third_person_template: tool({
     description:
-      'Build a complete third-person starter game from bundled assets: player pawn, controller, kits, sword/pistol pickups, HUD, and target dummy. Returns pawn objectId.',
+      'Build a complete open-world (Zelda-like) third-person starter game from bundled assets: a procedural terrain island with foliage + sky/fog, a sword+bow player pawn, a village Elder NPC who gives a 3-step quest (collect 3 relics → return → clear the ruins & reach the shrine), scattered collectible relics with a HUD counter, an enemy encounter + boss in the ruins, and an intro cinematic. Returns pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createThirdPersonTemplate();
-      return id ? `Created third-person starter — pawn objectId ${id}. Press Play: WASD move (hold Shift to sprint), mouse look, walk over the sword/pistol to equip, click to shoot (pistol), E interact, F emote.` : `Couldn't build the template.`;
+      return id ? `Created open-world third-person starter — pawn objectId ${id}. Press Play: WASD move (hold Shift to sprint), mouse look, LMB sword swing / RMB+LMB bow, Space jump, E to talk to the Elder. Follow the quest: collect the 3 relics, return to the Elder, then clear the northern ruins and reach the shrine.` : `Couldn't build the template.`;
     },
   }),
 
   create_first_person_template: tool({
     description:
-      'Build a complete FPS starter from bundled assets: invisible player pawn, camera-bound animated arms, weapon triggers, HUD crosshair, enemies, props, and projectile logic. Returns pawn objectId.',
+      'Build a complete FPS starter from bundled assets: invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles, HUD (crosshair/ammo/health), explosive barrels, full-body rigged enemies with world-space health bars, a 3-room gated tutorial, a cinematic mood (night-arena environment + bloom + ambient/music), an intro cinematic, and a clear-the-arena win/lose flow. Returns pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createFirstPersonTemplate();
       return id
-        ? `Created FPS starter — pawn objectId ${id}. Press Play: WASD move, mouse look, click to fire, R reload/fix, Q/E grab, C/T push, and 1-4 swap arm/weapon animations.`
+        ? `Created FPS starter — pawn objectId ${id}. Press Play: an intro cinematic sweeps the arena, then WASD move, mouse look, hold LMB to fire (auto), RMB aim, R reload, 1-5 swap weapons. Clear every enemy for VICTORY; a YOU DIED screen shows if your Health hits 0.`
         : `Couldn't build the FPS template.`;
     },
   }),
@@ -1235,6 +1458,76 @@ export const engineTools = {
     execute: async () => {
       const id = createFilmModeTemplate();
       return id ? `Created Film Mode cinematic tutorial with cinematicId ${id}. Press Play to watch it.` : `Couldn't build the Film Mode template.`;
+    },
+  }),
+
+  create_driving_template: tool({
+    description:
+      'Build a complete arcade RACING starter from the bundled car kit: a "choose your car" start menu (5 cars), a marked race circuit (a stadium oval of edge cones + checkpoint gate posts + a start/finish line whose start straight doubles as the grid) on a near-flat streamed terrain world, WASD + mouse-orbit driving with suspension feel (chassis squat/dive/lean + spinning, steering wheels), a real handbrake drift, headlights, brake lights, a full car sound set (looping engine + skid, brake/horn/collision one-shots), and a HUD with a speedometer + lap counter / current & best lap time. The runtime times laps automatically as the car passes the "Checkpoint N" markers in order. Returns the default car objectId.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createDrivingTemplate();
+      return id
+        ? `Created racing starter — default car objectId ${id}. Press Play: pick a car, then W accelerate, S brake/reverse, A/D steer, Space handbrake (drift), H horn, mouse to look. Follow the cone-lined oval through the checkpoints; laps are timed on the HUD. Tune handling/audio with set_vehicle.`
+        : `Couldn't build the driving template.`;
+    },
+  }),
+
+  set_vehicle: tool({
+    description:
+      'Add/configure the built-in arcade VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn), the body is a dynamic Rapier body (vertical owned by physics so it rides terrain/ramps), suspension is visual (chassis squat/dive/lean + spinning, steering wheels). The handbrake loosens rear grip (handbrakeGrip) for oversteer; while the tires slip the car leans harder and the skid sound fades in. Wire wheelObjectIds/steeredWheelIds/headlightIds/brakeLightIds to child objects and the engine/skid/brake/horn/collision audio asset ids. Pass enabled:false to remove control. All fields optional.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      enabled: z.boolean().optional(),
+      maxSpeed: z.number().optional().describe('Top forward speed (u/s). Default 26.'),
+      maxReverseSpeed: z.number().optional().describe('Top reverse speed (u/s). Default 9.'),
+      acceleration: z.number().optional().describe('Throttle accel (u/s²). Default 16.'),
+      braking: z.number().optional().describe('Brake decel (u/s²). Default 34.'),
+      drag: z.number().optional().describe('Coast decel (u/s²). Default 9.'),
+      steerAngle: z.number().optional().describe('Max front-wheel steer (radians). Default 0.55.'),
+      turnRate: z.number().optional().describe('Yaw turn rate (rad/s) at full lock + speed. Default 2.0.'),
+      gripFactor: z.number().optional().describe('Lateral grip 0..1 (drives lean + slip). Default 0.9.'),
+      handbrakeGrip: z.number().optional().describe('Rear grip 0..1 while handbrake held — lower = looser drift. Default 0.28.'),
+      bodyRoll: z.number().optional().describe('Chassis lean into turns. Default 0.05.'),
+      bodyPitch: z.number().optional().describe('Chassis squat/dive under accel/brake. Default 0.04.'),
+      suspensionStiffness: z.number().optional().describe('How quickly lean/squat settles, 0..1. Default 0.18.'),
+      wheelRadius: z.number().optional().describe('Wheel radius (u) — sets spin rate. Default 0.4.'),
+      wheelObjectIds: z.array(z.string()).optional().describe('The 4 wheel child object ids [FL,FR,RL,RR].'),
+      steeredWheelIds: z.array(z.string()).optional().describe('Which wheels steer (the front pair).'),
+      headlightIds: z.array(z.string()).optional(),
+      brakeLightIds: z.array(z.string()).optional(),
+      keyThrottle: z.string().optional(),
+      keyReverse: z.string().optional(),
+      keyLeft: z.string().optional(),
+      keyRight: z.string().optional(),
+      keyHandbrake: z.string().optional(),
+      keyHorn: z.string().optional().describe('Key code that sounds the horn. Default KeyH.'),
+      cameraFollow: z.boolean().optional(),
+      cameraOffset: vec3.optional().describe('[side, up, back]. Negative Z is behind.'),
+      cameraPitch: z.number().optional(),
+      mouseLook: z.boolean().optional(),
+      engineSoundId: z.string().optional().describe('Audio asset id LOOPED as the engine (playback rate rises with speed).'),
+      skidSoundId: z.string().optional().describe('Audio asset id LOOPED while the tires slip (volume ∝ drift).'),
+      brakeSoundId: z.string().optional().describe('One-shot brake squeal on hard deceleration.'),
+      hornSoundId: z.string().optional().describe('One-shot horn fired on the horn key.'),
+      collisionSoundId: z.string().optional().describe('One-shot impact when the car hits something while moving.'),
+    }),
+    execute: async ({ objectId, enabled, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (enabled === false) {
+        store().setVehicleEnabled(objectId, false);
+        return `Disabled vehicle controller on ${object.name}.`;
+      }
+      store().setVehicleEnabled(objectId, true);
+      if (Object.keys(patch).length) {
+        const { cameraOffset, ...rest } = patch;
+        store().updateVehicle(objectId, {
+          ...rest,
+          ...(cameraOffset ? { cameraOffset: asVec3(cameraOffset) } : {}),
+        });
+      }
+      return `Updated vehicle controller on ${object.name}.`;
     },
   }),
 
@@ -1264,6 +1557,51 @@ export const engineTools = {
     execute: async ({ cinematicId, action }) => {
       const id = store().addCinematicAction(cinematicId, normalizeCinematicAction(action));
       return id ? `Added cinematic action ${id}.` : `No cinematic with id ${cinematicId}.`;
+    },
+  }),
+
+  add_cinematic_shot: tool({
+    description:
+      'Add one static camera shot (a single framing) to a Film Mode cinematic — the "shot list" primitive. Each call is a cut to a new framing; chain several to edit a sequence (e.g. wide → push-in → reveal). Set blend>0 to dolly from the previous shot instead of a hard cut. Add focusDistance+aperture for depth-of-field; differing focusDistance across a blended shot pair produces a rack-focus pull.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      time: z.number().min(0).describe('Seconds from cinematic start when this shot cuts in.'),
+      position: vec3.describe('Camera world position.'),
+      lookAt: vec3.describe('World point the camera frames.'),
+      fov: z.number().min(10).max(140).optional().describe('Field of view in degrees (default 50; lower = tighter/more telephoto).'),
+      blend: z.number().min(0).max(10).optional().describe('Seconds to dolly from the previous shot. 0 = hard cut (default for the first shot); ~1–2 for a smooth move.'),
+      focusDistance: z.number().min(0).optional().describe('Depth-of-field focus distance in world units ahead of the camera.'),
+      aperture: z.number().min(0).max(12).optional().describe('Depth-of-field blur strength (bokeh). 0 = sharp, 3–6 = shallow cinematic focus.'),
+      duration: z.number().min(0).optional(),
+      label: z.string().optional(),
+    }),
+    execute: async ({ cinematicId, time, position, lookAt, fov, blend, focusDistance, aperture, duration, label }) => {
+      const id = store().addCinematicShot(cinematicId, { time, position: asVec3(position), lookAt: asVec3(lookAt), fov, blend, focusDistance, aperture, duration, label });
+      return id ? `Added camera shot ${id} at ${time}s.` : `No cinematic with id ${cinematicId}.`;
+    },
+  }),
+
+  set_cinematic_look: tool({
+    description:
+      'Set the film "look" of a cinematic: letterbox bars, film grain, an extra vignette, and a real color grade rendered on the cinematic camera. Use to make a cutscene read as a movie. The grade is a preset PLUS optional manual params (exposure/contrast/saturation/temperature/tint) scaled by gradeIntensity — pass a preset for a quick look, or the manual params (with grade:"custom") to dial it in.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      letterbox: z.number().min(0).max(3).optional().describe('Letterbox aspect ratio (e.g. 2.39 for scope, 1.85 for flat). 0 = no bars.'),
+      grade: z.enum(['none', 'warm', 'teal-orange', 'noir', 'cool', 'sepia', 'custom']).optional().describe('Color grade preset. Seeds the params below; use "custom" to drive the grade purely from the params.'),
+      gradeIntensity: z.number().min(0).max(1).optional().describe('Overall grade strength (mix between original and graded). Default 1.'),
+      exposure: z.number().min(-1).max(1).optional().describe('Exposure offset in stops. Overrides the preset.'),
+      contrast: z.number().min(-1).max(1).optional().describe('Contrast, −1..1. Overrides the preset.'),
+      saturation: z.number().min(-1).max(1).optional().describe('Saturation, −1 (grayscale) .. 1 (boosted). Overrides the preset.'),
+      temperature: z.number().min(-1).max(1).optional().describe('Color temperature, −1 (cool) .. 1 (warm). Overrides the preset.'),
+      tint: z.string().optional().describe('Custom tint color (hex) multiplied into the image by tintAmount.'),
+      tintAmount: z.number().min(0).max(1).optional().describe('Strength of the custom tint, 0–1.'),
+      grain: z.number().min(0).max(1).optional().describe('Film-grain strength, 0–1.'),
+      vignette: z.number().min(0).max(1).optional().describe('Darkened-edge vignette strength, 0–1.'),
+    }),
+    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette }) => {
+      if (!store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
+      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette });
+      return `Updated film look for cinematic ${cinematicId}.`;
     },
   }),
 
@@ -1812,12 +2150,12 @@ export const engineTools = {
 
   bind_ui_element: tool({
     description:
-      'Bind a UI property to a live expression using project variable names or self.<key> for world UI. Empty expression removes the binding.',
+      "Bind a UI property to a live expression using project variable names or self.<key> for world UI. Use vars['Display Name'] for variable names with spaces. Empty expression removes the binding.",
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
       target: z.enum(['text', 'fill', 'visible', 'color', 'background', 'width']),
-      expression: z.string().describe('e.g. "score", "health / 100", "self.health > 0"'),
+      expression: z.string().describe('e.g. "score", "health / 100", "vars[\'Gold Coins\']", "self.health > 0"'),
     }),
     execute: async ({ documentId, elementId, target, expression }) => {
       if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
@@ -1857,6 +2195,46 @@ export const engineTools = {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
       store().setObjectVariable(objectId, key, asGraphValue(value));
       return `Set ${objectId}.${key} = ${JSON.stringify(value)}.`;
+    },
+  }),
+
+  add_blueprint_variable: tool({
+    description:
+      'Declare a typed PER-INSTANCE variable on a blueprint (Unreal-style class variable). Every object running this blueprint gets its OWN copy (seeded by name into its instance variables) — use this for per-actor state like a player\'s Gold/Health/Ammo, an enemy\'s aggro, etc., so it is NOT shared across instances the way a project variable is. Read/write it with Get/Set Object Var nodes (objectKey = the variable name), on self or another actor via a target/Cast. Returns the blueprint-variable id.',
+    inputSchema: z.object({
+      blueprintId: z.string(),
+      name: z.string().optional(),
+      type: z.enum(VALUE_TYPES).optional(),
+      defaultValue: graphValue.optional(),
+    }),
+    execute: async ({ blueprintId, name, type = 'number', defaultValue }) => {
+      if (!store().blueprints.some((b) => b.id === blueprintId)) return `No blueprint with id ${blueprintId}.`;
+      const id = store().addBlueprintVariable(blueprintId, { name, type: type as GraphValueType, defaultValue: defaultValue !== undefined ? asGraphValue(defaultValue) : undefined });
+      return id ? `Added instance variable "${name ?? id}" (${type}) to blueprint ${blueprintId}. Each object running it gets its own copy; access via Get/Set Object Var (objectKey = the name).` : `Couldn't add the variable.`;
+    },
+  }),
+
+  update_blueprint_variable: tool({
+    description: "Rename, retype, or change the default of a blueprint's per-instance variable.",
+    inputSchema: z.object({
+      blueprintId: z.string(),
+      variableId: z.string(),
+      name: z.string().optional(),
+      type: z.enum(VALUE_TYPES).optional(),
+      defaultValue: graphValue.optional(),
+    }),
+    execute: async ({ blueprintId, variableId, name, type, defaultValue }) => {
+      store().updateBlueprintVariable(blueprintId, variableId, { name, type: type as GraphValueType | undefined, defaultValue: defaultValue !== undefined ? asGraphValue(defaultValue) : undefined });
+      return `Updated blueprint variable ${variableId}.`;
+    },
+  }),
+
+  remove_blueprint_variable: tool({
+    description: "Remove a per-instance variable declaration from a blueprint.",
+    inputSchema: z.object({ blueprintId: z.string(), variableId: z.string() }),
+    execute: async ({ blueprintId, variableId }) => {
+      store().removeBlueprintVariable(blueprintId, variableId);
+      return `Removed blueprint variable ${variableId}.`;
     },
   }),
 

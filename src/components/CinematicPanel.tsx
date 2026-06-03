@@ -2,13 +2,31 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, CircleDot, Clapperboard, Eye, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { editorCameraPose } from '../three/EditorCamera';
-import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicTransformKeyframe, SceneObjectKind, Vector3Tuple } from '../types';
+import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicTransformKeyframe, SceneObjectKind, Vector3Tuple } from '../types';
+import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
 
 const easeOptions: { value: CinematicEase; label: string }[] = [
   { value: 'smooth', label: 'Smooth (ease in-out)' },
   { value: 'in', label: 'Ease in' },
   { value: 'out', label: 'Ease out' },
   { value: 'linear', label: 'Linear' },
+];
+
+const gradeOptions: { value: CinematicGrade; label: string }[] = [
+  { value: 'none', label: 'None (ungraded)' },
+  { value: 'warm', label: 'Warm' },
+  { value: 'teal-orange', label: 'Teal / Orange' },
+  { value: 'noir', label: 'Noir (B&W)' },
+  { value: 'cool', label: 'Cool / Blue' },
+  { value: 'sepia', label: 'Sepia' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const letterboxOptions: { value: number; label: string }[] = [
+  { value: 0, label: 'Off (full frame)' },
+  { value: 2.39, label: '2.39:1 (scope)' },
+  { value: 2.35, label: '2.35:1 (CinemaScope)' },
+  { value: 1.85, label: '1.85:1 (flat)' },
 ];
 
 const actionLabel: Record<CinematicActionType, string> = {
@@ -22,18 +40,6 @@ const actionLabel: Record<CinematicActionType, string> = {
   fade: 'Fade',
 };
 
-const timelineLane: Record<CinematicActionType, number> = {
-  camera: 0,
-  transform: 1,
-  animation: 2,
-  spawn: 3,
-  visibility: 3,
-  sound: 4,
-  event: 4,
-  fade: 5,
-};
-
-const laneLabels = ['Camera', 'Transform', 'Animation', 'Scene', 'Audio/Event', 'Fade'];
 const actionTypes: CinematicActionType[] = ['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade'];
 const spawnKinds: SceneObjectKind[] = ['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera'];
 const emptyVec: Vector3Tuple = [0, 0, 0];
@@ -53,17 +59,6 @@ type VectorActionField =
 
 function actionTitle(action: CinematicAction) {
   return action.label || actionLabel[action.type];
-}
-
-function timelineStyle(action: CinematicAction, duration: number) {
-  const safeDuration = Math.max(duration, 0.5);
-  const start = Math.max(0, Math.min(100, (action.time / safeDuration) * 100));
-  const length = Math.max(2.5, (((action.duration ?? 0.12) / safeDuration) * 100));
-  return {
-    left: `${start}%`,
-    width: `${Math.min(100 - start, length)}%`,
-    top: `${timelineLane[action.type] * 30 + 6}px`,
-  };
 }
 
 function vectorValue(value: Vector3Tuple | undefined, fallback: Vector3Tuple): Vector3Tuple {
@@ -120,6 +115,7 @@ export function CinematicPanel() {
   const editorPreview = useEditorStore((state) => state.editorCinematicPreview);
   const createCinematic = useEditorStore((state) => state.createCinematic);
   const updateCinematic = useEditorStore((state) => state.updateCinematic);
+  const setCinematicLook = useEditorStore((state) => state.setCinematicLook);
   const deleteCinematic = useEditorStore((state) => state.deleteCinematic);
   const setActiveCinematic = useEditorStore((state) => state.setActiveCinematic);
   const addCinematicAction = useEditorStore((state) => state.addCinematicAction);
@@ -132,6 +128,8 @@ export function CinematicPanel() {
   const addCinematicTransformKeyframe = useEditorStore((state) => state.addCinematicTransformKeyframe);
   const cinematicRecording = useEditorStore((state) => state.cinematicRecording);
   const setCinematicRecording = useEditorStore((state) => state.setCinematicRecording);
+  const selectedKeyframe = useEditorStore((state) => state.selectedCinematicKeyframe);
+  const selectCinematicKeyframe = useEditorStore((state) => state.selectCinematicKeyframe);
   const [selectedActionId, setSelectedActionId] = useState('');
 
   const cinematics = scene?.cinematics ?? [];
@@ -162,6 +160,11 @@ export function CinematicPanel() {
   }, [active, activeId, activeActionIds, active?.duration, editorPreview?.time, previewCinematic, previewing]);
 
   useEffect(() => () => clearCinematicPreview(), [clearCinematicPreview]);
+
+  // Keep the panel's selected beat in sync with a keyframe selected from the 3D path gizmo.
+  useEffect(() => {
+    if (selectedKeyframe) setSelectedActionId(selectedKeyframe.actionId);
+  }, [selectedKeyframe]);
 
   const setPreviewTime = (time: number) => {
     if (!active || running) return;
@@ -326,6 +329,27 @@ export function CinematicPanel() {
     applyTransformKeyframes(action.id, frames);
   };
 
+  // ----- Selected keyframe (shared with the 3D path gizmo): edit its transform directly -----
+  const selectedKeyframeInfo = (() => {
+    if (!selectedKeyframe || !active) return null;
+    const action = active.actions.find((item) => item.id === selectedKeyframe.actionId);
+    if (!action) return null;
+    if (action.type === 'camera') return { action, camera: action.keyframes?.[selectedKeyframe.index] };
+    if (action.type === 'transform') return { action, object: action.transformKeyframes?.[selectedKeyframe.index] };
+    return null;
+  })();
+
+  const updateSelectedKeyframe = (patch: Partial<CinematicCameraKeyframe & CinematicTransformKeyframe>) => {
+    if (!active || !selectedKeyframe) return;
+    const action = active.actions.find((item) => item.id === selectedKeyframe.actionId);
+    if (!action) return;
+    if (action.type === 'camera' && action.keyframes) {
+      applyKeyframes(action.id, action.keyframes.map((keyframe, i) => (i === selectedKeyframe.index ? { ...keyframe, ...patch } : keyframe)) as CinematicCameraKeyframe[]);
+    } else if (action.type === 'transform' && action.transformKeyframes) {
+      applyTransformKeyframes(action.id, action.transformKeyframes.map((keyframe, i) => (i === selectedKeyframe.index ? { ...keyframe, ...patch } : keyframe)) as CinematicTransformKeyframe[]);
+    }
+  };
+
   // ----- Direct timeline manipulation: drag a clip to retime it, drag a keyframe diamond to move it -----
   const tracksRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<null | { kind: 'clip' | 'ckf' | 'tkf'; actionId: string; index?: number; startX: number; startTime: number; moved: boolean }>(null);
@@ -363,6 +387,119 @@ export function CinematicPanel() {
     event.currentTarget.setPointerCapture?.(event.pointerId);
     dragRef.current = { kind: 'clip', actionId: action.id, startX: event.clientX, startTime: action.time, moved: false };
     setSelectedActionId(action.id);
+    selectCinematicKeyframe(null);
+  };
+
+  // Scrubbing: click/drag the ruler or empty lane to move the playhead (and the camera preview).
+  const scrubbingRef = useRef(false);
+  const scrubAtClientX = (clientX: number) => {
+    const el = tracksRef.current;
+    if (!el || !active || running) return;
+    const rect = el.getBoundingClientRect();
+    const ratio = (clientX - rect.left) / (rect.width || 1);
+    setPreviewTime(Math.min(Math.max(ratio, 0), 1) * active.duration);
+  };
+  const beginScrub = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    scrubbingRef.current = true;
+    scrubAtClientX(event.clientX);
+  };
+  const onScrubMove = (event: React.PointerEvent) => {
+    if (scrubbingRef.current) scrubAtClientX(event.clientX);
+  };
+  const endScrub = () => {
+    scrubbingRef.current = false;
+  };
+
+  // Group the flat action list into Sequencer rows: one Camera row, one row per animated object,
+  // then grouped rows for the discrete beats (animation / scene / audio+events / fade).
+  type SeqTrack = { id: string; label: string; kind: 'camera' | 'object' | 'group'; objectId?: string; actions: CinematicAction[] };
+  const buildSeqTracks = (actions: CinematicAction[]): SeqTrack[] => {
+    const rows: SeqTrack[] = [{ id: 'camera', label: 'Camera', kind: 'camera', actions: actions.filter((action) => action.type === 'camera') }];
+    const byObject = new Map<string, CinematicAction[]>();
+    actions
+      .filter((action) => action.type === 'transform')
+      .forEach((action) => {
+        const key = action.objectId ?? '∅';
+        (byObject.get(key) ?? byObject.set(key, []).get(key)!).push(action);
+      });
+    byObject.forEach((acts, objectId) => {
+      rows.push({ id: `obj-${objectId}`, label: objects.find((object) => object.id === objectId)?.name ?? 'Object', kind: 'object', objectId, actions: acts });
+    });
+    const groups: { id: string; label: string; types: CinematicActionType[] }[] = [
+      { id: 'animation', label: 'Animation', types: ['animation'] },
+      { id: 'scene', label: 'Scene', types: ['spawn', 'visibility'] },
+      { id: 'audio', label: 'Audio & Events', types: ['sound', 'event'] },
+      { id: 'fade', label: 'Fade', types: ['fade'] },
+    ];
+    groups.forEach((group) => {
+      const acts = actions.filter((action) => group.types.includes(action.type));
+      if (acts.length) rows.push({ id: group.id, label: group.label, kind: 'group', actions: acts });
+    });
+    return rows;
+  };
+
+  const pct = (time: number) => (active ? Math.min(100, Math.max(0, (time / Math.max(active.duration, 0.5)) * 100)) : 0);
+
+  // Render one Sequencer row's content: keyframe diamonds (+ a span bar) for animated tracks, or a
+  // draggable clip for discrete beats. Everything shares the row's horizontal time scale.
+  const renderTrackBody = (track: SeqTrack): React.ReactNode[] => {
+    if (!active) return [];
+    const nodes: React.ReactNode[] = [];
+    track.actions.forEach((action) => {
+      const kfs = action.type === 'camera' ? action.keyframes : action.type === 'transform' ? action.transformKeyframes : undefined;
+      if (kfs && kfs.length) {
+        const times = kfs.map((frame) => frame.time);
+        const lo = Math.min(...times);
+        const hi = Math.max(...times);
+        nodes.push(
+          <div
+            key={`${action.id}-span`}
+            className={`seq-track-span${action.id === selectedActionId ? ' active' : ''}`}
+            style={{ left: `${pct(lo)}%`, width: `${Math.max(1.5, pct(hi) - pct(lo))}%` }}
+            title={`${actionTitle(action)} — drag to shift the whole track`}
+            onPointerDown={(event) => beginClipDrag(event, action)}
+            onPointerMove={onTimelinePointerMove}
+            onPointerUp={() => onTimelinePointerUp(action)}
+          />,
+        );
+        kfs.forEach((frame, index) => {
+          nodes.push(
+            <button
+              key={`${action.id}-kf-${index}`}
+              className={`cinematic-keyframe-pip${selectedKeyframe?.actionId === action.id && selectedKeyframe.index === index ? ' active' : ''}`}
+              style={{ left: `${pct(frame.time)}%`, top: '50%' }}
+              title={`Keyframe ${index + 1} @ ${frame.time.toFixed(2)}s (drag to move · click to edit in 3D)`}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                dragRef.current = { kind: action.type === 'camera' ? 'ckf' : 'tkf', actionId: action.id, index, startX: event.clientX, startTime: frame.time, moved: false };
+                setSelectedActionId(action.id);
+                selectCinematicKeyframe(action.id, index);
+              }}
+              onPointerMove={onTimelinePointerMove}
+              onPointerUp={() => onTimelinePointerUp(action)}
+            />,
+          );
+        });
+      } else {
+        nodes.push(
+          <button
+            key={`${action.id}-clip`}
+            className={`seq-clip2 ${action.type}${action.id === selectedActionId ? ' active' : ''}`}
+            style={{ left: `${pct(action.time)}%`, width: `${Math.max(2, ((action.duration ?? 0.12) / Math.max(active.duration, 0.5)) * 100)}%` }}
+            title={`${actionTitle(action)} — ${action.time.toFixed(2)}s (drag to retime)`}
+            onPointerDown={(event) => beginClipDrag(event, action)}
+            onPointerMove={onTimelinePointerMove}
+            onPointerUp={() => onTimelinePointerUp(action)}
+          >
+            {actionTitle(action)}
+          </button>,
+        );
+      }
+    });
+    return nodes;
   };
 
   const objectPicker = (label = 'Object') =>
@@ -545,6 +682,29 @@ export function CinematicPanel() {
               <label className="field-row">
                 <span>Blend in</span>
                 <input type="number" min={0} max={10} step={0.1} value={selectedAction.blend ?? 0} title="Seconds to glide from the previous shot (0 = hard cut)" onChange={(event) => updateSelectedAction({ blend: Number(event.target.value) })} />
+              </label>
+              <label className="field-row">
+                <span>Focus dist</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={selectedAction.focusDistance ?? 0}
+                  title="Depth-of-field focus distance in world units ahead of the camera (rack focus pulls between shots). 0 = no DoF."
+                  onChange={(event) => updateSelectedAction({ focusDistance: Number(event.target.value) || undefined })}
+                />
+              </label>
+              <label className="field-row">
+                <span>Aperture</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={12}
+                  step={0.5}
+                  value={selectedAction.aperture ?? 0}
+                  title="Depth-of-field blur strength (bokeh). 0 = everything sharp; 3–6 = a shallow, cinematic focus."
+                  onChange={(event) => updateSelectedAction({ aperture: Number(event.target.value) || undefined })}
+                />
               </label>
               <label className="field-row">
                 <span>Easing</span>
@@ -768,30 +928,26 @@ export function CinematicPanel() {
         </div>
       ) : (
         <>
-          <section className="inspector-section">
-            <h3>Sequences</h3>
-            <div className="cinematic-list">
+          <div className="seq-seqbar">
+            <select className="seq-seq-select" value={active?.id ?? ''} onChange={(event) => setActiveCinematic(event.target.value)} title="Active sequence">
               {cinematics.map((cinematic) => (
-                <button
-                  key={cinematic.id}
-                  className={cinematic.id === active?.id ? 'cinematic-list-item active' : 'cinematic-list-item'}
-                  onClick={() => setActiveCinematic(cinematic.id)}
-                >
-                  <span>{cinematic.name}</span>
-                  <small>{cinematic.duration.toFixed(1)}s</small>
-                </button>
+                <option key={cinematic.id} value={cinematic.id}>
+                  {cinematic.name} · {cinematic.duration.toFixed(1)}s
+                </option>
               ))}
-            </div>
-          </section>
+            </select>
+            {active && (
+              <input className="seq-name" value={active.name} placeholder="Sequence name" onChange={(event) => updateCinematic(active.id, { name: event.target.value })} />
+            )}
+            <button className="icon-button" title="New sequence" onClick={() => createCinematic('New Sequence', 8)}>
+              <Plus size={15} aria-hidden />
+            </button>
+          </div>
 
           {active && (
             <>
               <section className="inspector-section">
                 <h3>Timeline</h3>
-                <label className="field-row">
-                  <span>Name</span>
-                  <input value={active.name} onChange={(event) => updateCinematic(active.id, { name: event.target.value })} />
-                </label>
                 <label className="field-row">
                   <span>Duration</span>
                   <input type="number" min={0.5} step={0.5} value={active.duration} onChange={(event) => updateCinematic(active.id, { duration: Number(event.target.value) })} />
@@ -800,6 +956,158 @@ export function CinematicPanel() {
                   <span>Autoplay</span>
                   <input type="checkbox" checked={Boolean(active.autoplay)} onChange={(event) => updateCinematic(active.id, { autoplay: event.target.checked })} />
                 </label>
+              </section>
+              <section className="inspector-section">
+                <h3>Film look</h3>
+                <label className="field-row">
+                  <span>Letterbox</span>
+                  <select
+                    value={active.look?.letterbox ?? 0}
+                    title="Black bars for a cinematic aspect ratio"
+                    onChange={(event) => setCinematicLook(active.id, { letterbox: Number(event.target.value) })}
+                  >
+                    {letterboxOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-row">
+                  <span>Color grade</span>
+                  <select
+                    value={active.look?.grade ?? 'none'}
+                    title="A film color grade rendered on the cinematic camera. Picking a preset fills the sliders below; tweaking any slider switches to Custom."
+                    onChange={(event) => {
+                      const grade = event.target.value as CinematicGrade;
+                      // Picking a preset writes its params explicitly (so the sliders reflect it); 'none'
+                      // clears them; 'custom' keeps whatever is there and just flips the label.
+                      if (grade === 'none') {
+                        setCinematicLook(active.id, { grade, exposure: undefined, contrast: undefined, saturation: undefined, temperature: undefined, tint: undefined, tintAmount: undefined });
+                      } else if (grade === 'custom') {
+                        setCinematicLook(active.id, { grade });
+                      } else {
+                        const preset = GRADE_PRESETS[grade];
+                        setCinematicLook(active.id, { grade, ...preset });
+                      }
+                    }}
+                  >
+                    {gradeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {active.look?.grade && active.look.grade !== 'none' && (
+                  <>
+                    <label className="field-row">
+                      <span>Grade strength</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={active.look?.gradeIntensity ?? 1}
+                        title="Overall grade strength (blend between the original and graded image)"
+                        onChange={(event) => setCinematicLook(active.id, { gradeIntensity: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field-row">
+                      <span>Exposure</span>
+                      <input
+                        type="range"
+                        min={-1}
+                        max={1}
+                        step={0.02}
+                        value={resolveGrade(active.look)?.exposure ?? 0}
+                        title="Exposure in stops"
+                        onChange={(event) => setCinematicLook(active.id, { grade: 'custom', exposure: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field-row">
+                      <span>Contrast</span>
+                      <input
+                        type="range"
+                        min={-1}
+                        max={1}
+                        step={0.02}
+                        value={resolveGrade(active.look)?.contrast ?? 0}
+                        onChange={(event) => setCinematicLook(active.id, { grade: 'custom', contrast: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field-row">
+                      <span>Saturation</span>
+                      <input
+                        type="range"
+                        min={-1}
+                        max={1}
+                        step={0.02}
+                        value={resolveGrade(active.look)?.saturation ?? 0}
+                        onChange={(event) => setCinematicLook(active.id, { grade: 'custom', saturation: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field-row">
+                      <span>Temperature</span>
+                      <input
+                        type="range"
+                        min={-1}
+                        max={1}
+                        step={0.02}
+                        value={resolveGrade(active.look)?.temperature ?? 0}
+                        title="Warm (right) ↔ cool (left)"
+                        onChange={(event) => setCinematicLook(active.id, { grade: 'custom', temperature: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field-row">
+                      <span>Tint</span>
+                      <input
+                        type="color"
+                        value={resolveGrade(active.look)?.tint ?? '#ffffff'}
+                        title="Custom tint colour (strength set by Tint amount)"
+                        onChange={(event) => setCinematicLook(active.id, { grade: 'custom', tint: event.target.value, tintAmount: active.look?.tintAmount ? active.look.tintAmount : 0.3 })}
+                      />
+                    </label>
+                    <label className="field-row">
+                      <span>Tint amount</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={resolveGrade(active.look)?.tintAmount ?? 0}
+                        onChange={(event) => setCinematicLook(active.id, { grade: 'custom', tintAmount: Number(event.target.value) })}
+                      />
+                    </label>
+                  </>
+                )}
+                <label className="field-row">
+                  <span>Grain</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={active.look?.grain ?? 0}
+                    title="Film-grain strength"
+                    onChange={(event) => setCinematicLook(active.id, { grain: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="field-row">
+                  <span>Vignette</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={active.look?.vignette ?? 0}
+                    title="Darkened-edge vignette strength"
+                    onChange={(event) => setCinematicLook(active.id, { vignette: Number(event.target.value) })}
+                  />
+                </label>
+              </section>
+              <section className="inspector-section">
+                <h3>Recording</h3>
                 <button
                   className={`full-button cinematic-record${cinematicRecording ? ' armed' : ''}`}
                   disabled={running}
@@ -811,13 +1119,13 @@ export function CinematicPanel() {
                 </button>
                 <div className="cinematic-transport" aria-label="Cinematic preview controls">
                   <button
-                    className={previewing ? 'active' : undefined}
-                    title="Preview this cinematic in the editor viewport"
-                    disabled={running}
-                    onClick={() => (previewing ? clearCinematicPreview() : setPreviewTime(timelineTime))}
+                    className={previewing && !cinematicRecording ? 'active' : undefined}
+                    title="Camera preview — look through the cinematic camera in the viewport. Scrub the timeline to watch the shot update."
+                    disabled={running || cinematicRecording}
+                    onClick={() => (previewing ? clearCinematicPreview() : setPreviewTime(timelineTime || 0))}
                   >
                     <Video size={14} aria-hidden />
-                    <span>{previewing ? 'Previewing' : 'Preview'}</span>
+                    <span>{previewing && !cinematicRecording ? 'Previewing camera' : 'Camera preview'}</span>
                   </button>
                   <button title="Jump to start" disabled={running} onClick={() => setPreviewTime(0)}>
                     <SkipBack size={14} aria-hidden />
@@ -859,72 +1167,56 @@ export function CinematicPanel() {
                   </button>
                 </div>
 
-                <div className="cinematic-timeline" aria-label="Cinematic timeline">
-                  <div className="cinematic-time-ruler">
-                    <span>{running || previewing ? `${beatTime.toFixed(1)}s` : '0s'}</span>
-                    <span>{(active.duration / 2).toFixed(1)}s</span>
-                    <span>{active.duration.toFixed(1)}s</span>
-                  </div>
-                  <div className="cinematic-tracks" ref={tracksRef} style={{ height: `${laneLabels.length * 30 + 8}px` }}>
-                    {laneLabels.map((label, index) => (
-                      <div className="cinematic-lane" key={label} style={{ top: `${index * 30}px` }}>
-                        <span>{label}</span>
+                <div className="seq-timeline2" aria-label="Cinematic timeline">
+                  <div className="seq-grid">
+                    <div className="seq-labels">
+                      <div className="seq-labels-spacer" />
+                      {buildSeqTracks(active.actions).map((track) => (
+                        <div key={track.id} className="seq-label-row" title={track.label}>
+                          <span className="seq-label-name">{track.label}</span>
+                          <small>{track.actions.length}</small>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="seq-lanes-col">
+                      <div className="seq-ruler2" onPointerDown={beginScrub} onPointerMove={onScrubMove} onPointerUp={endScrub} title="Click or drag to scrub">
+                        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
+                          <span key={fraction} style={{ left: `${fraction * 100}%` }}>
+                            {(active.duration * fraction).toFixed(active.duration < 10 ? 1 : 0)}s
+                          </span>
+                        ))}
                       </div>
-                    ))}
-                    {(running || previewing) && <div className="cinematic-playhead" style={{ left: `${playhead}%` }} />}
-                    {active.actions.map((action) => (
-                      <button
-                        key={action.id}
-                        className={`cinematic-clip ${action.type}${action.id === selectedActionId ? ' active' : ''}`}
-                        style={timelineStyle(action, active.duration)}
-                        title={`${actionTitle(action)} - ${action.time.toFixed(2)}s (drag to retime)`}
-                        onPointerDown={(event) => beginClipDrag(event, action)}
-                        onPointerMove={onTimelinePointerMove}
-                        onPointerUp={() => onTimelinePointerUp(action)}
-                      >
-                        {actionTitle(action)}
-                      </button>
-                    ))}
-                    {/* Keyframe diamonds for the selected camera/object track — drag to retime each key. */}
-                    {selectedAction?.type === 'camera' &&
-                      selectedAction.keyframes?.map((frame, index) => (
-                        <button
-                          key={`ckf-${selectedAction.id}-${index}`}
-                          className="cinematic-keyframe-pip"
-                          style={{ left: `${Math.min(100, Math.max(0, (frame.time / Math.max(active.duration, 0.5)) * 100))}%`, top: `${timelineLane.camera * 30 + 14}px` }}
-                          title={`Keyframe ${index + 1} @ ${frame.time.toFixed(2)}s (drag to move)`}
-                          onPointerDown={(event) => {
-                            event.stopPropagation();
-                            event.currentTarget.setPointerCapture?.(event.pointerId);
-                            dragRef.current = { kind: 'ckf', actionId: selectedAction.id, index, startX: event.clientX, startTime: frame.time, moved: false };
-                          }}
-                          onPointerMove={onTimelinePointerMove}
-                          onPointerUp={() => onTimelinePointerUp(selectedAction)}
-                        />
-                      ))}
-                    {selectedAction?.type === 'transform' &&
-                      selectedAction.transformKeyframes?.map((frame, index) => (
-                        <button
-                          key={`tkf-${selectedAction.id}-${index}`}
-                          className="cinematic-keyframe-pip"
-                          style={{ left: `${Math.min(100, Math.max(0, (frame.time / Math.max(active.duration, 0.5)) * 100))}%`, top: `${timelineLane.transform * 30 + 14}px` }}
-                          title={`Keyframe ${index + 1} @ ${frame.time.toFixed(2)}s (drag to move)`}
-                          onPointerDown={(event) => {
-                            event.stopPropagation();
-                            event.currentTarget.setPointerCapture?.(event.pointerId);
-                            dragRef.current = { kind: 'tkf', actionId: selectedAction.id, index, startX: event.clientX, startTime: frame.time, moved: false };
-                          }}
-                          onPointerMove={onTimelinePointerMove}
-                          onPointerUp={() => onTimelinePointerUp(selectedAction)}
-                        />
-                      ))}
+                      <div className="seq-rows" ref={tracksRef}>
+                        <div className="seq-playhead2" style={{ left: `${playhead}%` }} />
+                        {buildSeqTracks(active.actions).map((track) => {
+                          const isSel =
+                            !!selectedAction &&
+                            ((track.kind === 'camera' && selectedAction.type === 'camera') ||
+                              (track.kind === 'object' && selectedAction.objectId === track.objectId) ||
+                              track.actions.some((action) => action.id === selectedActionId));
+                          return (
+                            <div
+                              key={track.id}
+                              className={`seq-row${isSel ? ' active' : ''}`}
+                              onPointerDown={(event) => {
+                                if (event.target === event.currentTarget) beginScrub(event);
+                              }}
+                              onPointerMove={onScrubMove}
+                              onPointerUp={endScrub}
+                            >
+                              {renderTrackBody(track)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
+                  <p className="field-hint seq-hint">Click the ruler to scrub · drag clips/diamonds to retime · Record, then move the camera/objects to auto-key.</p>
                 </div>
               </section>
 
-              <section className="inspector-section">
-                <h3>Quick Beats</h3>
-                <p className="field-hint">Scrub the playhead, frame the shot in the viewport, then keyframe it. The camera flies smoothly through every keyframe.</p>
+              <details className="inspector-section seq-add-details">
+                <summary>Add beat ＋</summary>
                 <div className="cinematic-quick-grid">
                   <button
                     className="full-button primary"
@@ -1029,7 +1321,58 @@ export function CinematicPanel() {
                     Fade in &amp; out
                   </button>
                 </div>
-              </section>
+              </details>
+
+              {selectedKeyframeInfo && (
+                <section className="inspector-section cinematic-action-editor">
+                  <div className="cinematic-editor-heading">
+                    <h3>Selected Keyframe</h3>
+                    <span>#{selectedKeyframe!.index + 1}</span>
+                  </div>
+                  <p className="field-hint">Drag the gold handle in the viewport to move it, or edit its transform here.</p>
+                  <label className="field-row">
+                    <span>Time</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.05}
+                      value={Number((selectedKeyframeInfo.camera ?? selectedKeyframeInfo.object)?.time.toFixed(3) ?? 0)}
+                      onChange={(event) => updateSelectedKeyframe({ time: Math.max(0, Number(event.target.value)) })}
+                    />
+                  </label>
+                  <VectorEditor
+                    label="Position"
+                    value={(selectedKeyframeInfo.camera ?? selectedKeyframeInfo.object)?.position}
+                    onChange={(value) => updateSelectedKeyframe({ position: value })}
+                  />
+                  {selectedKeyframeInfo.camera ? (
+                    <>
+                      <p className="field-hint">Drag the cyan aim handle in the viewport to point the camera, or set its target here.</p>
+                      <VectorEditor label="Look at" value={selectedKeyframeInfo.camera.lookAt} onChange={(value) => updateSelectedKeyframe({ lookAt: value })} />
+                      <button
+                        className="full-button"
+                        disabled={!selected || selected.kind === 'camera'}
+                        title={selected && selected.kind !== 'camera' ? `Aim this shot at ${selected.name}` : 'Select a (non-camera) object to aim at'}
+                        onClick={() => selected && selected.kind !== 'camera' && updateSelectedKeyframe({ lookAt: selected.transform.position })}
+                      >
+                        Aim at selected object
+                      </button>
+                      <label className="field-row">
+                        <span>FOV</span>
+                        <input type="number" min={10} max={140} value={selectedKeyframeInfo.camera.fov} onChange={(event) => updateSelectedKeyframe({ fov: Number(event.target.value) })} />
+                      </label>
+                    </>
+                  ) : selectedKeyframeInfo.object ? (
+                    <>
+                      <VectorEditor label="Rotation" value={selectedKeyframeInfo.object.rotation} onChange={(value) => updateSelectedKeyframe({ rotation: value })} />
+                      <VectorEditor label="Scale" value={selectedKeyframeInfo.object.scale} onChange={(value) => updateSelectedKeyframe({ scale: value })} />
+                    </>
+                  ) : null}
+                  <button className="full-button" onClick={() => selectCinematicKeyframe(null)}>
+                    Done editing keyframe
+                  </button>
+                </section>
+              )}
 
               {selectedAction && (
                 <section className="inspector-section cinematic-action-editor">
@@ -1043,6 +1386,10 @@ export function CinematicPanel() {
                     </button>
                     <button className="full-button" disabled={running || !previewing} onClick={() => updateSelectedAction({ time: beatTime })}>
                       Set time to preview
+                    </button>
+                    <button className="full-button danger" title="Delete this beat" onClick={() => removeCinematicAction(active.id, selectedAction.id)}>
+                      <Trash2 size={13} aria-hidden />
+                      Delete beat
                     </button>
                   </div>
                   <label className="field-row">
@@ -1071,26 +1418,6 @@ export function CinematicPanel() {
                 </section>
               )}
 
-              <section className="inspector-section">
-                <h3>Actions</h3>
-                {active.actions.length === 0 ? (
-                  <p className="field-hint">Add quick beats here, or ask the AI to build camera cuts, transforms, animation beats, temporary spawns, sounds, and events.</p>
-                ) : (
-                  <div className="cinematic-action-list">
-                    {active.actions.map((action) => (
-                      <div className={`cinematic-action-card${action.id === selectedActionId ? ' active' : ''}`} key={action.id}>
-                        <button className="cinematic-action-summary" onClick={() => setSelectedActionId(action.id)}>
-                          <strong>{actionTitle(action)}</strong>
-                          <span>{action.time.toFixed(2)}s - {actionLabel[action.type]}</span>
-                        </button>
-                        <button className="icon-button" title="Remove action" onClick={() => removeCinematicAction(active.id, action.id)}>
-                          <Trash2 size={13} aria-hidden />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
             </>
           )}
         </>

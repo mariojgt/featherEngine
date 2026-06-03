@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { getPlatform, isDesktop } from '../platform';
 import { blankProject } from '../project/serialize';
 import { buildGameBundle, embedAssets } from '../project/exportGame';
+import { verifyGameBundle } from '../project/verifyBundle';
 import { useEditorStore } from './editorStore';
 
 interface RecentProject {
@@ -182,6 +183,20 @@ export const useProjectStore = create<ProjectState>()(
             project.assets = await embedAssets(editor.assets);
             const bundle = buildGameBundle(project);
 
+            // Audit the bundle: inventory everything and flag any resource that didn't make it in.
+            const report = verifyGameBundle(bundle);
+            const reportLines = [
+              '— Export contents —',
+              ...report.summary,
+              ...(report.warnings.length
+                ? ['', `⚠ ${report.warnings.length} issue(s):`, ...report.warnings]
+                : ['✓ Everything resolved — nothing lost.']),
+              '',
+            ];
+            if (report.warnings.length) {
+              set({ toast: { kind: 'error', message: `Export warning: ${report.warnings[0]}` } });
+            }
+
             // Desktop: run the full build right here, streaming progress to the overlay.
             if (platform.isDesktop && platform.buildProduction) {
               // Let the user choose where the finished game is written.
@@ -190,7 +205,7 @@ export const useProjectStore = create<ProjectState>()(
                 : undefined;
               // A picker that returns null means the user cancelled — don't build.
               if (destination === null) return;
-              set({ buildProgress: { running: true, lines: ['Preparing build…'] } });
+              set({ buildProgress: { running: true, lines: [...reportLines, 'Preparing build…'] } });
               try {
                 const outDir = await platform.buildProduction(
                   JSON.stringify(bundle),
@@ -221,23 +236,28 @@ export const useProjectStore = create<ProjectState>()(
             }
 
             // Web fallback: stage the bundle and tell the user the CLI command.
+            const issueSuffix = report.warnings.length
+              ? `  (⚠ ${report.warnings.length} resource issue(s) — see console)`
+              : '';
+            if (report.warnings.length) console.warn('Export issues:', report.warnings);
+            console.info('Export contents:', report.summary);
             const path = await platform.stageProduction(projectName, bundle);
             if (path) {
               set({
                 toast: {
-                  kind: 'success',
+                  kind: report.warnings.length ? 'error' : 'success',
                   message:
                     `Staged for production. From the engine folder, run:  ` +
-                    `npm run export:production -- --bundle "${path}"`,
+                    `npm run export:production -- --bundle "${path}"${issueSuffix}`,
                 },
               });
             } else {
               set({
                 toast: {
-                  kind: 'success',
+                  kind: report.warnings.length ? 'error' : 'success',
                   message:
                     `game.json downloaded. From the engine source folder, place it at ` +
-                    `exports/staging/game.json and run:  npm run export:production`,
+                    `exports/staging/game.json and run:  npm run export:production${issueSuffix}`,
                 },
               });
             }

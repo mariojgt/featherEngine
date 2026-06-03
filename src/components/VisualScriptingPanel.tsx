@@ -23,7 +23,7 @@ export const nodeGroups: Array<{
   {
     title: 'Logic',
     icon: GitBranch,
-    nodes: ['Branch', 'Compare', 'AND', 'OR', 'Cooldown'],
+    nodes: ['Branch', 'Compare', 'AND', 'OR', 'Cast', 'Cooldown'],
   },
   {
     title: 'Math',
@@ -48,7 +48,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -181,6 +181,13 @@ function GraphDataLibrary() {
   const createVariable = useEditorStore((state) => state.createVariable);
   const updateVariable = useEditorStore((state) => state.updateVariable);
   const deleteVariable = useEditorStore((state) => state.deleteVariable);
+  const blueprints = useEditorStore((state) => state.blueprints);
+  const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
+  const addBlueprintVariable = useEditorStore((state) => state.addBlueprintVariable);
+  const updateBlueprintVariable = useEditorStore((state) => state.updateBlueprintVariable);
+  const removeBlueprintVariable = useEditorStore((state) => state.removeBlueprintVariable);
+  const activeBlueprint = blueprints.find((b) => b.id === activeBlueprintId);
+  const instanceVars = activeBlueprint?.variables ?? [];
   const createDataAsset = useEditorStore((state) => state.createDataAsset);
   const renameDataAsset = useEditorStore((state) => state.renameDataAsset);
   const deleteDataAsset = useEditorStore((state) => state.deleteDataAsset);
@@ -196,11 +203,15 @@ function GraphDataLibrary() {
     <div className="graph-library">
       <section>
         <div className="library-heading">
-          <span>Variables</span>
-          <button title="Create variable" onClick={() => createVariable()}>
+          <span>Global Variables</span>
+          <button title="Create a global (shared) variable" onClick={() => createVariable()}>
             <Plus size={13} aria-hidden />
           </button>
         </div>
+        <small className="node-hint">
+          SHARED across the whole game (one value for everything) — use for score, settings, Save Game. For per-object
+          state (per-player gold, per-enemy health) use Instance Variables below instead.
+        </small>
 
         {variables.map((variable) => (
           <div className="library-card" key={variable.id}>
@@ -242,6 +253,61 @@ function GraphDataLibrary() {
             />
           </div>
         ))}
+      </section>
+
+      <section>
+        <div className="library-heading">
+          <span>Instance Variables{activeBlueprint ? ` · ${activeBlueprint.name}` : ''}</span>
+          <button
+            title={activeBlueprint ? 'Declare a per-instance variable on this blueprint' : 'Open a blueprint first'}
+            disabled={!activeBlueprint}
+            onClick={() => activeBlueprint && addBlueprintVariable(activeBlueprint.id)}
+          >
+            <Plus size={13} aria-hidden />
+          </button>
+        </div>
+        {!activeBlueprint && <small className="node-hint">Open a blueprint to declare its per-instance variables.</small>}
+        {activeBlueprint && instanceVars.length === 0 && (
+          <small className="node-hint">
+            Each object running this blueprint gets its OWN copy (e.g. per-player Gold). Read/write with Get/Set Object Var (key = the name).
+          </small>
+        )}
+        {activeBlueprint &&
+          instanceVars.map((variable) => (
+            <div className="library-card" key={variable.id}>
+              <div className="library-row">
+                <input
+                  value={variable.name}
+                  onChange={(event) => updateBlueprintVariable(activeBlueprint.id, variable.id, { name: event.target.value })}
+                />
+                <button title="Delete instance variable" onClick={() => removeBlueprintVariable(activeBlueprint.id, variable.id)}>
+                  <Trash2 size={13} aria-hidden />
+                </button>
+              </div>
+              <div className="library-row two">
+                <select
+                  value={variable.type}
+                  onChange={(event) =>
+                    updateBlueprintVariable(activeBlueprint.id, variable.id, {
+                      type: event.target.value as GraphValueType,
+                      defaultValue: emptyValue(event.target.value as GraphValueType),
+                    })
+                  }
+                >
+                  {valueTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <ValueEditor
+                type={variable.type}
+                value={variable.defaultValue}
+                onChange={(defaultValue) => updateBlueprintVariable(activeBlueprint.id, variable.id, { defaultValue })}
+              />
+            </div>
+          ))}
       </section>
 
       <section>
@@ -339,6 +405,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
   const particleSystems = useEditorStore((state) => state.particleSystems);
+  const blueprints = useEditorStore((state) => state.blueprints);
+  const activeGraph = useEditorStore((state) => state.activeGraph());
   const activeScene = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId));
   const sceneObjects = useEditorStore(selectActiveObjects);
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
@@ -420,6 +488,34 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesUIElement = node.data.nodeKind === 'ui.setText';
   const updatesObjectKey =
     node.data.nodeKind === 'variable.getObject' || node.data.nodeKind === 'variable.setObject';
+  const updatesCast = node.data.nodeKind === 'logic.cast';
+  // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
+  // dropdown of THAT blueprint's declared instance variables (Unreal "Cast → As BP_X → pick its variable"):
+  //  - Self / blank        → this blueprint (the owner)
+  //  - $player             → the camera-follow player's blueprint
+  //  - a specific object   → that object's blueprint
+  //  - $cast / $trigger     → resolved only at runtime, so the user declares the expected type via castBlueprintId
+  const playerBlueprintId = sceneObjects.find((o) => o.character?.cameraFollow)?.script?.blueprintId;
+  const targetSel = node.data.targetObjectId;
+  // If this node's "Target" pin is WIRED from a Cast node, take the type straight off that wire (Unreal "As
+  // BP_X" → the picker is typed automatically, no manual blueprint pick).
+  const targetWire = activeGraph?.edges.find((edge) => edge.target === node.id && edge.targetHandle === 'target');
+  const wiredSource = targetWire ? activeGraph?.nodes.find((n) => n.id === targetWire.source) : undefined;
+  const wiredCastBlueprintId = wiredSource?.data.nodeKind === 'logic.cast' ? wiredSource.data.castBlueprintId : undefined;
+  const isTargetWired = Boolean(targetWire);
+  // The "context" blueprint whose declared variables fill the Variable dropdown.
+  const needsTypePick = !isTargetWired && (targetSel === '$cast' || targetSel === '$trigger');
+  const ctxBlueprintId =
+    wiredCastBlueprintId ??
+    (!targetSel || targetSel === '$self'
+      ? activeBlueprintId
+      : targetSel === '$player'
+        ? playerBlueprintId
+        : targetSel === '$cast' || targetSel === '$trigger'
+          ? node.data.castBlueprintId
+          : sceneObjects.find((o) => o.id === targetSel)?.script?.blueprintId);
+  const ctxBlueprint = blueprints.find((b) => b.id === ctxBlueprintId);
+  const ctxVars = ctxBlueprint?.variables ?? [];
   const updatesOtherObject = node.data.nodeKind === 'event.collisionEnter' || node.data.nodeKind === 'event.triggerEnter';
   const updatesTargetObject =
     node.data.nodeKind === 'action.destroyObject' ||
@@ -1040,15 +1136,118 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
         )}
 
         {updatesObjectKey && (
-          <label className="node-field">
-            <span>Variable Key</span>
-            <input
-              value={node.data.objectKey ?? ''}
-              placeholder="e.g. health"
-              onChange={(event) => updateGraphNodeData(node.id, { objectKey: event.target.value })}
-            />
-            <small className="node-hint">A per-object instance variable, read by world UI as self.{node.data.objectKey || 'key'}.</small>
-          </label>
+          <>
+            <label className="node-field">
+              <span>Target</span>
+              <select
+                value={node.data.targetObjectId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}
+              >
+                <option value="">Self (this object)</option>
+                <option value="$player">Player</option>
+                <option value="$trigger">Trigger toucher ($trigger)</option>
+                <option value="$cast">Cast result ($cast)</option>
+                {sceneObjects.map((object) => (
+                  <option key={object.id} value={object.id}>
+                    {object.name}
+                  </option>
+                ))}
+              </select>
+              <small className="node-hint">
+                {isTargetWired
+                  ? `Driven by the wired Target pin${ctxBlueprint ? ` (a ${ctxBlueprint.name} reference)` : ''} — this dropdown is ignored while connected.`
+                  : 'Whose instance this reads/writes — self, the player, the trigger toucher, a Cast result, or a specific object. Or wire a Cast’s "As" pin into the Target input.'}
+              </small>
+            </label>
+            {needsTypePick && (
+              <label className="node-field">
+                <span>Of Blueprint (type)</span>
+                <select
+                  value={node.data.castBlueprintId ?? ''}
+                  onChange={(event) => updateGraphNodeData(node.id, { castBlueprintId: event.target.value || undefined })}
+                >
+                  <option value="">— pick the type —</option>
+                  {blueprints.map((bp) => (
+                    <option key={bp.id} value={bp.id}>
+                      {bp.name}
+                    </option>
+                  ))}
+                </select>
+                <small className="node-hint">
+                  {targetSel === '$cast'
+                    ? 'Match the blueprint your upstream Cast checked — its declared variables fill the picker below.'
+                    : 'The blueprint you expect the toucher to be — its declared variables fill the picker below.'}
+                </small>
+              </label>
+            )}
+            {ctxVars.length > 0 ? (
+              <label className="node-field">
+                <span>Variable{ctxBlueprint ? ` · ${ctxBlueprint.name}` : ''}</span>
+                <select value={node.data.objectKey ?? ''} onChange={(event) => updateGraphNodeData(node.id, { objectKey: event.target.value })}>
+                  <option value="">— pick a variable —</option>
+                  {ctxVars.map((v) => (
+                    <option key={v.id} value={v.name}>
+                      {v.name} ({v.type})
+                    </option>
+                  ))}
+                </select>
+                <small className="node-hint">A per-instance variable of {ctxBlueprint?.name ?? 'that blueprint'} — each instance holds its own value.</small>
+              </label>
+            ) : (
+              <label className="node-field">
+                <span>Variable Key</span>
+                <input
+                  value={node.data.objectKey ?? ''}
+                  placeholder="e.g. health"
+                  onChange={(event) => updateGraphNodeData(node.id, { objectKey: event.target.value })}
+                />
+                <small className="node-hint">
+                  {needsTypePick
+                    ? 'Pick the blueprint type above to choose from its declared variables, or type a key directly.'
+                    : 'No instance variables declared on the target blueprint yet — declare them in the Instance Variables panel, or type a key.'}
+                </small>
+              </label>
+            )}
+          </>
+        )}
+
+        {updatesCast && (
+          <>
+            <label className="node-field">
+              <span>Cast To Blueprint</span>
+              <select
+                value={node.data.castBlueprintId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { castBlueprintId: event.target.value || undefined })}
+              >
+                <option value="">Any (just get a reference)</option>
+                {blueprints.map((bp) => (
+                  <option key={bp.id} value={bp.id}>
+                    {bp.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="node-field">
+              <span>Target</span>
+              <select
+                value={node.data.targetObjectId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}
+              >
+                <option value="">Self (this object)</option>
+                <option value="$player">Player</option>
+                <option value="$trigger">Trigger toucher ($trigger)</option>
+                {sceneObjects.map((object) => (
+                  <option key={object.id} value={object.id}>
+                    {object.name}
+                  </option>
+                ))}
+              </select>
+              <small className="node-hint">
+                Continues only if the target runs the chosen blueprint; on success it becomes "$cast" for downstream Get/Set
+                Object Var (Unreal-style Cast To &lt;Blueprint&gt;).
+              </small>
+            </label>
+          </>
         )}
 
         {updatesEventName && (

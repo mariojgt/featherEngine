@@ -32,12 +32,14 @@ import {
   type ParticleConfig,
   type ParticleSystemDefinition,
   type RenderSettings,
+  type SceneEnvironmentSettings,
   type ProjectVariable,
   type RigidBodyType,
   type Scene,
   type SceneObject,
   type SceneObjectKind,
   type ScriptBlueprint,
+  type BlueprintVariable,
   type SkeletonAsset,
   type SkeletonSocket,
   type AttachmentComponent,
@@ -51,15 +53,21 @@ import {
   type AnimatorTransition,
   type AnimatorCondition,
   type CharacterControllerComponent,
+  type VehicleComponent,
   type CinematicAction,
   type CinematicCameraKeyframe,
   type CinematicTransformKeyframe,
   type CinematicEase,
+  type CinematicLook,
   type CinematicSequence,
   type InventoryComponent,
   type RuntimeCinematicCamera,
   type RuntimeCinematicFade,
   type RuntimeCinematicState,
+  type TerrainComponent,
+  type TerrainBrushSettings,
+  type TerrainMaterialLayer,
+  type TerrainSculptOperation,
   type TransformComponent,
   type Vector3Tuple,
   type UIDocument,
@@ -76,6 +84,9 @@ import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
 import { resolveMaterial } from '../three/materialResolve';
+import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
+import { applyTerrainPaint, applyTerrainSculpt, defaultTerrain, highestTerrainWorldHeight, terrainLocalPointFromWorld, withTerrainDefaults } from '../terrain/terrain';
+import { worldTransformOf, worldToLocalUnderParent } from '../utils/transformHierarchy';
 import type { ModelInspection } from '../three/inspectModel';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
@@ -132,11 +143,19 @@ const mixCinematicCamera = (
   from: RuntimeCinematicCamera,
   to: RuntimeCinematicCamera,
   t: number,
-): RuntimeCinematicCamera => ({
-  position: mixVec3(from.position, to.position, t),
-  lookAt: mixVec3(from.lookAt, to.lookAt, t),
-  fov: mix(from.fov, to.fov, t),
-});
+): RuntimeCinematicCamera => {
+  const fromFocus = from.focusDistance ?? to.focusDistance;
+  const toFocus = to.focusDistance ?? from.focusDistance;
+  const fromAperture = from.aperture ?? to.aperture;
+  const toAperture = to.aperture ?? from.aperture;
+  return {
+    position: mixVec3(from.position, to.position, t),
+    lookAt: mixVec3(from.lookAt, to.lookAt, t),
+    fov: mix(from.fov, to.fov, t),
+    focusDistance: fromFocus !== undefined && toFocus !== undefined ? mix(fromFocus, toFocus, t) : undefined,
+    aperture: fromAperture !== undefined && toAperture !== undefined ? mix(fromAperture, toAperture, t) : undefined,
+  };
+};
 
 /** Catmull-Rom interpolation of one scalar through four control points (p1→p2 over t∈[0,1]). */
 const catmullRom = (p0: number, p1: number, p2: number, p3: number, t: number): number => {
@@ -161,10 +180,10 @@ const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: numbe
   if (!frames.length) return undefined;
   if (frames.length === 1 || time <= frames[0].time) {
     const first = frames[0];
-    return { position: first.position, lookAt: first.lookAt, fov: first.fov };
+    return { position: first.position, lookAt: first.lookAt, fov: first.fov, focusDistance: first.focusDistance, aperture: first.aperture };
   }
   const last = frames[frames.length - 1];
-  if (time >= last.time) return { position: last.position, lookAt: last.lookAt, fov: last.fov };
+  if (time >= last.time) return { position: last.position, lookAt: last.lookAt, fov: last.fov, focusDistance: last.focusDistance, aperture: last.aperture };
 
   let i = 0;
   while (i < frames.length - 1 && frames[i + 1].time <= time) i += 1;
@@ -174,10 +193,20 @@ const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: numbe
   const k3 = frames[i + 2] ?? k2;
   const span = Math.max(k2.time - k1.time, 0.001);
   const t = clamp01((time - k1.time) / span);
+  // Focus pulls: spline the focus distance/aperture across keyframes when any frame defines them,
+  // falling back to the nearer keyframe's value where a frame leaves them unset.
+  const focus = (pick: (frame: CinematicCameraKeyframe) => number | undefined): number | undefined => {
+    if ([k0, k1, k2, k3].every((frame) => pick(frame) === undefined)) return undefined;
+    const f1 = pick(k1) ?? pick(k2) ?? 0;
+    const f2 = pick(k2) ?? f1;
+    return catmullRom(pick(k0) ?? f1, f1, f2, pick(k3) ?? f2, t);
+  };
   return {
     position: catmullRomVec3(k0.position, k1.position, k2.position, k3.position, t),
     lookAt: catmullRomVec3(k0.lookAt, k1.lookAt, k2.lookAt, k3.lookAt, t),
     fov: catmullRom(k0.fov, k1.fov, k2.fov, k3.fov, t),
+    focusDistance: focus((frame) => frame.focusDistance),
+    aperture: focus((frame) => frame.aperture),
   };
 };
 
@@ -207,6 +236,8 @@ const cameraFromCinematicAction = (
     position,
     lookAt: action.lookAt ?? (rotation ? lookAtFromRotation(position, rotation) : [0, 1, 0]),
     fov: action.fov ?? 50,
+    focusDistance: action.focusDistance,
+    aperture: action.aperture,
   };
 };
 
@@ -426,6 +457,46 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   cameraRelativeMovement: true,
 });
 
+/** A factory for a fresh default arcade vehicle (car) controller. Tuned for a fun, always-controllable feel. */
+export const defaultVehicle = (): VehicleComponent => ({
+  enabled: false,
+  maxSpeed: 20,
+  maxReverseSpeed: 8,
+  acceleration: 11,
+  braking: 26,
+  drag: 5,
+  steerAngle: 0.6,
+  turnRate: 2.0,
+  steerReturnSpeed: 0.25,
+  gripFactor: 0.9,
+  handbrakeGrip: 0.35,
+  suspensionTravel: 0.14,
+  suspensionStiffness: 0.18,
+  bodyRoll: 0.07,
+  bodyPitch: 0.05,
+  wheelRadius: 0.4,
+  rideHeight: 0.5,
+  wheelRestY: 0.3,
+  wheelObjectIds: [],
+  steeredWheelIds: [],
+  headlightIds: [],
+  brakeLightIds: [],
+  keyThrottle: 'KeyW',
+  keyReverse: 'KeyS',
+  keyLeft: 'KeyA',
+  keyRight: 'KeyD',
+  keyHandbrake: 'Space',
+  keyHorn: 'KeyH',
+  cameraFollow: true,
+  // Behind (-Z) and above a +Z-forward car; pulled back further than a character for a chase-cam feel.
+  cameraOffset: [0, 3.4, -8.5],
+  cameraPitch: 0.24,
+  cameraMinPitch: -0.1,
+  cameraMaxPitch: 1.0,
+  mouseLook: true,
+  mouseSensitivity: 0.0025,
+});
+
 /** Default ragdoll tuning — the same conservative values RagdollRig was hardcoded with. */
 export const defaultRagdollSettings = (): RagdollSettings => ({
   capsuleRadius: 0.06,
@@ -441,9 +512,27 @@ export interface CreateObjectOptions {
   position?: Vector3Tuple;
   color?: string;
   physics?: Partial<PhysicsComponent>;
+  terrain?: Partial<TerrainComponent>;
   /** Nest the new object under this object (sets `parentId`). */
   parentId?: string;
 }
+
+const defaultTerrainBrush = (): TerrainBrushSettings => ({
+  enabled: false,
+  mode: 'sculpt',
+  operation: 'raise',
+  radius: 8,
+  strength: 0.65,
+  flattenHeight: 0,
+  targetLayerId: 'terrain-grass',
+});
+
+const syncTerrainLayerColors = (terrain: TerrainComponent): TerrainComponent => ({
+  ...terrain,
+  lowColor: terrain.materialLayers[0]?.color ?? terrain.lowColor,
+  midColor: terrain.materialLayers[1]?.color ?? terrain.midColor,
+  highColor: terrain.materialLayers[2]?.color ?? terrain.highColor,
+});
 
 const titleCase = (value: string) => `${value[0].toUpperCase()}${value.slice(1)}`;
 
@@ -516,6 +605,12 @@ const makeUIElement = (kind: UIElementKind, name?: string): UIElement => {
   return base;
 };
 
+const UI_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const quoteUIExpressionString = (value: string) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+
+const uiVariableRef = (name: string) => (UI_IDENTIFIER_RE.test(name) ? name : `vars[${quoteUIExpressionString(name)}]`);
+
 /** A fresh UI document with a root panel. Screen docs anchor top-left by default. */
 const makeUIDocument = (name: string, surface: UISurface, folderId?: string): UIDocument => {
   const root = makeUIElement('panel', 'Root');
@@ -585,6 +680,7 @@ const defaultUIComponent = (documentId: string): UIComponent => ({
  * binding referencing `variableName` BY NAME — the caller ensures that project variable exists.
  */
 const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElement => {
+  const variableExpression = uiVariableRef(variableName);
   switch (preset) {
     case 'healthBar': {
       const container = makeUIElement('panel', 'Health Bar');
@@ -594,7 +690,7 @@ const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElement => 
       label.style = { color: '#ffffff', fontSize: '12px', fontWeight: '600' };
       const bar = makeUIElement('bar', 'Bar');
       bar.style = { width: '200px', height: '16px', background: '#23262F', borderRadius: '8px' };
-      bar.bindings = [{ target: 'fill', expression: `${variableName} / 100` }];
+      bar.bindings = [{ target: 'fill', expression: `${variableExpression} / 100` }];
       container.children = [label, bar];
       return container;
     }
@@ -602,7 +698,7 @@ const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElement => 
       const text = makeUIElement('text', 'Counter');
       text.text = '0';
       text.style = { color: '#ffffff', fontSize: '20px', fontWeight: '700' };
-      text.bindings = [{ target: 'text', expression: variableName }];
+      text.bindings = [{ target: 'text', expression: variableExpression }];
       return text;
     }
     case 'label': {
@@ -710,7 +806,9 @@ const starterObjects: SceneObject[] = [
 
 const starterSceneId = 'scene-main';
 
-const starterScenes: Scene[] = [{ id: starterSceneId, name: 'Main', objects: starterObjects }];
+const starterScenes: Scene[] = [
+  { id: starterSceneId, name: 'Main', objects: starterObjects, environment: defaultSceneEnvironment() },
+];
 
 const starterVariables: ProjectVariable[] = [
   {
@@ -830,7 +928,10 @@ const nodeDescriptions: Record<string, string> = {
   'Get Anim Param': 'Reads the current value of an animator parameter (float/bool) back into the blueprint.',
   'Get Anim State': 'Outputs the name of the animator\'s currently-active state, for the blueprint to react to.',
   'Get Move Input': 'Outputs a world-space move direction (Vector3) from WASD / arrow keys.',
+  'Get Drive Input': 'Outputs [throttle, steer, handbrake] (Vector3) from the vehicle keys (W/S throttle, A/D steer, Space handbrake).',
+  'Get Vehicle Speed': 'Outputs the owning Vehicle\'s current speed (units/sec) — for speedometers, gear logic, or speed-gated effects.',
   Move: 'Moves the owner along the ground by a direction vector at a speed, turning it to face travel.',
+  Drive: 'Drives the owning Vehicle from a [throttle, steer, handbrake] vector — the Vehicle controller handles physics, suspension + terrain.',
   Jump: 'Makes the owning character jump (needs a Character Controller for height/gravity).',
   'Is Grounded': 'Outputs true when the owning character is on the ground.',
   'Set Camera': 'Overrides the follow-camera distance/height at runtime.',
@@ -867,6 +968,7 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   Compare: 'logic.compare',
   AND: 'logic.and',
   OR: 'logic.or',
+  Cast: 'logic.cast',
   Add: 'math.add',
   Clamp: 'math.clamp',
   Lerp: 'math.lerp',
@@ -884,6 +986,7 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Apply Force': 'action.applyForce',
   'Fire Event': 'action.fireEvent',
   'Spawn Object': 'action.spawnObject',
+  'Spawn Prefab': 'action.spawnPrefab',
   'Destroy Object': 'action.destroyObject',
   'Play Sound': 'action.playSound',
   'Set Material Color': 'action.setMaterialColor',
@@ -894,7 +997,10 @@ const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Get Anim Param': 'animator.getParam',
   'Get Anim State': 'animator.getState',
   'Get Move Input': 'input.move',
+  'Get Drive Input': 'input.driveInput',
+  'Get Vehicle Speed': 'query.vehicleSpeed',
   Move: 'action.move',
+  Drive: 'action.drive',
   Jump: 'action.jump',
   'Is Grounded': 'query.grounded',
   'Set Camera': 'action.setCamera',
@@ -1001,6 +1107,12 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: `Rotate ${axis} ${amount}`, description: 'Rotates the attached object when execution reaches this node.' };
     case 'logic.compare':
       return { label: `Compare ${data.compareOp ?? '=='}`, description: 'Outputs true or false by comparing two values.' };
+    case 'logic.cast':
+      return {
+        label: 'Cast To Blueprint',
+        description:
+          "Unreal-style Cast: continues only if the target object (targetObjectId — $self/$player/$trigger or an id) runs the given blueprint (castBlueprintId). On success it records the target as the \"$cast\" reference, so downstream Get/Set Object Var with targetObjectId \"$cast\" read/write THAT instance's blueprint variables.",
+      };
     case 'value.number':
       return { label: `Number ${Number(data.numberValue ?? 0)}`, description: 'Outputs a numeric literal.' };
     case 'value.string':
@@ -1067,8 +1179,14 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return { label: 'Get Anim State', description: 'Outputs the active animator state name.' };
     case 'input.move':
       return { label: 'Get Move Input', description: 'WASD / arrows → a world move direction.' };
+    case 'input.driveInput':
+      return { label: 'Get Drive Input', description: 'Vehicle keys → [throttle, steer, handbrake].' };
+    case 'query.vehicleSpeed':
+      return { label: 'Get Vehicle Speed', description: 'The owning Vehicle\'s current speed (units/sec).' };
     case 'action.move':
       return { label: 'Move', description: 'Moves + turns the owner along a direction at a speed.' };
+    case 'action.drive':
+      return { label: 'Drive', description: 'Drive the owning Vehicle from a [throttle, steer, handbrake] vector.' };
     case 'action.jump':
       return { label: 'Jump', description: 'Makes the owning character jump.' };
     case 'query.grounded':
@@ -1094,6 +1212,11 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
       return {
         label: 'Spawn Attached',
         description: 'Spawns a model and attaches it to the owner (or Target) at a bone/socket — Unreal-style equip. Replaces any weapon already on that socket.',
+      };
+    case 'action.spawnPrefab':
+      return {
+        label: 'Spawn Prefab',
+        description: 'Instantiates a prefab (a captured object tree, with its scripts/animator) at a position at runtime — use for enemy waves, breakables, hazards. Spawned objects clear when Play stops.',
       };
     case 'ai.distanceToPlayer':
       return { label: 'Distance To Player', description: 'Outputs the distance (units) from this object to the player. Wire into Compare for range checks.' };
@@ -1143,7 +1266,7 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
     case 'variable.getObject':
       return { label: `Get Object Var: ${data.objectKey || 'health'}`, description: "Reads one of this object's instance variables (self)." };
     case 'variable.setObject':
-      return { label: `Set Object Var: ${data.objectKey || 'health'}`, description: "Writes one of this object's instance variables (self)." };
+      return { label: `Set Object Var: ${data.objectKey || 'health'}`, description: "Writes an instance variable on the target object (self by default; set targetObjectId / \"$trigger\" to write the toucher)." };
     default: {
       const label = data.label ?? 'Node';
       return { label, description: nodeDescriptions[label] ?? `${data.category ?? 'Graph'} node` };
@@ -1274,6 +1397,8 @@ const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNodeData 
     nodeKind === 'action.getMaterialColor' ||
     nodeKind === 'action.getMaterialProperty' ||
     nodeKind === 'input.move' ||
+    nodeKind === 'input.driveInput' ||
+    nodeKind === 'query.vehicleSpeed' ||
     nodeKind === 'query.grounded' ||
     nodeKind === 'animator.getParam' ||
     nodeKind === 'animator.getState' ||
@@ -1391,7 +1516,7 @@ const starterEdges: Edge[] = [
 const getAssetType = (fileName: string): AssetType => {
   const ext = fileName.split('.').pop()?.toLowerCase();
   if (ext === 'glb' || ext === 'gltf') return 'model';
-  if (['png', 'jpg', 'jpeg'].includes(ext ?? '')) return 'image';
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(ext ?? '')) return 'image';
   if (['mp3', 'wav'].includes(ext ?? '')) return 'audio';
   return 'unknown';
 };
@@ -1402,6 +1527,7 @@ const objectDefaults: Record<SceneObjectKind, Partial<SceneObject>> = {
   sphere: { kind: 'sphere', renderer: defaultRenderer('sphere', '#3DDC97') },
   capsule: { kind: 'capsule', renderer: defaultRenderer('capsule', '#F7B955') },
   plane: { kind: 'plane', renderer: defaultRenderer('plane', '#2B3345'), physics: defaultPhysics('fixed', 'box') },
+  terrain: { kind: 'terrain', terrain: defaultTerrain(), physics: { ...defaultPhysics('fixed', 'mesh'), enabled: true } },
   light: { kind: 'light' },
   camera: { kind: 'camera' },
 };
@@ -1418,6 +1544,38 @@ const makeRuntimeVariableMap = (variables: ProjectVariable[]) =>
     string,
     GraphValue
   >;
+
+/**
+ * Merge a blueprint's DECLARED instance-variable defaults under an object's existing instance variables, so
+ * each object running the blueprint gets its own typed copy (keyed by variable name) without clobbering any
+ * value already authored on the object. Used when attaching a script and when seeding runtime values on Play.
+ */
+const seedBlueprintInstanceVars = (
+  existing: Record<string, GraphValue> | undefined,
+  blueprint: ScriptBlueprint | undefined,
+): Record<string, GraphValue> => {
+  const seeded: Record<string, GraphValue> = {};
+  for (const variable of blueprint?.variables ?? []) seeded[variable.name] = cloneGraphValue(variable.defaultValue);
+  return { ...seeded, ...(existing ?? {}) };
+};
+
+/** Look up the declared TYPE of an instance variable (by name) on the object's attached blueprint, if any. */
+const declaredInstanceVarType = (
+  object: SceneObject | undefined,
+  blueprints: ScriptBlueprint[],
+  key: string,
+): GraphValueType | undefined => {
+  const bp = object?.script?.blueprintId ? blueprints.find((b) => b.id === object.script!.blueprintId) : undefined;
+  return bp?.variables?.find((v) => v.name === key)?.type;
+};
+
+/** Best-effort GraphValueType from a runtime value, used to coerce instance-var writes when no declaration exists. */
+const inferGraphType = (value: GraphValue | undefined): GraphValueType => {
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'string') return 'string';
+  if (Array.isArray(value)) return 'vector3';
+  return 'number';
+};
 
 const saveKeyForSlot = (slot: string) => `nodeforge.save.${slot.trim() || 'slot1'}`;
 
@@ -1551,6 +1709,15 @@ const makeImpactObject = (position: Vector3Tuple, color = '#ffd27f'): SceneObjec
   kind: 'empty',
   transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
   effect: { kind: 'impact', life: 0.45, maxLife: 0.45, color, count: 24 },
+});
+
+/** A big fiery burst for explosions (barrels, grenades): far more particles, longer-lived, hot-orange. */
+const makeExplosion = (position: Vector3Tuple, color = '#ff7a1a'): SceneObject => ({
+  id: makeId('fx'),
+  name: 'Explosion',
+  kind: 'empty',
+  transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
+  effect: { kind: 'impact', life: 0.7, maxLife: 0.7, color, count: 70 },
 });
 
 /** A floating combat damage number that rises + fades above a hit. */
@@ -1697,6 +1864,8 @@ interface EditorState {
   scenes: Scene[];
   activeSceneId: string;
   selectedObjectId: string;
+  /** Editor-only active terrain brush. Durable sculpt/paint results live on each TerrainComponent. */
+  terrainBrush: TerrainBrushSettings;
   /** Object whose follow-camera offset is being positioned with the on-screen gizmo (editor UI only). */
   cameraRigTarget?: string;
   isDirty: boolean;
@@ -1795,6 +1964,9 @@ interface EditorState {
   runtimeTriggersExit: PhysicsContactEvent[];
   /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
   runtimeSoundQueue: string[];
+  /** Live audio state for the driven (camera-follow) vehicle, set each tick by the vehicle pass. Drives the
+   *  looping engine (playbackRate ∝ rpm) + skid (volume ∝ slip) beds in useRuntimeAudio. Null when no car drives. */
+  runtimeVehicleSound: { engineId?: string; skidId?: string; rpm: number; slip: number } | null;
   /** Messages emitted by action.print during Play; shown by the on-screen console overlay. */
   runtimeLog: string[];
   /** Screen UI documents currently shown during Play (keyed by doc id). Seeded from `visibleOnStart`. */
@@ -1806,13 +1978,19 @@ interface EditorState {
   runtimeCinematic?: RuntimeCinematicState;
   runtimeCinematicCamera?: RuntimeCinematicCamera;
   runtimeCinematicFade?: RuntimeCinematicFade;
+  /** The active cinematic's film look (letterbox/grade/grain) while playing; drives CinematicOverlay. */
+  runtimeCinematicLook?: CinematicLook;
   editorCinematicPreview?: { sequenceId: string; time: number };
   editorCinematicPreviewCamera?: RuntimeCinematicCamera;
   editorCinematicPreviewFade?: RuntimeCinematicFade;
+  /** The previewed cinematic's film look while scrubbing in the editor (mirrors runtimeCinematicLook). */
+  editorCinematicPreviewLook?: CinematicLook;
   editorCinematicPreviewTransforms: Record<string, TransformComponent>;
   editorCinematicPreviewHidden: string[];
   /** Editor-only: Film Mode "Record" mode — moving the camera or dragging objects auto-keys them. */
   cinematicRecording: boolean;
+  /** Editor-only: the keyframe selected for 3D path editing (its handle gets a transform gizmo). */
+  selectedCinematicKeyframe?: { actionId: string; index: number };
   runtimeStarted: boolean;
   runtimeTime: number;
   assetSearch: string;
@@ -1822,6 +2000,7 @@ interface EditorState {
   createScene: (name?: string) => string;
   renameScene: (id: string, name: string) => void;
   setSceneAudio: (id: string, patch: { ambientSoundId?: string; musicSoundId?: string }) => void;
+  updateSceneEnvironment: (id: string, patch: Partial<SceneEnvironmentSettings>) => void;
   deleteScene: (id: string) => void;
   setActiveScene: (id: string) => void;
   duplicateScene: (id: string) => void;
@@ -1866,6 +2045,19 @@ interface EditorState {
   updateTransform: (id: string, field: keyof TransformComponent, value: Vector3Tuple) => void;
   updateRenderer: (id: string, patch: Partial<MeshRendererComponent>) => void;
   setObjectModel: (id: string, modelAssetId?: string) => void;
+  updateTerrain: (id: string, patch: Partial<TerrainComponent>) => void;
+  setTerrainBrush: (patch: Partial<TerrainBrushSettings>) => void;
+  applyTerrainBrush: (objectId: string, worldPosition: Vector3Tuple) => void;
+  sculptTerrainAt: (
+    objectId: string,
+    worldPosition: Vector3Tuple,
+    options: { operation?: TerrainSculptOperation; radius?: number; strength?: number; flattenHeight?: number },
+  ) => void;
+  paintTerrainAt: (objectId: string, worldPosition: Vector3Tuple, options: { layerId: string; radius?: number }) => void;
+  updateTerrainMaterialLayer: (objectId: string, layerId: string, patch: Partial<TerrainMaterialLayer>) => void;
+  addTerrainMaterialLayer: (objectId: string) => string | undefined;
+  removeTerrainMaterialLayer: (objectId: string, layerId: string) => void;
+  clearTerrainEdits: (objectId: string, edits?: 'height' | 'paint' | 'all') => void;
   updatePhysics: (id: string, patch: Partial<PhysicsComponent>) => void;
   togglePhysics: (id: string) => void;
   /** Enable/disable the animator on an object (seeds a default component when first enabled). */
@@ -1909,6 +2101,10 @@ interface EditorState {
   toggleCharacterController: (id: string) => void;
   /** Patch an object's character controller. No-op if it has none. */
   updateCharacterController: (id: string, patch: Partial<CharacterControllerComponent>) => void;
+  /** Enable/disable the built-in arcade vehicle (car) controller on an object (seeds defaults when first enabled). */
+  setVehicleEnabled: (id: string, enabled?: boolean) => void;
+  /** Patch an object's vehicle controller (seeds defaults if it has none). */
+  updateVehicle: (id: string, patch: Partial<VehicleComponent>) => void;
   /** Define/replace an object's weapon inventory (pass undefined to remove it). */
   setInventory: (objectId: string, inventory: InventoryComponent | undefined) => void;
   /** Equip the inventory slot at `index`: swaps the attached weapon, plays the equip montage + switch sound,
@@ -1958,6 +2154,27 @@ interface EditorState {
   }) => { objectId: string; blueprintId: string; variableId: string; uiDocumentId: string; counterElementId: string };
   createCinematic: (name?: string, duration?: number) => string;
   updateCinematic: (id: string, patch: Partial<Omit<CinematicSequence, 'id' | 'actions' | 'createdAt'>>) => void;
+  /** Set/merge the cinematic's film look (letterbox aspect, color grade, grain, vignette). */
+  setCinematicLook: (id: string, patch: Partial<CinematicLook>) => void;
+  /**
+   * Add one static camera shot (a single framing) to a cinematic at `time`. This is the "shot list"
+   * authoring primitive: each call is a cut to a new framing. `blend` 0 = hard cut, >0 = dolly from the
+   * previous shot. Optional `focusDistance`+`aperture` give the shot depth-of-field. Returns the beat id.
+   */
+  addCinematicShot: (
+    cinematicId: string,
+    shot: {
+      time: number;
+      position: Vector3Tuple;
+      lookAt: Vector3Tuple;
+      fov?: number;
+      blend?: number;
+      focusDistance?: number;
+      aperture?: number;
+      duration?: number;
+      label?: string;
+    },
+  ) => string | undefined;
   deleteCinematic: (id: string) => void;
   setActiveCinematic: (id: string) => void;
   addCinematicAction: (cinematicId: string, action: Omit<CinematicAction, 'id'>) => string | undefined;
@@ -1968,6 +2185,12 @@ interface EditorState {
   /** Capture/replace an object transform keyframe at `time` (uses `transform` or the object's live pose). */
   addCinematicTransformKeyframe: (cinematicId: string, objectId: string, time: number, transform?: TransformComponent) => string | undefined;
   setCinematicRecording: (recording: boolean) => void;
+  /** Select (or clear, with null) a keyframe for 3D path editing; poses the scene at its time. */
+  selectCinematicKeyframe: (actionId: string | null, index?: number) => void;
+  /** Move the selected keyframe's world position (camera or object) — used by the 3D path gizmo. */
+  moveCinematicKeyframe: (actionId: string, index: number, position: Vector3Tuple) => void;
+  /** Aim a camera keyframe at a world point (its look-at) — used by the 3D path gizmo's aim handle. */
+  aimCinematicKeyframe: (actionId: string, index: number, lookAt: Vector3Tuple) => void;
   previewCinematic: (cinematicId: string, time: number) => void;
   clearCinematicPreview: () => void;
   playCinematic: (cinematicId: string) => void;
@@ -1982,6 +2205,18 @@ interface EditorState {
     folderId?: string,
   ) => { blueprintId: string; graphId: string };
   openObjectScript: (objectId: string) => string | undefined;
+  /** Declare a typed PER-INSTANCE variable on a blueprint; every object running it gets its own copy
+   *  (seeded into object.variables by name). Returns the new variable id. */
+  addBlueprintVariable: (
+    blueprintId: string,
+    opts?: { name?: string; type?: GraphValueType; defaultValue?: GraphValue },
+  ) => string | undefined;
+  updateBlueprintVariable: (
+    blueprintId: string,
+    variableId: string,
+    patch: { name?: string; type?: GraphValueType; defaultValue?: GraphValue },
+  ) => void;
+  removeBlueprintVariable: (blueprintId: string, variableId: string) => void;
   createFolder: (name?: string, parentId?: string) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
@@ -2186,6 +2421,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   scenes: starterScenes,
   activeSceneId: starterSceneId,
   selectedObjectId: 'obj-player',
+  terrainBrush: defaultTerrainBrush(),
   isDirty: false,
   assets: [],
   folders: [],
@@ -2243,6 +2479,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeTriggers: [],
   runtimeTriggersExit: [],
   runtimeSoundQueue: [],
+  runtimeVehicleSound: null,
   runtimeLog: [],
   runtimeVisibleUI: {},
   runtimeObjectVariables: {},
@@ -2250,12 +2487,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeCinematic: undefined,
   runtimeCinematicCamera: undefined,
   runtimeCinematicFade: undefined,
+  runtimeCinematicLook: undefined,
   editorCinematicPreview: undefined,
   editorCinematicPreviewCamera: undefined,
   editorCinematicPreviewFade: undefined,
+  editorCinematicPreviewLook: undefined,
   editorCinematicPreviewTransforms: {},
   editorCinematicPreviewHidden: [],
   cinematicRecording: false,
+  selectedCinematicKeyframe: undefined,
   runtimeStarted: false,
   runtimeTime: 0,
   assetSearch: '',
@@ -2264,7 +2504,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   createScene: (name) => {
     const id = makeId('scene');
     set((state) => ({
-      scenes: [...state.scenes, { id, name: name ?? `Scene ${state.scenes.length + 1}`, objects: [], cinematics: [] }],
+      scenes: [
+        ...state.scenes,
+        { id, name: name ?? `Scene ${state.scenes.length + 1}`, objects: [], cinematics: [], environment: defaultSceneEnvironment() },
+      ],
       isDirty: true,
     }));
     return id;
@@ -2277,6 +2520,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setSceneAudio: (id, patch) =>
     set((state) => ({
       scenes: state.scenes.map((scene) => (scene.id === id ? { ...scene, ...patch } : scene)),
+      isDirty: true,
+    })),
+  updateSceneEnvironment: (id, patch) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) =>
+        scene.id === id
+          ? { ...scene, environment: { ...withSceneEnvironmentDefaults(scene.environment), ...stripUndefined(patch) } }
+          : scene,
+      ),
       isDirty: true,
     })),
   deleteScene: (id) =>
@@ -2323,7 +2575,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         id,
         name: kind === 'empty' ? 'Empty Object' : `${kind[0].toUpperCase()}${kind.slice(1)}`,
         kind,
-        transform: defaultTransform([0, kind === 'plane' ? 0 : 2, 0]),
+        transform: defaultTransform([0, kind === 'plane' || kind === 'terrain' ? 0 : 2, 0]),
         ...defaults,
       } as SceneObject;
 
@@ -2337,12 +2589,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         id,
         name: options.name ?? (kind === 'empty' ? 'Empty Object' : titleCase(kind)),
         kind,
-        transform: defaultTransform(options.position ?? [0, kind === 'plane' ? 0 : 2, 0]),
+        transform: defaultTransform(options.position ?? [0, kind === 'plane' || kind === 'terrain' ? 0 : 2, 0]),
         ...defaults,
       } as SceneObject;
 
       if (options.color && next.renderer) {
         next.renderer = { ...next.renderer, color: options.color };
+      }
+      if (kind === 'terrain') {
+        next.terrain = withTerrainDefaults({ ...next.terrain, ...options.terrain });
       }
       if (options.physics) {
         next.physics = withPhysicsDefaults({ ...(next.physics ?? defaultPhysics()), ...options.physics });
@@ -2436,8 +2691,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (parentId && !objects.some((object) => object.id === parentId)) return state;
       // Reject cycles: a node can't be parented under one of its own descendants.
       if (parentId && collectSubtree(objects, id).some((object) => object.id === parentId)) return state;
+      // Keep the object's WORLD pose fixed across the re-parent: capture where it is now, then
+      // re-express that pose as a LOCAL transform under the new parent (identity when detaching).
+      const world = worldTransformOf(objects, id);
+      const localTransform = worldToLocalUnderParent(objects, world, parentId || undefined);
       return mapActiveSceneObjects(state, (current) =>
-        current.map((object) => (object.id === id ? { ...object, parentId: parentId || undefined } : object)),
+        current.map((object) =>
+          object.id === id ? { ...object, parentId: parentId || undefined, transform: localTransform } : object,
+        ),
       );
     }),
   createPrefabFromObject: (objectId, name, folderId) => {
@@ -2665,6 +2926,150 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Assigning a model needs a renderer to hang it on; seed a default one if missing.
           const renderer = object.renderer ?? defaultRenderer('cube');
           return { ...object, renderer: { ...renderer, modelAssetId: modelAssetId || undefined } };
+        }),
+      ),
+    ),
+  updateTerrain: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id) return object;
+          const current = withTerrainDefaults(object.terrain);
+          const terrain = withTerrainDefaults({
+            ...current,
+            ...stripUndefined(patch),
+            foliage: {
+              ...current.foliage,
+              ...(patch.foliage ? stripUndefined(patch.foliage) : {}),
+            },
+          });
+          return { ...object, terrain: syncTerrainLayerColors(terrain) };
+        }),
+      ),
+    ),
+  setTerrainBrush: (patch) =>
+    set((state) => ({
+      terrainBrush: {
+        ...state.terrainBrush,
+        ...stripUndefined(patch),
+        radius: Math.min(256, Math.max(0.5, patch.radius ?? state.terrainBrush.radius)),
+        strength: Math.min(64, Math.max(0, patch.strength ?? state.terrainBrush.strength)),
+      },
+    })),
+  applyTerrainBrush: (objectId, worldPosition) => {
+    const brush = get().terrainBrush;
+    const object = selectActiveObjects(get()).find((item) => item.id === objectId);
+    if (!object?.terrain || !brush.enabled) return;
+    const terrain = withTerrainDefaults(object.terrain);
+    const layerId = brush.targetLayerId && terrain.materialLayers.some((layer) => layer.id === brush.targetLayerId)
+      ? brush.targetLayerId
+      : terrain.materialLayers[0]?.id;
+    if (brush.mode === 'paint' && layerId) {
+      get().paintTerrainAt(objectId, worldPosition, { layerId, radius: brush.radius });
+      return;
+    }
+    get().sculptTerrainAt(objectId, worldPosition, {
+      operation: brush.operation,
+      radius: brush.radius,
+      strength: brush.strength,
+      flattenHeight: brush.flattenHeight,
+    });
+  },
+  sculptTerrainAt: (objectId, worldPosition, options) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          const local = terrainLocalPointFromWorld(object, worldPosition);
+          return {
+            ...object,
+            terrain: applyTerrainSculpt(terrain, local[0], local[2], {
+              operation: options.operation ?? 'raise',
+              radius: options.radius ?? get().terrainBrush.radius,
+              strength: options.strength ?? get().terrainBrush.strength,
+              flattenHeight: options.flattenHeight ?? get().terrainBrush.flattenHeight,
+            }),
+          };
+        }),
+      ),
+    ),
+  paintTerrainAt: (objectId, worldPosition, options) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          const local = terrainLocalPointFromWorld(object, worldPosition);
+          return {
+            ...object,
+            terrain: applyTerrainPaint(terrain, local[0], local[2], {
+              layerId: options.layerId,
+              radius: options.radius ?? get().terrainBrush.radius,
+            }),
+          };
+        }),
+      ),
+    ),
+  updateTerrainMaterialLayer: (objectId, layerId, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          const materialLayers = terrain.materialLayers.map((layer) =>
+            layer.id === layerId ? { ...layer, ...stripUndefined(patch), id: layer.id } : layer,
+          );
+          return { ...object, terrain: syncTerrainLayerColors(withTerrainDefaults({ ...terrain, materialLayers })) };
+        }),
+      ),
+    ),
+  addTerrainMaterialLayer: (objectId) => {
+    const id = makeId('terrain-layer');
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          const materialLayers = [
+            ...terrain.materialLayers,
+            { id, name: `Layer ${terrain.materialLayers.length + 1}`, color: '#8aa36f' },
+          ];
+          return { ...object, terrain: syncTerrainLayerColors(withTerrainDefaults({ ...terrain, materialLayers })) };
+        }),
+      ),
+    );
+    return id;
+  },
+  removeTerrainMaterialLayer: (objectId, layerId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          if (terrain.materialLayers.length <= 1) return object;
+          const materialLayers = terrain.materialLayers.filter((layer) => layer.id !== layerId);
+          const paintOverrides = Object.fromEntries(
+            Object.entries(terrain.paintOverrides).filter(([, paintedLayerId]) => paintedLayerId !== layerId),
+          );
+          return { ...object, terrain: syncTerrainLayerColors(withTerrainDefaults({ ...terrain, materialLayers, paintOverrides })) };
+        }),
+      ),
+    ),
+  clearTerrainEdits: (objectId, edits = 'all') =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          return {
+            ...object,
+            terrain: withTerrainDefaults({
+              ...terrain,
+              heightOverrides: edits === 'paint' ? terrain.heightOverrides : {},
+              paintOverrides: edits === 'height' ? terrain.paintOverrides : {},
+            }),
+          };
         }),
       ),
     ),
@@ -3005,6 +3410,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       mapActiveSceneObjects(state, (objects) =>
         objects.map((object) =>
           object.id === id && object.character ? { ...object, character: { ...object.character, ...patch } } : object,
+        ),
+      ),
+    ),
+  setVehicleEnabled: (id, enabled) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id) return object;
+          const current = object.vehicle ?? defaultVehicle();
+          return { ...object, vehicle: { ...current, enabled: enabled ?? !current.enabled } };
+        }),
+      ),
+    ),
+  updateVehicle: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id ? { ...object, vehicle: { ...defaultVehicle(), ...object.vehicle, ...patch } } : object,
         ),
       ),
     ),
@@ -3741,8 +4164,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return summary || undefined;
   },
   createCollectibleCounter: (options = {}) => {
-    const rawVariableName = options.variableName?.trim() || 'Coins';
-    const variableName = (/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawVariableName) ? rawVariableName : rawVariableName.replace(/[^A-Za-z0-9_]/g, '_').replace(/^[^A-Za-z_]+/, '')) || 'Coins';
+    const variableName = options.variableName?.trim() || 'Coins';
+    const variableExpression = uiVariableRef(variableName);
     const label = options.label?.trim() || variableName;
     const amount = options.amount ?? 1;
     const name = options.name?.trim() || `${label} Pickup`;
@@ -3758,7 +4181,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const variableId = variable?.id ?? get().createVariable(variableName, 'number', false);
 
     const findCounter = (element: UIElement): string | undefined => {
-      if (element.bindings.some((binding) => binding.target === 'text' && binding.expression.includes(variableName))) {
+      if (
+        element.bindings.some(
+          (binding) =>
+            binding.target === 'text' &&
+            (binding.expression.includes(variableName) || binding.expression.includes(variableExpression)),
+        )
+      ) {
         return element.id;
       }
       for (const child of element.children) {
@@ -3777,6 +4206,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       uiDocument = get().uiDocuments.find((doc) => doc.id === docId);
     }
     const uiDocumentId = uiDocument?.id ?? get().createUIDocument(`${label} HUD`, 'screen');
+    get().updateUIDocument(uiDocumentId, { surface: 'screen', visibleOnStart: true });
     const currentDoc = get().uiDocuments.find((doc) => doc.id === uiDocumentId);
     let counterElementId = currentDoc ? findCounter(currentDoc.root) : undefined;
     if (!counterElementId) {
@@ -3791,7 +4221,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           custom: { textShadow: '0 2px 6px rgba(0,0,0,0.65)' },
         },
       });
-      get().setUIBinding(uiDocumentId, counterElementId, 'text', `'${expressionLabel}: ' + ${variableName}`);
+      get().setUIBinding(uiDocumentId, counterElementId, 'text', `'${expressionLabel}: ' + ${variableExpression}`);
     }
 
     const objectId = get().createObjectWithProps('sphere', {
@@ -3854,6 +4284,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })),
       isDirty: true,
     })),
+  setCinematicLook: (id, patch) =>
+    set((state) => {
+      let nextLook: CinematicLook | undefined;
+      const scenes = state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) => {
+          if (cinematic.id !== id) return cinematic;
+          const merged = stripUndefined({ ...(cinematic.look ?? {}), ...patch }) as CinematicLook;
+          nextLook = merged;
+          return { ...cinematic, look: merged };
+        }),
+      }));
+      return {
+        scenes,
+        // Live-update the active runtime/preview look so the overlay reflects edits immediately.
+        runtimeCinematicLook: state.runtimeCinematic?.sequenceId === id ? nextLook : state.runtimeCinematicLook,
+        editorCinematicPreviewLook: state.editorCinematicPreview?.sequenceId === id ? nextLook : state.editorCinematicPreviewLook,
+        isDirty: true,
+      };
+    }),
   deleteCinematic: (id) =>
     set((state) => ({
       scenes: state.scenes.map((scene) => ({
@@ -3864,9 +4314,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeCinematic: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematic,
       runtimeCinematicCamera: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematicCamera,
       runtimeCinematicFade: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematicFade,
+      runtimeCinematicLook: state.runtimeCinematic?.sequenceId === id ? undefined : state.runtimeCinematicLook,
       editorCinematicPreview: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreview,
       editorCinematicPreviewCamera: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreviewCamera,
       editorCinematicPreviewFade: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreviewFade,
+      editorCinematicPreviewLook: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreviewLook,
       editorCinematicPreviewTransforms: state.editorCinematicPreview?.sequenceId === id ? {} : state.editorCinematicPreviewTransforms,
       editorCinematicPreviewHidden: state.editorCinematicPreview?.sequenceId === id ? [] : state.editorCinematicPreviewHidden,
       isDirty: true,
@@ -3930,6 +4382,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })),
       isDirty: true,
     })),
+  addCinematicShot: (cinematicId, shot) => {
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+    if (!cinematic) return undefined;
+    const shotCount = cinematic.actions.filter((action) => action.type === 'camera').length;
+    const time = Number(Math.max(0, shot.time).toFixed(3));
+    return get().addCinematicAction(cinematicId, {
+      type: 'camera',
+      time,
+      duration: Math.max(0.5, shot.duration ?? Math.max(1.5, cinematic.duration - time)),
+      label: shot.label ?? `Shot ${shotCount + 1}`,
+      ease: 'smooth',
+      position: [...shot.position],
+      lookAt: [...shot.lookAt],
+      fov: shot.fov ?? 50,
+      // First shot is the opening framing (hard cut); later shots default to a soft dolly unless told to cut.
+      blend: shot.blend ?? (shotCount > 0 ? 1.2 : 0),
+      focusDistance: shot.focusDistance,
+      aperture: shot.aperture,
+    });
+  },
   addCinematicCameraKeyframe: (cinematicId, time, pose) => {
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
     if (!cinematic) return undefined;
@@ -3938,6 +4410,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       position: [...pose.position],
       lookAt: [...pose.lookAt],
       fov: Math.round(pose.fov),
+      focusDistance: pose.focusDistance,
+      aperture: pose.aperture,
     };
     const track = cinematic.actions.find((action) => action.type === 'camera' && action.keyframes?.length);
     let actionId = track?.id;
@@ -3999,6 +4473,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       return { cinematicRecording: true };
     }),
+  selectCinematicKeyframe: (actionId, index) => {
+    if (!actionId || index == null) {
+      set({ selectedCinematicKeyframe: undefined });
+      return;
+    }
+    set({ selectedCinematicKeyframe: { actionId, index } });
+    // Pose the scene at this keyframe's time so editing it shows the right moment.
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
+    const action = cinematic?.actions.find((item) => item.id === actionId);
+    const frame = action?.type === 'camera' ? action.keyframes?.[index] : action?.type === 'transform' ? action.transformKeyframes?.[index] : undefined;
+    if (cinematic && frame) get().previewCinematic(cinematic.id, frame.time);
+  },
+  moveCinematicKeyframe: (actionId, index, position) => {
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
+    const action = cinematic?.actions.find((item) => item.id === actionId);
+    if (!cinematic || !action) return;
+    if (action.type === 'camera' && action.keyframes?.[index]) {
+      const keyframes = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, position } : keyframe));
+      get().updateCinematicAction(cinematic.id, actionId, { keyframes });
+    } else if (action.type === 'transform' && action.transformKeyframes?.[index]) {
+      const transformKeyframes = action.transformKeyframes.map((keyframe, i) => (i === index ? { ...keyframe, position } : keyframe));
+      get().updateCinematicAction(cinematic.id, actionId, { transformKeyframes });
+    } else {
+      return;
+    }
+    const preview = get().editorCinematicPreview;
+    if (preview?.sequenceId === cinematic.id) get().previewCinematic(cinematic.id, preview.time);
+  },
+  aimCinematicKeyframe: (actionId, index, lookAt) => {
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
+    const action = cinematic?.actions.find((item) => item.id === actionId);
+    if (!cinematic || action?.type !== 'camera' || !action.keyframes?.[index]) return;
+    const keyframes = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, lookAt } : keyframe));
+    get().updateCinematicAction(cinematic.id, actionId, { keyframes });
+    const preview = get().editorCinematicPreview;
+    if (preview?.sequenceId === cinematic.id) get().previewCinematic(cinematic.id, preview.time);
+  },
   previewCinematic: (cinematicId, time) =>
     set((state) => {
       if (state.isPlaying) return state;
@@ -4011,19 +4522,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         editorCinematicPreview: { sequenceId: cinematicId, time: previewTime },
         editorCinematicPreviewCamera: cinematicCameraAt(sequence, objects, previewTime),
         editorCinematicPreviewFade: cinematicFadeAt(sequence, previewTime),
+        editorCinematicPreviewLook: sequence.look,
         editorCinematicPreviewTransforms: cinematicTransformsAt(sequence, objects, previewTime),
         editorCinematicPreviewHidden: cinematicHiddenAt(sequence, previewTime),
       };
     }),
   clearCinematicPreview: () =>
     set((state) =>
-      state.editorCinematicPreview
+      state.editorCinematicPreview || state.selectedCinematicKeyframe
         ? {
             editorCinematicPreview: undefined,
             editorCinematicPreviewCamera: undefined,
             editorCinematicPreviewFade: undefined,
+            editorCinematicPreviewLook: undefined,
             editorCinematicPreviewTransforms: {},
             editorCinematicPreviewHidden: [],
+            selectedCinematicKeyframe: undefined,
           }
         : state,
     ),
@@ -4042,6 +4556,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematic: { sequenceId: cinematicId, time: 0, firedActionIds: [], spawnedObjectIds: [] },
         runtimeCinematicCamera: initialCinematicCamera(sequence, scene?.objects ?? []),
         runtimeCinematicFade: initialCinematicFade(sequence),
+        runtimeCinematicLook: sequence.look,
       };
     });
   },
@@ -4055,6 +4570,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematic: undefined,
         runtimeCinematicCamera: undefined,
         runtimeCinematicFade: undefined,
+        runtimeCinematicLook: undefined,
       };
     }),
   attachScript: (id, nextBlueprintId) =>
@@ -4065,11 +4581,83 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...mapActiveSceneObjects(state, (objects) =>
           objects.map((object) =>
             object.id === id
-              ? { ...object, script: { blueprintId: blueprint.id, graphId: blueprint.graphId, enabled: true } }
+              ? {
+                  ...object,
+                  script: { blueprintId: blueprint.id, graphId: blueprint.graphId, enabled: true },
+                  // Seed this instance's own copy of the blueprint's declared variables (keep existing values).
+                  variables: seedBlueprintInstanceVars(object.variables, blueprint),
+                }
               : object,
           ),
         ),
         activeBlueprintId: blueprint.id,
+      };
+    }),
+  addBlueprintVariable: (blueprintId, opts = {}) => {
+    const blueprint = get().blueprints.find((b) => b.id === blueprintId);
+    if (!blueprint) return undefined;
+    const type = opts.type ?? 'number';
+    const id = makeId('bpvar');
+    const existing = blueprint.variables ?? [];
+    const variable: BlueprintVariable = {
+      id,
+      name: opts.name?.trim() || `Var ${existing.length + 1}`,
+      type,
+      defaultValue: opts.defaultValue !== undefined ? coerceGraphValue(opts.defaultValue, type) : defaultValueForType(type),
+    };
+    set((state) => ({
+      blueprints: state.blueprints.map((b) => (b.id === blueprintId ? { ...b, variables: [...existing, variable] } : b)),
+      // Seed the new variable's default onto every object already running this blueprint (don't clobber values).
+      ...mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.script?.blueprintId === blueprintId && object.variables?.[variable.name] === undefined
+            ? { ...object, variables: { ...(object.variables ?? {}), [variable.name]: cloneGraphValue(variable.defaultValue) } }
+            : object,
+        ),
+      ),
+      isDirty: true,
+    }));
+    return id;
+  },
+  updateBlueprintVariable: (blueprintId, variableId, patch) =>
+    set((state) => {
+      const blueprint = state.blueprints.find((b) => b.id === blueprintId);
+      const current = blueprint?.variables?.find((v) => v.id === variableId);
+      if (!blueprint || !current) return state;
+      const type = patch.type ?? current.type;
+      const nextName = patch.name?.trim() || current.name;
+      const defaultValue =
+        patch.defaultValue !== undefined ? coerceGraphValue(patch.defaultValue, type) : coerceGraphValue(current.defaultValue, type);
+      const renamed = nextName !== current.name;
+      return {
+        blueprints: state.blueprints.map((b) =>
+          b.id === blueprintId
+            ? { ...b, variables: (b.variables ?? []).map((v) => (v.id === variableId ? { ...v, name: nextName, type, defaultValue } : v)) }
+            : b,
+        ),
+        // Carry a rename across to instances that hold the old key (preserve their per-instance value).
+        ...(renamed
+          ? mapActiveSceneObjects(state, (objects) =>
+              objects.map((object) => {
+                if (object.script?.blueprintId !== blueprintId || object.variables?.[current.name] === undefined) return object;
+                const { [current.name]: held, ...rest } = object.variables;
+                return { ...object, variables: { ...rest, [nextName]: held } };
+              }),
+            )
+          : {}),
+        isDirty: true,
+      };
+    }),
+  removeBlueprintVariable: (blueprintId, variableId) =>
+    set((state) => {
+      const blueprint = state.blueprints.find((b) => b.id === blueprintId);
+      const removed = blueprint?.variables?.find((v) => v.id === variableId);
+      if (!blueprint || !removed) return state;
+      return {
+        blueprints: state.blueprints.map((b) =>
+          b.id === blueprintId ? { ...b, variables: (b.variables ?? []).filter((v) => v.id !== variableId) } : b,
+        ),
+        isDirty: true,
       };
     }),
   detachScript: (id) =>
@@ -5154,22 +5742,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeTriggers: [],
           runtimeTriggersExit: [],
           runtimeSoundQueue: [],
+          runtimeVehicleSound: null,
           runtimeLog: [],
           // Show every screen HUD flagged visibleOnStart; world docs render whenever their object exists.
           runtimeVisibleUI: Object.fromEntries(
             state.uiDocuments.filter((doc) => doc.surface === 'screen' && doc.visibleOnStart).map((doc) => [doc.id, true]),
           ),
-          // Seed per-instance object variables so world-UI `self.*` bindings have authored starting values.
+          // Seed per-instance object variables: each object gets its OWN copy of its blueprint's declared
+          // variables (merged under any authored overrides), so world-UI `self.*` + Get/Set Object Var start
+          // from typed defaults — this is the per-instance scope (vs shared project variables).
           runtimeObjectVariables: Object.fromEntries(
-            objects.filter((object) => object.variables).map((object) => [object.id, { ...object.variables }]),
+            objects.map((object) => [
+              object.id,
+              seedBlueprintInstanceVars(
+                object.variables,
+                object.script?.blueprintId ? state.blueprints.find((b) => b.id === object.script!.blueprintId) : undefined,
+              ),
+            ]),
           ),
           runtimeUITextOverrides: {},
           runtimeCinematic: autoplay ? { sequenceId: autoplay.id, time: 0, firedActionIds: [], spawnedObjectIds: [] } : undefined,
           runtimeCinematicCamera: initialCinematicCamera(autoplay, objects),
           runtimeCinematicFade: initialCinematicFade(autoplay),
+          runtimeCinematicLook: autoplay?.look,
           editorCinematicPreview: undefined,
           editorCinematicPreviewCamera: undefined,
           editorCinematicPreviewFade: undefined,
+          editorCinematicPreviewLook: undefined,
           editorCinematicPreviewTransforms: {},
           editorCinematicPreviewHidden: [],
           runtimeStarted: false,
@@ -5221,6 +5820,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeTriggers: [],
         runtimeTriggersExit: [],
         runtimeSoundQueue: [],
+        runtimeVehicleSound: null,
         runtimeLog: [],
         runtimeVisibleUI: {},
         runtimeObjectVariables: {},
@@ -5228,9 +5828,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematic: undefined,
         runtimeCinematicCamera: undefined,
         runtimeCinematicFade: undefined,
+        runtimeCinematicLook: undefined,
         editorCinematicPreview: undefined,
         editorCinematicPreviewCamera: undefined,
         editorCinematicPreviewFade: undefined,
+        editorCinematicPreviewLook: undefined,
         editorCinematicPreviewTransforms: {},
         editorCinematicPreviewHidden: [],
         runtimeStarted: false,
@@ -5255,6 +5857,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       );
       const runtimeTime = state.runtimeTime + delta;
       const nextVelocities = { ...state.runtimeVelocities };
+      // Per-frame Vehicle drive input set by the "Drive" blueprint node (throttle/steer/handbrake).
+      // A scripted car (one with a blueprint) is driven ONLY by this — its graph is authoritative.
+      const vehicleScriptInputs: Record<string, { throttle: number; steer: number; handbrake: boolean }> = {};
       const nextVariableValues = { ...state.runtimeVariableValues };
       // Per-object instance variables (read/written by self.* and the object-var nodes). Deep-copied per object.
       const nextObjectVariables: Record<string, Record<string, GraphValue>> = {};
@@ -5297,6 +5902,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (left > 0) nextHitFlash[id] = left;
       }
       const meleeSwings = new Set<string>(); // characters that started an attack swing this frame (melee hit-test)
+      // On lethal damage: a rigged target (character/animator) goes LIMP like the player (ragdoll), so it crumples
+      // instead of vanishing; a simple prop (e.g. the target dummy) just despawns.
+      const dieOrRagdoll = (target: SceneObject | undefined, id: string) => {
+        if (target && (target.character?.enabled || target.animator?.enabled)) setRagdoll(id, true);
+        else destroyedIds.add(id);
+      };
+      // Explosions: an object with an `explosive` instance var bursts on death (barrels, grenades) — queued here,
+      // then processed after the hit passes so blasts can CHAIN (a barrel killed by another barrel explodes too).
+      const explodeQueue: Array<{ pos: Vector3Tuple; dmg: number; radius: number }> = [];
+      const exploded = new Set<string>();
+      const killTarget = (target: SceneObject | undefined, id: string) => {
+        if (target?.variables?.explosive) {
+          if (exploded.has(id)) return;
+          exploded.add(id);
+          destroyedIds.add(id);
+          explodeQueue.push({
+            pos: [...target.transform.position] as Vector3Tuple,
+            dmg: toNumber(target.variables.explosionDamage ?? 60),
+            radius: toNumber(target.variables.explosionRadius ?? 4.5),
+          });
+        } else dieOrRagdoll(target, id);
+      };
       // Per-character movement-mode override (Set Movement Mode node) — persists across frames, updated by the
       // node in the script pass, then read by the character + animator passes below.
       const movementModeNow: Record<string, string> = { ...state.runtimeMovementMode };
@@ -5371,6 +5998,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // in the post-pass below, so here we only collect scripted motion + side effects.
       const mappedObjects = activeObjects.map((object) => {
           if (destroyedIds.has(object.id)) return object;
+          // A limp (ragdolling) body doesn't run its scripts — so a dead enemy stops chasing/shooting.
+          if (isRagdoll(object.id)) return object;
           const position = [...object.transform.position] as Vector3Tuple;
           const rotation = [...object.transform.rotation] as Vector3Tuple;
           const scale = [...object.transform.scale] as Vector3Tuple;
@@ -5438,6 +6067,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return [dirX, 0, dirZ] as Vector3Tuple;
             }
 
+            if (node.data.nodeKind === 'query.vehicleSpeed') {
+              const v = nextVelocities[object.id];
+              return v ? Math.hypot(v[0], v[2]) : 0;
+            }
+
+            if (node.data.nodeKind === 'input.driveInput') {
+              // Vehicle input → [throttle (W=+1/S=-1), steer (A=+1/D=-1), handbrake (Space=1/0)]. Reads the
+              // owner Vehicle's key bindings so the graph is fully editable (rebind keys, gate it, etc.).
+              const veh = object.vehicle;
+              const kThrottle = veh?.keyThrottle ?? 'KeyW';
+              const kReverse = veh?.keyReverse ?? 'KeyS';
+              const kLeft = veh?.keyLeft ?? 'KeyA';
+              const kRight = veh?.keyRight ?? 'KeyD';
+              const kHand = veh?.keyHandbrake ?? 'Space';
+              const throttle = (currentKeys[kThrottle] ? 1 : 0) - (currentKeys[kReverse] ? 1 : 0);
+              const steer = (currentKeys[kLeft] ? 1 : 0) - (currentKeys[kRight] ? 1 : 0);
+              const hand = currentKeys[kHand] ? 1 : 0;
+              return [throttle, steer, hand] as Vector3Tuple;
+            }
+
             if (node.data.nodeKind === 'query.grounded') {
               return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
             }
@@ -5489,7 +6138,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'variable.getObject') {
               const key = node.data.objectKey || '';
-              return cloneGraphValue(nextObjectVariables[object.id]?.[key] ?? object.variables?.[key] ?? 0);
+              // Target comes from the wired reference input (a Cast's "As" pin) or the targetObjectId sentinel —
+              // so a script can READ another actor's instance variable (then e.g. increment it).
+              const targetId = objectVarTarget(node);
+              return cloneGraphValue(
+                nextObjectVariables[targetId]?.[key] ?? activeObjects.find((o) => o.id === targetId)?.variables?.[key] ?? 0,
+              );
+            }
+
+            // Cast's value-out ("As <Blueprint>"): the validated actor id, or undefined if it isn't that blueprint.
+            if (node.data.nodeKind === 'logic.cast') {
+              const wired = valueInput(node, 'object');
+              const targetId = (typeof wired === 'string' && wired) || resolveTarget(node.data.targetObjectId) || object.id;
+              const targetObj = activeObjects.find((o) => o.id === targetId);
+              return targetObj && (!node.data.castBlueprintId || targetObj.script?.blueprintId === node.data.castBlueprintId)
+                ? targetId
+                : undefined;
             }
 
             if (node.data.nodeKind === 'data.tableGet') {
@@ -5555,18 +6219,46 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
 
-          // Resolve a node's target object id, supporting the "$trigger" sentinel = the object overlapping the
-          // owner this frame (lets a volume/pickup's own script act on whoever entered OR left it). Checks the
-          // enter list first, then the exit list (so Trigger Exit handlers can target the leaving object too).
-          const resolveTarget = (raw: string | undefined): string | undefined =>
-            raw === '$trigger'
-              ? state.runtimeTriggers.find((t) => t.objectId === object.id)?.otherObjectId ??
+          // The most recent successful Cast target on THIS owner this execution — resolved by the "$cast"
+          // sentinel so downstream Get/Set Object Var act on the cast actor's instance variables.
+          let castTargetId: string | undefined;
+
+          // Resolve a node's target object id. Sentinels: "$trigger" = the object overlapping the owner this
+          // frame; "$self" = the owner; "$player" = the camera-follow player; "$cast" = the last successful Cast.
+          const resolveTarget = (raw: string | undefined): string | undefined => {
+            if (raw === '$trigger')
+              return (
+                state.runtimeTriggers.find((t) => t.objectId === object.id)?.otherObjectId ??
                 state.runtimeTriggersExit.find((t) => t.objectId === object.id)?.otherObjectId
-              : raw;
+              );
+            if (raw === '$self') return object.id;
+            if (raw === '$player') return playerId;
+            if (raw === '$cast') return castTargetId;
+            return raw;
+          };
+
+          // The object a Get/Set Object Var acts on: a wired "target" reference (a Cast's "As" pin) wins, then
+          // the targetObjectId sentinel/id, then self.
+          const objectVarTarget = (node: NodeForgeNode): string => {
+            const wired = valueInput(node, 'target');
+            return (typeof wired === 'string' && wired ? wired : resolveTarget(node.data.targetObjectId)) || object.id;
+          };
 
           function applyAction(node: NodeForgeNode, visited: Set<string>): boolean {
             if (node.data.nodeKind === 'logic.branch') {
               return toBoolean(valueInput(node, 'condition', node.data.booleanValue ?? true));
+            }
+
+            // Cast (Unreal-style): gate the chain on the target running a specific blueprint. The object to test
+            // comes from the wired "object" reference input (e.g. another Cast's "As" pin) or the targetObjectId
+            // sentinel. On success, record it as "$cast" AND expose it from this node's value-out (the "As" pin).
+            if (node.data.nodeKind === 'logic.cast') {
+              const wired = valueInput(node, 'object');
+              const targetId = (typeof wired === 'string' && wired) || resolveTarget(node.data.targetObjectId) || object.id;
+              const targetObj = activeObjects.find((o) => o.id === targetId);
+              const ok = Boolean(targetObj) && (!node.data.castBlueprintId || targetObj!.script?.blueprintId === node.data.castBlueprintId);
+              if (ok) castTargetId = targetId;
+              return ok;
             }
 
             // Cooldown gate: passes through at most once per N seconds (fire rate / spawn rate). While on
@@ -5633,11 +6325,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'variable.setObject') {
               const key = node.data.objectKey || '';
+              // Target: a wired reference (a Cast's "As" pin) wins, else the targetObjectId sentinel
+              // ($self/$player/$trigger/$cast) or an id, else self — so a pickup can write a variable on whoever
+              // walked into it, or on a cast actor.
+              const targetId = objectVarTarget(node);
               if (key) {
-                (nextObjectVariables[object.id] ??= { ...(object.variables ?? {}) })[key] = coerceGraphValue(
-                  valueInput(node, 'value', node.data.numberValue ?? 0),
-                  'number',
-                );
+                const targetObj = activeObjects.find((o) => o.id === targetId);
+                // Coerce to the variable's DECLARED type on the target's blueprint (so bools/strings/vectors
+                // work, not just numbers); fall back to inferring the type from the supplied value.
+                const declType = declaredInstanceVarType(targetObj, state.blueprints, key);
+                const fallback = declType ? literalValueForType(node.data, declType) : (node.data.numberValue ?? 0);
+                const raw = valueInput(node, 'value', fallback);
+                const baseVars = nextObjectVariables[targetId] ?? targetObj?.variables ?? {};
+                (nextObjectVariables[targetId] = { ...baseVars })[key] = coerceGraphValue(raw, declType ?? inferGraphType(raw));
               }
             }
 
@@ -5740,6 +6440,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               spawned.push(makeSpawnedObject(node.data.spawnKind ?? 'cube', position));
             }
 
+            if (node.data.nodeKind === 'action.spawnPrefab' && node.data.prefabId) {
+              // Instantiate a prefab tree (re-ided) at the spawner's position. The clones keep the prefab's
+              // controllerId/blueprintId (project-level), so spawned enemies animate + run their AI immediately.
+              const prefab = state.prefabs.find((p) => p.id === node.data.prefabId);
+              if (prefab && prefab.objects.length) {
+                const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
+                for (const clone of clones) {
+                  spawned.push(
+                    clone.id === rootId
+                      ? { ...clone, parentId: undefined, transform: { ...clone.transform, position: [...position] as Vector3Tuple } }
+                      : clone,
+                  );
+                }
+              }
+            }
+
             if (node.data.nodeKind === 'action.destroyObject') {
               destroyedIds.add(node.data.targetObjectId || object.id);
             }
@@ -5810,6 +6526,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 }
                 changed = true;
               }
+            }
+
+            if (node.data.nodeKind === 'action.drive') {
+              const v = valueInput(node, 'vector');
+              if (Array.isArray(v)) vehicleScriptInputs[object.id] = { throttle: v[0] ?? 0, steer: v[1] ?? 0, handbrake: (v[2] ?? 0) > 0.5 };
+              else vehicleScriptInputs[object.id] = { throttle: 0, steer: 0, handbrake: false };
             }
 
             if (node.data.nodeKind === 'action.jump') {
@@ -5997,7 +6719,226 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const diff = target - current;
         return Math.abs(diff) <= maxStep ? target : current + Math.sign(diff) * maxStep;
       };
+
+      // ---- Vehicle pass (pre-compute) ----------------------------------------------------------
+      // Arcade car driving. The car is a KINEMATIC body the runtime fully positions (so Rapier never fights
+      // it — no jitter, no "flying"): we integrate a signed forward speed from WASD, steer the yaw (scaled by
+      // speed), advance X/Z along the heading, and snap the chassis Y onto the terrain. SUSPENSION is real and
+      // computed: the chassis bobs/tilts to follow the terrain under its four wheels (a smoothed spring), plus
+      // a squat/dive on accel/brake and a lean into turns; each wheel also visually compresses toward its own
+      // ground contact, spins ∝ speed, and the front pair steers. Everything is computed into lookup maps and
+      // applied inside the movedObjects map below (wheels/lights are separate child objects). Driving is gated
+      // on a `Driving` project var (0 until a car is chosen in the start menu); no such var = always active.
+      const vehicleBody = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+      const vehicleWheel = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+      const vehicleBrake = new Map<string, number>();
+      // Live audio state for the driven car (engine pitch + skid volume), set below and published after the loop.
+      let nextVehicleSound: EditorState['runtimeVehicleSound'] = null;
+      const drivingVar = state.variables.find((v) => v.name === 'Driving');
+      const drivingActive =
+        !drivingVar || toNumber(nextVariableValues[drivingVar.id] ?? drivingVar.defaultValue) > 0.5;
+      const vehiclePlayerId = activeObjects.find((o) => o.vehicle?.enabled && o.vehicle.cameraFollow)?.id;
+      const groundAt = (x: number, z: number) => highestTerrainWorldHeight(mappedObjects, x, z) ?? 0;
+      for (const object of mappedObjects) {
+        if (!object.vehicle?.enabled) continue;
+        const veh = { ...defaultVehicle(), ...object.vehicle };
+        const yaw = object.transform.rotation[1];
+        const prevVel = nextVelocities[object.id] ?? [0, 0, 0];
+        // Signed forward speed recovered from the stored velocity projected onto the current heading.
+        const prevSpeed = prevVel[0] * Math.sin(yaw) + prevVel[2] * Math.cos(yaw);
+        // Input: a SCRIPTED car (has a blueprint) is driven by its "Drive" node (vehicleScriptInputs) — fully
+        // editable in the graph. An AUTO car (no blueprint) reads its keys directly, gated by the Driving var.
+        const scripted = Boolean(object.script?.enabled);
+        const di = vehicleScriptInputs[object.id];
+        const throttleSig = scripted
+          ? (di ? di.throttle : 0)
+          : drivingActive
+            ? (currentKeys[veh.keyThrottle] ? 1 : 0) - (currentKeys[veh.keyReverse] ? 1 : 0)
+            : 0;
+        const steerRaw = scripted
+          ? (di ? di.steer : 0)
+          : drivingActive
+            ? (currentKeys[veh.keyLeft] ? 1 : 0) - (currentKeys[veh.keyRight] ? 1 : 0)
+            : 0;
+        // Handbrake: scripted cars read it from the Drive node, auto cars from the key. It loosens rear grip
+        // (oversteer / drift) and bleeds a little speed.
+        const handbrake = scripted
+          ? Boolean(di?.handbrake)
+          : drivingActive
+            ? Boolean(currentKeys[veh.keyHandbrake])
+            : false;
+        const braking = throttleSig < -0.05;
+        // Integrate speed (weighty): throttle accelerates with the accel TAPERING toward top speed (so it
+        // eases up to maxSpeed instead of snapping); reverse brakes a forward roll then accelerates back;
+        // neither = coast to a stop via drag.
+        let speed = prevSpeed;
+        if (throttleSig > 0.05) {
+          const accel = veh.acceleration * throttleSig * (0.35 + 0.65 * Math.max(0, 1 - Math.max(0, speed) / veh.maxSpeed));
+          speed = speed < -0.01 ? approach(speed, 0, veh.braking * delta) : Math.min(veh.maxSpeed, speed + accel * delta);
+        } else if (throttleSig < -0.05) {
+          speed = speed > 0.01 ? approach(speed, 0, veh.braking * delta) : Math.max(-veh.maxReverseSpeed, speed - veh.acceleration * 0.6 * -throttleSig * delta);
+        } else {
+          speed = approach(speed, 0, veh.drag * delta);
+        }
+        // Handbrake scrubs a little speed (locked rears) so a drift bleeds momentum like a real one.
+        if (handbrake) speed = approach(speed, 0, veh.drag * 1.4 * delta);
+        if (Math.abs(speed) < 0.02) speed = 0;
+
+        // Find the wheels (needed for steering wheelbase + suspension).
+        const wheels = veh.wheelObjectIds
+          .map((wid) => mappedObjects.find((o) => o.id === wid))
+          .filter((w): w is SceneObject => Boolean(w));
+
+        // STEERING — a kinematic "bicycle model" so it feels like a car, not a spinning top:
+        //  • the steer angle is SMOOTHED toward the input and SPEED-SENSITIVE (less lock at speed) — no twitch;
+        //  • yaw rate = (speed / wheelbase) · tan(steer), so the car ARCS with a radius set by speed and steer,
+        //    and CANNOT spin in place (zero speed → zero turn). Reversing flips the turn direction naturally.
+        const steeredWheels = wheels.filter((w) => veh.steeredWheelIds.includes(w.id));
+        // VISUAL steer cranks the front wheels to the FULL steer angle (clearly visible that the WHEELS turn,
+        // not just the frame), smoothed for weight. The car's actual yaw uses a gentler, speed-reduced steer so
+        // it arcs instead of spinning — decoupling the two keeps the wheels expressive without twitchy handling.
+        const prevSteer = steeredWheels[0]?.transform.rotation[1] ?? 0;
+        const topFrac = Math.min(1, Math.abs(prevSpeed) / Math.max(0.001, veh.maxSpeed));
+        const steerK = 1 - Math.exp(-9 * Math.min(delta, 0.1));
+        const visualSteer = prevSteer + (steerRaw * veh.steerAngle - prevSteer) * steerK;
+        // Grip is loose while the handbrake is held (drift): the rear steps out, so the car keeps more steer
+        // lock at speed and rotates FASTER than the wheels point (oversteer). gripFactor/handbrakeGrip are 0..1.
+        const grip = handbrake ? veh.handbrakeGrip : veh.gripFactor;
+        const effectiveSteer = visualSteer * (1 - (handbrake ? 0.15 : 0.5) * topFrac);
+        const lzs = wheels.map((w) => w.transform.position[2]);
+        const wheelbase = wheels.length ? Math.max(0.8, Math.max(...lzs) - Math.min(...lzs)) : 2.4;
+        const oversteer = 1 + (1 - grip) * (handbrake ? 1.6 : 0.4);
+        const yawRate = (speed / wheelbase) * Math.tan(effectiveSteer) * oversteer;
+        // Tire slip 0..1 — drives the skid sound + extra body lean. High when the handbrake is held at speed,
+        // or in a hard fast corner where the chassis is loaded beyond its grip.
+        const slip = Math.min(
+          1,
+          Math.max(
+            handbrake && Math.abs(speed) > 2 ? 0.55 + 0.45 * topFrac : 0,
+            Math.max(0, Math.abs(yawRate * speed) * (1 - veh.gripFactor) * 1.1 - 0.2),
+          ),
+        );
+        const newYaw = yaw + yawRate * delta;
+        const cosY = Math.cos(newYaw);
+        const sinY = Math.sin(newYaw);
+        const position = [...object.transform.position] as Vector3Tuple;
+        position[0] += sinY * speed * delta;
+        position[2] += cosY * speed * delta;
+
+        // Sample the terrain under each wheel (world space) for the suspension.
+        const wheelGround = wheels.map((w) => {
+          const lx = w.transform.position[0];
+          const lz = w.transform.position[2];
+          return groundAt(position[0] + lx * cosY + lz * sinY, position[2] - lx * sinY + lz * cosY);
+        });
+        const avgGround = wheelGround.length
+          ? wheelGround.reduce((a, b) => a + b, 0) / wheelGround.length
+          : groundAt(position[0], position[2]);
+
+        // Chassis Y rides on the terrain (springy). suspensionStiffness controls how fast it settles.
+        const settle = 1 - Math.exp(-(8 + veh.suspensionStiffness * 40) * Math.min(delta, 0.1));
+        const targetY = avgGround + veh.rideHeight;
+        position[1] = object.transform.position[1] + (targetY - object.transform.position[1]) * settle;
+        const velocity: Vector3Tuple = [sinY * speed, (position[1] - object.transform.position[1]) / Math.max(delta, 1e-4), cosY * speed];
+        nextVelocities[object.id] = velocity;
+
+        // Terrain tilt (pitch from front↔rear ground, roll from left↔right) + accel squat + turn lean.
+        const frontG: number[] = [];
+        const rearG: number[] = [];
+        const leftG: number[] = [];
+        const rightG: number[] = [];
+        wheels.forEach((w, i) => {
+          (w.transform.position[2] >= 0 ? frontG : rearG).push(wheelGround[i]);
+          (w.transform.position[0] <= 0 ? leftG : rightG).push(wheelGround[i]);
+        });
+        const avg = (a: number[], fallback: number) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : fallback);
+        const accelSig = (speed - prevSpeed) / Math.max(delta, 1e-4);
+        const terrainPitch = Math.atan2(avg(rearG, avgGround) - avg(frontG, avgGround), wheelbase);
+        const terrainRoll = Math.atan2(avg(leftG, avgGround) - avg(rightG, avgGround), 1.7);
+        const targetPitch = Math.max(-0.18, Math.min(0.18, terrainPitch + -accelSig * veh.bodyPitch * 0.04));
+        // Lean into the turn, plus an extra drift lean while the tires slip (reads as a slide).
+        const turnLean = -yawRate * speed * veh.bodyRoll * (1 + slip * 1.5);
+        const targetRoll = Math.max(-0.3, Math.min(0.3, terrainRoll + turnLean));
+        const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * settle;
+        const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * settle;
+        vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow] });
+
+        // Wheels: spin around local X (∝ distance travelled), the front pair shows the smoothed steer angle
+        // around local Y, and each wheel bobs toward its own ground contact (visible per-wheel suspension).
+        const TWO_PI = Math.PI * 2;
+        wheels.forEach((w, i) => {
+          const base = w.transform.rotation;
+          const spin = (base[0] + (speed / Math.max(0.05, veh.wheelRadius)) * delta) % TWO_PI;
+          const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
+          // Per-wheel suspension: target compression from this wheel's own ground contact, SMOOTHED toward
+          // the previous wheel Y so it glides over terrain noise instead of jittering (the straight-line wobble).
+          const comp = Math.max(-veh.suspensionTravel, Math.min(veh.suspensionTravel, wheelGround[i] - avgGround));
+          const wheelY = w.transform.position[1] + (veh.wheelRestY + comp - w.transform.position[1]) * settle;
+          vehicleWheel.set(w.id, { position: [w.transform.position[0], wheelY, w.transform.position[2]], rotation: [spin, steerY, base[2]] });
+        });
+        // Brake lights glow while braking / reversing / handbraking.
+        for (const lid of veh.brakeLightIds) vehicleBrake.set(lid, braking || handbrake ? 4 : 0.15);
+
+        // --- Audio ---
+        // Engine + skid are continuous LOOPS handled imperatively by useRuntimeAudio; here we just publish the
+        // driven car's live state (engine playback rate ∝ rpm, skid volume ∝ slip). Other one-shots fire below.
+        if (object.id === vehiclePlayerId) {
+          nextVehicleSound = {
+            engineId: veh.engineSoundId,
+            skidId: veh.skidSoundId,
+            rpm: Math.min(1, Math.abs(speed) / Math.max(0.001, veh.maxSpeed)),
+            slip,
+          };
+        }
+        // Brake squeal: a one-shot when the car scrubs off real speed (hard brake or handbrake at speed).
+        if (veh.brakeSoundId && Math.abs(prevSpeed) > 6 && (braking || handbrake) && accelSig < -8) {
+          const key = `${object.id}:brakeSfx`;
+          if ((nextCooldowns[key] ?? 0) <= 0) {
+            sounds.push(veh.brakeSoundId);
+            nextCooldowns[key] = 0.9;
+          }
+        }
+        // Horn: one-shot on the horn key (debounced), independent of the drive flow.
+        if (veh.hornSoundId && drivingActive && currentKeys[veh.keyHorn]) {
+          const key = `${object.id}:hornSfx`;
+          if ((nextCooldowns[key] ?? 0) <= 0) {
+            sounds.push(veh.hornSoundId);
+            nextCooldowns[key] = 0.5;
+          }
+        }
+        // Collision thud: a one-shot when this car contacts something while moving (it knocks cones/barriers).
+        if (veh.collisionSoundId && Math.abs(speed) > 3) {
+          const hit = state.runtimeCollisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id);
+          if (hit) {
+            const key = `${object.id}:hitSfx`;
+            if ((nextCooldowns[key] ?? 0) <= 0) {
+              sounds.push(veh.collisionSoundId);
+              nextCooldowns[key] = 0.35;
+            }
+          }
+        }
+      }
+
       const movedObjects = mappedObjects.map((object) => {
+        // Vehicle body / wheel / brake-light updates computed in the vehicle pass above.
+        const vb = vehicleBody.get(object.id);
+        if (vb) return { ...object, transform: { ...object.transform, position: vb.position, rotation: vb.rotation } };
+        const vw = vehicleWheel.get(object.id);
+        if (vw) return { ...object, transform: { ...object.transform, position: vw.position, rotation: vw.rotation } };
+        const vbrake = vehicleBrake.get(object.id);
+        if (vbrake !== undefined && object.renderer) {
+          return {
+            ...object,
+            renderer: {
+              ...object.renderer,
+              materialOverrides: {
+                ...object.renderer.materialOverrides,
+                emissiveColor: object.renderer.materialOverrides?.emissiveColor ?? '#ff2a2a',
+                emissiveIntensity: vbrake,
+              },
+            },
+          };
+        }
         // Particle bursts (impacts): count down their life; despawn when spent.
         if (object.effect) {
           const life = object.effect.life - delta;
@@ -6052,7 +6993,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const scripted = Boolean(object.script?.enabled);
         const position = [...object.transform.position] as Vector3Tuple;
         const rotation = [...object.transform.rotation] as Vector3Tuple;
-        const grounded = state.runtimeGrounded.includes(object.id) || position[1] <= cc.groundLevel + 0.001;
+        // The walkable floor under this character: the flat groundLevel OR the terrain surface beneath it,
+        // whichever is higher — so a character stands on procedural terrain hills, not just the y=0 plane.
+        // (Only raise the floor where terrain actually exists; otherwise behavior is unchanged.)
+        const terrainFloor = highestTerrainWorldHeight(mappedObjects, position[0], position[2]);
+        // Over terrain the terrain surface is the floor (it may be below y=0); only fall back to the flat
+        // groundLevel where there's no terrain — never max() the two, or a sub-zero hill floats the pawn at 0.
+        const floorLevel = terrainFloor !== undefined ? terrainFloor : cc.groundLevel;
+        const grounded = state.runtimeGrounded.includes(object.id) || position[1] <= floorLevel + 0.001;
 
         // Roll/dodge: started on the roll key while grounded, dashes forward for rollDuration.
         let rollRemaining = state.runtimeRoll[object.id] ?? 0;
@@ -6201,7 +7149,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const g = cc.gravity * (verticalVelocity < 0 ? cc.fallMultiplier ?? 1.9 : 1);
           verticalVelocity -= g * delta;
           position[1] += verticalVelocity * delta;
-          if (position[1] <= cc.groundLevel) {
+          // Over TERRAIN, do NOT clamp the vertical here — let the Rapier kinematic controller resolve the
+          // capsule against the (continuous) heightfield. Clamping to the analytic surface fights the physics
+          // (camera jitter) and can bury the capsule below the collider (which then blocks horizontal movement).
+          // Gravity above still produces a downward "desired" that physics stops at the surface. On flat-ground
+          // scenes (no terrain) keep the simple groundLevel clamp.
+          const overTerrain = highestTerrainWorldHeight(mappedObjects, position[0], position[2]) !== undefined;
+          if (!overTerrain && position[1] <= cc.groundLevel) {
             position[1] = cc.groundLevel;
             if (verticalVelocity < 0) verticalVelocity = 0;
           }
@@ -6243,6 +7197,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         triggers = result.triggers;
         triggersExit = result.triggersExit;
         groundedIds = result.grounded;
+        const groundedSet = new Set(groundedIds);
         resolvedObjects = movedObjects.map((object) => {
           // While ragdolling the limp body owns the transform (set from the pelvis above) — don't let
           // the kinematic character capsule overwrite it back to a standing pose.
@@ -6251,11 +7206,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (!object.physics?.enabled && !object.character?.enabled) return object;
           const next = result.transforms.get(object.id);
           if (!next) return object;
+          let position = next.position;
+          // Terrain floor guard: the Rapier kinematic character controller doesn't always catch the streamed
+          // terrain heightfield, which would let a pawn sink through a hill and fall forever. Where terrain
+          // exists under the character, clamp its Y to the terrain surface (or the flat groundLevel, whichever
+          // is higher) and report it grounded so the animator leaves its falling/airborne state. Scenes with no
+          // terrain are untouched (the physics result stands).
+          if (object.character?.enabled) {
+            // Let Rapier's heightfield resolution stand for the character's Y (it's continuous, so walking is
+            // smooth). Only RECOVER from a genuine fall-through (sank well below the surface because the physics
+            // chunk wasn't streamed yet) — never nudge Y during normal walking, which would fight the physics
+            // (jitter) or bury the capsule (blocks movement). Also report "grounded" when resting on the surface.
+            const floor = highestTerrainWorldHeight(movedObjects, position[0], position[2]);
+            if (floor !== undefined) {
+              if (position[1] < floor - 1) {
+                position = [position[0], floor, position[2]];
+                groundedSet.add(object.id);
+              } else if (position[1] <= floor + 0.15) {
+                groundedSet.add(object.id);
+              }
+            }
+          }
           return {
             ...object,
-            transform: { position: next.position, rotation: next.rotation, scale: object.transform.scale },
+            transform: { position, rotation: next.rotation, scale: object.transform.scale },
           };
         });
+        groundedIds = [...groundedSet];
       }
 
       // Swim / climb modes: maintain the "inside a volume" sets from trigger enter/exit against objects
@@ -6317,6 +7294,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (landSound) sounds.push(landSound);
       }
 
+      // While a cinematic plays the player is locked in the cutscene (no input/camera control), so it must be
+      // INVULNERABLE — otherwise an enemy that wandered into range during an intro cinematic could whittle the
+      // frozen player down (the "I die during the opening cutscene" bug). Guards the three player-damage spots
+      // below (projectile / contact / melee). `pendingCinematicId` covers the frame a Play-Cinematic node fires.
+      const cinematicActive = Boolean(state.runtimeCinematic || pendingCinematicId);
+
       // Projectiles: on first contact with a non-owner, subtract from that object's `health` instance
       // variable (if it has one) and despawn; also despawn when their life runs out.
       for (const obj of resolvedObjects) {
@@ -6330,15 +7313,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const other = c.objectId === obj.id ? c.otherObjectId : c.otherObjectId === obj.id ? c.objectId : undefined;
           if (!other || other === proj.ownerId) continue;
           const target = resolvedObjects.find((o) => o.id === other);
-          if (!target || target.projectile) continue; // ignore other projectiles
+          if (!target || target.projectile || isRagdoll(other)) continue; // ignore other projectiles + corpses
           const hasHealth = nextObjectVariables[other]?.health !== undefined || target.variables?.health !== undefined;
-          if (hasHealth) {
+          if (hasHealth && !(other === playerId && cinematicActive)) {
             const cur = toNumber(nextObjectVariables[other]?.health ?? target.variables?.health ?? 0);
             const next = Math.max(0, cur - proj.damage);
             (nextObjectVariables[other] ??= { ...(target.variables ?? {}) }).health = next;
             // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
             if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
-            if (next <= 0) destroyedIds.add(other); // dummy/enemy dies
+            if (next <= 0) killTarget(target, other); // explosive → blast; rig → ragdoll; prop → despawn
             // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
             // hurt flash if the LOCAL player was the one hit.
             spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
@@ -6357,14 +7340,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
 
       // Enemy contact damage: an enemy within `attackRange` of the local player drains its `health` on a
-      // ~1s cadence (per-enemy cooldown). Triggers the hurt flash + the player's hurt sound.
-      if (playerId) {
+      // ~1s cadence (per-enemy cooldown). Triggers the hurt flash + the player's hurt sound. Suppressed while a
+      // cinematic plays so the locked player can't be chipped down during a cutscene.
+      if (playerId && !cinematicActive) {
         const player = resolvedObjects.find((o) => o.id === playerId);
         if (player) {
           const pp = player.transform.position;
           const hasHealth = nextObjectVariables[playerId]?.health !== undefined || player.variables?.health !== undefined;
           for (const e of resolvedObjects) {
-            if (!e.variables?.enemy) continue;
+            if (!e.variables?.enemy || isRagdoll(e.id)) continue; // dead/limp enemies stop dealing contact damage
             let cd = (state.runtimeEnemyCooldown[e.id] ?? 0) - delta;
             const dx = pp[0] - e.transform.position[0];
             const dz = pp[2] - e.transform.position[2];
@@ -6400,7 +7384,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const facing = attacker.transform.rotation[1] - (acc.modelYawOffset ?? 0);
         const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
         for (const target of resolvedObjects) {
-          if (target.id === attackerId || target.projectile) continue;
+          if (target.id === attackerId || target.projectile || isRagdoll(target.id)) continue;
+          if (target.id === playerId && cinematicActive) continue; // player is invulnerable during cutscenes
           const hasHealth = nextObjectVariables[target.id]?.health !== undefined || target.variables?.health !== undefined;
           if (!hasHealth) continue;
           const dx = target.transform.position[0] - ap[0];
@@ -6417,7 +7402,97 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (attackerId === playerId) hitMarker += 1;
           if (target.id === playerId) hurt += 1;
           if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
-          if (next <= 0) destroyedIds.add(target.id);
+          if (next <= 0) killTarget(target, target.id); // explosive → blast; rig → ragdoll; prop → despawn
+        }
+      }
+
+      // Process queued explosions: each spawns a fiery burst + deals falloff-free area damage to every health
+      // object in radius. A barrel/enemy killed by the blast that is itself `explosive` chains (re-queued); the
+      // `exploded` guard + the count cap keep it bounded.
+      let blastGuard = 0;
+      while (explodeQueue.length && blastGuard++ < 64) {
+        const blast = explodeQueue.shift()!;
+        spawned.push(makeExplosion(blast.pos));
+        for (const o of resolvedObjects) {
+          if (o.projectile || o.effect || destroyedIds.has(o.id) || isRagdoll(o.id)) continue;
+          const hasHp = nextObjectVariables[o.id]?.health !== undefined || o.variables?.health !== undefined;
+          if (!hasHp) continue;
+          const dx = o.transform.position[0] - blast.pos[0];
+          const dy = o.transform.position[1] - blast.pos[1];
+          const dz = o.transform.position[2] - blast.pos[2];
+          if (Math.hypot(dx, dy, dz) > blast.radius) continue;
+          const cur = toNumber(nextObjectVariables[o.id]?.health ?? o.variables?.health ?? 0);
+          if (cur <= 0) continue;
+          const next = Math.max(0, cur - blast.dmg);
+          (nextObjectVariables[o.id] ??= { ...(o.variables ?? {}) }).health = next;
+          nextHitFlash[o.id] = HIT_FLASH_TIME;
+          if (o.id === playerId) hurt += 1;
+          if (next <= 0) killTarget(o, o.id); // chains if `o` is explosive
+        }
+      }
+
+      // Mirror the player's instance `health` into the project 'Health' variable so the HUD bar + death/ragdoll
+      // (which read that variable) reflect combat damage AND health pickups. Instance `health` is the source of
+      // truth (it's what the projectile/melee/enemy-contact passes write); this is a one-way follow.
+      if (playerId) {
+        const healthVar = state.variables.find((v) => v.name === 'Health');
+        const player = resolvedObjects.find((o) => o.id === playerId);
+        const h = nextObjectVariables[playerId]?.health ?? player?.variables?.health;
+        if (healthVar && h !== undefined) nextVariableValues[healthVar.id] = toNumber(h);
+      }
+
+      // Mirror the driven car's horizontal speed into a project 'Speed' variable (km/h-ish) so a driving HUD
+      // speedometer can bind to it. The vehicle pass stored the car's world velocity in nextVelocities.
+      if (vehiclePlayerId) {
+        const speedVar = state.variables.find((v) => v.name === 'Speed');
+        const v = nextVelocities[vehiclePlayerId];
+        if (speedVar && v) nextVariableValues[speedVar.id] = Math.round(Math.hypot(v[0], v[2]) * 3.6);
+      }
+
+      // --- Lap / checkpoint timing (race tracks) ---
+      // Opt-in: only runs when the project has a `Lap` variable (the driving template creates it). Checkpoints
+      // are scene objects named "Checkpoint <n>" (0 = start/finish); the driven car must pass them IN ORDER, and
+      // re-crossing the start/finish (0) after the last one banks a lap. Mirrored into project vars for the HUD —
+      // far more robust than wiring per-gate trigger blueprints. Proximity-based so it needs no physical colliders.
+      const lapVar = state.variables.find((v) => v.name === 'Lap');
+      if (lapVar && vehiclePlayerId && drivingActive) {
+        const nextIdxVar = state.variables.find((v) => v.name === 'Checkpoint');
+        const lapTimeVar = state.variables.find((v) => v.name === 'LapTime');
+        const bestVar = state.variables.find((v) => v.name === 'BestLap');
+        const checkpoints = activeObjects
+          .map((o) => {
+            const m = /^Checkpoint\s*(\d+)/i.exec(o.name);
+            return m ? { idx: Number(m[1]), pos: o.transform.position } : null;
+          })
+          .filter((c): c is { idx: number; pos: Vector3Tuple } => Boolean(c))
+          .sort((a, b) => a.idx - b.idx);
+        const carPos = vehicleBody.get(vehiclePlayerId)?.position ?? activeObjects.find((o) => o.id === vehiclePlayerId)?.transform.position;
+        if (checkpoints.length && carPos && nextIdxVar) {
+          const maxIdx = checkpoints[checkpoints.length - 1].idx;
+          let nextIdx = toNumber(nextVariableValues[nextIdxVar.id] ?? nextIdxVar.defaultValue);
+          let laps = toNumber(nextVariableValues[lapVar.id] ?? lapVar.defaultValue);
+          let lapTime = toNumber((lapTimeVar && nextVariableValues[lapTimeVar.id]) ?? lapTimeVar?.defaultValue ?? 0) + delta;
+          let best = toNumber((bestVar && nextVariableValues[bestVar.id]) ?? bestVar?.defaultValue ?? 0);
+          const target = checkpoints.find((c) => c.idx === nextIdx) ?? checkpoints[0];
+          const CP_RADIUS = 16;
+          if (Math.hypot(carPos[0] - target.pos[0], carPos[2] - target.pos[2]) < CP_RADIUS) {
+            if (target.idx === 0) {
+              laps += 1;
+              if (best === 0 || lapTime < best) best = lapTime;
+              lapTime = 0;
+              nextIdx = maxIdx > 0 ? 1 : 0;
+              const chime = state.assets.find((a) => a.name === 'lap_complete.mp3');
+              if (chime) sounds.push(chime.id);
+            } else {
+              nextIdx = target.idx >= maxIdx ? 0 : target.idx + 1;
+              const blip = state.assets.find((a) => a.name === 'checkpoint.mp3');
+              if (blip) sounds.push(blip.id);
+            }
+          }
+          nextVariableValues[nextIdxVar.id] = nextIdx;
+          nextVariableValues[lapVar.id] = laps;
+          if (lapTimeVar) nextVariableValues[lapTimeVar.id] = Math.round(lapTime * 10) / 10;
+          if (bestVar) nextVariableValues[bestVar.id] = Math.round(best * 10) / 10;
         }
       }
 
@@ -6428,6 +7503,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let nextRuntimeCinematic = startingCinematic ?? state.runtimeCinematic;
       let nextRuntimeCinematicCamera = startingCinematic ? undefined : state.runtimeCinematicCamera;
       let nextRuntimeCinematicFade = startingCinematic ? undefined : state.runtimeCinematicFade;
+      let nextRuntimeCinematicLook = startingCinematic ? undefined : state.runtimeCinematicLook;
       if (nextRuntimeCinematic) {
         const scene = state.scenes.find((item) => item.id === state.activeSceneId);
         const sequence = scene?.cinematics?.find((item) => item.id === nextRuntimeCinematic?.sequenceId);
@@ -6435,6 +7511,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           nextRuntimeCinematic = undefined;
           nextRuntimeCinematicCamera = undefined;
           nextRuntimeCinematicFade = undefined;
+          nextRuntimeCinematicLook = undefined;
         } else {
           const prevTime = nextRuntimeCinematic.time;
           const currentTime = Math.min(sequence.duration, prevTime + delta);
@@ -6443,6 +7520,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
           nextRuntimeCinematicCamera = cinematicCameraAt(sequence, allObjects, currentTime, nextRuntimeCinematicCamera);
           nextRuntimeCinematicFade = cinematicFadeAt(sequence, currentTime, nextRuntimeCinematicFade);
+          nextRuntimeCinematicLook = sequence.look;
 
           for (const action of sequence.actions) {
             const length = Math.max(action.duration ?? 0, 0.001);
@@ -6510,6 +7588,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             nextRuntimeCinematic = undefined;
             nextRuntimeCinematicCamera = undefined;
             nextRuntimeCinematicFade = undefined;
+            nextRuntimeCinematicLook = undefined;
           } else {
             nextRuntimeCinematic = { ...nextRuntimeCinematic, time: currentTime, firedActionIds: [...fired], spawnedObjectIds: [...spawnedByCinematic] };
           }
@@ -6687,6 +7766,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeEventQueue: cinematicEvents,
         runtimeStarted: true,
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
+        runtimeVehicleSound: nextVehicleSound,
         runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
         runtimeObjectVariables: nextObjectVariables,
         runtimeVisibleUI: nextVisibleUI,
@@ -6694,6 +7774,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematic: nextRuntimeCinematic,
         runtimeCinematicCamera: nextRuntimeCinematicCamera,
         runtimeCinematicFade: nextRuntimeCinematicFade,
+        runtimeCinematicLook: nextRuntimeCinematicLook,
         scenes: nextScenes,
       };
     }),
@@ -6797,20 +7878,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       blueprints: state.blueprints,
       graphs: state.graphs,
       prefabs: state.prefabs ?? [],
+      renderSettings: state.renderSettings,
     };
   },
   loadProject: (project) =>
     set(() => {
       // Backfill component defaults so older saves load safely.
       const rawScenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
+      const normalizeSceneObject = (object: SceneObject): SceneObject => ({
+        ...object,
+        terrain: object.terrain ? withTerrainDefaults(object.terrain) : object.terrain,
+        character: object.character ? { ...defaultCharacter(), ...object.character } : object.character,
+        physics: object.physics ? withPhysicsDefaults(object.physics) : object.physics,
+      });
       const scenes = rawScenes.map((scene) => ({
         ...scene,
+        environment: withSceneEnvironmentDefaults(scene.environment),
         cinematics: scene.cinematics ?? [],
-        objects: scene.objects.map((object) => ({
-          ...object,
-          character: object.character ? { ...defaultCharacter(), ...object.character } : object.character,
-          physics: object.physics ? withPhysicsDefaults(object.physics) : object.physics,
-        })),
+        objects: scene.objects.map(normalizeSceneObject),
+      }));
+      const prefabs = (project.prefabs ?? []).map((prefab) => ({
+        ...prefab,
+        objects: prefab.objects.map(normalizeSceneObject),
       }));
       const activeSceneId = scenes.some((scene) => scene.id === project.activeSceneId)
         ? project.activeSceneId
@@ -6855,11 +7944,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         uiDocuments: project.uiDocuments ?? [],
         blueprints: project.blueprints,
         graphs: normalizedGraphs,
-        prefabs: project.prefabs ?? [],
+        prefabs,
         editingPrefabId: null,
         prefabReturnSceneId: null,
         // Regenerate thumbnails for any prefabs that were saved without one.
-        prefabThumbnailQueue: (project.prefabs ?? []).filter((prefab) => !prefab.thumbnail).map((prefab) => prefab.id),
+        prefabThumbnailQueue: prefabs.filter((prefab) => !prefab.thumbnail).map((prefab) => prefab.id),
         activeBlueprintId: project.blueprints[0]?.id ?? '',
         activeMaterialId: project.materials?.[0]?.id ?? '',
         activeUIDocumentId: project.uiDocuments?.[0]?.id ?? '',
@@ -6895,6 +7984,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeMontageRequests: {},
         runtimeCollisions: [],
         runtimeSoundQueue: [],
+        runtimeVehicleSound: null,
         runtimeLog: [],
         runtimeVisibleUI: {},
         runtimeObjectVariables: {},
@@ -6916,3 +8006,4 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
   markClean: () => set({ isDirty: false }),
 }));
+

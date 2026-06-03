@@ -1,12 +1,13 @@
 import { Link2, Palette, Settings2, Unlink } from 'lucide-react';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { defaultCharacter, defaultLight, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { defaultCharacter, defaultLight, defaultVehicle, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useAssetUrl } from '../three/ModelAsset';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TransformComponent, Vector3Tuple } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent } from '../types';
 import { particlePresetIds } from '../runtime/particlePresets';
+import { withTerrainDefaults } from '../terrain/terrain';
 
 const axes = ['X', 'Y', 'Z'] as const;
 
@@ -705,6 +706,77 @@ function KeyBinding({ label, value, onChange }: { label: string; value: string; 
   );
 }
 
+function VehicleSection({
+  vehicle,
+  onToggle,
+  onChange,
+}: {
+  vehicle: VehicleComponent | undefined;
+  onToggle: () => void;
+  onChange: (patch: Partial<VehicleComponent>) => void;
+}) {
+  const v = vehicle ? { ...defaultVehicle(), ...vehicle } : undefined;
+  const num = (label: string, key: keyof VehicleComponent, step = 0.1, fallback = 0) => (
+    <label className="field-row">
+      <span>{label}</span>
+      <input
+        type="number"
+        step={step}
+        value={Number(v?.[key] ?? fallback)}
+        onChange={(event) => onChange({ [key]: Number(event.target.value) } as Partial<VehicleComponent>)}
+      />
+    </label>
+  );
+  return (
+    <section className="inspector-section">
+      <h3>Vehicle Controller</h3>
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={v?.enabled ?? false} onChange={onToggle} />
+      </label>
+      {v && v.enabled && (
+        <>
+          <p className="field-hint">W accelerate · S brake/reverse · A/D steer · Space handbrake (drift) · H horn · Mouse look. The body should be a dynamic, convex-collider Rapier body.</p>
+
+          <h4 className="inspector-subhead">Drivetrain</h4>
+          {num('Max Speed', 'maxSpeed', 1, 26)}
+          {num('Max Reverse', 'maxReverseSpeed', 1, 9)}
+          {num('Acceleration', 'acceleration', 1, 16)}
+          {num('Braking', 'braking', 1, 34)}
+          {num('Drag', 'drag', 1, 9)}
+
+          <h4 className="inspector-subhead">Steering</h4>
+          {num('Steer Angle', 'steerAngle', 0.02, 0.55)}
+          {num('Turn Rate', 'turnRate', 0.05, 2)}
+          {num('Grip', 'gripFactor', 0.05, 0.9)}
+          {num('Handbrake Grip', 'handbrakeGrip', 0.02, 0.28)}
+
+          <h4 className="inspector-subhead">Suspension (feel)</h4>
+          {num('Body Roll', 'bodyRoll', 0.01, 0.05)}
+          {num('Body Pitch', 'bodyPitch', 0.01, 0.04)}
+          {num('Stiffness', 'suspensionStiffness', 0.02, 0.18)}
+          {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
+          <p className="field-hint">
+            Body Roll = lean into turns; Body Pitch = squat/dive under accel/brake; Stiffness = how fast it settles.
+            Wheel Radius sets how fast the wheels spin. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length}.
+          </p>
+
+          <h4 className="inspector-subhead">Camera</h4>
+          <label className="field-row">
+            <span>Follow Camera</span>
+            <input type="checkbox" checked={v.cameraFollow} onChange={(event) => onChange({ cameraFollow: event.target.checked })} />
+          </label>
+          <label className="field-row">
+            <span>Mouse Look</span>
+            <input type="checkbox" checked={v.mouseLook} onChange={(event) => onChange({ mouseLook: event.target.checked })} />
+          </label>
+          {num('Camera Pitch', 'cameraPitch', 0.02, 0.24)}
+        </>
+      )}
+    </section>
+  );
+}
+
 function CharacterSection({
   objectId,
   character,
@@ -1214,6 +1286,111 @@ function ParticleSection({
   );
 }
 
+function TerrainSection({
+  terrain,
+  onChange,
+}: {
+  terrain: TerrainComponent;
+  onChange: (patch: Partial<TerrainComponent>) => void;
+}) {
+  const t = withTerrainDefaults(terrain);
+  const patchFoliage = (patch: Partial<TerrainComponent['foliage']>) =>
+    onChange({ foliage: { ...t.foliage, ...patch } });
+  return (
+    <section className="inspector-section">
+      <h3>Terrain</h3>
+      <button className="full-button" onClick={() => focusWorkspacePanel('terrain')}>
+        Terrain Tools
+      </button>
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={t.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Size</span>
+        <NumberInput value={t.size} min={32} step={32} onChange={(size) => onChange({ size })} />
+      </label>
+      <label className="field-row">
+        <span>Chunk</span>
+        <NumberInput value={t.chunkSize} min={8} step={8} onChange={(chunkSize) => onChange({ chunkSize })} />
+      </label>
+      <label className="field-row">
+        <span>Resolution</span>
+        <NumberInput value={t.resolution} min={4} max={64} step={1} onChange={(resolution) => onChange({ resolution })} />
+      </label>
+      <label className="field-row">
+        <span>Stream Radius</span>
+        <NumberInput value={t.streamRadius} min={1} max={10} step={1} onChange={(streamRadius) => onChange({ streamRadius })} />
+      </label>
+      <label className="field-row">
+        <span>Physics Radius</span>
+        <NumberInput value={t.physicsRadius} min={1} max={5} step={1} onChange={(physicsRadius) => onChange({ physicsRadius })} />
+      </label>
+      <label className="field-row">
+        <span>Seed</span>
+        <NumberInput value={t.seed} step={1} precision={0} onChange={(seed) => onChange({ seed })} />
+      </label>
+      <label className="field-row">
+        <span>Height</span>
+        <NumberInput value={t.heightScale} min={0} step={0.5} onChange={(heightScale) => onChange({ heightScale })} />
+      </label>
+      <label className="field-row">
+        <span>Frequency</span>
+        <NumberInput value={t.frequency} min={0.001} max={0.25} step={0.001} precision={4} onChange={(frequency) => onChange({ frequency })} />
+      </label>
+      <label className="field-row">
+        <span>Octaves</span>
+        <NumberInput value={t.octaves} min={1} max={8} step={1} onChange={(octaves) => onChange({ octaves })} />
+      </label>
+      <label className="field-row">
+        <span>Low Color</span>
+        <input type="color" value={t.lowColor} onChange={(event) => onChange({ lowColor: event.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>Mid Color</span>
+        <input type="color" value={t.midColor} onChange={(event) => onChange({ midColor: event.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>High Color</span>
+        <input type="color" value={t.highColor} onChange={(event) => onChange({ highColor: event.target.value })} />
+      </label>
+
+      <h4 className="inspector-subhead">Foliage</h4>
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={t.foliage.enabled} onChange={(event) => patchFoliage({ enabled: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Mode</span>
+        <select value={t.foliage.mode} onChange={(event) => patchFoliage({ mode: event.target.value as TerrainComponent['foliage']['mode'] })}>
+          <option value="grass">Grass</option>
+          <option value="trees">Trees</option>
+          <option value="mixed">Mixed</option>
+        </select>
+      </label>
+      <RangeField label="Grass Density" value={t.foliage.density} onChange={(density) => patchFoliage({ density })} />
+      <RangeField label="Tree Density" value={t.foliage.treeDensity} onChange={(treeDensity) => patchFoliage({ treeDensity })} />
+      <RangeField label="Slope Limit" value={t.foliage.slopeLimit} onChange={(slopeLimit) => patchFoliage({ slopeLimit })} />
+      <label className="field-row">
+        <span>Min Scale</span>
+        <NumberInput value={t.foliage.minScale} min={0.1} step={0.1} onChange={(minScale) => patchFoliage({ minScale })} />
+      </label>
+      <label className="field-row">
+        <span>Max Scale</span>
+        <NumberInput value={t.foliage.maxScale} min={0.1} step={0.1} onChange={(maxScale) => patchFoliage({ maxScale })} />
+      </label>
+      <label className="field-row">
+        <span>Grass Color</span>
+        <input type="color" value={t.foliage.grassColor} onChange={(event) => patchFoliage({ grassColor: event.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>Tree Color</span>
+        <input type="color" value={t.foliage.treeColor} onChange={(event) => patchFoliage({ treeColor: event.target.value })} />
+      </label>
+    </section>
+  );
+}
+
 function PhysicsSection({
   physics,
   onChange,
@@ -1289,6 +1466,7 @@ export function InspectorPanel() {
   const updateRenderer = useEditorStore((state) => state.updateRenderer);
   const setObjectModel = useEditorStore((state) => state.setObjectModel);
   const setObjectMaterial = useEditorStore((state) => state.setObjectMaterial);
+  const updateTerrain = useEditorStore((state) => state.updateTerrain);
   const setActiveMaterial = useEditorStore((state) => state.setActiveMaterial);
   const materials = useEditorStore((state) => state.materials);
   const assets = useEditorStore((state) => state.assets);
@@ -1298,6 +1476,8 @@ export function InspectorPanel() {
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
   const toggleCharacterController = useEditorStore((state) => state.toggleCharacterController);
   const updateCharacterController = useEditorStore((state) => state.updateCharacterController);
+  const setVehicleEnabled = useEditorStore((state) => state.setVehicleEnabled);
+  const updateVehicle = useEditorStore((state) => state.updateVehicle);
   const setObjectLight = useEditorStore((state) => state.setObjectLight);
   const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
   const animations = useEditorStore((state) => state.animations);
@@ -1396,6 +1576,10 @@ export function InspectorPanel() {
             <LightSection light={object.light} onChange={(patch) => setObjectLight(object.id, patch)} />
           )}
 
+          {object.terrain && (
+            <TerrainSection terrain={object.terrain} onChange={(patch) => updateTerrain(object.id, patch)} />
+          )}
+
           {object.renderer && (
             <RendererSection
               renderer={object.renderer}
@@ -1436,6 +1620,12 @@ export function InspectorPanel() {
             character={object.character}
             onToggle={() => toggleCharacterController(object.id)}
             onChange={(patch) => updateCharacterController(object.id, patch)}
+          />
+
+          <VehicleSection
+            vehicle={object.vehicle}
+            onToggle={() => setVehicleEnabled(object.id)}
+            onChange={(patch) => updateVehicle(object.id, patch)}
           />
 
           <AttachmentSection objectId={object.id} />

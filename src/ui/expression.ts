@@ -3,7 +3,8 @@
  *
  * We must NOT use `eval`/`new Function` — they are blocked by the Tauri desktop CSP. This is a
  * hand-written recursive-descent parser/evaluator supporting:
- *   numbers, strings, identifiers (incl. dotted like `self.health`), `+ - * / %`,
+ *   numbers, strings, identifiers (incl. dotted like `self.health` and bracketed
+ *   lookups like `vars['Gold Coins']`), `+ - * / %`,
  *   comparisons (`> >= < <= == !=`), `&& || !`, parentheses, and a ternary `cond ? a : b`.
  *
  * Identifiers resolve against a context: `vars` (project variables by name) and an optional
@@ -25,7 +26,31 @@ type Token =
   | { t: 'id'; v: string }
   | { t: 'op'; v: string };
 
-const OPS = ['===', '!==', '==', '!=', '>=', '<=', '&&', '||', '>', '<', '+', '-', '*', '/', '%', '!', '(', ')', '?', ':', '.'];
+const OPS = [
+  '===',
+  '!==',
+  '==',
+  '!=',
+  '>=',
+  '<=',
+  '&&',
+  '||',
+  '>',
+  '<',
+  '+',
+  '-',
+  '*',
+  '/',
+  '%',
+  '!',
+  '(',
+  ')',
+  '?',
+  ':',
+  '.',
+  '[',
+  ']',
+];
 
 function tokenize(src: string): Token[] | null {
   const tokens: Token[] = [];
@@ -40,6 +65,11 @@ function tokenize(src: string): Token[] | null {
       let j = i + 1;
       let str = '';
       while (j < src.length && src[j] !== c) {
+        if (src[j] === '\\' && j + 1 < src.length) {
+          str += src[j + 1];
+          j += 2;
+          continue;
+        }
         str += src[j];
         j += 1;
       }
@@ -195,27 +225,42 @@ class Parser {
     }
     if (tk.t === 'id') {
       this.pos += 1;
-      // dotted path: id ('.' id)*
-      let path = tk.v;
-      while (this.eatOp('.')) {
-        const next = this.peek();
-        if (!next || next.t !== 'id') return undefined;
-        path += `.${next.v}`;
-        this.pos += 1;
+      // Path: id ('.' id | '[' string ']')*
+      const path = [tk.v];
+      for (;;) {
+        if (this.eatOp('.')) {
+          const next = this.peek();
+          if (!next || next.t !== 'id') return undefined;
+          path.push(next.v);
+          this.pos += 1;
+          continue;
+        }
+        if (this.eatOp('[')) {
+          const next = this.peek();
+          if (!next || next.t !== 'str') return undefined;
+          path.push(next.v);
+          this.pos += 1;
+          if (!this.eatOp(']')) return undefined;
+          continue;
+        }
+        break;
       }
       return this.resolve(path);
     }
     return undefined;
   }
 
-  private resolve(path: string): UIExprValue {
-    if (path === 'true') return true;
-    if (path === 'false') return false;
-    if (path.startsWith('self.')) {
-      const v = this.ctx.self?.[path.slice(5)];
-      return coerce(v);
+  private resolve(path: string[]): UIExprValue {
+    const root = path[0];
+    if (path.length === 1 && root === 'true') return true;
+    if (path.length === 1 && root === 'false') return false;
+    if (root === 'vars' && path.length > 1) {
+      return coerce(this.ctx.vars[path.slice(1).join('.')]);
     }
-    return coerce(this.ctx.vars[path]);
+    if (root === 'self' && path.length > 1) {
+      return coerce(this.ctx.self?.[path.slice(1).join('.')]);
+    }
+    return coerce(this.ctx.vars[path.join('.')]);
   }
 }
 
@@ -241,7 +286,9 @@ function looseEq(a: UIExprValue, b: UIExprValue): boolean {
 
 /** Evaluate a binding expression against a context. Returns `undefined` on empty/malformed input. */
 export function evalExpression(src: string, ctx: UIExprContext): UIExprValue {
-  if (!src || !src.trim()) return undefined;
+  const trimmed = src?.trim();
+  if (!trimmed) return undefined;
+  if (Object.prototype.hasOwnProperty.call(ctx.vars, trimmed)) return coerce(ctx.vars[trimmed]);
   const tokens = tokenize(src);
   if (!tokens || tokens.length === 0) return undefined;
   return new Parser(tokens, ctx).parse();

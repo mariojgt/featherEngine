@@ -2,7 +2,7 @@ import type { Edge, Node } from '@xyflow/react';
 
 export type Vector3Tuple = [number, number, number];
 
-export type SceneObjectKind = 'empty' | 'cube' | 'sphere' | 'capsule' | 'plane' | 'light' | 'camera';
+export type SceneObjectKind = 'empty' | 'cube' | 'sphere' | 'capsule' | 'plane' | 'terrain' | 'light' | 'camera';
 
 export type RigidBodyType = 'dynamic' | 'fixed' | 'kinematic';
 
@@ -60,6 +60,7 @@ export type GraphNodeKind =
   | 'logic.compare'
   | 'logic.and'
   | 'logic.or'
+  | 'logic.cast'
   | 'math.add'
   | 'math.clamp'
   | 'math.lerp'
@@ -75,6 +76,7 @@ export type GraphNodeKind =
   | 'action.applyForce'
   | 'action.fireEvent'
   | 'action.spawnObject'
+  | 'action.spawnPrefab'
   | 'action.destroyObject'
   | 'action.playSound'
   | 'action.setMaterialColor'
@@ -87,8 +89,11 @@ export type GraphNodeKind =
   | 'animator.getParam'
   | 'animator.getState'
   | 'input.move'
+  | 'input.driveInput'
   | 'query.grounded'
+  | 'query.vehicleSpeed'
   | 'action.move'
+  | 'action.drive'
   | 'action.jump'
   | 'action.setCamera'
   | 'action.setRagdoll'
@@ -155,6 +160,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   assetId?: string;
   /** action.spawnObject: kind of object to spawn at runtime. */
   spawnKind?: SceneObjectKind;
+  /** action.spawnPrefab: id of the prefab (captured object tree) to instantiate at runtime. */
+  prefabId?: string;
   /** action.print: message to log to the runtime console. */
   message?: string;
   /** animator.setFloat/setBool/setTrigger/getParam/getState: name of the animator parameter. */
@@ -169,6 +176,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   elementId?: string;
   /** variable.getObject/setObject: key on the owning object's instance variables. */
   objectKey?: string;
+  /** logic.cast: the blueprint id the target must be running for the cast to succeed. */
+  castBlueprintId?: string;
   /** action.spawnProjectile: muzzle speed (units/sec) and hit damage. */
   projectileSpeed?: number;
   projectileDamage?: number;
@@ -222,7 +231,7 @@ export interface TransformComponent {
 
 export interface MeshRendererComponent {
   enabled: boolean;
-  mesh: Exclude<SceneObjectKind, 'empty' | 'light' | 'camera'>;
+  mesh: Exclude<SceneObjectKind, 'empty' | 'terrain' | 'light' | 'camera'>;
   color: string;
   metalness: number;
   roughness: number;
@@ -239,6 +248,91 @@ export interface MeshRendererComponent {
   materialId?: string;
   /** Per-object tweaks applied on top of the assigned material — written by runtime "Set Material" nodes, never mutating the shared definition. */
   materialOverrides?: MaterialOverrides;
+}
+
+export type TerrainFoliageMode = 'grass' | 'trees' | 'mixed';
+export type TerrainGrassMeshStyle = 'blade' | 'cross' | 'tuft';
+export type TerrainTreeMeshStyle = 'cone' | 'round';
+
+export interface TerrainMaterialLayer {
+  id: string;
+  name: string;
+  color: string;
+  textureAssetId?: string;
+  normalMapAssetId?: string;
+}
+
+export type TerrainSculptOperation = 'raise' | 'lower' | 'flatten' | 'smooth';
+export type TerrainBrushMode = 'sculpt' | 'paint';
+
+export interface TerrainBrushSettings {
+  enabled: boolean;
+  objectId?: string;
+  mode: TerrainBrushMode;
+  operation: TerrainSculptOperation;
+  radius: number;
+  strength: number;
+  targetLayerId?: string;
+  flattenHeight: number;
+}
+
+/** Procedural foliage scattered on terrain chunks. MVP intentionally uses built-in instanced shapes. */
+export interface TerrainFoliageComponent {
+  enabled: boolean;
+  mode: TerrainFoliageMode;
+  /** Relative density 0..1. Grass/shrub instances per chunk scale from this value. */
+  density: number;
+  /** Relative density 0..1 for sparse tree instances. */
+  treeDensity: number;
+  minScale: number;
+  maxScale: number;
+  /** Minimum terrain normal Y allowed for placement. Higher avoids steep slopes. */
+  slopeLimit: number;
+  grassMesh: TerrainGrassMeshStyle;
+  treeMesh: TerrainTreeMeshStyle;
+  /** Optional model assets override the built-in foliage mesh for previewable custom vegetation. */
+  grassModelAssetId?: string;
+  treeModelAssetId?: string;
+  grassColor: string;
+  trunkColor: string;
+  treeColor: string;
+}
+
+/**
+ * A procedural, chunk-streamed terrain surface. Stored as compact settings rather than a huge
+ * height array so projects/export bundles stay small and the same world can be rebuilt deterministically.
+ */
+export interface TerrainComponent {
+  enabled: boolean;
+  /** Total authored terrain width/depth in world units. */
+  size: number;
+  /** Width/depth of one streamed render/physics chunk. */
+  chunkSize: number;
+  /** Segments per chunk edge. Higher = more detail and more vertices/collider samples. */
+  resolution: number;
+  /** Render chunks around the camera/player in this many chunk rings. */
+  streamRadius: number;
+  /** Physics chunks around active characters/dynamic bodies in this many chunk rings. */
+  physicsRadius: number;
+  /** Deterministic seed for height/noise/foliage scatter. */
+  seed: number;
+  heightScale: number;
+  frequency: number;
+  octaves: number;
+  persistence: number;
+  lacunarity: number;
+  /** World-space distance between persistent sculpt/paint samples. */
+  editSpacing: number;
+  lowColor: string;
+  midColor: string;
+  highColor: string;
+  /** Paintable terrain material layers. The first three backfill low/mid/high terrain colors. */
+  materialLayers: TerrainMaterialLayer[];
+  /** Sparse absolute height overrides keyed as "gridX:gridZ". */
+  heightOverrides: Record<string, number>;
+  /** Sparse material-layer paint overrides keyed as "gridX:gridZ", value = TerrainMaterialLayer.id. */
+  paintOverrides: Record<string, string>;
+  foliage: TerrainFoliageComponent;
 }
 
 /** Per-object overrides layered over an assigned MaterialDefinition (Unreal "dynamic material instance" style). */
@@ -702,6 +796,42 @@ export interface RenderSettings {
   vignetteEnabled: boolean;
 }
 
+export type SkyMode = 'color' | 'procedural' | 'image';
+
+/**
+ * Scene-level sky, fog and base lighting. This is the lightweight "world settings" layer:
+ * procedural/color sky works without external files, while image mode can use an imported panorama.
+ */
+export interface SceneEnvironmentSettings {
+  skyMode: SkyMode;
+  /** Fallback / flat sky color. Also clears the renderer behind procedural/image sky domes. */
+  backgroundColor: string;
+  /** Procedural sky upper hemisphere. */
+  skyTopColor: string;
+  /** Procedural sky horizon band. */
+  skyHorizonColor: string;
+  /** Procedural sky lower hemisphere / ground bounce tint. */
+  skyGroundColor: string;
+  /** Equirectangular panorama image asset used when skyMode is "image". */
+  skyTextureAssetId?: string;
+  /** Sky dome yaw in degrees. */
+  skyRotation: number;
+  /** Strength of the built-in ambient/environment light rig. */
+  environmentIntensity: number;
+  /** Directional sun color. */
+  sunColor: string;
+  /** Directional sun strength. */
+  sunIntensity: number;
+  /** Sun compass angle in degrees. */
+  sunAzimuth: number;
+  /** Sun height in degrees. */
+  sunElevation: number;
+  fogEnabled: boolean;
+  fogColor: string;
+  fogNear: number;
+  fogFar: number;
+}
+
 /** A reusable named attach point on a skeleton (Unreal socket): a bone + a local offset. */
 export interface SkeletonSocket {
   id: string;
@@ -731,6 +861,95 @@ export interface ViewModelComponent {
   ownerObjectId: string;
 }
 
+/**
+ * A built-in arcade VEHICLE (car) controller — the driving peer of {@link CharacterControllerComponent}.
+ * During Play the runtime's vehicle pass reads WASD (W throttle / S brake+reverse / A,D steer, Space
+ * handbrake), integrates a signed forward speed, steers the yaw (scaled by speed), and drives the body's
+ * horizontal motion; VERTICAL motion is left to the Rapier dynamic body so the car rides terrain, climbs
+ * ramps and bumps props for free. Suspension "feel" is visual: the chassis squats/dives (bodyPitch) and
+ * leans into turns (bodyRoll), and the wheel child objects spin (∝ speed) + the front pair steers. A
+ * follow camera (shared with the character follow camera) trails the car with mouse orbit.
+ */
+export interface VehicleComponent {
+  enabled: boolean;
+  // --- Drivetrain ---
+  /** Top forward speed (units/sec). */
+  maxSpeed: number;
+  /** Top reverse speed (units/sec). */
+  maxReverseSpeed: number;
+  /** Throttle acceleration (units/sec²). */
+  acceleration: number;
+  /** Brake deceleration (units/sec²) when reversing input fights forward motion. */
+  braking: number;
+  /** Coasting deceleration (units/sec²) when no throttle/brake is held. */
+  drag: number;
+  // --- Steering ---
+  /** Max visual front-wheel steer angle (radians). */
+  steerAngle: number;
+  /** Yaw turn rate (radians/sec) at full lock and full speed. */
+  turnRate: number;
+  /** How fast the steering reads in/out (0..1 smoothing per frame). */
+  steerReturnSpeed: number;
+  /** Lateral grip 0..1 — drives how hard the chassis leans into a turn (visual). */
+  gripFactor: number;
+  /** Grip while the handbrake is held (lower = looser, for drift feel). */
+  handbrakeGrip: number;
+  // --- Suspension / feel (visual) ---
+  /** Wheel suspension travel (world units) — reserved for ride-height bob. */
+  suspensionTravel: number;
+  /** Suspension stiffness 0..1 — how quickly chassis lean/squat settles. */
+  suspensionStiffness: number;
+  /** Chassis lean into turns (radians per unit of lateral load). */
+  bodyRoll: number;
+  /** Chassis squat/dive under accel/brake (radians per unit of longitudinal load). */
+  bodyPitch: number;
+  /** Wheel radius (world units) — sets how fast wheels spin for a given speed. */
+  wheelRadius: number;
+  /** Distance from the car body's origin down to the wheel-contact (ground) plane. The kinematic body's
+   *  Y is set to groundHeight + rideHeight so the wheels rest on the terrain. Usually -(body bbox min Y). */
+  rideHeight: number;
+  /** Authored local Y of the wheel centers — the suspension bobs each wheel around this rest height. */
+  wheelRestY: number;
+  // --- Wiring (child object ids) ---
+  /** The 4 wheel child objects, conventionally [frontLeft, frontRight, rearLeft, rearRight]. */
+  wheelObjectIds: string[];
+  /** Which of the wheels steer (the front pair). */
+  steeredWheelIds: string[];
+  /** Headlight child objects (kind 'light') — informational; lit via the light component. */
+  headlightIds: string[];
+  /** Brake-light child objects — their emissive intensity is raised while braking/reversing. */
+  brakeLightIds: string[];
+  // --- Input bindings (KeyboardEvent.code) ---
+  keyThrottle: string;
+  keyReverse: string;
+  keyLeft: string;
+  keyRight: string;
+  keyHandbrake: string;
+  /** Sound the horn (one-shot, debounced). */
+  keyHorn: string;
+  // --- Camera (shared shape with the character follow camera) ---
+  /** Use this car's follow camera in game view / export. */
+  cameraFollow: boolean;
+  /** Resting camera offset [side, up, back]; negative back sits behind a +Z-forward car. */
+  cameraOffset: Vector3Tuple;
+  cameraPitch: number;
+  cameraMinPitch: number;
+  cameraMaxPitch: number;
+  /** Orbit the follow camera with the mouse. */
+  mouseLook: boolean;
+  mouseSensitivity: number;
+  /** Audio asset id looped as the engine sound while driving (its playback rate rises with speed). */
+  engineSoundId?: string;
+  /** Audio asset id looped (volume rises with slip) while the tires skid — handbrake drift / hard cornering. */
+  skidSoundId?: string;
+  /** One-shot brake squeal fired when the car decelerates hard from speed. */
+  brakeSoundId?: string;
+  /** One-shot horn fired on the horn key. */
+  hornSoundId?: string;
+  /** One-shot impact fired when the car collides with something while moving. */
+  collisionSoundId?: string;
+}
+
 export interface SceneObject {
   id: string;
   name: string;
@@ -742,9 +961,13 @@ export interface SceneObject {
   script?: ScriptGraphComponent;
   animator?: AnimatorComponent;
   character?: CharacterControllerComponent;
+  /** Built-in arcade car controller (driving). See {@link VehicleComponent}. */
+  vehicle?: VehicleComponent;
   attachment?: AttachmentComponent;
   viewModel?: ViewModelComponent;
   ui?: UIComponent;
+  /** Procedural streamed terrain surface and optional instanced foliage. */
+  terrain?: TerrainComponent;
   /** Per-instance data (e.g. this enemy's `health`), read/written by scripts and world UI bindings via `self.*`. */
   variables?: Record<string, GraphValue>;
   /** Present on runtime-spawned projectiles (action.spawnProjectile): flies forward, damages on hit, despawns. */
@@ -930,6 +1153,11 @@ export interface CinematicCameraKeyframe {
   position: Vector3Tuple;
   lookAt: Vector3Tuple;
   fov: number;
+  /** Depth-of-field focus distance in world units ahead of the camera (along the look direction).
+   *  Splined across keyframes for rack-focus pulls. Requires `aperture > 0` to take visible effect. */
+  focusDistance?: number;
+  /** Depth-of-field blur strength (bokeh scale). 0 (or omitted) = no DoF / everything sharp. */
+  aperture?: number;
 }
 
 /**
@@ -991,6 +1219,46 @@ export interface CinematicAction {
   fadeFrom?: number;
   fadeTo?: number;
   fadeColor?: string;
+  /** Camera beats only: depth-of-field focus distance in world units ahead of the camera. Used when
+   *  the beat has no keyframe track. Splines/blends with the next shot. Needs `aperture > 0` to show. */
+  focusDistance?: number;
+  /** Camera beats only: depth-of-field blur strength (bokeh scale). 0/omitted = sharp (no DoF). */
+  aperture?: number;
+}
+
+/** A film color-grade preset. `custom` = driven purely by the manual grade params below. */
+export type CinematicGrade = 'none' | 'warm' | 'teal-orange' | 'noir' | 'cool' | 'sepia' | 'custom';
+
+/**
+ * The "film look" of a cinematic — applied while it plays (and while scrubbing its preview):
+ * letterbox bars + film grain + vignette as a DOM layer, and a real **color grade** rendered as a
+ * post-processing shader on the cinematic camera. The grade is a preset (which seeds the params
+ * below) plus optional manual overrides — exposure / contrast / saturation / temperature / a custom
+ * tint — scaled by `gradeIntensity`. This is what makes a starter cinematic read as a *film*.
+ */
+export interface CinematicLook {
+  /** Letterbox target aspect ratio (e.g. 2.35 for scope, 1.85 for flat). 0/omitted = no bars. */
+  letterbox?: number;
+  /** Color grade preset (seeds the params below). `none`/omitted = ungraded; `custom` = params only. */
+  grade?: CinematicGrade;
+  /** Overall grade strength, 0–1 (mix between the original and graded image). Default 1. */
+  gradeIntensity?: number;
+  /** Exposure offset in stops, ~−1..1. 0 = unchanged. Overrides the preset when set. */
+  exposure?: number;
+  /** Contrast, ~−1..1. 0 = unchanged. Overrides the preset when set. */
+  contrast?: number;
+  /** Saturation, −1 (grayscale) .. 1 (boosted). 0 = unchanged. Overrides the preset when set. */
+  saturation?: number;
+  /** Color temperature, −1 (cool/blue) .. 1 (warm/orange). 0 = neutral. Overrides the preset when set. */
+  temperature?: number;
+  /** Custom tint color (hex) multiplied into the image by `tintAmount`. Overrides the preset when set. */
+  tint?: string;
+  /** Strength of the custom `tint`, 0–1. 0/omitted = no tint. */
+  tintAmount?: number;
+  /** Film-grain strength, 0–1. 0/omitted = clean. */
+  grain?: number;
+  /** Extra darkened-edge vignette, 0–1, on top of any project vignette. 0/omitted = none. */
+  vignette?: number;
 }
 
 export interface CinematicSequence {
@@ -999,6 +1267,8 @@ export interface CinematicSequence {
   duration: number;
   autoplay?: boolean;
   skippable?: boolean;
+  /** The film look (letterbox / grade / grain / vignette) layered over the frame while this plays. */
+  look?: CinematicLook;
   actions: CinematicAction[];
   createdAt: number;
 }
@@ -1007,6 +1277,10 @@ export interface RuntimeCinematicCamera {
   position: Vector3Tuple;
   lookAt: Vector3Tuple;
   fov: number;
+  /** Live depth-of-field focus distance (world units ahead of camera). Drives the DoF post effect. */
+  focusDistance?: number;
+  /** Live depth-of-field bokeh scale. 0/omitted = no DoF this frame. */
+  aperture?: number;
 }
 
 export interface RuntimeCinematicFade {
@@ -1026,6 +1300,8 @@ export interface Scene {
   id: string;
   name: string;
   objects: SceneObject[];
+  /** World sky/fog/base lighting for this scene. */
+  environment?: SceneEnvironmentSettings;
   /** Audio asset id looped quietly as the ambient bed (wind/room tone) while this scene plays. */
   ambientSoundId?: string;
   /** Audio asset id looped as background music while this scene plays. */
@@ -1120,6 +1396,20 @@ export interface DataAsset {
   createdAt: number;
 }
 
+/**
+ * A typed variable DECLARED on a blueprint (Unreal-style "class variable"). Every object instance that runs
+ * the blueprint gets its OWN copy, seeded from `defaultValue` into the object's per-instance `variables` (keyed
+ * by `name`). This is the per-instance scope — distinct from global/shared ProjectVariables. Read/write at
+ * runtime with the Get/Set Object Var nodes (objectKey = the variable name), optionally on another actor via a
+ * target / Cast.
+ */
+export interface BlueprintVariable {
+  id: string;
+  name: string;
+  type: GraphValueType;
+  defaultValue: GraphValue;
+}
+
 export interface ScriptBlueprint {
   id: string;
   name: string;
@@ -1128,6 +1418,8 @@ export interface ScriptBlueprint {
   color: string;
   /** Containing folder id, or undefined for the project root. */
   folderId?: string;
+  /** Typed per-instance variables this blueprint declares (each object running it gets its own copy). */
+  variables?: BlueprintVariable[];
   createdAt: number;
 }
 

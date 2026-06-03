@@ -102,8 +102,10 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'animator.getParam': Hash,
   'animator.getState': Radio,
   'input.move': Keyboard,
+  'input.driveInput': Keyboard,
   'query.grounded': Crosshair,
   'action.move': Move,
+  'action.drive': Move,
   'action.jump': Wind,
   'action.setCamera': Crosshair,
   'action.spawnProjectile': Send,
@@ -158,6 +160,8 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'action.getMaterialColor',
   'action.getMaterialProperty',
   'input.move',
+  'input.driveInput',
+  'query.vehicleSpeed',
   'query.grounded',
   'animator.getParam',
   'animator.getState',
@@ -189,8 +193,16 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 't', label: 'T' },
       ];
     case 'variable.set':
-    case 'variable.setObject':
       return [{ id: 'value', label: 'Value' }];
+    case 'variable.setObject':
+      return [
+        { id: 'value', label: 'Value' },
+        { id: 'target', label: 'Target' },
+      ];
+    case 'variable.getObject':
+      return [{ id: 'target', label: 'Target' }];
+    case 'logic.cast':
+      return [{ id: 'object', label: 'Object' }];
     case 'ui.setText':
       return [{ id: 'text', label: 'Text' }];
     case 'data.tableGet':
@@ -217,6 +229,8 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'vector', label: 'Direction' },
         { id: 'speed', label: 'Speed' },
       ];
+    case 'action.drive':
+      return [{ id: 'vector', label: 'Drive Input' }];
     case 'action.setCamera':
       return [
         { id: 'distance', label: 'Distance' },
@@ -385,6 +399,12 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           position={Position.Right}
           style={{ top: 82 }}
         />
+      )}
+
+      {/* Cast is an exec gate that ALSO outputs the validated actor as a typed reference ("As <Blueprint>"),
+          wired into a Get/Set Object Var's Target — the Unreal "Cast → As BP_X" pin. */}
+      {data.nodeKind === 'logic.cast' && (
+        <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 104 }} />
       )}
     </div>
   );

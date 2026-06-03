@@ -17,6 +17,7 @@ import { MaterialEditorPanel } from './MaterialEditorPanel';
 import { ParticleSystemEditorPanel } from './ParticleSystemEditorPanel';
 import { AnimatorEditorPanel } from './AnimatorEditorPanel';
 import { UIEditorPanel } from './UIEditorPanel';
+import { TerrainEditorPanel } from './TerrainEditorPanel';
 import { SceneSettingsPanel } from './SceneSettingsPanel';
 import { CinematicPanel } from './CinematicPanel';
 import { getWorkspaceApi, setWorkspaceApi } from './workspacePanels';
@@ -24,7 +25,7 @@ import { onPanelClosed } from '../sync/storeSync';
 import { POPPABLE_PANELS, openPanelWindow } from '../sync/popoutWindow';
 
 const LAYOUT_KEY = 'nodeforge.layout';
-const LAYOUT_VERSION = 8;
+const LAYOUT_VERSION = 10;
 
 // Where each panel sits when (re)added to the dock — used to restore a panel after
 // its popped-out window closes.
@@ -37,11 +38,13 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   scripting: { component: 'scripting', title: 'Scripting', ref: 'viewport', direction: 'below' },
   project: { component: 'project', title: 'Project', ref: 'hierarchy', direction: 'below' },
   materials: { component: 'materials', title: 'Material', ref: 'inspector', direction: 'below' },
+  terrain: { component: 'terrain', title: 'Terrain', ref: 'materials', direction: 'within' },
   particles: { component: 'particles', title: 'Particle System', ref: 'materials', direction: 'within' },
   animator: { component: 'animator', title: 'Animator', ref: 'inspector', direction: 'below' },
   ui: { component: 'ui', title: 'UI', ref: 'inspector', direction: 'below' },
   scene: { component: 'scene', title: 'Scene', ref: 'inspector', direction: 'within' },
-  cinematic: { component: 'cinematic', title: 'Film Mode', ref: 'materials', direction: 'within' },
+  // Film Mode is a Sequencer — it wants width, so it docks along the bottom next to Scripting.
+  cinematic: { component: 'cinematic', title: 'Film Mode', ref: 'scripting', direction: 'within' },
 };
 
 // Each Dockview panel just renders the existing panel component (they read stores directly).
@@ -52,6 +55,7 @@ const components = {
   project: () => <AssetBrowser />,
   scripting: () => <VisualScriptingPanel />,
   materials: () => <MaterialEditorPanel />,
+  terrain: () => <TerrainEditorPanel />,
   particles: () => <ParticleSystemEditorPanel />,
   animator: () => <AnimatorEditorPanel />,
   ui: () => <UIEditorPanel />,
@@ -123,12 +127,14 @@ function buildDefaultLayout(api: DockviewApi) {
   api.addPanel({ id: 'scripting', component: 'scripting', title: 'Scripting', position: { referencePanel: 'viewport', direction: 'below' } });
   api.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'hierarchy', direction: 'below' } });
   api.addPanel({ id: 'materials', component: 'materials', title: 'Material', position: { referencePanel: 'inspector', direction: 'below' } });
+  api.addPanel({ id: 'terrain', component: 'terrain', title: 'Terrain', position: { referencePanel: 'materials', direction: 'within' } });
   // Animator shares the Material group as a tab (both author reusable assets next to the Inspector).
   api.addPanel({ id: 'animator', component: 'animator', title: 'Animator', position: { referencePanel: 'materials', direction: 'within' } });
   // UI editor joins the same group as another tab.
   api.addPanel({ id: 'ui', component: 'ui', title: 'UI', position: { referencePanel: 'materials', direction: 'within' } });
   api.addPanel({ id: 'particles', component: 'particles', title: 'Particle System', position: { referencePanel: 'materials', direction: 'within' } });
-  api.addPanel({ id: 'cinematic', component: 'cinematic', title: 'Film Mode', position: { referencePanel: 'materials', direction: 'within' } });
+  // Film Mode is a wide Sequencer — dock it along the bottom as a tab beside Scripting.
+  api.addPanel({ id: 'cinematic', component: 'cinematic', title: 'Film Mode', position: { referencePanel: 'scripting', direction: 'within' } });
 }
 
 /** Rebuild the default layout (wired to the toolbar's View → Reset Layout). */

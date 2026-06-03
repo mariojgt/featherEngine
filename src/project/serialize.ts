@@ -5,6 +5,7 @@ import {
   type ProjectManifest,
   type Scene,
 } from '../types';
+import { defaultSceneEnvironment } from '../three/environmentSettings';
 
 export const SCENES_DIR = 'scenes';
 export const ASSETS_DIR = 'assets';
@@ -108,6 +109,7 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
       prefabs: (data.prefabs as NodeForgeProject['prefabs']) ?? [],
+      renderSettings: data.renderSettings as NodeForgeProject['renderSettings'],
     };
   }
 
@@ -141,6 +143,7 @@ export function migrateLoaded(raw: unknown): NodeForgeProject {
       blueprints: (data.blueprints as NodeForgeProject['blueprints']) ?? [],
       graphs: (data.graphs as NodeForgeProject['graphs']) ?? [],
       prefabs: (data.prefabs as NodeForgeProject['prefabs']) ?? [],
+      renderSettings: data.renderSettings as NodeForgeProject['renderSettings'],
     };
   }
 
@@ -154,7 +157,7 @@ export function blankProject(name: string): NodeForgeProject {
     version: PROJECT_VERSION,
     name,
     activeSceneId: sceneId,
-    scenes: [{ id: sceneId, name: 'Main', objects: [] }],
+    scenes: [{ id: sceneId, name: 'Main', objects: [], environment: defaultSceneEnvironment() }],
     assets: [],
     folders: [],
     variables: [],

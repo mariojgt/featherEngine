@@ -41,13 +41,13 @@ const formatBytes = (bytes: number) => {
 const detectType = (name: string): AssetType => {
   const ext = name.split('.').pop()?.toLowerCase();
   if (ext === 'glb' || ext === 'gltf') return 'model';
-  if (['png', 'jpg', 'jpeg'].includes(ext ?? '')) return 'image';
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(ext ?? '')) return 'image';
   if (['mp3', 'wav'].includes(ext ?? '')) return 'audio';
   return 'unknown';
 };
 
 /** Extensions the browser accepts — keep in sync with the file picker's `accept` attribute. */
-const ACCEPTED_EXT = new Set(['glb', 'gltf', 'fbx', 'png', 'jpg', 'jpeg', 'mp3', 'wav']);
+const ACCEPTED_EXT = new Set(['glb', 'gltf', 'fbx', 'png', 'jpg', 'jpeg', 'webp', 'mp3', 'wav']);
 const isAccepted = (name: string) => ACCEPTED_EXT.has(name.split('.').pop()?.toLowerCase() ?? '');
 
 const assetGlyph = (type: AssetType) => (type === 'audio' ? Music : type === 'image' ? Image : Box);
@@ -903,7 +903,7 @@ export function AssetBrowser() {
           type="file"
           hidden
           multiple
-          accept=".glb,.gltf,.fbx,.png,.jpg,.jpeg,.mp3,.wav"
+          accept=".glb,.gltf,.fbx,.png,.jpg,.jpeg,.webp,.mp3,.wav"
           onChange={(event) => {
             if (event.target.files) void importFiles(event.target.files, importTargetRef.current);
             event.target.value = '';

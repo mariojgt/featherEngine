@@ -107,6 +107,26 @@ try {
 const gameName = opts.name || bundle?.project?.name || 'Game';
 const slug = slugify(gameName);
 
+// Inventory + resource check so CLI exports also flag anything missing.
+{
+  const p = bundle.project ?? {};
+  const objectCount = (p.scenes ?? []).reduce((n, s) => n + (s.objects?.length ?? 0), 0);
+  const assets = p.assets ?? [];
+  const notEmbedded = assets.filter((a) => !a.data || a.unresolved);
+  console.log(
+    `\nContents: ${(p.scenes ?? []).length} scenes / ${objectCount} objects · ` +
+      `${(p.blueprints ?? []).length} blueprints · ${(p.materials ?? []).length} materials · ` +
+      `${(p.particleSystems ?? []).length} particles · ${(p.prefabs ?? []).length} prefabs · ` +
+      `${assets.length} resources`,
+  );
+  if (notEmbedded.length) {
+    console.warn(`⚠ ${notEmbedded.length} resource(s) NOT embedded:`);
+    for (const a of notEmbedded) console.warn(`   - ${a.name ?? a.id} (${a.path ?? a.id})`);
+  } else if (assets.length) {
+    console.log('✓ All resources embedded.');
+  }
+}
+
 // 1. Build the player runtime (dist-player/) unless told to reuse the existing build.
 if (!opts['skip-build']) {
   run(npmCmd, ['run', 'build:player']);

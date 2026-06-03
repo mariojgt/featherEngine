@@ -5,7 +5,38 @@ import * as THREE from 'three';
 import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLook } from '../runtime/mouseLook';
 import { SkinnedModel, useResolvedAnimator } from './SkinnedModel';
-import type { SceneObject } from '../types';
+import type { CharacterControllerComponent, SceneObject } from '../types';
+
+/**
+ * Normalize a follow-camera config from EITHER a character controller OR a vehicle controller, so the
+ * one rich follow camera (spring arm, zoom, look-ahead, mouse orbit) serves both pawns and cars. A
+ * vehicle's camera fields are mapped onto a character-shaped config (third-person, no camera-relative
+ * movement); `moveSpeed` is set to the car's top speed so the sprint-FOV / look-ahead scale sensibly.
+ */
+export function resolveCameraConfig(object: SceneObject | undefined): CharacterControllerComponent | undefined {
+  if (!object) return undefined;
+  if (object.character?.enabled && object.character.cameraFollow) return { ...defaultCharacter(), ...object.character };
+  if (object.vehicle?.enabled && object.vehicle.cameraFollow) {
+    const v = object.vehicle;
+    return {
+      ...defaultCharacter(),
+      enabled: true,
+      cameraMode: 'thirdPerson',
+      cameraFollow: true,
+      cameraOffset: v.cameraOffset,
+      cameraPitch: v.cameraPitch,
+      cameraMinPitch: v.cameraMinPitch,
+      cameraMaxPitch: v.cameraMaxPitch,
+      mouseLook: v.mouseLook,
+      mouseSensitivity: v.mouseSensitivity,
+      moveSpeed: v.maxSpeed,
+      sprintMultiplier: 1,
+      cameraRelativeMovement: false,
+      modelYawOffset: 0,
+    };
+  }
+  return undefined;
+}
 
 /** Reusable zero vector for relaxing the look-ahead offset back to center when idle (avoids per-frame allocs). */
 const ZERO = new THREE.Vector3();
@@ -20,10 +51,14 @@ function belongsToObject(object3d: THREE.Object3D | null, objectId: string): boo
   return false;
 }
 
-/** The first active-scene object whose character controller wants a follow camera. */
+/** The first active-scene object whose character OR vehicle controller wants a follow camera. */
 export function useFollowTarget(): SceneObject | undefined {
   const objects = useEditorStore(selectActiveObjects);
-  return objects.find((object) => object.character?.enabled && object.character.cameraFollow);
+  return objects.find(
+    (object) =>
+      (object.character?.enabled && object.character.cameraFollow) ||
+      (object.vehicle?.enabled && object.vehicle.cameraFollow),
+  );
 }
 
 export interface CameraPose {
@@ -39,7 +74,7 @@ export interface CameraPose {
  * the Play / preview camera below, so the indicator and the real camera can never disagree.
  */
 export function computeRestingCameraPose(target: SceneObject): CameraPose {
-  const cc = { ...defaultCharacter(), ...(target.character ?? {}) };
+  const cc = resolveCameraConfig(target) ?? { ...defaultCharacter(), ...(target.character ?? {}) };
   const [x, y, z] = target.transform.position;
 
   if (cc.cameraMode === 'firstPerson') {
@@ -161,11 +196,16 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   // clamped so you can't zoom inside the character or absurdly far. Smoothed toward its target each frame.
   const zoomTarget = useRef(1);
   const zoom = useRef(1);
+  // Auto-follow: when moving and NOT actively steering with the mouse, the camera gently swings to trail the
+  // travel heading (AAA TPS feel). These track recent mouse activity so manual look always wins.
+  const lastMouseDx = useRef(0);
+  const lastMouseDy = useRef(0);
+  const mouseIdle = useRef(0);
 
   // Normalize so a controller created before `mouseLook` existed still enables the camera.
   // In `preview` mode (editor, not playing) we deliberately ignore mouse-look so tuning the camera
   // offset/pitch shows a stable resting framing and never hijacks the editor pointer.
-  const useMouse = Boolean({ ...defaultCharacter(), ...(target?.character ?? {}) }.mouseLook) && Boolean(target) && !preview;
+  const useMouse = Boolean(resolveCameraConfig(target)?.mouseLook) && Boolean(target) && !preview;
   const wantsMouseLook = useMouse;
 
   // Mouse-look. Two ways, both supported so it always works: (1) click to capture the pointer
@@ -221,8 +261,9 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
 
   useFrame((_, delta) => {
     const camera = cameraRef.current;
-    if (!camera || !target?.character) return;
-    const cc = { ...defaultCharacter(), ...target.character };
+    const ccResolved = resolveCameraConfig(target);
+    if (!camera || !target || !ccResolved) return;
+    const cc = ccResolved;
     const [x, y, z] = target.transform.position;
     // Framerate-independent smoothing factor for a given responsiveness `k` (higher = snappier).
     const smooth = (k: number) => 1 - Math.exp(-k * Math.min(delta, 0.1));
@@ -277,6 +318,22 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       lookAhead.current.lerp(ZERO, smooth(4));
     }
 
+    // Auto-follow: ease the camera behind the travel heading when moving, UNLESS the player is actively steering
+    // (any recent mouse motion resets the idle timer and wins) or aiming. We nudge the shared mouse-look yaw
+    // itself — angularly, shortest-path — so camera-relative movement stays perfectly in sync with the camera.
+    const mouseMoved = Math.abs(mouseLook.dx - lastMouseDx.current) > 0.5 || Math.abs(mouseLook.dy - lastMouseDy.current) > 0.5;
+    lastMouseDx.current = mouseLook.dx;
+    lastMouseDy.current = mouseLook.dy;
+    mouseIdle.current = mouseMoved ? 0 : mouseIdle.current + delta;
+    const speed = rv ? Math.hypot(rv[0], rv[2]) : 0;
+    if (cc.mouseLook && useMouse && !aiming && speed > 0.6 && mouseIdle.current > 0.35) {
+      const heading = Math.atan2(rv![0], rv![2]);
+      const curYaw = -mouseLook.dx * cc.mouseSensitivity;
+      const diff = Math.atan2(Math.sin(heading - curYaw), Math.cos(heading - curYaw));
+      const newYaw = curYaw + diff * smooth(2.2); // gentle so it trails, never whips
+      mouseLook.dx = -newYaw / cc.mouseSensitivity;
+    }
+
     // Resting offset [side, up, back]. The Set Camera node can override distance/height at runtime; the mouse
     // wheel scales the distance (zoom), smoothed so a scroll glides in/out instead of jumping.
     zoom.current = THREE.MathUtils.lerp(zoom.current, zoomTarget.current, smooth(12));
@@ -308,8 +365,13 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       springRay.current.far = wanted;
       const hits = springRay.current.intersectObjects(scene.children, true);
       // Ignore the followed character's own meshes — otherwise the spring arm collides with the very
-      // body it's trailing and snaps the camera inside it, filling the screen (a black view).
-      const wall = hits.find((h) => h.distance > 0.6 && !belongsToObject(h.object, target.id));
+      // body it's trailing and snaps the camera inside it, filling the screen (a black view) — AND ignore
+      // the terrain/foliage (tagged userData.nfGround), so the camera never pulls in on the ground or grass.
+      const isGround = (obj: THREE.Object3D | null) => {
+        for (let o = obj; o; o = o.parent) if (o.userData?.nfGround) return true;
+        return false;
+      };
+      const wall = hits.find((h) => h.distance > 0.6 && !belongsToObject(h.object, target.id) && !isGround(h.object));
       if (wall) {
         desired.current.copy(pivot).addScaledVector(toCam, Math.max(0.6, wall.distance - 0.3));
       }
@@ -326,7 +388,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   });
 
   if (!target) return null;
-  const cc = { ...defaultCharacter(), ...target.character };
+  const cc = resolveCameraConfig(target) ?? { ...defaultCharacter(), ...target.character };
   return (
     <PerspectiveCamera ref={cameraRef} makeDefault fov={cc.cameraMode === 'firstPerson' ? 68 : 50} near={0.02} position={[0, 3, 6]}>
       {/* First-person view-model (arms/weapon) — shown in Play AND in the editor camera preview, so you

@@ -79,6 +79,7 @@ export class PlayerErrorBoundary extends Component<{ children: ReactNode }, { er
 /** Live runtime readout, toggled with the backtick (`) key — so a black/blank screen can be diagnosed. */
 export function DebugOverlay() {
   const [open, setOpen] = useState(false);
+  const [fps, setFps] = useState(0);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -87,6 +88,26 @@ export function DebugOverlay() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Sample FPS only while the panel is open, so it never costs anything during normal play.
+  useEffect(() => {
+    if (!open) return;
+    let raf = 0;
+    let frames = 0;
+    let last = performance.now();
+    const loop = () => {
+      frames += 1;
+      const now = performance.now();
+      if (now - last >= 500) {
+        setFps(Math.round((frames * 1000) / (now - last)));
+        frames = 0;
+        last = now;
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
 
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const allObjects = useEditorStore(selectActiveObjects);
@@ -112,6 +133,10 @@ export function DebugOverlay() {
   return (
     <div style={panelStyle}>
       <strong>Debug ( ` to close )</strong>
+      <div style={fps && fps < 45 ? { color: '#ffb347' } : undefined}>
+        fps: {fps || '…'}
+        {fps && fps < 30 ? '  ⚠ low' : ''}
+      </div>
       <div>playing: {String(isPlaying)}</div>
       <div>
         objects: {visible.length} visible / {allObjects.length} total

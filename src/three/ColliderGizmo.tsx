@@ -41,6 +41,7 @@ function wireMaterial() {
  * the runtime uses, so the wireframe and the simulation can never drift apart.
  */
 export function ColliderGizmo({ object }: { object: SceneObject }) {
+  if (object.terrain?.enabled) return null;
   const kind = colliderKindFor(object);
   const [px, py, pz] = object.transform.position;
   const [rx, ry, rz] = object.transform.rotation;
