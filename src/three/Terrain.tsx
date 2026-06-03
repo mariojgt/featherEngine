@@ -1,5 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
-import { Clone, useGLTF } from '@react-three/drei';
+import { useGLTF } from '@react-three/drei';
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
@@ -77,8 +77,68 @@ function createChunkGeometry(terrain: TerrainComponent, chunk: TerrainChunkKey) 
   return geometry;
 }
 
-function TerrainChunk({ object, terrain, chunk }: { object: SceneObject; terrain: TerrainComponent; chunk: TerrainChunkKey }) {
-  const geometry = useMemo(() => createChunkGeometry(terrain, chunk), [terrain, chunk.id]);
+// Per-chunk content signatures. `applyTerrainBrush` returns a brand-new terrain object on every
+// pointer-move during a sculpt/paint drag; keying chunk geometry on the terrain ref therefore
+// rebuilt EVERY visible chunk (up to streamRadius² of them) on every move event. Instead we bucket
+// each override key into the chunk(s) it can affect and build a per-chunk signature, so only the
+// chunks the brush actually touched get a new signature — the rest reuse their cached geometry.
+const terrainChunkSigCache = new WeakMap<TerrainComponent, { base: string; chunks: Map<string, string> }>();
+
+function terrainChunkSignatures(terrain: TerrainComponent): { base: string; chunks: Map<string, string> } {
+  const cached = terrainChunkSigCache.get(terrain);
+  if (cached) return cached;
+  const cs = terrain.chunkSize;
+  const margin = terrain.editSpacing * 2; // bilinear + normal sampling read a cell or two past a vertex
+  const parts = new Map<string, string[]>();
+  const bucket = (ix: number, iz: number, entry: string) => {
+    const px = ix * terrain.editSpacing;
+    const pz = iz * terrain.editSpacing;
+    const cxs = new Set([Math.floor((px - margin) / cs), Math.floor((px + margin) / cs)]);
+    const czs = new Set([Math.floor((pz - margin) / cs), Math.floor((pz + margin) / cs)]);
+    for (const cx of cxs)
+      for (const cz of czs) {
+        const k = `${cx}:${cz}`;
+        const list = parts.get(k);
+        if (list) list.push(entry);
+        else parts.set(k, [entry]);
+      }
+  };
+  for (const key in terrain.heightOverrides) {
+    const sep = key.indexOf(':');
+    bucket(Number(key.slice(0, sep)), Number(key.slice(sep + 1)), `${key}=${terrain.heightOverrides[key]}`);
+  }
+  for (const key in terrain.paintOverrides) {
+    const sep = key.indexOf(':');
+    bucket(Number(key.slice(0, sep)), Number(key.slice(sep + 1)), `${key}#${terrain.paintOverrides[key]}`);
+  }
+  const chunks = new Map<string, string>();
+  for (const [k, list] of parts) chunks.set(k, list.join(';'));
+  // Everything that affects geometry but isn't a per-cell override (noise params, size, material
+  // layer colors, …) goes in the base signature — a change there rebuilds every chunk, which is fine
+  // because those are rare inspector edits, not per-stroke changes.
+  const { heightOverrides: _h, paintOverrides: _p, ...rest } = terrain;
+  const result = { base: JSON.stringify(rest), chunks };
+  terrainChunkSigCache.set(terrain, result);
+  return result;
+}
+
+function TerrainChunk({
+  object,
+  terrain,
+  chunk,
+  baseSig,
+  chunkSig,
+}: {
+  object: SceneObject;
+  terrain: TerrainComponent;
+  chunk: TerrainChunkKey;
+  baseSig: string;
+  chunkSig: string;
+}) {
+  // Intentionally keyed on the content signatures, NOT the `terrain` ref: when this chunk's content
+  // is unchanged the memo returns the existing geometry even though `terrain` is a new object.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const geometry = useMemo(() => createChunkGeometry(terrain, chunk), [baseSig, chunkSig, chunk.id]);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const terrainBrush = useEditorStore((state) => state.terrainBrush);
   const selectObject = useEditorStore((state) => state.selectObject);
@@ -212,8 +272,10 @@ function InstancedMatrices({
   }, [matrices]);
 
   if (matrices.length === 0) return null;
+  // Bounding sphere is computed above, so the instanced foliage can frustum-cull when off-screen
+  // instead of submitting all (up to thousands of) instances to the vertex shader every frame.
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, matrices.length]} frustumCulled={false} castShadow receiveShadow userData={{ nfGround: true }}>
+    <instancedMesh ref={ref} args={[undefined, undefined, matrices.length]} castShadow receiveShadow userData={{ nfGround: true }}>
       {children}
     </instancedMesh>
   );
@@ -233,6 +295,45 @@ function FoliageModelClones({
   return <LoadedFoliageModel url={url} matrices={matrices} limit={limit} />;
 }
 
+// One InstancedMesh per source-mesh of a custom foliage model. The old implementation rendered a
+// separate <Clone> (a full scene-graph clone) per placement — up to `limit` clones, each its own
+// draw call(s) and cloned materials. Instancing collapses every placement of a given source mesh
+// into a single draw call, the same way the built-in foliage path works.
+function FoliageInstancedPart({
+  geometry,
+  material,
+  local,
+  placements,
+}: {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material | THREE.Material[];
+  local: THREE.Matrix4;
+  placements: THREE.Matrix4[];
+}) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  useLayoutEffect(() => {
+    const mesh = ref.current;
+    if (!mesh) return;
+    const composed = new THREE.Matrix4();
+    placements.forEach((placement, index) => {
+      // placement positions/orients the model; `local` is the mesh's transform within the model.
+      composed.multiplyMatrices(placement, local);
+      mesh.setMatrixAt(index, composed);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere(); // lets the instanced foliage frustum-cull when off-screen
+  }, [placements, local]);
+  return (
+    <instancedMesh
+      ref={ref}
+      args={[geometry, material, placements.length]}
+      castShadow
+      receiveShadow
+      userData={{ nfGround: true }}
+    />
+  );
+}
+
 function LoadedFoliageModel({
   url,
   matrices,
@@ -243,23 +344,23 @@ function LoadedFoliageModel({
   limit: number;
 }) {
   const { scene } = useGLTF(url);
-  const placements = useMemo(
-    () =>
-      matrices.slice(0, limit).map((matrix) => {
-        const position = new THREE.Vector3();
-        const quaternion = new THREE.Quaternion();
-        const scale = new THREE.Vector3();
-        matrix.decompose(position, quaternion, scale);
-        return { position, quaternion, scale };
-      }),
-    [matrices, limit],
-  );
+  // Flatten the model into (geometry, material, in-model transform) parts to instance.
+  const parts = useMemo(() => {
+    const collected: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; matrix: THREE.Matrix4 }[] = [];
+    scene.updateWorldMatrix(true, true);
+    scene.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      collected.push({ geometry: mesh.geometry, material: mesh.material, matrix: mesh.matrixWorld.clone() });
+    });
+    return collected;
+  }, [scene]);
+  const placements = useMemo(() => matrices.slice(0, limit), [matrices, limit]);
+  if (placements.length === 0 || parts.length === 0) return null;
   return (
     <>
-      {placements.map((placement, index) => (
-        <group key={index} position={placement.position} quaternion={placement.quaternion} scale={placement.scale}>
-          <Clone object={scene} castShadow receiveShadow />
-        </group>
+      {parts.map((part, index) => (
+        <FoliageInstancedPart key={index} geometry={part.geometry} material={part.material} local={part.matrix} placements={placements} />
       ))}
     </>
   );
@@ -301,11 +402,19 @@ function TerrainFoliage({ terrain, chunks }: { terrain: TerrainComponent; chunks
 export function Terrain({ object }: { object: SceneObject }) {
   const terrain = useMemo(() => withTerrainDefaults(object.terrain), [object.terrain]);
   const chunks = useVisibleTerrainChunks(object, terrain);
+  const sigs = useMemo(() => terrainChunkSignatures(terrain), [terrain]);
   if (!terrain.enabled) return null;
   return (
     <>
       {chunks.map((chunk) => (
-        <TerrainChunk key={chunk.id} object={object} terrain={terrain} chunk={chunk} />
+        <TerrainChunk
+          key={chunk.id}
+          object={object}
+          terrain={terrain}
+          chunk={chunk}
+          baseSig={sigs.base}
+          chunkSig={sigs.chunks.get(`${chunk.x}:${chunk.z}`) ?? ''}
+        />
       ))}
       <TerrainFoliage terrain={terrain} chunks={chunks} />
     </>

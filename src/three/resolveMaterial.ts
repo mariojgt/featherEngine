@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import type { MeshRendererComponent } from '../types';
 import { resolveMaterial, type ResolvedMaterial } from './materialResolve';
@@ -17,7 +18,12 @@ export function useResolvedMaterial(renderer: MeshRendererComponent | undefined)
   const materials = useEditorStore((state) => state.materials);
   const graphs = useEditorStore((state) => state.graphs);
   const assets = useEditorStore((state) => state.assets);
-  const resolved = resolveMaterial(renderer, materials, graphs);
-  const urlFor = (id?: string) => (id ? assets.find((asset) => asset.id === id)?.url : undefined);
-  return { ...resolved, baseColorUrl: urlFor(resolved.baseColorAssetId), normalUrl: urlFor(resolved.normalAssetId) };
+  // Only recompute when the inputs actually change identity. During Play the material/graph/asset
+  // arrays are stable and a static object's `renderer` keeps its reference, so this holds across
+  // frames instead of re-walking the material graph + scanning assets on every render.
+  return useMemo(() => {
+    const resolved = resolveMaterial(renderer, materials, graphs);
+    const urlFor = (id?: string) => (id ? assets.find((asset) => asset.id === id)?.url : undefined);
+    return { ...resolved, baseColorUrl: urlFor(resolved.baseColorAssetId), normalUrl: urlFor(resolved.normalAssetId) };
+  }, [renderer, materials, graphs, assets]);
 }

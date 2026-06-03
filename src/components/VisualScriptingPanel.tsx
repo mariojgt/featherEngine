@@ -23,7 +23,7 @@ export const nodeGroups: Array<{
   {
     title: 'Logic',
     icon: GitBranch,
-    nodes: ['Branch', 'Compare', 'AND', 'OR', 'Cast', 'Cooldown'],
+    nodes: ['Branch', 'Compare', 'AND', 'OR', 'Cast', 'Cooldown', 'For Loop'],
   },
   {
     title: 'Math',
@@ -33,7 +33,7 @@ export const nodeGroups: Array<{
   {
     title: 'Values',
     icon: Database,
-    nodes: ['Number', 'String', 'Boolean', 'Vector3'],
+    nodes: ['Number', 'Random', 'String', 'Boolean', 'Vector3'],
   },
   {
     title: 'Variables',
@@ -48,7 +48,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -408,6 +408,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const blueprints = useEditorStore((state) => state.blueprints);
   const activeGraph = useEditorStore((state) => state.activeGraph());
   const activeScene = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId));
+  const scenes = useEditorStore((state) => state.scenes);
   const sceneObjects = useEditorStore(selectActiveObjects);
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
   const isAnimNode = Boolean(node?.data.nodeKind.startsWith('animator.'));
@@ -488,6 +489,9 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesUIElement = node.data.nodeKind === 'ui.setText';
   const updatesObjectKey =
     node.data.nodeKind === 'variable.getObject' || node.data.nodeKind === 'variable.setObject';
+  const updatesRandom = node.data.nodeKind === 'value.random';
+  const updatesLoop = node.data.nodeKind === 'logic.forLoop';
+  const updatesLoadScene = node.data.nodeKind === 'action.loadScene';
   const updatesCast = node.data.nodeKind === 'logic.cast';
   // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
   // dropdown of THAT blueprint's declared instance variables (Unreal "Cast → As BP_X → pick its variable"):
@@ -611,6 +615,70 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               value={node.data.amount ?? 0}
               onChange={(event) => updateGraphNodeData(node.id, { amount: Number(event.target.value) })}
             />
+          </label>
+        )}
+
+        {updatesRandom && (
+          <>
+            <label className="node-field">
+              <span>Min</span>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.randomMin ?? 0}
+                onChange={(event) => updateGraphNodeData(node.id, { randomMin: Number(event.target.value) })}
+              />
+            </label>
+            <label className="node-field">
+              <span>Max</span>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.randomMax ?? 1}
+                onChange={(event) => updateGraphNodeData(node.id, { randomMax: Number(event.target.value) })}
+              />
+            </label>
+            <label className="node-field node-field-row">
+              <span>Whole number</span>
+              <input
+                type="checkbox"
+                checked={Boolean(node.data.randomInteger)}
+                onChange={(event) => updateGraphNodeData(node.id, { randomInteger: event.target.checked })}
+              />
+            </label>
+            <small className="node-hint">Min/Max can also be wired. Whole-number mode includes Max (dice / index rolls).</small>
+          </>
+        )}
+
+        {updatesLoop && (
+          <label className="node-field">
+            <span>Iterations</span>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              value={node.data.loopCount ?? 4}
+              onChange={(event) => updateGraphNodeData(node.id, { loopCount: Math.max(0, Math.floor(Number(event.target.value))) })}
+            />
+            <small className="node-hint">Fires "Body" this many times (index on the value-out), then "Completed". Capped at 10000.</small>
+          </label>
+        )}
+
+        {updatesLoadScene && (
+          <label className="node-field">
+            <span>Scene</span>
+            <select
+              value={node.data.targetSceneId ?? ''}
+              onChange={(event) => updateGraphNodeData(node.id, { targetSceneId: event.target.value || undefined })}
+            >
+              <option value="">Select a scene…</option>
+              {scenes.map((scene) => (
+                <option key={scene.id} value={scene.id}>
+                  {scene.name}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">Switches scene during Play. Project variables persist; the leaving scene resets.</small>
           </label>
         )}
 
@@ -1087,6 +1155,18 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 onChange={(event) => updateGraphNodeData(node.id, { projectileGravity: Number(event.target.value) })}
               />
               <small className="node-hint">0 = flies straight. Raise it (e.g. 1) for an arcing grenade/arrow.</small>
+            </label>
+
+            <label className="node-field">
+              <span>Knockback</span>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                value={node.data.projectileKnockback ?? 1}
+                onChange={(event) => updateGraphNodeData(node.id, { projectileKnockback: Number(event.target.value) })}
+              />
+              <small className="node-hint">How hard a hit shoves a dynamic prop (box/crate/barrel). 0 = no push, 1 = default, higher = harder.</small>
             </label>
 
             <label className="library-check" title="Log every spawn and hit to the runtime console">

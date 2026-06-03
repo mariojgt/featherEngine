@@ -1,10 +1,12 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { ContactShadows, Edges, TransformControls } from '@react-three/drei';
+import { ContactShadows, Edges, PerformanceMonitor, TransformControls } from '@react-three/drei';
 import { Camera, Globe, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
+import { recordRender } from '../runtime/perfStats';
+import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget, computeRestingCameraPose } from '../three/FollowCamera';
@@ -62,6 +64,20 @@ class WebGLErrorBoundary extends Component<{ children: ReactNode }, { failed: bo
     return this.props.children;
   }
 }
+
+/**
+ * One shared geometry per built-in primitive kind, reused by every object of that kind instead of
+ * constructing a fresh BufferGeometry per mesh (1000 cubes → 1 BoxGeometry, not 1000). Attached via
+ * `<primitive ... dispose={null}>` so r3f never disposes the shared instance when one object unmounts,
+ * while each object's own `<meshStandardMaterial>` still disposes normally. The args match what the
+ * per-kind JSX used before, so visuals are unchanged.
+ */
+const SHARED_GEO = {
+  box: new THREE.BoxGeometry(1, 1, 1),
+  sphere: new THREE.SphereGeometry(0.55, 32, 24),
+  capsule: new THREE.CapsuleGeometry(0.34, 0.82, 8, 18),
+  plane: new THREE.PlaneGeometry(1, 1, 12, 12),
+};
 
 function Primitive({ object, selected }: { object: SceneObject; selected: boolean }) {
   // Floating combat damage number.
@@ -157,11 +173,49 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
     const l = object.light;
     const lightEl =
       l?.type === 'point' ? (
-        <pointLight color={l.color} intensity={l.intensity} distance={l.distance} decay={2} castShadow={l.castShadow} />
+        <pointLight
+          color={l.color}
+          intensity={l.intensity}
+          distance={l.distance}
+          decay={2}
+          castShadow={l.castShadow}
+          // Bounded shadow map (512²) + bias instead of the three.js default — predictable cost and
+          // no shadow acne. Point lights are the most expensive (cubemap), so keep them small.
+          shadow-mapSize-width={512}
+          shadow-mapSize-height={512}
+          shadow-bias={-0.0008}
+        />
       ) : l?.type === 'spot' ? (
-        <spotLight color={l.color} intensity={l.intensity} distance={l.distance} angle={l.angle} penumbra={0.45} decay={2} castShadow={l.castShadow} />
+        <spotLight
+          color={l.color}
+          intensity={l.intensity}
+          distance={l.distance}
+          angle={l.angle}
+          penumbra={0.45}
+          decay={2}
+          castShadow={l.castShadow}
+          shadow-mapSize-width={1024}
+          shadow-mapSize-height={1024}
+          shadow-bias={-0.0006}
+        />
       ) : (
-        <directionalLight color={l?.color ?? '#ffffff'} intensity={l?.intensity ?? 2.4} castShadow={l?.castShadow ?? true} position={[0, 0, 0]} />
+        <directionalLight
+          color={l?.color ?? '#ffffff'}
+          intensity={l?.intensity ?? 2.4}
+          castShadow={l?.castShadow ?? true}
+          position={[0, 0, 0]}
+          // The sun: a tightly-framed shadow camera keeps a 2048² map sharp over the play area
+          // rather than smearing it across an unbounded default frustum.
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+          shadow-bias={-0.0004}
+          shadow-camera-near={0.5}
+          shadow-camera-far={120}
+          shadow-camera-left={-40}
+          shadow-camera-right={40}
+          shadow-camera-top={40}
+          shadow-camera-bottom={-40}
+        />
       );
     return (
       <>
@@ -198,7 +252,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   if (renderer.mesh === 'sphere') {
     return (
       <mesh castShadow receiveShadow>
-        <sphereGeometry args={[0.55, 32, 24]} />
+        <primitive object={SHARED_GEO.sphere} attach="geometry" dispose={null} />
         {commonMaterial}
         {selected && <Edges color="#F7B955" scale={1.04} />}
       </mesh>
@@ -208,7 +262,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   if (renderer.mesh === 'capsule') {
     return (
       <mesh castShadow receiveShadow>
-        <capsuleGeometry args={[0.34, 0.82, 8, 18]} />
+        <primitive object={SHARED_GEO.capsule} attach="geometry" dispose={null} />
         {commonMaterial}
         {selected && <Edges color="#F7B955" scale={1.05} />}
       </mesh>
@@ -218,7 +272,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   if (renderer.mesh === 'plane') {
     return (
       <mesh receiveShadow>
-        <planeGeometry args={[1, 1, 12, 12]} />
+        <primitive object={SHARED_GEO.plane} attach="geometry" dispose={null} />
         {commonMaterial}
         {selected && <Edges color="#F7B955" scale={1.01} />}
       </mesh>
@@ -227,7 +281,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
 
   return (
     <mesh castShadow receiveShadow>
-      <boxGeometry args={[1, 1, 1]} />
+      <primitive object={SHARED_GEO.box} attach="geometry" dispose={null} />
       {commonMaterial}
       {selected && <Edges color="#F7B955" scale={1.03} />}
     </mesh>
@@ -239,14 +293,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
 // of re-rendering here. Only objects whose transform/renderer actually changed (the car + its wheels, etc.)
 // re-render. The callbacks/flags it takes are all stable (useCallback / play-constant), so a shallow prop
 // compare is correct. This is the single biggest Play-mode FPS win in object-heavy scenes like the city.
-export const SceneObjectView = memo(function SceneObjectView({
-  object,
-  selected,
-  registerObject,
-  isGizmoEngaged,
-  drawSelf = true,
-  children,
-}: {
+type SceneObjectViewProps = {
   object: SceneObject;
   selected: boolean;
   registerObject: (id: string, object: THREE.Group | null) => void;
@@ -256,9 +303,78 @@ export const SceneObjectView = memo(function SceneObjectView({
   drawSelf?: boolean;
   /** Nested child objects — rendered inside this object's group so they inherit its transform. */
   children?: ReactNode;
-}) {
+};
+
+/**
+ * Custom memo comparator that powers the runtime→React transform decoupling.
+ *
+ * While playing, an object's `transform` is applied imperatively in useFrame from the transform
+ * buffer, so a frame where ONLY the transform changed must NOT re-render (return true to skip).
+ * Every other field is still compared by reference, so material/visibility/structural changes
+ * re-render normally. While NOT playing, transform IS compared so gizmo/inspector edits show.
+ */
+function sceneObjectPropsEqual(prev: SceneObjectViewProps, next: SceneObjectViewProps): boolean {
+  if (
+    prev.selected !== next.selected ||
+    prev.drawSelf !== next.drawSelf ||
+    prev.registerObject !== next.registerObject ||
+    prev.isGizmoEngaged !== next.isGizmoEngaged ||
+    prev.children !== next.children
+  )
+    return false;
+  const a = prev.object as unknown as Record<string, unknown>;
+  const b = next.object as unknown as Record<string, unknown>;
+  if (a === b) return true;
+  const playing = useEditorStore.getState().isPlaying;
+  for (const key in b) {
+    if (playing && key === 'transform') continue;
+    if (a[key] !== b[key]) return false;
+  }
+  for (const key in a) {
+    if (playing && key === 'transform') continue;
+    if (!(key in b)) return false;
+  }
+  return true;
+}
+
+export const SceneObjectView = memo(function SceneObjectView({
+  object,
+  selected,
+  registerObject,
+  isGizmoEngaged,
+  drawSelf = true,
+  children,
+}: SceneObjectViewProps) {
   const selectObject = useEditorStore((state) => state.selectObject);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const groupRef = useRef<THREE.Group | null>(null);
+  // Reference of the transform tuple last written to the group. tickRuntime keeps the SAME transform
+  // object for objects that didn't move (only moved ones get a fresh `{...object, transform}`), so a
+  // ref match means "static this frame" → skip the writes entirely. Reset on Stop via the null below.
+  const lastApplied = useRef<unknown>(null);
+
+  // Imperative transform application during Play: read this object's final transform from the
+  // runtime buffer and write it straight to the group. Paired with sceneObjectPropsEqual (which
+  // ignores `transform` while playing), this is the core decoupling — movement no longer churns
+  // React. Declared before any early return so hook order stays stable; for bone-attached objects
+  // groupRef stays null and this no-ops (they ride a bone instead).
+  useFrame(() => {
+    if (!useEditorStore.getState().isPlaying) {
+      lastApplied.current = null;
+      return;
+    }
+    const group = groupRef.current;
+    if (!group) return;
+    const t = readTransform(object.id);
+    // Same tuple reference as last applied → the object is static this frame; the writes (and the
+    // rotation→quaternion sync each one triggers) would be redundant, so skip them. Most of a scene
+    // is static scenery, so this makes the steady-state cost scale with MOVING objects, not all.
+    if (!t || t === lastApplied.current) return;
+    lastApplied.current = t;
+    group.position.set(t.position[0], t.position[1], t.position[2]);
+    group.rotation.set(t.rotation[0], t.rotation[1], t.rotation[2]);
+    group.scale.set(t.scale[0], t.scale[1], t.scale[2]);
+  });
 
   // Attached objects ride a character's bone instead of sitting at their own transform.
   if (object.attachment) {
@@ -273,7 +389,10 @@ export const SceneObjectView = memo(function SceneObjectView({
 
   return (
     <group
-      ref={(node) => registerObject(object.id, node)}
+      ref={(node) => {
+        groupRef.current = node;
+        registerObject(object.id, node);
+      }}
       userData={{ nfObjectId: object.id }}
       position={object.transform.position}
       rotation={object.transform.rotation}
@@ -295,7 +414,7 @@ export const SceneObjectView = memo(function SceneObjectView({
       {children}
     </group>
   );
-});
+}, sceneObjectPropsEqual);
 
 type TreeRenderOpts = {
   isPlaying: boolean;
@@ -676,6 +795,60 @@ function ViewportFallback() {
   );
 }
 
+/**
+ * Reads three.js renderer counters once per frame and feeds them to the perf overlay.
+ * `gl.info` auto-resets right before each render, so in a pre-render `useFrame` these hold the
+ * PREVIOUS frame's totals — a 1-frame lag that's irrelevant for a stats display.
+ */
+function RenderStatsProbe() {
+  const gl = useThree((state) => state.gl);
+  useFrame(() => {
+    const info = gl.info;
+    recordRender({
+      calls: info.render.calls,
+      triangles: info.render.triangles,
+      programs: info.programs?.length ?? 0,
+      geometries: info.memory.geometries,
+      textures: info.memory.textures,
+    });
+  });
+  return null;
+}
+
+/** Max simultaneous shadow-casting lights during Play. Forward rendering makes each one a full extra
+ *  depth pass, so over-budget scenes (e.g. the car-select menu's 10 spotlights) cap here. */
+const MAX_SHADOW_CASTERS = 8;
+
+/**
+ * Shadow budget: during Play, keep shadows on the first N shadow-capable lights and disable the rest.
+ * Deliberately re-evaluated ONLY when the caster COUNT changes (lights spawned/destroyed) — never
+ * per-frame or by camera distance — because toggling `castShadow` triggers a shader recompile, and
+ * doing that every frame would cost more than it saves. Authored intent is remembered in userData and
+ * restored when the scene drops back under budget. Stop resets it (lights re-render from props).
+ */
+function LightBudget() {
+  const scene = useThree((state) => state.scene);
+  const evaluatedCount = useRef(-1);
+  useFrame(() => {
+    if (!useEditorStore.getState().isPlaying) {
+      evaluatedCount.current = -1;
+      return;
+    }
+    const casters: THREE.Light[] = [];
+    scene.traverse((obj) => {
+      const light = obj as THREE.Light & { shadow?: unknown };
+      if (light.isLight && light.shadow) casters.push(light);
+    });
+    if (casters.length === evaluatedCount.current) return;
+    evaluatedCount.current = casters.length;
+    casters.forEach((light, i) => {
+      if (light.userData.nfWantsShadow === undefined) light.userData.nfWantsShadow = light.castShadow;
+      light.castShadow = Boolean(light.userData.nfWantsShadow) && i < MAX_SHADOW_CASTERS;
+    });
+  });
+  return null;
+}
+
 /** Lives inside the Canvas so it can expose the live camera + canvas DOM node for drop raycasting. */
 function DropController({ contextRef }: { contextRef: MutableRefObject<DropContext | null> }) {
   const camera = useThree((state) => state.camera);
@@ -698,6 +871,10 @@ export function ViewportPanel() {
   const [snapStep, setSnapStep] = useState(0.5);
   const [focusNonce, setFocusNonce] = useState(0);
   const [previewCamera, setPreviewCamera] = useState(false);
+  // Adaptive resolution for the editor viewport. Without a cap the Canvas renders at native
+  // devicePixelRatio (2–3x on Retina = 4–9x the fragments), which is the biggest "editor feels
+  // heavy" cost. Cap at 1.5 and let PerformanceMonitor drop to 1 when the frame rate dips.
+  const [dpr, setDpr] = useState(1.5);
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
@@ -944,7 +1121,17 @@ export function ViewportPanel() {
       <div className="scene-drop-zone" onDragOverCapture={handleDragOver} onDropCapture={handleDrop}>
         {hasWebGL ? (
           <WebGLErrorBoundary>
-            <Canvas className="scene-canvas" shadows camera={{ position: [6, 4.2, 7], fov: 46 }}>
+            <Canvas
+              className="scene-canvas"
+              shadows
+              dpr={dpr}
+              gl={{ powerPreference: 'high-performance' }}
+              performance={{ min: 0.5 }}
+              camera={{ position: [6, 4.2, 7], fov: 46 }}
+            >
+              <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+              <RenderStatsProbe />
+              <LightBudget />
               <SceneContent
                 transformMode={transformMode}
                 transformSpace={transformSpace}

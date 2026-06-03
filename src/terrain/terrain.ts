@@ -56,7 +56,23 @@ export const defaultTerrain = (): TerrainComponent => ({
   foliage: defaultTerrainFoliage(),
 });
 
+// Normalizing a terrain config re-sanitizes its (potentially huge) height/paint override records, which is
+// far too expensive to redo on every height sample during Play. Store objects are immutable — a terrain edit
+// produces a new component reference — so memoize the normalized result by input reference: we normalize once
+// per edit instead of once per sample (the runtime's terrain-following vehicle/character passes hammer this).
+const terrainDefaultsCache = new WeakMap<object, TerrainComponent>();
+
 export function withTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainComponent {
+  if (terrain) {
+    const cached = terrainDefaultsCache.get(terrain);
+    if (cached) return cached;
+  }
+  const normalized = normalizeTerrainDefaults(terrain);
+  if (terrain) terrainDefaultsCache.set(terrain, normalized);
+  return normalized;
+}
+
+function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainComponent {
   const base = defaultTerrain();
   const foliage = { ...base.foliage, ...(terrain?.foliage ?? {}) };
   const size = clamp(terrain?.size ?? base.size, 32, 8192);
@@ -171,6 +187,15 @@ function overrideAt(record: Record<string, number>, ix: number, iz: number): num
   return Number.isFinite(value) ? value : undefined;
 }
 
+// True if the record has no own keys. `Object.keys(record).length === 0` allocated a full
+// key array on EVERY height sample — for a terrain with many sculpt overrides that array build
+// dominated chunk generation (the "multi-minute load freeze"). `for…in` with an early return
+// is O(1) and allocates nothing.
+function isRecordEmpty(record: Record<string, number>): boolean {
+  for (const _key in record) return false;
+  return true;
+}
+
 export function sampleBaseTerrainLocalHeight(input: TerrainComponent | Partial<TerrainComponent>, localX: number, localZ: number): number {
   const terrain = withTerrainDefaults(input);
   let frequency = terrain.frequency;
@@ -191,7 +216,7 @@ export function sampleBaseTerrainLocalHeight(input: TerrainComponent | Partial<T
 
 export function sampleTerrainLocalHeight(input: TerrainComponent | Partial<TerrainComponent>, localX: number, localZ: number): number {
   const terrain = withTerrainDefaults(input);
-  if (!Object.keys(terrain.heightOverrides).length) return sampleBaseTerrainLocalHeight(terrain, localX, localZ);
+  if (isRecordEmpty(terrain.heightOverrides)) return sampleBaseTerrainLocalHeight(terrain, localX, localZ);
 
   const gx = localX / terrain.editSpacing;
   const gz = localZ / terrain.editSpacing;
@@ -410,6 +435,37 @@ export function highestTerrainWorldHeight(objects: SceneObject[], worldX: number
     if (height !== undefined && (best === undefined || height > best)) best = height;
   }
   return best;
+}
+
+export type TerrainHeightSampler = (worldX: number, worldZ: number) => number | undefined;
+
+/**
+ * Build a per-tick terrain height sampler. It filters the terrain objects ONCE (a scene
+ * usually has 0–1) instead of re-scanning every object on each query, and memoizes results
+ * on a ~1cm grid so repeated lookups at the same spot within a frame (e.g. a character's
+ * floor checked in several passes, or every wheel of a car) don't re-run octave noise.
+ * Create a fresh sampler each tick so the cache never goes stale across frames.
+ */
+export function createTerrainHeightSampler(objects: SceneObject[]): TerrainHeightSampler {
+  const terrainObjects: SceneObject[] = [];
+  for (const object of objects) if (object.terrain?.enabled) terrainObjects.push(object);
+  if (terrainObjects.length === 0) return () => undefined;
+  const cache = new Map<number, number | undefined>();
+  return (worldX, worldZ) => {
+    // Pack the quantized (x,z) into one numeric key — cheaper than building a string per call.
+    const qx = Math.round(worldX * 100);
+    const qz = Math.round(worldZ * 100);
+    const key = qx * 4194304 + qz; // 2^22 stride; ample for any realistic terrain extent
+    const hit = cache.get(key);
+    if (hit !== undefined || cache.has(key)) return hit;
+    let best: number | undefined;
+    for (const object of terrainObjects) {
+      const height = terrainWorldHeightAt(object, worldX, worldZ);
+      if (height !== undefined && (best === undefined || height > best)) best = height;
+    }
+    cache.set(key, best);
+    return best;
+  };
 }
 
 export interface TerrainChunkKey {

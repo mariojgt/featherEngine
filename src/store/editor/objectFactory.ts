@@ -5,7 +5,6 @@ import type {
   GraphValue,
   GraphValueType,
   NodeForgeNodeData,
-  PhysicsComponent,
   ProjectileComponent,
   ProjectVariable,
   SceneObject,
@@ -152,6 +151,8 @@ export interface ProjectileSetup {
   color?: string;
   life?: number;
   gravity?: number;
+  /** Knockback multiplier for shoving a struck dynamic prop (0 = none, default ~1). */
+  knockback?: number;
   debug?: boolean;
   /** Optional scene object to clone the look from (mesh/model/scale/material). */
   template?: SceneObject;
@@ -176,6 +177,7 @@ export const makeProjectileObject = (
     damage,
     life,
     velocity: [...velocity] as Vector3Tuple,
+    knockback: typeof setup.knockback === 'number' ? setup.knockback : undefined,
     debug: setup.debug || undefined,
   };
 

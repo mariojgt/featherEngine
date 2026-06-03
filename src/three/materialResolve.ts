@@ -73,12 +73,26 @@ function addHex(a: string, b: string): string {
   return toHex(ar + br, ag + bg, ab + bb);
 }
 
+// A material graph's output only changes when the graph is edited (which replaces the graph
+// object). Cache the evaluated output per graph identity so per-object material resolution —
+// run for every object that re-renders, and per-frame by "Get Material" script nodes — doesn't
+// re-walk the whole graph each time.
+const materialGraphCache = new WeakMap<ProjectGraph, MaterialGraphOutput>();
+
 /**
  * Evaluate a material node graph into the channels its Material Output node drives.
  * Unconnected channels are absent (the caller keeps the material's flat-field value).
- * Constant-time only — no per-pixel shading.
+ * Constant-time only — no per-pixel shading. Result is cached on the graph object.
  */
 export function evaluateMaterialGraph(graph: ProjectGraph): MaterialGraphOutput {
+  const cached = materialGraphCache.get(graph);
+  if (cached) return cached;
+  const result = computeMaterialGraph(graph);
+  materialGraphCache.set(graph, result);
+  return result;
+}
+
+function computeMaterialGraph(graph: ProjectGraph): MaterialGraphOutput {
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
   const output = graph.nodes.find((node) => node.data.nodeKind === 'material.output');
   if (!output) return {};

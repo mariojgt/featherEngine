@@ -58,7 +58,11 @@ export const layoutGraphNodes = (nodes: NodeForgeNode[], edges: Edge[]): NodeFor
 export interface GraphRuntime {
   graph: ProjectGraph;
   nodesById: Map<string, NodeForgeNode>;
+  /** Default execution continuation: targets reached via the standard "exec-out" pin. */
   outgoing: Map<string, string[]>;
+  /** Execution targets grouped by the source pin they leave from (e.g. "exec-out", "exec-body").
+   *  Lets multi-output exec nodes (For Loop's Body vs Completed) route to distinct chains. */
+  outgoingByHandle: Map<string, Map<string, string[]>>;
   incomingValues: Map<string, Edge[]>;
   incomingValueByHandle: Map<string, Map<string, Edge>>;
   eventRoots: NodeForgeNode[];
@@ -66,10 +70,12 @@ export interface GraphRuntime {
 }
 
 const graphRuntimeCache = new WeakMap<ProjectGraph, GraphRuntime>();
+const graphRuntimeMapCache = new WeakMap<ProjectGraph[], Map<string, GraphRuntime>>();
 
 export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, string[]>();
+  const outgoingByHandle = new Map<string, Map<string, string[]>>();
   const incomingValues = new Map<string, Edge[]>();
   const incomingValueByHandle = new Map<string, Map<string, Edge>>();
 
@@ -83,9 +89,20 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
       if (edge.targetHandle) byHandle.set(edge.targetHandle, edge);
       incomingValueByHandle.set(edge.target, byHandle);
     } else {
-      const existing = outgoing.get(edge.source);
-      if (existing) existing.push(edge.target);
-      else outgoing.set(edge.source, [edge.target]);
+      // Exec edges leave a node from a named pin. Edges authored before multi-output nodes existed
+      // (and AI-created flow edges) carry no sourceHandle → treat them as the default "exec-out".
+      const handle = edge.sourceHandle || 'exec-out';
+      const byHandle = outgoingByHandle.get(edge.source) ?? new Map<string, string[]>();
+      const handleTargets = byHandle.get(handle);
+      if (handleTargets) handleTargets.push(edge.target);
+      else byHandle.set(handle, [edge.target]);
+      outgoingByHandle.set(edge.source, byHandle);
+      // The default-pin continuation stays in `outgoing` so existing call sites are unchanged.
+      if (handle === 'exec-out') {
+        const existing = outgoing.get(edge.source);
+        if (existing) existing.push(edge.target);
+        else outgoing.set(edge.source, [edge.target]);
+      }
     }
   });
 
@@ -99,7 +116,7 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
     else customEventRoots.set(key, [node]);
   }
 
-  return { graph, nodesById, outgoing, incomingValues, incomingValueByHandle, eventRoots, customEventRoots };
+  return { graph, nodesById, outgoing, outgoingByHandle, incomingValues, incomingValueByHandle, eventRoots, customEventRoots };
 };
 
 export const getGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
@@ -110,5 +127,10 @@ export const getGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
   return runtime;
 };
 
-export const getGraphRuntimeMap = (graphs: ProjectGraph[]): Map<string, GraphRuntime> =>
-  new Map(graphs.map((graph) => [graph.id, getGraphRuntime(graph)]));
+export const getGraphRuntimeMap = (graphs: ProjectGraph[]): Map<string, GraphRuntime> => {
+  const cached = graphRuntimeMapCache.get(graphs);
+  if (cached) return cached;
+  const runtimes = new Map(graphs.map((graph) => [graph.id, getGraphRuntime(graph)]));
+  graphRuntimeMapCache.set(graphs, runtimes);
+  return runtimes;
+};

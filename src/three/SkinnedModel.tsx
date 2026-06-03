@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
-import { useEditorStore } from '../store/editorStore';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
 import { useFootIK } from './footIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
@@ -80,6 +80,16 @@ export function SkinnedModel({
     return mats;
   }, [model]);
 
+  // Dispose this instance's private material clones when the model is swapped or the component
+  // unmounts — otherwise each spawned/despawned skinned character leaks its materials' GPU programs.
+  // dispose() frees the program only, leaving the shared source textures intact.
+  useEffect(
+    () => () => {
+      for (const t of tintMats) t.mat.dispose();
+    },
+    [tintMats],
+  );
+
   useEffect(() => {
     for (const t of tintMats) {
       if (tint?.color) t.mat.color?.set(tint.color);
@@ -96,14 +106,18 @@ export function SkinnedModel({
 
   // Ragdoll: mirror the shared ragdoll flag (set by key/node/death) into render state each frame.
   const [ragdoll, setRagdollLocal] = useState(false);
+  // These all read STATIC config (a key code, a skeleton's ragdoll tuning) and return a primitive
+  // or a stable object reference, so they don't trigger re-renders during Play. The fix vs the old
+  // code: scan only the active scene's existing objects array (selectActiveObjects) instead of
+  // `scenes.flatMap(...)`, which allocated a fresh all-scenes array on every store tick (60fps).
   const ragdollKeyCode = useEditorStore((state) =>
-    registerId ? state.scenes.flatMap((s) => s.objects).find((o) => o.id === registerId)?.character?.keyRagdoll : undefined,
+    registerId ? selectActiveObjects(state).find((o) => o.id === registerId)?.character?.keyRagdoll : undefined,
   );
   const ragdollKey = useEditorStore((state) => (ragdollKeyCode ? state.runtimeKeys[ragdollKeyCode] : undefined));
   // Resolve this object's skeleton → its ragdoll tuning (shared by everything on that skeleton).
   const ragdollSettings = useEditorStore((state) => {
     if (!registerId) return undefined;
-    const object = state.scenes.flatMap((s) => s.objects).find((o) => o.id === registerId);
+    const object = selectActiveObjects(state).find((o) => o.id === registerId);
     const mesh = state.skeletalMeshes.find((m) => m.id === object?.animator?.skeletalMeshId);
     const skeletonId = mesh?.skeletonId;
     return skeletonId ? state.skeletons.find((sk) => sk.id === skeletonId)?.ragdoll : undefined;

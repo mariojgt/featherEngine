@@ -269,6 +269,9 @@ const NODE_LABELS = [
   'Direction To Player',
   'Face Player',
   'Cooldown',
+  'For Loop',
+  'Random',
+  'Load Scene',
   'Save Game',
   'Load Game',
   'Clear Save',
@@ -339,6 +342,9 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Direction To Player': 'Runtime',
   'Face Player': 'Runtime',
   Cooldown: 'Logic',
+  'For Loop': 'Logic',
+  Random: 'Values',
+  'Load Scene': 'Runtime',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
@@ -2972,6 +2978,7 @@ export const engineTools = {
       projectileColor: z.string().optional().describe('Built-in projectile color.'),
       projectileLife: z.number().optional().describe('Projectile lifetime. Default 3.'),
       projectileGravity: z.number().optional().describe('Projectile gravity. 0 = straight.'),
+      projectileKnockback: z.number().optional().describe('How hard a hit shoves a DYNAMIC prop along the shot (multiplier, default 1; 0 = no knockback). Raise for heavier punch.'),
       projectileTemplateId: z.string().optional().describe('Scene object id to clone as projectile.'),
       projectileMuzzle: vec3.optional().describe('First-person muzzle offset [right, up, forward].'),
       projectileDebug: z.boolean().optional().describe('Log projectile spawns/hits.'),
@@ -2979,6 +2986,11 @@ export const engineTools = {
       animationSpeed: z.number().optional().describe('Animation speed. Default 1.'),
       cinematicId: z.string().optional().describe('Play Cinematic: Film Mode cinematic id.'),
       movementMode: z.enum(['walking', 'swimming', 'climbing', 'flying']).optional().describe('Character movement mode.'),
+      randomMin: z.number().optional().describe('Random: inclusive low bound. Default 0.'),
+      randomMax: z.number().optional().describe('Random: inclusive high bound. Default 1.'),
+      randomInteger: z.boolean().optional().describe('Random: round to a whole number (Max inclusive) for dice/index rolls.'),
+      loopCount: z.number().int().optional().describe('For Loop: how many times to fire the Body output. Default 4, capped at 10000.'),
+      targetSceneId: z.string().optional().describe('Load Scene: id of the scene to switch to during Play.'),
     }),
     execute: async ({
       blueprintId,
@@ -3010,6 +3022,7 @@ export const engineTools = {
       projectileColor,
       projectileLife,
       projectileGravity,
+      projectileKnockback,
       projectileTemplateId,
       projectileMuzzle,
       projectileDebug,
@@ -3019,8 +3032,14 @@ export const engineTools = {
       movementMode,
       otherObjectId,
       targetObjectId,
+      randomMin,
+      randomMax,
+      randomInteger,
+      loopCount,
+      targetSceneId,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
+      if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
       if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
@@ -3057,6 +3076,7 @@ export const engineTools = {
         projectileColor,
         projectileLife,
         projectileGravity,
+        projectileKnockback,
         projectileTemplateId,
         projectileMuzzle: projectileMuzzle ? asVec3(projectileMuzzle) : undefined,
         projectileDebug,
@@ -3064,6 +3084,11 @@ export const engineTools = {
         animationSpeed,
         cinematicId,
         movementMode,
+        randomMin,
+        randomMax,
+        randomInteger,
+        loopCount,
+        targetSceneId,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },
@@ -3121,6 +3146,7 @@ export const engineTools = {
       projectileColor: z.string().optional().describe('Built-in projectile color.'),
       projectileLife: z.number().optional().describe('Projectile lifetime.'),
       projectileGravity: z.number().optional().describe('Projectile gravity.'),
+      projectileKnockback: z.number().optional().describe('How hard a hit shoves a DYNAMIC prop along the shot (multiplier, default 1; 0 = no knockback).'),
       projectileTemplateId: z.string().optional().describe('Scene object id to clone as projectile.'),
       projectileMuzzle: vec3.optional().describe('First-person muzzle offset.'),
       projectileDebug: z.boolean().optional().describe('Log projectile spawns/hits.'),
@@ -3128,9 +3154,15 @@ export const engineTools = {
       // Set/Get Anim nodes: which animator parameter (by name, from the snapshot's controllers) and which object.
       paramName: z.string().optional(),
       targetObjectId: z.string().optional().describe('Target object id; omit for self.'),
+      randomMin: z.number().optional().describe('Random: inclusive low bound.'),
+      randomMax: z.number().optional().describe('Random: inclusive high bound.'),
+      randomInteger: z.boolean().optional().describe('Random: whole-number mode (Max inclusive).'),
+      loopCount: z.number().int().optional().describe('For Loop: Body iteration count (capped 10000).'),
+      targetSceneId: z.string().optional().describe('Load Scene: scene id to switch to during Play.'),
     }),
-    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, ...patch }) => {
+    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
+      if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
       if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
@@ -3146,6 +3178,7 @@ export const engineTools = {
       if (projectileTemplateId !== undefined) updates.projectileTemplateId = projectileTemplateId || undefined;
       if (projectileMuzzle !== undefined) updates.projectileMuzzle = asVec3(projectileMuzzle);
       if (cinematicId !== undefined) updates.cinematicId = cinematicId || undefined;
+      if (targetSceneId !== undefined) updates.targetSceneId = targetSceneId || undefined;
       if (vectorValue !== undefined) updates.vectorValue = asVec3(vectorValue);
       store().setActiveBlueprint(blueprintId);
       store().updateGraphNodeData(nodeId, updates);

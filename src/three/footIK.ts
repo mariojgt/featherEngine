@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { isRagdoll } from '../runtime/ragdollState';
-import { highestTerrainWorldHeight } from '../terrain/terrain';
+import { createTerrainHeightSampler } from '../terrain/terrain';
 
 /**
  * Terrain foot IK for skinned characters.
@@ -130,13 +130,15 @@ export function useFootIK(model: THREE.Object3D, registerId?: string) {
     if (!state.runtimeGrounded.includes(registerId)) return; // airborne → let the jump/fall pose play untouched
 
     const objects = selectActiveObjects(state);
+    // Filter terrain objects once, then memoize the body + per-foot height queries this frame.
+    const sampleTerrainHeight = createTerrainHeightSampler(objects);
     model.getWorldPosition(rootWorld);
-    const bodyFloor = highestTerrainWorldHeight(objects, rootWorld.x, rootWorld.z);
+    const bodyFloor = sampleTerrainHeight(rootWorld.x, rootWorld.z);
     if (bodyFloor === undefined) return; // no terrain under this character → leave the animation as-authored
 
     for (const leg of legs) {
       leg.foot.getWorldPosition(footWorld);
-      const groundUnder = highestTerrainWorldHeight(objects, footWorld.x, footWorld.z);
+      const groundUnder = sampleTerrainHeight(footWorld.x, footWorld.z);
       if (groundUnder === undefined) continue;
       const clearance = footWorld.y - bodyFloor; // how high this foot sits above the body's ground in the pose
       if (clearance > 0.5) continue; // a lifted, mid-stride foot — don't yank it onto the ground

@@ -26,6 +26,7 @@ import {
   terrainChunkKeysAroundWorld,
   withTerrainDefaults,
 } from '../terrain/terrain';
+import { worldMatrixOf } from '../utils/transformHierarchy';
 
 let ready = false;
 let initPromise: Promise<void> | null = null;
@@ -52,6 +53,44 @@ function quatFromEuler(rotation: Vector3Tuple) {
   reuseEuler.set(rotation[0], rotation[1], rotation[2], 'XYZ');
   reuseQuat.setFromEuler(reuseEuler);
   return { x: reuseQuat.x, y: reuseQuat.y, z: reuseQuat.z, w: reuseQuat.w };
+}
+
+// --- Parent-aware world transforms ---------------------------------------------------------------
+// Physics bodies live in WORLD space, but an object's stored `transform` is LOCAL (relative to its
+// parent). For a root object local == world, so these only do real work for parented objects — e.g.
+// a trigger volume nested INSIDE a solid sphere. Without this a child body would be spawned at its
+// local coordinates (near the origin) instead of where its parent actually is, so it never overlaps
+// anything ("triggers inside don't fire").
+const wtPos = new THREE.Vector3();
+const wtQuat = new THREE.Quaternion();
+const wtScale = new THREE.Vector3();
+const wtEuler = new THREE.Euler();
+
+type PosRot = { position: Vector3Tuple; rotation: Vector3Tuple };
+
+/** World transform (position + Euler rotation) of `id`, composing the full parent chain. */
+function worldPosRot(byId: Map<string, SceneObject>, id: string): PosRot {
+  worldMatrixOf(byId, id).decompose(wtPos, wtQuat, wtScale);
+  wtEuler.setFromQuaternion(wtQuat, 'XYZ');
+  return { position: [wtPos.x, wtPos.y, wtPos.z], rotation: [wtEuler.x, wtEuler.y, wtEuler.z] };
+}
+
+/** Convert a world position/rotation into the LOCAL transform under `parentId`. */
+function worldToLocalUnder(
+  byId: Map<string, SceneObject>,
+  parentId: string,
+  position: Vector3Tuple,
+  rotation: Vector3Tuple,
+): PosRot {
+  const world = new THREE.Matrix4().compose(
+    new THREE.Vector3(position[0], position[1], position[2]),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rotation[0], rotation[1], rotation[2], 'XYZ')),
+    new THREE.Vector3(1, 1, 1),
+  );
+  const local = worldMatrixOf(byId, parentId).invert().multiply(world);
+  local.decompose(wtPos, wtQuat, wtScale);
+  wtEuler.setFromQuaternion(wtQuat, 'XYZ');
+  return { position: [wtPos.x, wtPos.y, wtPos.z], rotation: [wtEuler.x, wtEuler.y, wtEuler.z] };
 }
 
 function clampCollisionLayer(layer: number | undefined): number {
@@ -206,21 +245,27 @@ class PhysicsRuntime {
   private handleToTrigger = new Map<number, boolean>();
   private charEntries = new Map<string, CharacterEntry>();
   private terrainEntries = new Map<string, TerrainEntry>();
-
+  /** All active objects this frame, keyed by id — lets body creation resolve parent-chain world transforms. */
+  private frameById = new Map<string, SceneObject>();
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
   }
 
   private createBody(object: SceneObject) {
-    const p = object.transform.position;
+    // Spawn at the object's WORLD transform so a parented body (e.g. a trigger nested inside another
+    // object) lands where it actually is, not at its local-to-parent coordinates.
+    const world = object.parentId ? worldPosRot(this.frameById, object.id) : object.transform;
+    const p = world.position;
     const desc = bodyDescFor(object)
       .setTranslation(p[0], p[1], p[2])
-      .setRotation(quatFromEuler(object.transform.rotation))
+      .setRotation(quatFromEuler(world.rotation))
       .setLinearDamping(object.physics?.linearDamping ?? 0)
       .setAngularDamping(object.physics?.angularDamping ?? 0.05);
     const body = this.world.createRigidBody(desc);
-    body.setGravityScale(object.physics?.gravityScale ?? 1, false);
+    // A trigger/sensor is a marker volume, not a falling object — never let gravity pull it out of place
+    // (e.g. a trigger nested inside a sphere). It still follows a moving parent via the per-frame body loop.
+    body.setGravityScale(object.physics?.isTrigger ? 0 : (object.physics?.gravityScale ?? 1), false);
     // Bullets are small and fast — without continuous collision detection they tunnel straight through a
     // thin wall in a single step and strike whatever is behind it. CCD makes a projectile sweep its motion
     // each step so it stops at the first surface it crosses (cover blocks the shot, as expected).
@@ -447,6 +492,27 @@ class PhysicsRuntime {
   ): PhysicsFrameResult {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     this.world.timestep = dt;
+    // Resolve parent chains in WORLD space: bodies are simulated in world coordinates, but objects
+    // store LOCAL transforms. `byId` powers world-transform composition for parented bodies; `prevById`
+    // does the same for last frame's transforms so the scripted-motion delta is also world-space.
+    const byId = new Map(objects.map((object) => [object.id, object]));
+    this.frameById = byId;
+    const prevById = new Map(
+      objects.map((object) => {
+        const pt = prevTransforms.get(object.id);
+        return [
+          object.id,
+          pt ? { ...object, transform: { ...object.transform, position: pt.position, rotation: pt.rotation } } : object,
+        ] as const;
+      }),
+    );
+    // World transform (this frame / last frame) for an object — local for roots, composed for children.
+    const curWorld = (object: SceneObject): PosRot =>
+      object.parentId ? worldPosRot(byId, object.id) : object.transform;
+    const prevWorld = (object: SceneObject): PosRot | undefined => {
+      if (!object.parentId) return prevTransforms.get(object.id);
+      return worldPosRot(prevById, object.id);
+    };
     this.syncTerrainChunks(objects);
     this.syncBodies(objects);
     this.syncCharacters(objects);
@@ -456,9 +522,10 @@ class PhysicsRuntime {
       const entry = this.entries.get(object.id);
       if (!entry) continue;
       const body = entry.body;
-      const cur = object.transform.position;
-      const curRot = object.transform.rotation;
-      const prev = prevTransforms.get(object.id);
+      const world = curWorld(object);
+      const cur = world.position;
+      const curRot = world.rotation;
+      const prev = prevWorld(object);
       const dp: Vector3Tuple = prev
         ? [cur[0] - prev.position[0], cur[1] - prev.position[1], cur[2] - prev.position[2]]
         : [0, 0, 0];
@@ -552,10 +619,12 @@ class PhysicsRuntime {
       const q = entry.body.rotation();
       reuseQuat.set(q.x, q.y, q.z, q.w);
       reuseEuler.setFromQuaternion(reuseQuat, 'XYZ');
-      transforms.set(id, {
-        position: [t.x, t.y, t.z],
-        rotation: [reuseEuler.x, reuseEuler.y, reuseEuler.z],
-      });
+      const position: Vector3Tuple = [t.x, t.y, t.z];
+      const rotation: Vector3Tuple = [reuseEuler.x, reuseEuler.y, reuseEuler.z];
+      // The body simulates in WORLD space; convert back to LOCAL so a parented body's stored transform
+      // stays relative to its parent (root objects: world == local, so this is a no-op).
+      const object = byId.get(id);
+      transforms.set(id, object?.parentId ? worldToLocalUnder(byId, object.parentId, position, rotation) : { position, rotation });
     }
     // Characters: collision resolves position; facing (rotation) stays whatever the controller set.
     for (const object of objects) {
@@ -612,6 +681,18 @@ class PhysicsRuntime {
     if (!hit) return null;
     const id = this.handleToId.get(hit.collider.handle);
     return id ? { objectId: id, distance: hit.timeOfImpact } : null;
+  }
+
+  /**
+   * Apply a one-shot linear impulse to a DYNAMIC body (and wake it). Used for projectile knockback: a fast
+   * CCD bullet is removed the moment it reports a hit, so it can't reliably transfer momentum through the
+   * solver — instead the hit pass calls this so the struck prop visibly gets shoved along the shot. No-op
+   * for fixed/kinematic bodies or unknown ids.
+   */
+  applyImpulse(objectId: string, impulse: Vector3Tuple) {
+    const entry = this.entries.get(objectId);
+    if (!entry || entry.body.bodyType() !== RAPIER.RigidBodyType.Dynamic) return;
+    entry.body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
   }
 
   dispose() {

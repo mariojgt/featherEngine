@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Boxes,
@@ -170,7 +170,14 @@ function BuildProgressOverlay() {
 }
 
 function SceneSwitcher() {
-  const scenes = useEditorStore((state) => state.scenes);
+  // The runtime tick rebuilds `state.scenes` every frame during Play; this switcher only needs the
+  // id+name list, so subscribe to a signature of that and derive the list — otherwise the toolbar
+  // re-renders 60×/sec while playing.
+  const sceneListSig = useEditorStore((state) => state.scenes.map((s) => `${s.id}:${s.name}`).join('|'));
+  const scenes = useMemo(
+    () => useEditorStore.getState().scenes.map((s) => ({ id: s.id, name: s.name })),
+    [sceneListSig],
+  );
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
   const setActiveScene = useEditorStore((state) => state.setActiveScene);
   const createScene = useEditorStore((state) => state.createScene);
@@ -237,7 +244,11 @@ export function Toolbar() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const editingPrefab = useEditorStore((state) => state.editingPrefabId !== null);
   const setPlaying = useEditorStore((state) => state.setPlaying);
-  const selectedObject = useEditorStore((state) => state.selectedObject());
+  // Subscribe to the selected object's id+name as primitives, not the object itself: the runtime
+  // tick replaces the object array every frame, so subscribing to the object would re-render the
+  // whole toolbar 60×/sec during Play even though only these two fields are used.
+  const selectedObjectId = useEditorStore((state) => state.selectedObject()?.id);
+  const selectedObjectName = useEditorStore((state) => state.selectedObject()?.name);
   const isDirty = useEditorStore((state) => state.isDirty);
   const projectName = useProjectStore((state) => state.projectName);
   const save = useProjectStore((state) => state.save);
@@ -289,14 +300,14 @@ export function Toolbar() {
         <button
           className="icon-button"
           title="Save selected object as a reusable Prefab"
-          disabled={!selectedObject}
+          disabled={!selectedObjectId}
           onClick={() => {
-            if (!selectedObject) return;
-            const id = createPrefabFromObject(selectedObject.id);
+            if (!selectedObjectId) return;
+            const id = createPrefabFromObject(selectedObjectId);
             useProjectStore.setState({
               toast: id
-                ? { kind: 'success', message: `Saved "${selectedObject.name}" as a prefab — see the Project browser.` }
-                : { kind: 'error', message: `Couldn't create a prefab from "${selectedObject.name}".` },
+                ? { kind: 'success', message: `Saved "${selectedObjectName}" as a prefab — see the Project browser.` }
+                : { kind: 'error', message: `Couldn't create a prefab from "${selectedObjectName}".` },
             });
           }}
         >
@@ -318,15 +329,15 @@ export function Toolbar() {
       </div>
 
       <AnimatePresence mode="popLayout">
-        {selectedObject && (
+        {selectedObjectId && (
           <motion.div
-            key={selectedObject.id}
+            key={selectedObjectId}
             className="selection-pill"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
           >
-            <span>{selectedObject.name}</span>
+            <span>{selectedObjectName}</span>
           </motion.div>
         )}
       </AnimatePresence>

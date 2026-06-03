@@ -9,6 +9,8 @@ import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
 import { CinematicOverlay } from './components/CinematicOverlay';
 import { useEditorStore } from './store/editorStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
+import { recordFrame } from './runtime/perfStats';
+import { PerfOverlay } from './components/PerfOverlay';
 
 function RuntimePreviewLoop() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
@@ -23,9 +25,12 @@ function RuntimePreviewLoop() {
     let lastTime = performance.now();
 
     const loop = (time: number) => {
-      const delta = Math.min((time - lastTime) / 1000, 0.05);
+      const frameMs = time - lastTime;
+      const delta = Math.min(frameMs / 1000, 0.05);
       lastTime = time;
+      const tickStart = performance.now();
       tickRuntime(delta);
+      recordFrame(frameMs, performance.now() - tickStart);
       frame = requestAnimationFrame(loop);
     };
 
@@ -76,6 +81,7 @@ export default function App() {
       <CinematicOverlay />
       <AIChatWidget />
       <PrefabThumbnailHost />
+      <PerfOverlay />
     </div>
   );
 }

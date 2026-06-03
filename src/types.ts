@@ -61,10 +61,12 @@ export type GraphNodeKind =
   | 'logic.and'
   | 'logic.or'
   | 'logic.cast'
+  | 'logic.forLoop'
   | 'math.add'
   | 'math.clamp'
   | 'math.lerp'
   | 'value.number'
+  | 'value.random'
   | 'value.string'
   | 'value.boolean'
   | 'value.vector3'
@@ -107,6 +109,7 @@ export type GraphNodeKind =
   | 'ai.distanceToPlayer'
   | 'ai.directionToPlayer'
   | 'ai.playerLocation'
+  | 'ai.hasLineOfSight'
   | 'logic.cooldown'
   | 'material.output'
   | 'material.color'
@@ -127,7 +130,8 @@ export type GraphNodeKind =
   | 'variable.setObject'
   | 'action.burstParticles'
   | 'action.setParticlesEmitting'
-  | 'action.spawnParticleSystem';
+  | 'action.spawnParticleSystem'
+  | 'action.loadScene';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -186,6 +190,9 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   projectileColor?: string;
   projectileLife?: number;
   projectileGravity?: number;
+  /** action.spawnProjectile: how hard a hit shoves a DYNAMIC prop along the shot (0 = no knockback). The
+   *  applied impulse scales with the projectile's speed; this is the multiplier. Defaults to a light shove. */
+  projectileKnockback?: number;
   /** action.spawnProjectile: id of a scene object to CLONE as the projectile (mesh/model/scale/color). */
   projectileTemplateId?: string;
   /** action.spawnProjectile: muzzle spawn offset in CAMERA space [right, up, forward] (first-person) —
@@ -213,6 +220,17 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   particleAttach?: boolean;
   /** action.playAnimation: playback speed multiplier for the montage (default 1). */
   animationSpeed?: number;
+  /** value.random: inclusive range for the random number (min/max can also be wired). `randomInteger`
+   *  rounds to a whole number with `max` inclusive (great for dice / picking an index 0..n). */
+  randomMin?: number;
+  randomMax?: number;
+  randomInteger?: boolean;
+  /** logic.forLoop: how many times to fire the "Body" output (also wireable via the Count input).
+   *  The loop index (0-based) is available on the node's value-out. Capped at 10000 for safety. */
+  loopCount?: number;
+  /** action.loadScene: id of the Scene to switch to during Play — project variables persist across the
+   *  load (run state like score/floor), the leaving scene reverts to pristine, and physics rebuilds. */
+  targetSceneId?: string;
   /** action.setMovementMode: how the target character moves until changed — 'walking' (normal gravity),
    *  'swimming' (buoyant float; jump=up, crouch=down), 'climbing' (XZ locked, fwd/back = up/down), or
    *  'flying' (no gravity, free 3D; jump=up, crouch=down). Drives the swimming/climbing animator sources. */
@@ -1035,6 +1053,8 @@ export interface ProjectileComponent {
   life: number;
   /** World-space travel velocity (units/sec). */
   velocity: Vector3Tuple;
+  /** Multiplier for the knockback impulse applied to a struck DYNAMIC prop (0 = none). Default ~1. */
+  knockback?: number;
   /** When true, the runtime logs this projectile's spawn + hits to the runtime console. */
   debug?: boolean;
 }

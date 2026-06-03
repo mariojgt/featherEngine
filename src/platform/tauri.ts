@@ -13,19 +13,23 @@ async function writeProjectFiles(dir: string, project: NodeForgeProject) {
   const { manifest, sceneFiles } = splitProject(project);
   await mkdir(await join(dir, SCENES_DIR), { recursive: true });
   await mkdir(await join(dir, ASSETS_DIR), { recursive: true });
+  // Manifest stays pretty-printed (small, occasionally human-inspected). Scene files are machine
+  // files and can be large (terrain heightmaps etc.) — skip the indentation to cut serialization
+  // time and file size, and write them in parallel rather than one-await-at-a-time.
   await writeTextFile(await join(dir, MANIFEST), JSON.stringify(manifest, null, 2));
-  for (const { scene } of sceneFiles) {
-    await writeTextFile(await join(dir, SCENES_DIR, `${scene.id}.scene.json`), JSON.stringify(scene, null, 2));
-  }
+  await Promise.all(
+    sceneFiles.map(async ({ scene }) =>
+      writeTextFile(await join(dir, SCENES_DIR, `${scene.id}.scene.json`), JSON.stringify(scene)),
+    ),
+  );
 }
 
 async function readProjectDir(dir: string): Promise<OpenedProject> {
   const manifest = JSON.parse(await readTextFile(await join(dir, MANIFEST))) as ProjectManifest;
-  const scenes: Scene[] = [];
-  for (const ref of manifest.scenes) {
-    const raw = await readTextFile(await join(dir, ref.file));
-    scenes.push(JSON.parse(raw) as Scene);
-  }
+  // Scene file reads are independent — run them in parallel instead of sequentially.
+  const scenes: Scene[] = await Promise.all(
+    manifest.scenes.map(async (ref) => JSON.parse(await readTextFile(await join(dir, ref.file))) as Scene),
+  );
   const project = joinProject(manifest, scenes);
   // Resolve asset urls from disk.
   project.assets = await Promise.all(

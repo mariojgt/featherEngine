@@ -15,8 +15,52 @@ export function useAssetUrl(assetId?: string): string | undefined {
 export const useModelUrl = useAssetUrl;
 
 /**
+ * Refcounted, (url+flipY)-keyed texture cache. Without it, every object that references the same
+ * image map loaded its OWN THREE.Texture and uploaded it to the GPU separately — 100 crates sharing
+ * one texture meant 100 GPU uploads. Now the texture is loaded/uploaded once and shared; it's disposed
+ * only when the last consumer unmounts. `TextureLoader.load` returns the Texture synchronously (the
+ * image fills in asynchronously and triggers an upload), so acquire can hand it back immediately.
+ */
+interface TextureCacheEntry {
+  texture: THREE.Texture;
+  refs: number;
+}
+const textureCache = new Map<string, TextureCacheEntry>();
+
+function acquireTexture(url: string, flipY: boolean): THREE.Texture {
+  const key = `${url}|${flipY ? 1 : 0}`;
+  const existing = textureCache.get(key);
+  if (existing) {
+    existing.refs += 1;
+    return existing.texture;
+  }
+  const texture = new THREE.TextureLoader().load(url, (loaded) => {
+    loaded.colorSpace = THREE.SRGBColorSpace;
+    loaded.flipY = flipY;
+    loaded.needsUpdate = true;
+  });
+  // Set the UV/color conventions up front too, so the first GPU upload uses them.
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = flipY;
+  textureCache.set(key, { texture, refs: 1 });
+  return texture;
+}
+
+function releaseTexture(url: string, flipY: boolean) {
+  const key = `${url}|${flipY ? 1 : 0}`;
+  const entry = textureCache.get(key);
+  if (!entry) return;
+  entry.refs -= 1;
+  if (entry.refs <= 0) {
+    entry.texture.dispose();
+    textureCache.delete(key);
+  }
+}
+
+/**
  * Load an image URL into a texture usable as a material map. `flipY` follows the geometry's UV
  * convention: glTF/GLB models expect `false`, three.js built-in geometries expect `true`.
+ * Backed by the shared refcounted cache above, so identical maps are uploaded once.
  */
 export function useAssetTexture(url: string | undefined, flipY = false): THREE.Texture | undefined {
   const [texture, setTexture] = useState<THREE.Texture>();
@@ -25,15 +69,10 @@ export function useAssetTexture(url: string | undefined, flipY = false): THREE.T
       setTexture(undefined);
       return;
     }
-    let active = true;
-    new THREE.TextureLoader().load(url, (loaded) => {
-      loaded.colorSpace = THREE.SRGBColorSpace;
-      loaded.flipY = flipY;
-      if (active) setTexture(loaded);
-      else loaded.dispose();
-    });
+    setTexture(acquireTexture(url, flipY));
     return () => {
-      active = false;
+      setTexture(undefined);
+      releaseTexture(url, flipY);
     };
   }, [url, flipY]);
   return texture;
@@ -116,6 +155,23 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
   useEffect(() => {
     registerModelGeometry(geometryKey, clone);
   }, [clone, geometryKey]);
+
+  // The clone above gives every instance its OWN cloned materials (so per-object overrides don't
+  // leak into the shared useGLTF cache). Those clones must be disposed when this clone is replaced
+  // (model swapped / re-imported) or the component unmounts, or their GPU programs leak for the
+  // whole session. `material.dispose()` frees the program only — it does NOT free textures, so the
+  // shared GLTF-cache textures and the useAssetTexture-managed maps are left intact.
+  useEffect(
+    () => () => {
+      clone.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.material) return;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mat of materials) mat.dispose();
+      });
+    },
+    [clone],
+  );
 
   useEffect(() => {
     clone.traverse((node) => {

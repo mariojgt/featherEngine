@@ -447,7 +447,16 @@ function AnimatorSection({
 
 /** Attach this object to a bone "socket" of a skinned character — its Transform becomes the offset. */
 function AttachmentSection({ objectId }: { objectId: string }) {
-  const sceneObjects = useEditorStore(selectActiveObjects);
+  // Structural-signature subscription (like HierarchyPanel): this section reads only object
+  // identity/name/model/attachment — never per-frame transforms — so it must NOT re-render 60×/s
+  // during Play off the raw objects array. Re-derive the list only when that structure changes.
+  const objectsSig = useEditorStore((state) =>
+    selectActiveObjects(state)
+      .map((o) => `${o.id}~${o.name}~${o.renderer?.modelAssetId ?? ''}~${o.attachment?.targetObjectId ?? ''}~${o.attachment?.boneName ?? ''}`)
+      .join('|'),
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [objectsSig]);
   const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
   const skeletons = useEditorStore((state) => state.skeletons);
   const setAttachment = useEditorStore((state) => state.setAttachment);

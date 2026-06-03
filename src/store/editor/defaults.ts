@@ -12,6 +12,7 @@ import type {
   TerrainBrushSettings,
   TerrainComponent,
   TransformComponent,
+  VehicleComponent,
   Vector3Tuple,
 } from '../../types';
 

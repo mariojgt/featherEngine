@@ -7,14 +7,17 @@ import {
   Box,
   Crosshair,
   Database,
+  Dices,
   Equal,
   GitBranch,
   GitMerge,
   Hash,
   Image,
   Keyboard,
+  Layers,
   LayoutDashboard,
   Move,
+  Repeat,
   Play,
   Plus,
   Radio,
@@ -77,10 +80,12 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'logic.compare': Equal,
   'logic.and': Ampersand,
   'logic.or': GitMerge,
+  'logic.forLoop': Repeat,
   'math.add': Plus,
   'math.clamp': ArrowLeftRight,
   'math.lerp': Spline,
   'value.number': Hash,
+  'value.random': Dices,
   'value.string': TextIcon,
   'value.boolean': ToggleLeft,
   'value.vector3': Axis3d,
@@ -92,6 +97,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.applyForce': Wind,
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
+  'action.loadScene': Layers,
   'action.destroyObject': Trash2,
   'action.playSound': Volume2,
   'action.setMaterialColor': Palette,
@@ -144,6 +150,7 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'math.clamp',
   'math.lerp',
   'value.number',
+  'value.random',
   'value.string',
   'value.boolean',
   'value.vector3',
@@ -203,6 +210,13 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       return [{ id: 'target', label: 'Target' }];
     case 'logic.cast':
       return [{ id: 'object', label: 'Object' }];
+    case 'logic.forLoop':
+      return [{ id: 'count', label: 'Count' }];
+    case 'value.random':
+      return [
+        { id: 'min', label: 'Min' },
+        { id: 'max', label: 'Max' },
+      ];
     case 'ui.setText':
       return [{ id: 'text', label: 'Text' }];
     case 'data.tableGet':
@@ -405,6 +419,21 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           wired into a Get/Set Object Var's Target — the Unreal "Cast → As BP_X" pin. */}
       {data.nodeKind === 'logic.cast' && (
         <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 104 }} />
+      )}
+
+      {/* For Loop: the standard exec-out (above) is "Completed". These extra pins are the per-iteration
+          "Body" exec output and the current loop index value-out (Unreal-style ForLoop). */}
+      {data.nodeKind === 'logic.forLoop' && (
+        <>
+          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 78, fontSize: 10, opacity: 0.7 }}>
+            Body
+          </span>
+          <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: 84 }} />
+          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 100, fontSize: 10, opacity: 0.7 }}>
+            Index
+          </span>
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 106 }} />
+        </>
       )}
     </div>
   );
