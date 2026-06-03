@@ -74,14 +74,11 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.
   const interactFocusId = useEditorStore((state) => state.runtimeInteractFocusId);
-  // Combat hit-flash: a brief red emissive pulse when this object takes damage (re-renders only while > 0).
-  const hitFlash = useEditorStore((state) => state.runtimeHitFlash[object.id] ?? 0);
+  // Combat damage reads via the floating damage number only — no emissive tint on the struck object.
   const resolved =
-    hitFlash > 0
-      ? { ...baseResolved, emissiveColor: '#ff3b30', emissiveIntensity: 0.2 + 1.6 * Math.min(1, hitFlash / 0.16), overrideModel: true }
-      : interactFocusId === object.id
-        ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
-        : baseResolved;
+    interactFocusId === object.id
+      ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+      : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
   const resolvedAnimator = useResolvedAnimator(object);

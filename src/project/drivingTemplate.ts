@@ -161,17 +161,24 @@ async function importAudio(file: string, folderId?: string): Promise<AssetItem |
  *  runtime mirrors from the driven car's velocity. */
 function createDrivingHud(): UIDocument {
   const root = uiElement('panel', 'Root', { width: '100%', height: '100%', position: 'relative', padding: '0' });
+  // Bottom-center speedometer: a rounded glass pill holding the big speed number + a KM/H unit, with a thin
+  // accent rule between them. Binds to the runtime-mirrored `Speed` variable.
   const speedBox = uiElement('panel', 'Speed Box', {
     position: 'absolute', left: '50%', display: 'flex', flexDirection: 'column',
-    custom: { bottom: '54px', transform: 'translateX(-50%)', alignItems: 'center', gap: '2px' },
+    background: 'rgba(10,14,22,0.55)', borderRadius: '16px',
+    custom: {
+      bottom: '48px', transform: 'translateX(-50%)', alignItems: 'center', gap: '2px',
+      padding: '10px 30px 12px', backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.14)',
+      boxShadow: '0 10px 32px rgba(0,0,0,0.45)',
+    },
   });
   const speed = boundElement('text', 'Speed', {
-    color: '#FFFFFF', fontSize: '42px', fontWeight: '800', textAlign: 'center',
-    custom: { textShadow: '0 2px 10px rgba(0,0,0,0.8)' },
+    color: '#FFFFFF', fontSize: '52px', fontWeight: '800', textAlign: 'center',
+    custom: { textShadow: '0 2px 14px rgba(0,0,0,0.85)', lineHeight: '1', fontVariantNumeric: 'tabular-nums' },
   }, [{ target: 'text', expression: `Speed` }], '0');
   const unit = uiElement('text', 'Unit', {
-    color: 'rgba(255,255,255,0.7)', fontSize: '13px', fontWeight: '700', textAlign: 'center',
-    custom: { letterSpacing: '2px' },
+    color: '#27E0FF', fontSize: '12px', fontWeight: '700', textAlign: 'center',
+    custom: { letterSpacing: '4px', marginTop: '4px' },
   }, 'KM / H');
   speedBox.children = [speed, unit];
   const hint = uiElement('text', 'Controls', {
@@ -206,27 +213,48 @@ function createCarMenu(): { doc: UIDocument; events: string[] } {
   const events = CARS.map((_, i) => `selectCar${i}`);
   const root = uiElement('panel', 'Root', {
     width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column',
-    custom: { alignItems: 'center', justifyContent: 'center', gap: '18px', background: 'radial-gradient(circle at 50% 40%, rgba(10,14,22,0.55) 0%, rgba(6,8,13,0.9) 100%)' },
+    custom: {
+      alignItems: 'center', justifyContent: 'center', gap: '6px',
+      background: 'radial-gradient(120% 90% at 50% 30%, rgba(18,26,42,0.45) 0%, rgba(5,7,12,0.94) 78%)',
+    },
   });
   const title = uiElement('text', 'Title', {
-    color: '#FFFFFF', fontSize: '34px', fontWeight: '800', textAlign: 'center',
-    custom: { letterSpacing: '1px', textShadow: '0 2px 16px rgba(0,0,0,0.8)' },
-  }, '🏁  CHOOSE YOUR CAR');
+    color: '#FFFFFF', fontSize: '44px', fontWeight: '800', textAlign: 'center',
+    custom: { letterSpacing: '3px', textShadow: '0 2px 24px rgba(0,0,0,0.85)', marginBottom: '2px' },
+  }, 'CHOOSE YOUR CAR');
   const sub = uiElement('text', 'Subtitle', {
-    color: 'rgba(255,255,255,0.62)', fontSize: '14px', fontWeight: '500', textAlign: 'center',
-  }, 'Pick a ride, then drive the open world');
+    color: 'rgba(255,255,255,0.55)', fontSize: '14px', fontWeight: '600', textAlign: 'center',
+    custom: { letterSpacing: '4px', textTransform: 'uppercase', marginBottom: '26px' },
+  }, 'Pick your ride · hit the open world');
   const rowWrap = uiElement('panel', 'Cars', {
-    display: 'flex', flexDirection: 'row', custom: { gap: '14px', flexWrap: 'wrap', justifyContent: 'center', maxWidth: '760px' },
+    display: 'flex', flexDirection: 'row', custom: { gap: '18px', flexWrap: 'wrap', justifyContent: 'center', maxWidth: '880px' },
   });
   rowWrap.children = CARS.map((car, i) => {
-    const button = uiElement('button', `Pick ${car.name}`, {
-      width: '128px', height: '92px', borderRadius: '14px', color: '#FFFFFF', fontSize: '17px', fontWeight: '700',
-      background: 'rgba(20,24,34,0.82)', border: `2px solid ${car.accent}`,
+    // A tall card: a saturated accent header band over a dark body, an accent-tinted glow, and the car name
+    // big with a "SELECT" call-to-action beneath. Accent-per-car keeps the grid readable at a glance.
+    const card = uiElement('button', `Pick ${car.name}`, {
+      width: '150px', height: '150px', borderRadius: '18px', color: '#FFFFFF',
+      background: `linear-gradient(165deg, ${car.accent}26 0%, rgba(15,19,28,0.92) 46%, rgba(10,13,20,0.96) 100%)`,
+      border: `1px solid ${car.accent}66`,
       display: 'flex', flexDirection: 'column',
-      custom: { alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: `0 6px 20px ${car.accent}33` },
-    }, `🚗\n${car.name}`);
-    button.onClickEvent = events[i];
-    return button;
+      custom: {
+        alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer', overflow: 'hidden',
+        boxShadow: `0 10px 34px ${car.accent}33, inset 0 1px 0 rgba(255,255,255,0.08)`,
+        transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+      },
+    });
+    const glyph = uiElement('text', 'Glyph', {
+      fontSize: '40px', textAlign: 'center', custom: { lineHeight: '1', filter: `drop-shadow(0 4px 10px ${car.accent}88)` },
+    }, '🏎️');
+    const name = uiElement('text', 'Name', {
+      color: '#FFFFFF', fontSize: '20px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '0.5px' },
+    }, car.name);
+    const cta = uiElement('text', 'Select', {
+      color: car.accent, fontSize: '11px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '3px' },
+    }, 'SELECT');
+    card.children = [glyph, name, cta];
+    card.onClickEvent = events[i];
+    return card;
   });
   root.children = [title, sub, rowWrap];
   return { doc: { id: makeId('ui'), name: 'Car Select', surface: 'screen', root, css: '', visibleOnStart: true, createdAt: Date.now() }, events };
@@ -283,7 +311,7 @@ function buildTrack(): { objects: SceneObject[]; checkpointCount: number } {
         name: 'Cone',
         kind: 'cube',
         transform: { position: [px, 0.5, pz], rotation: [0, 0, 0], scale: [0.34, 1, 0.34] },
-        renderer: { ...defaultRenderer('cube', '#ff7a1a'), materialOverrides: { emissiveColor: '#ff5a00', emissiveIntensity: 0.5 } },
+        renderer: { ...defaultRenderer('cube', '#ff7a1a'), metalness: 0, roughness: 0.6, materialOverrides: { emissiveColor: '#ff6a12', emissiveIntensity: 0.9 } },
         physics: { enabled: true, bodyType: 'dynamic', collider: 'box', isTrigger: false, collisionLayer: 0, collisionMask: 0xffff, mass: 0.4, gravityScale: 1, friction: 0.6, linearDamping: 0.2, angularDamping: 0.3 },
       });
     });
@@ -311,7 +339,7 @@ function buildTrack(): { objects: SceneObject[]; checkpointCount: number } {
         name: cpIdx === 0 ? 'Start Post' : `CP ${cpIdx} Post`,
         kind: 'cube',
         transform: { position: [s.x + side * HALF_W * nx, 2.4, s.z + side * HALF_W * nz], rotation: [0, 0, 0], scale: [0.4, 4.8, 0.4] },
-        renderer: { ...defaultRenderer('cube', cpColors[cpIdx]), materialOverrides: { emissiveColor: cpColors[cpIdx], emissiveIntensity: 1.6 } },
+        renderer: { ...defaultRenderer('cube', cpColors[cpIdx]), metalness: 0.2, roughness: 0.4, materialOverrides: { emissiveColor: cpColors[cpIdx], emissiveIntensity: 2.4 } },
       });
     });
   });
@@ -330,10 +358,151 @@ function buildTrack(): { objects: SceneObject[]; checkpointCount: number } {
     name: 'Start Banner',
     kind: 'cube',
     transform: { position: [startS.x, 5.4, startS.z], rotation: [0, 0, 0], scale: [HALF_W * 2 + 1.2, 1.1, 0.4] },
-    renderer: { ...defaultRenderer('cube', '#111418'), materialOverrides: { emissiveColor: '#27E0FF', emissiveIntensity: 0.6 } },
+    renderer: { ...defaultRenderer('cube', '#0d1014'), metalness: 0.3, roughness: 0.4, materialOverrides: { emissiveColor: '#27E0FF', emissiveIntensity: 1.4 } },
   });
 
   return { objects, checkpointCount: cpFractions.length };
+}
+
+interface BuiltCar extends CarDef {
+  bodyAsset: AssetItem;
+  wheelAsset: AssetItem;
+}
+
+interface CarSounds {
+  engineSoundId?: string;
+  skidSoundId?: string;
+  brakeSoundId?: string;
+  hornSoundId?: string;
+  collisionSoundId?: string;
+}
+
+/**
+ * Build one drivable car: a KINEMATIC body root (the vehicle pass owns its transform so the solver never
+ * fights it) + 4 wheels + 2 headlights + 2 brake lights, all sized from the body model's MEASURED bounding
+ * box so they sit at the real corners (the kit's cars differ in size). Returns the root id (so the menu can
+ * destroy the unchosen ones) plus the flat object list. `showcaseIndex`/`count` space the cars across the grid.
+ */
+async function buildCar(
+  car: BuiltCar,
+  showcaseIndex: number,
+  count: number,
+  scriptRef: { blueprintId: string; graphId: string },
+  sounds: CarSounds,
+): Promise<{ rootId: string; objects: SceneObject[] }> {
+  const rootId = makeId('obj');
+  const showcaseX = (showcaseIndex - (count - 1) / 2) * 4.6;
+
+  const body = await measureModel(car.body);
+  const wheelBox = await measureModel(car.wheel);
+  const min = body?.min ?? [-0.9, -0.4, -2];
+  const max = body?.max ?? [0.9, 1.1, 2];
+  const cx = (min[0] + max[0]) / 2;
+  const cy = (min[1] + max[1]) / 2;
+  const cz = (min[2] + max[2]) / 2;
+  const halfW = (max[0] - min[0]) / 2;
+  const halfL = (max[2] - min[2]) / 2;
+  const wheelR = wheelBox ? Math.max(wheelBox.max[1] - wheelBox.min[1], wheelBox.max[0] - wheelBox.min[0]) / 2 : 0.35;
+  const sideX = halfW * 0.84;
+  const frontZ = cz + halfL * 0.66;
+  const rearZ = cz - halfL * 0.66;
+  const wheelRestY = min[1] + wheelR;
+
+  const wheelIds: string[] = [];
+  const steeredIds: string[] = [];
+  const headlightIds: string[] = [];
+  const brakeIds: string[] = [];
+
+  // 4 wheels [FL, FR, RL, RR] at the measured corners.
+  const wheelSpots: Array<{ x: number; z: number; front: boolean }> = [
+    { x: cx - sideX, z: frontZ, front: true },
+    { x: cx + sideX, z: frontZ, front: true },
+    { x: cx - sideX, z: rearZ, front: false },
+    { x: cx + sideX, z: rearZ, front: false },
+  ];
+  const wheels: SceneObject[] = wheelSpots.map((spot, w) => {
+    const id = makeId('obj');
+    wheelIds.push(id);
+    if (spot.front) steeredIds.push(id);
+    return {
+      id,
+      name: `Wheel ${w + 1}`,
+      kind: 'cube',
+      parentId: rootId,
+      transform: { position: [spot.x, wheelRestY, spot.z], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      renderer: { ...defaultRenderer('cube', '#15171c'), modelAssetId: car.wheelAsset.id, metalness: 0.5, roughness: 0.6 },
+    };
+  });
+
+  // 2 headlights (forward-facing spot lights) at the front face.
+  const headlights: SceneObject[] = [-1, 1].map((s, h) => {
+    const id = makeId('obj');
+    headlightIds.push(id);
+    const light: LightComponent = { type: 'spot', color: '#fff4d6', intensity: 7, distance: 30, angle: Math.PI / 7, castShadow: false };
+    return {
+      id,
+      name: `Headlight ${h + 1}`,
+      kind: 'light',
+      parentId: rootId,
+      transform: { position: [cx + s * halfW * 0.62, cy, max[2] * 0.98], rotation: [-0.12, 0, 0], scale: [1, 1, 1] },
+      light,
+    };
+  });
+
+  // 2 brake lights (emissive cubes at the rear — the vehicle pass brightens them while braking).
+  const brakeLights: SceneObject[] = [-1, 1].map((s, b) => {
+    const id = makeId('obj');
+    brakeIds.push(id);
+    return {
+      id,
+      name: `Brake Light ${b + 1}`,
+      kind: 'cube',
+      parentId: rootId,
+      transform: { position: [cx + s * halfW * 0.6, cy, min[2] * 0.98], rotation: [0, 0, 0], scale: [Math.max(0.12, halfW * 0.32), 0.12, 0.06] },
+      renderer: { ...defaultRenderer('cube', '#3a0c0c'), materialOverrides: { emissiveColor: '#ff2a2a', emissiveIntensity: 0.15 } },
+    };
+  });
+
+  const vehicle: VehicleComponent = {
+    ...defaultVehicle(),
+    enabled: true,
+    cameraFollow: true,
+    // A touch extra body roll over the (already arcade-tuned) defaults so the chosen ride leans hard into
+    // drifts and reads as lively; everything else inherits the tuned defaultVehicle() feel.
+    bodyRoll: 0.07,
+    wheelObjectIds: wheelIds,
+    steeredWheelIds: steeredIds,
+    headlightIds,
+    brakeLightIds: brakeIds,
+    engineSoundId: sounds.engineSoundId,
+    skidSoundId: sounds.skidSoundId,
+    brakeSoundId: sounds.brakeSoundId,
+    hornSoundId: sounds.hornSoundId,
+    collisionSoundId: sounds.collisionSoundId,
+    wheelRadius: wheelR,
+    rideHeight: -min[1],
+    wheelRestY,
+    // Chase camera sized to the car: above + behind by roughly the car's length.
+    cameraOffset: [0, 2.2 + (max[1] - min[1]), -(halfL * 2 + 5)] as Vector3Tuple,
+  };
+
+  const root: SceneObject = {
+    id: rootId,
+    name: car.name,
+    kind: 'cube',
+    transform: { position: [showcaseX, 4, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    renderer: { ...defaultRenderer('cube', '#cdd3dc'), modelAssetId: car.bodyAsset.id, metalness: 0.3, roughness: 0.45 },
+    // KINEMATIC: the vehicle pass owns the transform (incl. terrain-following Y), so the car can never be
+    // launched/jittered by the solver. The convex collider still pushes dynamic props it touches.
+    physics: {
+      enabled: true, bodyType: 'kinematic', collider: 'convex', isTrigger: false,
+      collisionLayer: 0, collisionMask: 0xffff, mass: 4, gravityScale: 1, friction: 0.9, linearDamping: 0, angularDamping: 0,
+    },
+    vehicle,
+    script: { blueprintId: scriptRef.blueprintId, graphId: scriptRef.graphId, enabled: true },
+  };
+
+  return { rootId, objects: [root, ...wheels, ...headlights, ...brakeLights] };
 }
 
 export async function createDrivingTemplate(): Promise<string | undefined> {
@@ -341,7 +510,6 @@ export async function createDrivingTemplate(): Promise<string | undefined> {
   const carsFolder = store.createFolder('Cars');
 
   // --- Import every car body + wheel model. ---
-  interface BuiltCar extends CarDef { bodyAsset: AssetItem; wheelAsset: AssetItem; }
   const built: BuiltCar[] = [];
   for (const car of CARS) {
     const bodyAsset = await importStaticModel(car.body, carsFolder);
@@ -402,130 +570,22 @@ export async function createDrivingTemplate(): Promise<string | undefined> {
   const carGraph: ProjectGraph = { id: carGraphId, name: 'Car Controller', nodes: carNodes, edges: carEdges };
   const carBlueprint: ScriptBlueprint = { id: carBpId, name: 'Car Controller', description: 'Drive the car with WASD when Driving is on. Edit these nodes to customize controls.', graphId: carGraphId, color: '#FF8A3D', createdAt: Date.now() };
 
-  // --- Build each car: a body root (KINEMATIC — the vehicle pass fully drives it so it never fights the
-  //     physics solver) + 4 wheels + 2 headlights (spot) + 2 brake lights (emissive). Wheel/light positions
-  //     come from the body model's MEASURED bounding box so they sit at the real corners (cars differ in
-  //     size). All cars want the follow camera; only the chosen one survives selection. ---
+  // --- Build each car (see buildCar): a KINEMATIC body root + 4 wheels + 2 headlights + 2 brake lights,
+  //     sized from the model's measured bounding box. All cars share the editable Car Controller blueprint
+  //     and want the follow camera; only the chosen one survives selection. ---
+  const carSounds: CarSounds = {
+    engineSoundId: engineSound?.id,
+    skidSoundId: skidSound?.id,
+    brakeSoundId: brakeSound?.id,
+    hornSoundId: hornSound?.id,
+    collisionSoundId: collisionSound?.id,
+  };
   const allObjects: SceneObject[] = [];
   const carRootIds: string[] = [];
-  let carIndex = 0;
-  for (const car of built) {
-    const i = carIndex++;
-    const rootId = makeId('obj');
+  for (let i = 0; i < built.length; i++) {
+    const { rootId, objects } = await buildCar(built[i], i, built.length, { blueprintId: carBpId, graphId: carGraphId }, carSounds);
     carRootIds.push(rootId);
-    const showcaseX = (i - (built.length - 1) / 2) * 4.6;
-
-    const body = await measureModel(car.body);
-    const wheelBox = await measureModel(car.wheel);
-    const min = body?.min ?? [-0.9, -0.4, -2];
-    const max = body?.max ?? [0.9, 1.1, 2];
-    const cx = (min[0] + max[0]) / 2;
-    const cy = (min[1] + max[1]) / 2;
-    const cz = (min[2] + max[2]) / 2;
-    const halfW = (max[0] - min[0]) / 2;
-    const halfL = (max[2] - min[2]) / 2;
-    const wheelR = wheelBox ? Math.max(wheelBox.max[1] - wheelBox.min[1], wheelBox.max[0] - wheelBox.min[0]) / 2 : 0.35;
-    const sideX = halfW * 0.84;
-    const frontZ = cz + halfL * 0.66;
-    const rearZ = cz - halfL * 0.66;
-    const wheelRestY = min[1] + wheelR;
-
-    const wheelIds: string[] = [];
-    const steeredIds: string[] = [];
-    const headlightIds: string[] = [];
-    const brakeIds: string[] = [];
-
-    // 4 wheels [FL, FR, RL, RR] at the measured corners.
-    const wheelSpots: Array<{ x: number; z: number; front: boolean }> = [
-      { x: cx - sideX, z: frontZ, front: true },
-      { x: cx + sideX, z: frontZ, front: true },
-      { x: cx - sideX, z: rearZ, front: false },
-      { x: cx + sideX, z: rearZ, front: false },
-    ];
-    const wheels: SceneObject[] = wheelSpots.map((spot, w) => {
-      const id = makeId('obj');
-      wheelIds.push(id);
-      if (spot.front) steeredIds.push(id);
-      return {
-        id,
-        name: `Wheel ${w + 1}`,
-        kind: 'cube',
-        parentId: rootId,
-        transform: { position: [spot.x, wheelRestY, spot.z], rotation: [0, 0, 0], scale: [1, 1, 1] },
-        renderer: { ...defaultRenderer('cube', '#15171c'), modelAssetId: car.wheelAsset.id, metalness: 0.5, roughness: 0.6 },
-      };
-    });
-
-    // 2 headlights (forward-facing spot lights) at the front face.
-    const headlights: SceneObject[] = [-1, 1].map((s, h) => {
-      const id = makeId('obj');
-      headlightIds.push(id);
-      const light: LightComponent = { type: 'spot', color: '#fff4d6', intensity: 7, distance: 30, angle: Math.PI / 7, castShadow: false };
-      return {
-        id,
-        name: `Headlight ${h + 1}`,
-        kind: 'light',
-        parentId: rootId,
-        transform: { position: [cx + s * halfW * 0.62, cy, max[2] * 0.98], rotation: [-0.12, 0, 0], scale: [1, 1, 1] },
-        light,
-      };
-    });
-
-    // 2 brake lights (emissive cubes at the rear — the vehicle pass brightens them while braking).
-    const brakeLights: SceneObject[] = [-1, 1].map((s, b) => {
-      const id = makeId('obj');
-      brakeIds.push(id);
-      return {
-        id,
-        name: `Brake Light ${b + 1}`,
-        kind: 'cube',
-        parentId: rootId,
-        transform: { position: [cx + s * halfW * 0.6, cy, min[2] * 0.98], rotation: [0, 0, 0], scale: [Math.max(0.12, halfW * 0.32), 0.12, 0.06] },
-        renderer: { ...defaultRenderer('cube', '#3a0c0c'), materialOverrides: { emissiveColor: '#ff2a2a', emissiveIntensity: 0.15 } },
-      };
-    });
-
-    const vehicle: VehicleComponent = {
-      ...defaultVehicle(),
-      enabled: true,
-      cameraFollow: true,
-      // A touch more grunt + a looser handbrake than the bare default, for a satisfying arcade drift.
-      maxSpeed: 26,
-      acceleration: 14,
-      handbrakeGrip: 0.28,
-      bodyRoll: 0.09,
-      wheelObjectIds: wheelIds,
-      steeredWheelIds: steeredIds,
-      headlightIds,
-      brakeLightIds: brakeIds,
-      engineSoundId: engineSound?.id,
-      skidSoundId: skidSound?.id,
-      brakeSoundId: brakeSound?.id,
-      hornSoundId: hornSound?.id,
-      collisionSoundId: collisionSound?.id,
-      wheelRadius: wheelR,
-      rideHeight: -min[1],
-      wheelRestY,
-      // Chase camera sized to the car: above + behind by roughly the car's length.
-      cameraOffset: [0, 2.2 + (max[1] - min[1]), -(halfL * 2 + 5)] as Vector3Tuple,
-    };
-
-    const root: SceneObject = {
-      id: rootId,
-      name: car.name,
-      kind: 'cube',
-      transform: { position: [showcaseX, 4, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-      renderer: { ...defaultRenderer('cube', '#cdd3dc'), modelAssetId: car.bodyAsset.id, metalness: 0.3, roughness: 0.45 },
-      // KINEMATIC: the vehicle pass owns the transform (incl. terrain-following Y), so the car can never be
-      // launched/jittered by the solver. The convex collider still pushes dynamic props it touches.
-      physics: {
-        enabled: true, bodyType: 'kinematic', collider: 'convex', isTrigger: false,
-        collisionLayer: 0, collisionMask: 0xffff, mass: 4, gravityScale: 1, friction: 0.9, linearDamping: 0, angularDamping: 0,
-      },
-      vehicle,
-      script: { blueprintId: carBpId, graphId: carGraphId, enabled: true },
-    };
-    allObjects.push(root, ...wheels, ...headlights, ...brakeLights);
+    allObjects.push(...objects);
   }
 
   // --- Infinite procedurally-streamed terrain world. Kept nearly FLAT (low heightScale) so the marked race
@@ -605,15 +665,18 @@ export async function createDrivingTemplate(): Promise<string | undefined> {
             environment: {
               ...defaultSceneEnvironment(),
               skyMode: 'procedural',
-              skyTopColor: '#3f78d8',
-              skyHorizonColor: '#cfe0f0',
-              sunIntensity: 1.3,
-              sunElevation: 42,
-              sunAzimuth: 50,
+              // A deeper zenith fading to a warm haze near the horizon, with a lower sun for longer, more
+              // cinematic shadows and a golden-hour warmth — while staying bright enough to read the track.
+              skyTopColor: '#2a64c9',
+              skyHorizonColor: '#e7ddca',
+              sunIntensity: 1.45,
+              sunElevation: 33,
+              sunAzimuth: 38,
               fogEnabled: true,
-              fogColor: '#aebfce',
-              fogNear: 90,
-              fogFar: 460,
+              // Warm distance haze, pushed back so the circuit stays crisp and only the far world softens.
+              fogColor: '#cdd6dd',
+              fogNear: 130,
+              fogFar: 540,
             },
           }
         : scene,

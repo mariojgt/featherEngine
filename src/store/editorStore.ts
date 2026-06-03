@@ -460,20 +460,23 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
 /** A factory for a fresh default arcade vehicle (car) controller. Tuned for a fun, always-controllable feel. */
 export const defaultVehicle = (): VehicleComponent => ({
   enabled: false,
-  maxSpeed: 20,
-  maxReverseSpeed: 8,
-  acceleration: 11,
-  braking: 26,
-  drag: 5,
-  steerAngle: 0.6,
+  // Tuned for a punchy-but-weighty arcade feel: brisk top speed, accel that pins you back, strong brakes,
+  // and enough coast drag that letting off settles the car instead of gliding forever.
+  maxSpeed: 26,
+  maxReverseSpeed: 9,
+  acceleration: 16,
+  braking: 34,
+  drag: 9,
+  // A slightly tighter steer lock + good grip; the handbrake drops grip hard for a clean drift.
+  steerAngle: 0.55,
   turnRate: 2.0,
   steerReturnSpeed: 0.25,
   gripFactor: 0.9,
-  handbrakeGrip: 0.35,
+  handbrakeGrip: 0.28,
   suspensionTravel: 0.14,
   suspensionStiffness: 0.18,
-  bodyRoll: 0.07,
-  bodyPitch: 0.05,
+  bodyRoll: 0.05,
+  bodyPitch: 0.04,
   wheelRadius: 0.4,
   rideHeight: 0.5,
   wheelRestY: 0.3,
@@ -488,9 +491,10 @@ export const defaultVehicle = (): VehicleComponent => ({
   keyHandbrake: 'Space',
   keyHorn: 'KeyH',
   cameraFollow: true,
-  // Behind (-Z) and above a +Z-forward car; pulled back further than a character for a chase-cam feel.
-  cameraOffset: [0, 3.4, -8.5],
-  cameraPitch: 0.24,
+  // Behind (-Z) and above a +Z-forward car; a low, pulled-back chase cam (closer to the deck than a
+  // character cam) reads as faster and shows more of the road ahead.
+  cameraOffset: [0, 3.0, -8.5],
+  cameraPitch: 0.2,
   cameraMinPitch: -0.1,
   cameraMaxPitch: 1.0,
   mouseLook: true,
@@ -1201,7 +1205,7 @@ const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData,
     case 'action.spawnProjectile':
       return {
         label: 'Spawn Projectile',
-        description: 'Fires a projectile forward from the owner that damages whatever it hits, then despawns.',
+        description: 'Fires a projectile forward from the owner; it stops at the first solid thing in its path (a wall blocks it — cover works) and only damages that hit when it has a health var, then despawns.',
       };
     case 'action.setVisible':
       return {
@@ -1945,8 +1949,6 @@ interface EditorState {
   runtimeHurt: number;
   /** Per-enemy attack cooldown (seconds remaining) so contact damage applies on a cadence, not every frame. */
   runtimeEnemyCooldown: Record<string, number>;
-  /** Per-object hit-flash time remaining (seconds) — drives a brief red emissive pulse when something takes damage. */
-  runtimeHitFlash: Record<string, number>;
   /** Per-character footstep-sound override from the surface volume they're standing in (a trigger tagged with
    *  a `footstepSound` instance variable). Empty → use the character's own footstepSoundId. */
   runtimeSurfaceSound: Record<string, string>;
@@ -2471,7 +2473,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeHitMarker: 0,
   runtimeHurt: 0,
   runtimeEnemyCooldown: {},
-  runtimeHitFlash: {},
   runtimeSurfaceSound: {},
   runtimeMovementMode: {},
   runtimeMontageRequests: {},
@@ -5734,7 +5735,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
-      runtimeHitFlash: {},
       runtimeSurfaceSound: {},
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
@@ -5812,7 +5812,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
-      runtimeHitFlash: {},
       runtimeSurfaceSound: {},
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
@@ -5893,14 +5892,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let hitMarker = state.runtimeHitMarker;
       let hurt = state.runtimeHurt;
       const nextEnemyCd: Record<string, number> = {};
-      // Hit-flash timers: decay last frame's flashes by delta (drop the spent ones); the combat pass re-arms a
-      // target to HIT_FLASH_TIME whenever it takes damage. The render layer turns this into a red emissive pulse.
-      const HIT_FLASH_TIME = 0.16;
-      const nextHitFlash: Record<string, number> = {};
-      for (const [id, t] of Object.entries(state.runtimeHitFlash)) {
-        const left = t - delta;
-        if (left > 0) nextHitFlash[id] = left;
-      }
       const meleeSwings = new Set<string>(); // characters that started an attack swing this frame (melee hit-test)
       // On lethal damage: a rigged target (character/animator) goes LIMP like the player (ragdoll), so it crumples
       // instead of vanishing; a simple prop (e.g. the target dummy) just despawns.
@@ -7300,8 +7291,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // below (projectile / contact / melee). `pendingCinematicId` covers the frame a Play-Cinematic node fires.
       const cinematicActive = Boolean(state.runtimeCinematic || pendingCinematicId);
 
-      // Projectiles: on first contact with a non-owner, subtract from that object's `health` instance
-      // variable (if it has one) and despawn; also despawn when their life runs out.
+      // Projectiles: a real moving rigid body. On its first solid contact with a non-owner it subtracts from
+      // that object's `health` instance var (if any) and despawns; it also despawns when its life runs out.
+      // Continuous collision detection on the body (see physicsWorld.createBody) stops a fast bullet from
+      // tunnelling through a thin wall — so a shot that meets a wall splats THERE instead of carrying on to a
+      // foe behind it. When several contacts register in one frame we resolve the NEAREST, so cover always
+      // wins over a target standing behind it. Projectiles + corpses never block a shot (excluded below).
+      const shotPassThrough = new Set(resolvedObjects.filter((o) => o.projectile).map((o) => o.id));
+      for (const o of resolvedObjects) if (isRagdoll(o.id)) shotPassThrough.add(o.id);
       for (const obj of resolvedObjects) {
         const proj = obj.projectile;
         if (!proj) continue;
@@ -7309,34 +7306,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           destroyedIds.add(obj.id);
           continue;
         }
+        // Of everything this bullet touched this frame, take the contact closest to it (cover beats target).
+        let other: string | undefined;
+        let bestDist = Infinity;
         for (const c of collisions) {
-          const other = c.objectId === obj.id ? c.otherObjectId : c.otherObjectId === obj.id ? c.objectId : undefined;
-          if (!other || other === proj.ownerId) continue;
-          const target = resolvedObjects.find((o) => o.id === other);
-          if (!target || target.projectile || isRagdoll(other)) continue; // ignore other projectiles + corpses
-          const hasHealth = nextObjectVariables[other]?.health !== undefined || target.variables?.health !== undefined;
-          if (hasHealth && !(other === playerId && cinematicActive)) {
-            const cur = toNumber(nextObjectVariables[other]?.health ?? target.variables?.health ?? 0);
-            const next = Math.max(0, cur - proj.damage);
-            (nextObjectVariables[other] ??= { ...(target.variables ?? {}) }).health = next;
-            // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
-            if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
-            if (next <= 0) killTarget(target, other); // explosive → blast; rig → ragdoll; prop → despawn
-            // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
-            // hurt flash if the LOCAL player was the one hit.
-            spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
-            nextHitFlash[other] = HIT_FLASH_TIME; // red pulse on the struck object
-            if (proj.ownerId === playerId) hitMarker += 1;
-            if (other === playerId) hurt += 1;
-            if (proj.debug) prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name}: -${proj.damage} hp → ${next}${next <= 0 ? ' (destroyed)' : ''}`);
-          } else if (proj.debug) {
-            prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name} (no health var — no damage)`);
+          const hit = c.objectId === obj.id ? c.otherObjectId : c.otherObjectId === obj.id ? c.objectId : undefined;
+          if (!hit || hit === proj.ownerId || shotPassThrough.has(hit)) continue;
+          const ho = resolvedObjects.find((x) => x.id === hit);
+          if (!ho) continue;
+          const dx = ho.transform.position[0] - obj.transform.position[0];
+          const dy = ho.transform.position[1] - obj.transform.position[1];
+          const dz = ho.transform.position[2] - obj.transform.position[2];
+          const dd = dx * dx + dy * dy + dz * dz;
+          if (dd < bestDist) {
+            bestDist = dd;
+            other = hit;
           }
-          // Spawn a particle burst at the impact point (the projectile's current position).
-          spawned.push(makeImpactObject(obj.transform.position));
-          destroyedIds.add(obj.id);
-          break;
         }
+        if (!other) continue; // still flying — it hasn't struck anything yet
+        const target = resolvedObjects.find((o) => o.id === other);
+        if (!target) {
+          destroyedIds.add(obj.id);
+          continue;
+        }
+        const hasHealth = nextObjectVariables[other]?.health !== undefined || target.variables?.health !== undefined;
+        if (hasHealth && !(other === playerId && cinematicActive)) {
+          const cur = toNumber(nextObjectVariables[other]?.health ?? target.variables?.health ?? 0);
+          const next = Math.max(0, cur - proj.damage);
+          (nextObjectVariables[other] ??= { ...(target.variables ?? {}) }).health = next;
+          // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
+          if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+          if (next <= 0) killTarget(target, other); // explosive → blast; rig → ragdoll; prop → despawn
+          // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
+          // hurt vignette if the LOCAL player was the one hit.
+          spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
+          if (proj.ownerId === playerId) hitMarker += 1;
+          if (other === playerId) hurt += 1;
+          if (proj.debug) prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name}: -${proj.damage} hp → ${next}${next <= 0 ? ' (destroyed)' : ''}`);
+        } else if (proj.debug) {
+          prints.push(`🎯 ${obj.name} [${obj.id.slice(-4)}] hit ${target.name} (no health var — no damage)`);
+        }
+        // Spawn a particle burst at the impact point and consume the bullet (a wall stops it too).
+        spawned.push(makeImpactObject(obj.transform.position));
+        destroyedIds.add(obj.id);
       }
 
       // Enemy contact damage: an enemy within `attackRange` of the local player drains its `health` on a
@@ -7353,12 +7365,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const dx = pp[0] - e.transform.position[0];
             const dz = pp[2] - e.transform.position[2];
             const near = Math.hypot(dx, dz) < toNumber(e.variables.attackRange ?? 1.6);
-            if (near && cd <= 0 && hasHealth) {
+            // A wall between the enemy and the player blocks the swipe (no hitting through cover).
+            let blocked = false;
+            if (near && physics) {
+              const ep = e.transform.position;
+              const dir3: Vector3Tuple = [pp[0] - ep[0], pp[1] - ep[1], pp[2] - ep[2]];
+              const dist3 = Math.hypot(dir3[0], dir3[1], dir3[2]);
+              const exclude = new Set(shotPassThrough);
+              exclude.add(e.id);
+              const los = physics.castRay([ep[0], ep[1] + 0.9, ep[2]], dir3, dist3, exclude);
+              if (los && los.objectId !== playerId && los.distance < dist3 - 0.15) blocked = true;
+            }
+            if (near && !blocked && cd <= 0 && hasHealth) {
               const dmg = toNumber(e.variables.enemyDamage ?? 10);
               const cur = toNumber(nextObjectVariables[playerId]?.health ?? player.variables?.health ?? 0);
               (nextObjectVariables[playerId] ??= { ...(player.variables ?? {}) }).health = Math.max(0, cur - dmg);
               hurt += 1;
-              nextHitFlash[playerId] = HIT_FLASH_TIME;
               if (player.character?.hurtSoundId) sounds.push(player.character.hurtSoundId);
               cd = 1;
             }
@@ -7383,6 +7405,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const ap = attacker.transform.position;
         const facing = attacker.transform.rotation[1] - (acc.modelYawOffset ?? 0);
         const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
+        const meleeExclude = new Set(shotPassThrough); // projectiles + corpses never block a swing
+        meleeExclude.add(attackerId);
         for (const target of resolvedObjects) {
           if (target.id === attackerId || target.projectile || isRagdoll(target.id)) continue;
           if (target.id === playerId && cinematicActive) continue; // player is invulnerable during cutscenes
@@ -7393,12 +7417,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const d = Math.hypot(dx, dz);
           if (d > range) continue;
           if (d > 0.3 && (dx / d) * fwd[0] + (dz / d) * fwd[1] < 0.35) continue; // must be in the swing's front cone
+          // Line-of-sight: don't let a swing pass through a wall to hit a foe behind cover. Cast from the
+          // attacker's chest to the target's; if solid geometry sits closer than the target, the hit is blocked.
+          if (physics) {
+            const tp = target.transform.position;
+            const dir3: Vector3Tuple = [tp[0] - ap[0], tp[1] - ap[1], tp[2] - ap[2]];
+            const dist3 = Math.hypot(dir3[0], dir3[1], dir3[2]);
+            const los = physics.castRay([ap[0], ap[1] + 0.9, ap[2]], dir3, dist3, meleeExclude);
+            if (los && los.objectId !== target.id && los.distance < dist3 - 0.15) continue;
+          }
           const cur = toNumber(nextObjectVariables[target.id]?.health ?? target.variables?.health ?? 0);
           const next = Math.max(0, cur - dmg);
           (nextObjectVariables[target.id] ??= { ...(target.variables ?? {}) }).health = next;
           spawned.push(makeDamageNumber(target.transform.position, dmg));
           spawned.push(makeImpactObject(target.transform.position, '#ffd27f'));
-          nextHitFlash[target.id] = HIT_FLASH_TIME; // red pulse on the struck object
           if (attackerId === playerId) hitMarker += 1;
           if (target.id === playerId) hurt += 1;
           if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
@@ -7425,7 +7457,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (cur <= 0) continue;
           const next = Math.max(0, cur - blast.dmg);
           (nextObjectVariables[o.id] ??= { ...(o.variables ?? {}) }).health = next;
-          nextHitFlash[o.id] = HIT_FLASH_TIME;
           if (o.id === playerId) hurt += 1;
           if (next <= 0) killTarget(o, o.id); // chains if `o` is explosive
         }
@@ -7755,7 +7786,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeHitMarker: hitMarker,
         runtimeHurt: hurt,
         runtimeEnemyCooldown: nextEnemyCd,
-        runtimeHitFlash: nextHitFlash,
         runtimeSurfaceSound: nextSurfaceSound,
         runtimeMovementMode: movementModeNow,
         runtimeMontageRequests: {},
@@ -7978,7 +8008,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeHitMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
-      runtimeHitFlash: {},
       runtimeSurfaceSound: {},
       runtimeMovementMode: {},
       runtimeMontageRequests: {},

@@ -36,14 +36,10 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   const renderer = object.renderer;
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight: warm emissive rim so the player sees what they can use (Unreal-style).
-  // Combat hit-flash: a brief red emissive pulse when this object takes damage.
-  const hitFlash = useEditorStore((state) => state.runtimeHitFlash[object.id] ?? 0);
-  const resolved =
-    hitFlash > 0
-      ? { ...baseResolved, emissiveColor: '#ff3b30', emissiveIntensity: 0.2 + 1.6 * Math.min(1, hitFlash / 0.16), overrideModel: true }
-      : focused
-        ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
-        : baseResolved;
+  // Combat damage reads via the floating damage number only — no emissive tint on the struck object.
+  const resolved = focused
+    ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+    : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
   const resolvedAnimator = useResolvedAnimator(object);

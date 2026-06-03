@@ -221,6 +221,10 @@ class PhysicsRuntime {
       .setAngularDamping(object.physics?.angularDamping ?? 0.05);
     const body = this.world.createRigidBody(desc);
     body.setGravityScale(object.physics?.gravityScale ?? 1, false);
+    // Bullets are small and fast — without continuous collision detection they tunnel straight through a
+    // thin wall in a single step and strike whatever is behind it. CCD makes a projectile sweep its motion
+    // each step so it stops at the first surface it crosses (cover blocks the shot, as expected).
+    if (object.projectile) body.enableCcd(true);
     const collider = this.world.createCollider(colliderDescFor(object), body);
     this.entries.set(object.id, { body, collider, signature: bodySignature(object) });
     this.handleToId.set(collider.handle, object.id);
@@ -570,6 +574,44 @@ class PhysicsRuntime {
     }
 
     return { transforms, collisions, triggers, triggersExit, grounded: [...grounded] };
+  }
+
+  /**
+   * Cast a ray and return the nearest solid (non-sensor) collider it hits, or null. The combat pass
+   * uses this for shot-blocking / line-of-sight so attacks can't pass through walls: a bullet stops
+   * at the first wall it crosses, and a melee/contact hit is dropped when geometry sits between the
+   * attacker and the target. `exclude` holds object ids to skip (the attacker, the projectile itself,
+   * other projectiles, corpses); colliders with no known object are skipped too. `dir` need not be
+   * normalized; the returned `distance` is along it in world units.
+   */
+  castRay(
+    origin: Vector3Tuple,
+    dir: Vector3Tuple,
+    maxDistance: number,
+    exclude?: Set<string>,
+  ): { objectId: string; distance: number } | null {
+    const len = Math.hypot(dir[0], dir[1], dir[2]);
+    if (!(len > 1e-6) || !(maxDistance > 0)) return null;
+    const ray = new RAPIER.Ray(
+      { x: origin[0], y: origin[1], z: origin[2] },
+      { x: dir[0] / len, y: dir[1] / len, z: dir[2] / len },
+    );
+    const hit = this.world.castRay(
+      ray,
+      maxDistance,
+      true, // count the inside of a shape as solid, so a ray starting inside cover still blocks
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+      undefined,
+      undefined,
+      undefined,
+      (collider) => {
+        const id = this.handleToId.get(collider.handle);
+        return id !== undefined && !exclude?.has(id);
+      },
+    );
+    if (!hit) return null;
+    const id = this.handleToId.get(hit.collider.handle);
+    return id ? { objectId: id, distance: hit.timeOfImpact } : null;
   }
 
   dispose() {

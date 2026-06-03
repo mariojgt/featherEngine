@@ -191,6 +191,9 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   // Camera-polish state: smoothed sprint-FOV boost, a velocity-derived look-ahead offset, and the
   // previous target position used to estimate that velocity frame-to-frame.
   const sprintBlend = useRef(0);
+  // Vehicles widen the FOV with speed (the "sense of speed" a chase cam gives) — smoothed so it eases in
+  // rather than pumping with every velocity wobble.
+  const speedFovBlend = useRef(0);
   const lookAhead = useRef(new THREE.Vector3());
   // Mouse-wheel zoom: a distance multiplier on the resting offset (1 = authored distance). Scroll in/out,
   // clamped so you can't zoom inside the character or absurdly far. Smoothed toward its target each frame.
@@ -380,7 +383,11 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // Framerate-independent follow lag (k≈12 ≈ the old fixed 0.18 lerp at 60fps, but stable at any framerate).
     camera.position.lerp(desired.current, smooth(12));
     camera.lookAt(x + lookAhead.current.x, y + up * 0.4, z + lookAhead.current.z);
-    const tpFov = THREE.MathUtils.lerp(50, 40, ads) + sprintBlend.current * 7;
+    // Vehicle speed-feel: ramp the FOV out toward +10° as the car approaches its top speed (cc.moveSpeed is
+    // the vehicle's maxSpeed). Characters never trip this (speedFovTarget stays 0), so their FOV is unchanged.
+    const speedFovTarget = target.vehicle?.enabled ? Math.min(1, speed / Math.max(0.001, cc.moveSpeed)) : 0;
+    speedFovBlend.current = THREE.MathUtils.lerp(speedFovBlend.current, speedFovTarget, smooth(3));
+    const tpFov = THREE.MathUtils.lerp(50, 40, ads) + sprintBlend.current * 7 + speedFovBlend.current * 10;
     if (Math.abs(camera.fov - tpFov) > 0.05) {
       camera.fov = tpFov;
       camera.updateProjectionMatrix();
