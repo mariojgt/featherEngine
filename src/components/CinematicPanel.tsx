@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, CircleDot, Clapperboard, Eye, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
+import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, Magnet, Pause, Play, Plus, RotateCcw, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { editorCameraPose } from '../three/EditorCamera';
-import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicTransformKeyframe, SceneObjectKind, Vector3Tuple } from '../types';
+import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicTransformKeyframe, MaterialOverrides, SceneObjectKind, Vector3Tuple } from '../types';
 import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
+import { createStoryboardCinematic, type StoryboardPreset } from '../project/cinematicStoryboard';
 
 const easeOptions: { value: CinematicEase; label: string }[] = [
   { value: 'smooth', label: 'Smooth (ease in-out)' },
   { value: 'in', label: 'Ease in' },
   { value: 'out', label: 'Ease out' },
   { value: 'linear', label: 'Linear' },
+];
+
+const interpolationOptions: { value: CinematicInterpolation; label: string }[] = [
+  { value: 'smooth', label: 'Smooth spline' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'hold', label: 'Hold stepped' },
 ];
 
 const gradeOptions: { value: CinematicGrade; label: string }[] = [
@@ -38,9 +45,12 @@ const actionLabel: Record<CinematicActionType, string> = {
   sound: 'Sound',
   event: 'Event',
   fade: 'Fade',
+  material: 'Material',
+  timeDilation: 'Time Dilation',
+  subsequence: 'Subsequence',
 };
 
-const actionTypes: CinematicActionType[] = ['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade'];
+const actionTypes: CinematicActionType[] = ['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence'];
 const spawnKinds: SceneObjectKind[] = ['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera'];
 const emptyVec: Vector3Tuple = [0, 0, 0];
 const unitVec: Vector3Tuple = [1, 1, 1];
@@ -117,7 +127,10 @@ export function CinematicPanel() {
   const updateCinematic = useEditorStore((state) => state.updateCinematic);
   const setCinematicLook = useEditorStore((state) => state.setCinematicLook);
   const deleteCinematic = useEditorStore((state) => state.deleteCinematic);
+  const duplicateCinematicTake = useEditorStore((state) => state.duplicateCinematicTake);
   const setActiveCinematic = useEditorStore((state) => state.setActiveCinematic);
+  const addCinematicMarker = useEditorStore((state) => state.addCinematicMarker);
+  const removeCinematicMarker = useEditorStore((state) => state.removeCinematicMarker);
   const addCinematicAction = useEditorStore((state) => state.addCinematicAction);
   const updateCinematicAction = useEditorStore((state) => state.updateCinematicAction);
   const removeCinematicAction = useEditorStore((state) => state.removeCinematicAction);
@@ -131,8 +144,19 @@ export function CinematicPanel() {
   const selectedKeyframe = useEditorStore((state) => state.selectedCinematicKeyframe);
   const selectCinematicKeyframe = useEditorStore((state) => state.selectCinematicKeyframe);
   const [selectedActionId, setSelectedActionId] = useState('');
+  const [cinematicSearch, setCinematicSearch] = useState('');
+  const [snapTimeline, setSnapTimeline] = useState(true);
+  const [movieStatus, setMovieStatus] = useState('');
 
   const cinematics = scene?.cinematics ?? [];
+  const visibleCinematics = useMemo(() => {
+    const query = cinematicSearch.trim().toLowerCase();
+    if (!query) return cinematics;
+    return cinematics.filter((cinematic) => `${cinematic.folder ?? ''}/${cinematic.name}`.toLowerCase().includes(query));
+  }, [cinematics, cinematicSearch]);
+  const sequenceOptions = activeCinematicId && !visibleCinematics.some((cinematic) => cinematic.id === activeCinematicId)
+    ? [...visibleCinematics, ...cinematics.filter((cinematic) => cinematic.id === activeCinematicId)]
+    : visibleCinematics;
   const audioAssets = useMemo(() => assets.filter((asset) => asset.type === 'audio'), [assets]);
   const active = cinematics.find((cinematic) => cinematic.id === activeCinematicId) ?? cinematics[0];
   const selected = objects.find((object) => object.id === selectedObjectId);
@@ -168,11 +192,17 @@ export function CinematicPanel() {
 
   const setPreviewTime = (time: number) => {
     if (!active || running) return;
-    previewCinematic(active.id, Math.min(Math.max(time, 0), active.duration));
+    previewCinematic(active.id, snapTime(time));
   };
 
-  const frameStep = 1 / 24;
+  const frameRate = Math.max(1, active?.frameRate ?? 24);
+  const frameStep = 1 / frameRate;
   const beatTime = active ? Math.min(Math.max(timelineTime, 0), active.duration) : 0;
+  const snapTime = (time: number) => {
+    if (!active) return Math.max(0, time);
+    const clamped = Math.min(Math.max(time, 0), active.duration);
+    return snapTimeline ? Number((Math.round(clamped * frameRate) / frameRate).toFixed(4)) : clamped;
+  };
 
   const addBeat = (action: Omit<CinematicAction, 'id'>) => {
     if (!active) return;
@@ -191,6 +221,19 @@ export function CinematicPanel() {
   };
 
   const cameraShotCount = active?.actions.filter((action) => action.type === 'camera').length ?? 0;
+
+  const createStoryboard = (preset: StoryboardPreset) => {
+    const result = createStoryboardCinematic({
+      preset,
+      subjectObjectId: selected?.kind === 'camera' ? undefined : selected?.id,
+      autoplay: preset === 'gameplay-handoff',
+      endEventName: preset === 'gameplay-handoff' ? 'cinematic_finished' : undefined,
+    });
+    if (result) {
+      setSelectedActionId('');
+      previewCinematic(result.cinematicId, 0);
+    }
+  };
 
   // Snap a camera beat onto the exact framing the editor viewport currently shows.
   const captureViewportInto = (action: CinematicAction) => {
@@ -224,6 +267,46 @@ export function CinematicPanel() {
     if (!active) return;
     addBeat({ type: 'fade', time: 0, duration: 1.2, label: 'Fade in', fadeFrom: 1, fadeTo: 0, fadeColor: '#000000' });
     addBeat({ type: 'fade', time: Math.max(0, active.duration - 1.2), duration: 1.2, label: 'Fade out', fadeFrom: 0, fadeTo: 1, fadeColor: '#000000' });
+  };
+
+  const addMarkerAtPlayhead = () => {
+    if (!active) return;
+    addCinematicMarker(active.id, { time: beatTime, label: `Marker ${(active.markers?.length ?? 0) + 1}`, color: '#FFD166' });
+  };
+
+  const recordCinematicMovie = () => {
+    if (!active || movieStatus) return;
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas.scene-canvas, canvas.game-canvas');
+    if (!canvas?.captureStream || typeof MediaRecorder === 'undefined') {
+      setMovieStatus('Recording is not supported in this browser.');
+      window.setTimeout(() => setMovieStatus(''), 2800);
+      return;
+    }
+    const stream = canvas.captureStream(Math.max(1, active.frameRate ?? 24));
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${active.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'cinematic'}.webm`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setMovieStatus('Saved WebM');
+      window.setTimeout(() => setMovieStatus(''), 1800);
+    };
+    setMovieStatus('Recording...');
+    playCinematic(active.id);
+    recorder.start();
+    window.setTimeout(() => {
+      if (recorder.state !== 'inactive') recorder.stop();
+    }, Math.max(1, active.duration) * 1000 + 350);
   };
 
   // Write a keyframe list back onto a camera beat, snapping the clip to span the keyframes so the
@@ -360,7 +443,7 @@ export function CinematicPanel() {
     if (!el || !drag || !active) return 0;
     const width = el.getBoundingClientRect().width || 1;
     const deltaSeconds = ((clientX - drag.startX) / width) * Math.max(active.duration, 0.5);
-    return Math.min(Math.max(drag.startTime + deltaSeconds, 0), active.duration);
+    return snapTime(drag.startTime + deltaSeconds);
   };
 
   const onTimelinePointerMove = (event: React.PointerEvent) => {
@@ -626,6 +709,16 @@ export function CinematicPanel() {
           {isTrack ? (
             <>
               {renderKeyframeTrack(selectedAction)}
+              <label className="field-row">
+                <span>Interpolation</span>
+                <select value={selectedAction.interpolation ?? 'smooth'} onChange={(event) => updateSelectedAction({ interpolation: event.target.value as CinematicInterpolation })}>
+                  {interpolationOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button className="full-button" title="Discard keyframes and edit this as a single static shot" onClick={() => updateSelectedAction({ keyframes: [] })}>
                 Convert to single shot
               </button>
@@ -716,6 +809,16 @@ export function CinematicPanel() {
                   ))}
                 </select>
               </label>
+              <label className="field-row">
+                <span>Interpolation</span>
+                <select value={selectedAction.interpolation ?? 'smooth'} onChange={(event) => updateSelectedAction({ interpolation: event.target.value as CinematicInterpolation })}>
+                  {interpolationOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </>
           )}
         </>
@@ -729,6 +832,16 @@ export function CinematicPanel() {
           <>
             {objectPicker('Target')}
             {renderTransformKeyframeTrack(selectedAction)}
+            <label className="field-row">
+              <span>Interpolation</span>
+              <select value={selectedAction.interpolation ?? 'smooth'} onChange={(event) => updateSelectedAction({ interpolation: event.target.value as CinematicInterpolation })}>
+                {interpolationOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button className="full-button" title="Discard keyframes and edit this as a single from→to move" onClick={() => updateSelectedAction({ transformKeyframes: [] })}>
               Convert to single move
             </button>
@@ -795,6 +908,16 @@ export function CinematicPanel() {
             <span>Easing</span>
             <select value={selectedAction.ease ?? 'smooth'} onChange={(event) => updateSelectedAction({ ease: event.target.value as CinematicEase })}>
               {easeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Interpolation</span>
+            <select value={selectedAction.interpolation ?? 'smooth'} onChange={(event) => updateSelectedAction({ interpolation: event.target.value as CinematicInterpolation })}>
+              {interpolationOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -888,6 +1011,79 @@ export function CinematicPanel() {
       );
     }
 
+    if (selectedAction.type === 'material') {
+      const toMaterial = selectedAction.toMaterial ?? {};
+      const patchMaterial = (patch: Partial<MaterialOverrides>) => updateSelectedAction({ toMaterial: { ...toMaterial, ...patch } });
+      return (
+        <>
+          {objectPicker('Target')}
+          <label className="field-row">
+            <span>Color</span>
+            <input type="color" value={toMaterial.color ?? '#ffffff'} onChange={(event) => patchMaterial({ color: event.target.value })} />
+          </label>
+          <label className="field-row">
+            <span>Emissive</span>
+            <input type="color" value={toMaterial.emissiveColor ?? '#000000'} onChange={(event) => patchMaterial({ emissiveColor: event.target.value })} />
+          </label>
+          <label className="field-row">
+            <span>Glow</span>
+            <input type="number" min={0} max={20} step={0.1} value={toMaterial.emissiveIntensity ?? 0} onChange={(event) => patchMaterial({ emissiveIntensity: Number(event.target.value) })} />
+          </label>
+          <label className="field-row">
+            <span>Metal</span>
+            <input type="number" min={0} max={1} step={0.05} value={toMaterial.metalness ?? 0} onChange={(event) => patchMaterial({ metalness: Number(event.target.value) })} />
+          </label>
+          <label className="field-row">
+            <span>Roughness</span>
+            <input type="number" min={0} max={1} step={0.05} value={toMaterial.roughness ?? 0.5} onChange={(event) => patchMaterial({ roughness: Number(event.target.value) })} />
+          </label>
+          <label className="field-row">
+            <span>Easing</span>
+            <select value={selectedAction.ease ?? 'smooth'} onChange={(event) => updateSelectedAction({ ease: event.target.value as CinematicEase })}>
+              {easeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      );
+    }
+
+    if (selectedAction.type === 'timeDilation') {
+      return (
+        <>
+          <label className="field-row">
+            <span>From speed</span>
+            <input type="number" min={0.05} max={4} step={0.05} value={selectedAction.fromTimeScale ?? selectedAction.timeScale ?? 1} onChange={(event) => updateSelectedAction({ fromTimeScale: Number(event.target.value) })} />
+          </label>
+          <label className="field-row">
+            <span>To speed</span>
+            <input type="number" min={0.05} max={4} step={0.05} value={selectedAction.toTimeScale ?? selectedAction.timeScale ?? 1} onChange={(event) => updateSelectedAction({ toTimeScale: Number(event.target.value) })} />
+          </label>
+        </>
+      );
+    }
+
+    if (selectedAction.type === 'subsequence') {
+      return (
+        <label className="field-row">
+          <span>Sequence</span>
+          <select value={selectedAction.cinematicId ?? ''} onChange={(event) => updateSelectedAction({ cinematicId: event.target.value || undefined })}>
+            <option value="">Select sequence...</option>
+            {cinematics
+              .filter((cinematic) => cinematic.id !== active?.id)
+              .map((cinematic) => (
+                <option key={cinematic.id} value={cinematic.id}>
+                  {cinematic.folder ? `${cinematic.folder}/` : ''}{cinematic.name}
+                </option>
+              ))}
+          </select>
+        </label>
+      );
+    }
+
     return (
       <>
         <label className="field-row">
@@ -929,15 +1125,24 @@ export function CinematicPanel() {
       ) : (
         <>
           <div className="seq-seqbar">
+            <label className="seq-search" title="Search cinematics by folder/name">
+              <Search size={13} aria-hidden />
+              <input value={cinematicSearch} placeholder="Search" onChange={(event) => setCinematicSearch(event.target.value)} />
+            </label>
             <select className="seq-seq-select" value={active?.id ?? ''} onChange={(event) => setActiveCinematic(event.target.value)} title="Active sequence">
-              {cinematics.map((cinematic) => (
+              {sequenceOptions.map((cinematic) => (
                 <option key={cinematic.id} value={cinematic.id}>
-                  {cinematic.name} · {cinematic.duration.toFixed(1)}s
+                  {cinematic.folder ? `${cinematic.folder}/` : ''}{cinematic.name} · {cinematic.duration.toFixed(1)}s
                 </option>
               ))}
             </select>
             {active && (
               <input className="seq-name" value={active.name} placeholder="Sequence name" onChange={(event) => updateCinematic(active.id, { name: event.target.value })} />
+            )}
+            {active && (
+              <button className="icon-button" title="Duplicate as a new take" onClick={() => duplicateCinematicTake(active.id)}>
+                <Copy size={15} aria-hidden />
+              </button>
             )}
             <button className="icon-button" title="New sequence" onClick={() => createCinematic('New Sequence', 8)}>
               <Plus size={15} aria-hidden />
@@ -953,9 +1158,63 @@ export function CinematicPanel() {
                   <input type="number" min={0.5} step={0.5} value={active.duration} onChange={(event) => updateCinematic(active.id, { duration: Number(event.target.value) })} />
                 </label>
                 <label className="field-row">
+                  <span>Folder</span>
+                  <input value={active.folder ?? ''} placeholder="Intros / Boss" onChange={(event) => updateCinematic(active.id, { folder: event.target.value || undefined })} />
+                </label>
+                <label className="field-row">
+                  <span>FPS</span>
+                  <input type="number" min={1} max={120} step={1} value={active.frameRate ?? 24} onChange={(event) => updateCinematic(active.id, { frameRate: Number(event.target.value) })} />
+                </label>
+                <label className="field-row">
                   <span>Autoplay</span>
                   <input type="checkbox" checked={Boolean(active.autoplay)} onChange={(event) => updateCinematic(active.id, { autoplay: event.target.checked })} />
                 </label>
+                <label className="field-row">
+                  <span>Snap</span>
+                  <button className={`mini-toggle${snapTimeline ? ' active' : ''}`} type="button" title="Snap scrubbing and drag retiming to sequence frames" onClick={() => setSnapTimeline(!snapTimeline)}>
+                    <Magnet size={13} aria-hidden />
+                    {snapTimeline ? 'Frames' : 'Free'}
+                  </button>
+                </label>
+                <div className="cinematic-actions-row">
+                  <button className="full-button" onClick={addMarkerAtPlayhead}>
+                    <Flag size={14} aria-hidden />
+                    Marker
+                  </button>
+                  <button className="full-button" disabled={Boolean(movieStatus)} title="Record the current viewport canvas to a WebM while this sequence plays" onClick={recordCinematicMovie}>
+                    <Download size={14} aria-hidden />
+                    {movieStatus || 'Export WebM'}
+                  </button>
+                </div>
+                {(active.markers ?? []).length > 0 && (
+                  <div className="cinematic-marker-list">
+                    {(active.markers ?? []).map((marker) => (
+                      <button key={marker.id} type="button" title="Jump to marker" onClick={() => setPreviewTime(marker.time)}>
+                        <span style={{ background: marker.color ?? '#FFD166' }} />
+                        <strong>{marker.label}</strong>
+                        <em>{marker.time.toFixed(2)}s</em>
+                        <Trash2 size={12} aria-hidden onClick={(event) => { event.stopPropagation(); removeCinematicMarker(active.id, marker.id); }} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+              <section className="inspector-section cinematic-shot-templates">
+                <h3>Shot templates</h3>
+                <div className="cinematic-template-grid">
+                  <button className="full-button" title="Create a new sequence with an establishing shot, push-in, reveal, fades, and film look" onClick={() => createStoryboard('three-shot-intro')}>
+                    <Clapperboard size={14} aria-hidden />
+                    3-shot intro
+                  </button>
+                  <button className="full-button" title="Create a new sequence with one smooth orbit camera path around the selected object or scene center" onClick={() => createStoryboard('orbit-reveal')}>
+                    <Camera size={14} aria-hidden />
+                    Orbit reveal
+                  </button>
+                  <button className="full-button" title="Create a new autoplay intro that ends with a cinematic_finished event for gameplay handoff" onClick={() => createStoryboard('gameplay-handoff')}>
+                    <Play size={14} aria-hidden />
+                    Gameplay handoff
+                  </button>
+                </div>
               </section>
               <section className="inspector-section">
                 <h3>Film look</h3>
@@ -1185,6 +1444,14 @@ export function CinematicPanel() {
                             {(active.duration * fraction).toFixed(active.duration < 10 ? 1 : 0)}s
                           </span>
                         ))}
+                        {(active.markers ?? []).map((marker) => (
+                          <i
+                            key={marker.id}
+                            className="seq-marker"
+                            style={{ left: `${pct(marker.time)}%`, background: marker.color ?? '#FFD166' }}
+                            title={`${marker.label} · ${marker.time.toFixed(2)}s`}
+                          />
+                        ))}
                       </div>
                       <div className="seq-rows" ref={tracksRef}>
                         <div className="seq-playhead2" style={{ left: `${playhead}%` }} />
@@ -1316,6 +1583,30 @@ export function CinematicPanel() {
                     onClick={() => addBeat({ type: 'event', time: beatTime, label: 'Custom event', eventName: 'cinematic_event' })}
                   >
                     Event
+                  </button>
+                  <button
+                    className="full-button"
+                    disabled={!selected}
+                    onClick={() => selected && addBeat({ type: 'material', time: beatTime, duration: 1, label: `Material ${selected.name}`, objectId: selected.id, toMaterial: { emissiveColor: '#5B8CFF', emissiveIntensity: 2.5 } })}
+                  >
+                    Material glow
+                  </button>
+                  <button
+                    className="full-button"
+                    onClick={() => addBeat({ type: 'timeDilation', time: beatTime, duration: 1.5, label: 'Slow motion', fromTimeScale: 1, toTimeScale: 0.35 })}
+                  >
+                    Slow motion
+                  </button>
+                  <button
+                    className="full-button"
+                    disabled={cinematics.filter((cinematic) => cinematic.id !== active.id).length === 0}
+                    onClick={() => {
+                      const child = cinematics.find((cinematic) => cinematic.id !== active.id);
+                      if (!child) return;
+                      addBeat({ type: 'subsequence', time: beatTime, duration: child.duration, label: `Sub ${child.name}`, cinematicId: child.id });
+                    }}
+                  >
+                    Subsequence
                   </button>
                   <button className="full-button" onClick={addFadeBookends}>
                     Fade in &amp; out

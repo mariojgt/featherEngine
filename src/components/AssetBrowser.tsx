@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   Music,
   Palette,
+  PackagePlus,
   PersonStanding,
   Search,
   Sparkles,
@@ -125,6 +126,17 @@ export function AssetBrowser() {
   const renamePrefab = useEditorStore((state) => state.renamePrefab);
   const deletePrefab = useEditorStore((state) => state.deletePrefab);
   const projectDir = useProjectStore((state) => state.projectDir);
+  const exportPrefabPackage = useProjectStore((state) => state.exportPrefabPackage);
+  const exportFolderPackage = useProjectStore((state) => state.exportFolderPackage);
+  const importPackageFromFile = useProjectStore((state) => state.importPackageFromFile);
+
+  // Imports are additive but write into the project — confirm so the user can back up first.
+  const importPackage = () => {
+    const ok = window.confirm(
+      'Import a package into this project?\n\nIt adds new prefabs, blueprints and assets (it never overwrites existing ones), but you should back up your project first if it matters.',
+    );
+    if (ok) void importPackageFromFile();
+  };
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedFolderId, setSelectedFolderId] = useState<string | undefined>(undefined);
@@ -687,6 +699,7 @@ export function AssetBrowser() {
           { label: 'Add to Scene', onClick: () => instantiatePrefab(prefab.id) },
           { label: 'Open in Prefab Editor', onClick: () => openPrefabEditor(prefab.id) },
           { label: 'Rename', onClick: () => startRename('prefab', prefab.id, prefab.name) },
+          { label: 'Export as Package…', onClick: () => void exportPrefabPackage(prefab.id) },
           ...moveEntries('prefab', prefab.id, prefab.folderId),
           'separator',
           { label: 'Delete prefab', danger: true, onClick: () => deletePrefab(prefab.id) },
@@ -834,6 +847,7 @@ export function AssetBrowser() {
               { label: 'Create UI', onClick: () => newUIDocument(folder.id) },
               { label: 'Import Asset…', onClick: () => triggerImport(folder.id) },
               'separator',
+              { label: 'Export Folder as Package…', onClick: () => void exportFolderPackage(folder.id) },
               { label: 'Rename', onClick: () => startRename('folder', folder.id, folder.name) },
               { label: 'Delete', danger: true, onClick: () => deleteFolder(folder.id) },
             ])
@@ -898,6 +912,9 @@ export function AssetBrowser() {
         <button className="icon-button compact" title="Import assets" onClick={() => triggerImport(selectedFolderId)}>
           <Upload size={15} aria-hidden />
         </button>
+        <button className="icon-button compact" title="Import package (.nfpack)" onClick={importPackage}>
+          <PackagePlus size={15} aria-hidden />
+        </button>
         <input
           ref={fileInputRef}
           type="file"
@@ -938,6 +955,8 @@ export function AssetBrowser() {
             { label: 'Create Particle System', onClick: () => newParticleSystem(undefined) },
             { label: 'Create UI', onClick: () => newUIDocument(undefined) },
             { label: 'Import Asset…', onClick: () => triggerImport(undefined) },
+            'separator',
+            { label: 'Import Package…', onClick: importPackage },
           ])
         }
       >

@@ -15,6 +15,7 @@ import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
+import { WebGLScreenUILayer } from '../ui/WebGLScreenUILayer';
 import { ImpactParticles } from '../three/ImpactParticles';
 import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
@@ -255,6 +256,9 @@ function GameScene() {
 
       {/* World-space UI widgets (health bars, nameplates) anchored at each object's position. */}
       {objects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
+
+      {/* WebGL HUD (uikit) for renderMode:'webgl' screen docs — caught by PostFx bloom. */}
+      <WebGLScreenUILayer />
 
       <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
       <PostFx />

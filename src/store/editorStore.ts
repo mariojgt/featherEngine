@@ -19,6 +19,7 @@ import {
   type GraphNodeTone,
   type AnimatorComponent,
   type MaterialDefinition,
+  type MaterialOverrides,
   type MeshRendererComponent,
   type NodeForgeProject,
   type NodeForgeNode,
@@ -56,6 +57,9 @@ import {
   type VehicleComponent,
   type CinematicAction,
   type CinematicCameraKeyframe,
+  type CinematicInterpolation,
+  type CinematicMarker,
+  type CinematicMaterialKeyframe,
   type CinematicTransformKeyframe,
   type CinematicEase,
   type CinematicLook,
@@ -88,6 +92,7 @@ import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/
 import { applyTerrainPaint, applyTerrainSculpt, defaultTerrain, highestTerrainWorldHeight, terrainLocalPointFromWorld, withTerrainDefaults } from '../terrain/terrain';
 import { worldTransformOf, worldToLocalUnderParent } from '../utils/transformHierarchy';
 import type { ModelInspection } from '../three/inspectModel';
+import { collectPackage, collectPrefabPackage, type PackageContent, type PackageSeeds, type PackageSource } from '../project/package';
 
 const makeId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
@@ -138,6 +143,43 @@ const isCinematicActionActive = (action: CinematicAction, time: number) => {
   return time >= action.time && time <= action.time + duration;
 };
 
+const shiftedCinematicAction = (action: CinematicAction, offset: number, parentId: string): CinematicAction => ({
+  ...action,
+  id: `${parentId}:${action.id}`,
+  time: action.time + offset,
+  keyframes: action.keyframes?.map((frame) => ({ ...frame, time: frame.time + offset })),
+  transformKeyframes: action.transformKeyframes?.map((frame) => ({ ...frame, time: frame.time + offset })),
+  materialKeyframes: action.materialKeyframes?.map((frame) => ({ ...frame, time: frame.time + offset })),
+});
+
+const cinematicActionsAt = (
+  sequence: CinematicSequence | undefined,
+  sequences: CinematicSequence[] = sequence ? [sequence] : [],
+  time = 0,
+  depth = 0,
+  visited = new Set<string>(),
+): CinematicAction[] => {
+  if (!sequence || depth > 4 || visited.has(sequence.id)) return [];
+  const nextVisited = new Set(visited);
+  nextVisited.add(sequence.id);
+  const actions: CinematicAction[] = [];
+  for (const action of sequence.actions) {
+    if (action.type === 'subsequence' && action.cinematicId) {
+      const child = sequences.find((item) => item.id === action.cinematicId);
+      const duration = Math.max(action.duration ?? child?.duration ?? 0, 0.001);
+      if (child && time >= action.time && time <= action.time + duration) {
+        actions.push(
+          ...cinematicActionsAt(child, sequences, time - action.time, depth + 1, nextVisited)
+            .map((childAction) => shiftedCinematicAction(childAction, action.time, action.id)),
+        );
+      }
+    } else {
+      actions.push(action);
+    }
+  }
+  return actions;
+};
+
 /** Linearly blend two camera poses (position/lookAt/fov). */
 const mixCinematicCamera = (
   from: RuntimeCinematicCamera,
@@ -170,12 +212,36 @@ const catmullRomVec3 = (p0: Vector3Tuple, p1: Vector3Tuple, p2: Vector3Tuple, p3
   catmullRom(p0[2], p1[2], p2[2], p3[2], t),
 ];
 
+const mixHexColor = (from: string | undefined, to: string | undefined, t: number): string | undefined => {
+  if (!from && !to) return undefined;
+  if (!from || !to) return to ?? from;
+  const a = from.replace('#', '');
+  const b = to.replace('#', '');
+  if (a.length !== 6 || b.length !== 6) return t < 0.5 ? from : to;
+  const parts = [0, 2, 4].map((i) => Math.round(mix(parseInt(a.slice(i, i + 2), 16), parseInt(b.slice(i, i + 2), 16), t)));
+  return `#${parts.map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+};
+
+const mixMaterialOverrides = (from: MaterialOverrides, to: MaterialOverrides, t: number): MaterialOverrides => ({
+  color: mixHexColor(from.color, to.color, t),
+  metalness: from.metalness !== undefined || to.metalness !== undefined ? mix(from.metalness ?? to.metalness ?? 0, to.metalness ?? from.metalness ?? 0, t) : undefined,
+  roughness: from.roughness !== undefined || to.roughness !== undefined ? mix(from.roughness ?? to.roughness ?? 0, to.roughness ?? from.roughness ?? 0, t) : undefined,
+  emissiveColor: mixHexColor(from.emissiveColor, to.emissiveColor, t),
+  emissiveIntensity:
+    from.emissiveIntensity !== undefined || to.emissiveIntensity !== undefined
+      ? mix(from.emissiveIntensity ?? to.emissiveIntensity ?? 0, to.emissiveIntensity ?? from.emissiveIntensity ?? 0, t)
+      : undefined,
+});
+
+const stripMaterialUndefined = (material: MaterialOverrides): MaterialOverrides =>
+  Object.fromEntries(Object.entries(material).filter(([, value]) => value !== undefined)) as MaterialOverrides;
+
 /**
  * Sample an animated camera track: fly smoothly through the keyframes via a Catmull-Rom spline
  * (positions + look-ats + fov). Times are absolute seconds; outside the range the camera holds on
  * the first/last keyframe. A single keyframe is a static framing.
  */
-const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: number): RuntimeCinematicCamera | undefined => {
+const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): RuntimeCinematicCamera | undefined => {
   const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
   if (!frames.length) return undefined;
   if (frames.length === 1 || time <= frames[0].time) {
@@ -193,6 +259,12 @@ const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: numbe
   const k3 = frames[i + 2] ?? k2;
   const span = Math.max(k2.time - k1.time, 0.001);
   const t = clamp01((time - k1.time) / span);
+  if (interpolation === 'hold') return { position: k1.position, lookAt: k1.lookAt, fov: k1.fov, focusDistance: k1.focusDistance, aperture: k1.aperture };
+  if (interpolation === 'linear') return mixCinematicCamera(
+    { position: k1.position, lookAt: k1.lookAt, fov: k1.fov, focusDistance: k1.focusDistance, aperture: k1.aperture },
+    { position: k2.position, lookAt: k2.lookAt, fov: k2.fov, focusDistance: k2.focusDistance, aperture: k2.aperture },
+    t,
+  );
   // Focus pulls: spline the focus distance/aperture across keyframes when any frame defines them,
   // falling back to the nearer keyframe's value where a frame leaves them unset.
   const focus = (pick: (frame: CinematicCameraKeyframe) => number | undefined): number | undefined => {
@@ -217,7 +289,7 @@ const cameraFromCinematicAction = (
 ): RuntimeCinematicCamera | undefined => {
   // An animated keyframe track takes over the whole framing when present.
   if (action.keyframes && action.keyframes.length) {
-    const sampled = sampleCameraKeyframes(action.keyframes, time);
+    const sampled = sampleCameraKeyframes(action.keyframes, time, action.interpolation);
     if (sampled) return sampled;
   }
   const cameraObject = action.objectId ? objects.find((object) => object.id === action.objectId) : undefined;
@@ -246,8 +318,9 @@ const cinematicCameraAt = (
   objects: SceneObject[],
   time: number,
   fallback?: RuntimeCinematicCamera,
+  sequences?: CinematicSequence[],
 ): RuntimeCinematicCamera | undefined => {
-  const cameraActions = (sequence?.actions.filter((item) => item.type === 'camera') ?? []).sort((a, b) => a.time - b.time);
+  const cameraActions = cinematicActionsAt(sequence, sequences, time).filter((item) => item.type === 'camera').sort((a, b) => a.time - b.time);
   if (!cameraActions.length) return fallback;
   const past = cameraActions.filter((item) => item.time <= time);
   const current = past[past.length - 1] ?? cameraActions[0];
@@ -269,7 +342,7 @@ const cinematicCameraAt = (
 };
 
 /** Sample an animated object transform track: fly smoothly through the keyframes via Catmull-Rom. */
-const sampleTransformKeyframes = (keyframes: CinematicTransformKeyframe[], time: number): TransformComponent | undefined => {
+const sampleTransformKeyframes = (keyframes: CinematicTransformKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): TransformComponent | undefined => {
   const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
   if (!frames.length) return undefined;
   const pick = (frame: CinematicTransformKeyframe): TransformComponent => ({ position: frame.position, rotation: frame.rotation, scale: frame.scale });
@@ -284,6 +357,14 @@ const sampleTransformKeyframes = (keyframes: CinematicTransformKeyframe[], time:
   const k0 = frames[i - 1] ?? k1;
   const k3 = frames[i + 2] ?? k2;
   const t = clamp01((time - k1.time) / Math.max(k2.time - k1.time, 0.001));
+  if (interpolation === 'hold') return pick(k1);
+  if (interpolation === 'linear') {
+    return {
+      position: mixVec3(k1.position, k2.position, t),
+      rotation: mixVec3(k1.rotation, k2.rotation, t),
+      scale: mixVec3(k1.scale, k2.scale, t),
+    };
+  }
   return {
     position: catmullRomVec3(k0.position, k1.position, k2.position, k3.position, t),
     rotation: catmullRomVec3(k0.rotation, k1.rotation, k2.rotation, k3.rotation, t),
@@ -295,8 +376,9 @@ const cinematicFadeAt = (
   sequence: CinematicSequence | undefined,
   time: number,
   fallback?: RuntimeCinematicFade,
+  sequences?: CinematicSequence[],
 ): RuntimeCinematicFade | undefined => {
-  const action = sequence?.actions
+  const action = cinematicActionsAt(sequence, sequences, time)
     .filter((item) => item.type === 'fade' && item.time <= time)
     .sort((a, b) => b.time - a.time)[0];
   if (!action) return undefined;
@@ -308,22 +390,23 @@ const cinematicFadeAt = (
   };
 };
 
-const initialCinematicCamera = (sequence: CinematicSequence | undefined, objects: SceneObject[]): RuntimeCinematicCamera | undefined =>
-  cinematicCameraAt(sequence, objects, 0);
+const initialCinematicCamera = (sequence: CinematicSequence | undefined, objects: SceneObject[], sequences?: CinematicSequence[]): RuntimeCinematicCamera | undefined =>
+  cinematicCameraAt(sequence, objects, 0, undefined, sequences);
 
-const initialCinematicFade = (sequence: CinematicSequence | undefined): RuntimeCinematicFade | undefined =>
-  cinematicFadeAt(sequence, 0);
+const initialCinematicFade = (sequence: CinematicSequence | undefined, sequences?: CinematicSequence[]): RuntimeCinematicFade | undefined =>
+  cinematicFadeAt(sequence, 0, undefined, sequences);
 
 const cinematicTransformsAt = (
   sequence: CinematicSequence | undefined,
   objects: SceneObject[],
   time: number,
+  sequences?: CinematicSequence[],
 ): Record<string, TransformComponent> => {
   if (!sequence) return {};
   const byId = new Map(objects.map((object) => [object.id, object]));
   const transforms: Record<string, TransformComponent> = {};
 
-  sequence.actions
+  cinematicActionsAt(sequence, sequences, time)
     .filter((action) => action.type === 'transform' && action.objectId && action.time <= time)
     .sort((a, b) => a.time - b.time)
     .forEach((action) => {
@@ -333,7 +416,7 @@ const cinematicTransformsAt = (
       if (!current) return;
       // An animated keyframe track drives the object's whole transform when present.
       if (action.transformKeyframes && action.transformKeyframes.length) {
-        const sampled = sampleTransformKeyframes(action.transformKeyframes, time);
+        const sampled = sampleTransformKeyframes(action.transformKeyframes, time, action.interpolation);
         if (sampled) transforms[objectId] = sampled;
         return;
       }
@@ -351,10 +434,80 @@ const cinematicTransformsAt = (
   return transforms;
 };
 
-const cinematicHiddenAt = (sequence: CinematicSequence | undefined, time: number): string[] => {
+const sampleMaterialKeyframes = (keyframes: CinematicMaterialKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): MaterialOverrides | undefined => {
+  const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
+  if (!frames.length) return undefined;
+  const pick = (frame: CinematicMaterialKeyframe): MaterialOverrides => ({
+    color: frame.color,
+    metalness: frame.metalness,
+    roughness: frame.roughness,
+    emissiveColor: frame.emissiveColor,
+    emissiveIntensity: frame.emissiveIntensity,
+  });
+  if (frames.length === 1 || time <= frames[0].time) return stripMaterialUndefined(pick(frames[0]));
+  const last = frames[frames.length - 1];
+  if (time >= last.time) return stripMaterialUndefined(pick(last));
+  let i = 0;
+  while (i < frames.length - 1 && frames[i + 1].time <= time) i += 1;
+  const k1 = frames[i];
+  const k2 = frames[i + 1];
+  if (interpolation === 'hold') return stripMaterialUndefined(pick(k1));
+  const t = clamp01((time - k1.time) / Math.max(k2.time - k1.time, 0.001));
+  return stripMaterialUndefined(mixMaterialOverrides(pick(k1), pick(k2), interpolation === 'linear' ? t : applyCinematicEase(t, 'smooth')));
+};
+
+const cinematicMaterialsAt = (
+  sequence: CinematicSequence | undefined,
+  objects: SceneObject[],
+  time: number,
+  sequences?: CinematicSequence[],
+): Record<string, MaterialOverrides> => {
+  if (!sequence) return {};
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const materials: Record<string, MaterialOverrides> = {};
+  cinematicActionsAt(sequence, sequences, time)
+    .filter((action) => action.type === 'material' && action.objectId && action.time <= time)
+    .sort((a, b) => a.time - b.time)
+    .forEach((action) => {
+      const objectId = action.objectId;
+      if (!objectId) return;
+      const base = materials[objectId] ?? byId.get(objectId)?.renderer?.materialOverrides ?? {};
+      if (action.materialKeyframes?.length) {
+        const sampled = sampleMaterialKeyframes(action.materialKeyframes, time, action.interpolation);
+        if (sampled) materials[objectId] = { ...base, ...sampled };
+        return;
+      }
+      const active = isCinematicActionActive(action, time);
+      const local = active ? cinematicActionLocalTime(action, time) : 1;
+      materials[objectId] = {
+        ...base,
+        ...stripMaterialUndefined(mixMaterialOverrides(action.fromMaterial ?? base, action.toMaterial ?? action.fromMaterial ?? base, local)),
+      };
+    });
+  return materials;
+};
+
+const cinematicTimeScaleAt = (
+  sequence: CinematicSequence | undefined,
+  time: number,
+  sequences?: CinematicSequence[],
+): number => {
+  const action = cinematicActionsAt(sequence, sequences, time)
+    .filter((item) => item.type === 'timeDilation' && item.time <= time)
+    .sort((a, b) => b.time - a.time)[0];
+  if (!action) return 1;
+  if (isCinematicActionActive(action, time)) {
+    const from = action.fromTimeScale ?? action.timeScale ?? 1;
+    const to = action.toTimeScale ?? action.timeScale ?? from;
+    return Math.max(0.05, mix(from, to, cinematicActionLocalTime(action, time)));
+  }
+  return Math.max(0.05, action.toTimeScale ?? action.timeScale ?? 1);
+};
+
+const cinematicHiddenAt = (sequence: CinematicSequence | undefined, time: number, sequences?: CinematicSequence[]): string[] => {
   if (!sequence) return [];
   const hidden = new Set<string>();
-  sequence.actions
+  cinematicActionsAt(sequence, sequences, time)
     .filter((action) => action.type === 'visibility' && action.objectId && action.time <= time)
     .sort((a, b) => a.time - b.time)
     .forEach((action) => {
@@ -461,22 +614,22 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
 export const defaultVehicle = (): VehicleComponent => ({
   enabled: false,
   // Tuned for a punchy-but-weighty arcade feel: brisk top speed, accel that pins you back, strong brakes,
-  // and enough coast drag that letting off settles the car instead of gliding forever.
-  maxSpeed: 26,
-  maxReverseSpeed: 9,
-  acceleration: 16,
-  braking: 34,
-  drag: 9,
-  // A slightly tighter steer lock + good grip; the handbrake drops grip hard for a clean drift.
-  steerAngle: 0.55,
+  // and a touch of coast drag so letting off carries momentum into the next corner instead of gliding forever.
+  maxSpeed: 30,
+  maxReverseSpeed: 10,
+  acceleration: 19,
+  braking: 32,
+  drag: 7,
+  // A responsive steer lock + strong grip for crisp turn-in; the handbrake drops grip hard for a clean drift.
+  steerAngle: 0.58,
   turnRate: 2.0,
   steerReturnSpeed: 0.25,
-  gripFactor: 0.9,
-  handbrakeGrip: 0.28,
+  gripFactor: 0.92,
+  handbrakeGrip: 0.22,
   suspensionTravel: 0.14,
   suspensionStiffness: 0.18,
   bodyRoll: 0.05,
-  bodyPitch: 0.04,
+  bodyPitch: 0.05,
   wheelRadius: 0.4,
   rideHeight: 0.5,
   wheelRestY: 0.3,
@@ -1989,6 +2142,7 @@ interface EditorState {
   editorCinematicPreviewLook?: CinematicLook;
   editorCinematicPreviewTransforms: Record<string, TransformComponent>;
   editorCinematicPreviewHidden: string[];
+  editorCinematicPreviewMaterials: Record<string, MaterialOverrides>;
   /** Editor-only: Film Mode "Record" mode — moving the camera or dragging objects auto-keys them. */
   cinematicRecording: boolean;
   /** Editor-only: the keyframe selected for 3D path editing (its handle gets a transform gizmo). */
@@ -2156,6 +2310,10 @@ interface EditorState {
   }) => { objectId: string; blueprintId: string; variableId: string; uiDocumentId: string; counterElementId: string };
   createCinematic: (name?: string, duration?: number) => string;
   updateCinematic: (id: string, patch: Partial<Omit<CinematicSequence, 'id' | 'actions' | 'createdAt'>>) => void;
+  duplicateCinematicTake: (id: string) => string | undefined;
+  addCinematicMarker: (cinematicId: string, marker: { time: number; label?: string; color?: string; determinismFence?: boolean }) => string | undefined;
+  updateCinematicMarker: (cinematicId: string, markerId: string, patch: Partial<Omit<CinematicMarker, 'id'>>) => void;
+  removeCinematicMarker: (cinematicId: string, markerId: string) => void;
   /** Set/merge the cinematic's film look (letterbox aspect, color grade, grain, vignette). */
   setCinematicLook: (id: string, patch: Partial<CinematicLook>) => void;
   /**
@@ -2260,7 +2418,7 @@ interface EditorState {
   // --- Game UI documents (HUD + world-space widgets). AI-friendly: explicit params, return ids. ---
   createUIDocument: (name?: string, surface?: UISurface, folderId?: string) => string;
   renameUIDocument: (id: string, name: string) => void;
-  updateUIDocument: (id: string, patch: Partial<Pick<UIDocument, 'name' | 'surface' | 'css' | 'visibleOnStart' | 'logicBlueprintId'>>) => void;
+  updateUIDocument: (id: string, patch: Partial<Pick<UIDocument, 'name' | 'surface' | 'css' | 'visibleOnStart' | 'logicBlueprintId' | 'renderMode'>>) => void;
   deleteUIDocument: (id: string) => void;
   setActiveUIDocument: (id: string) => void;
   /** Editor-only: which UI element is selected (shared by the panel tree and the viewport overlay). */
@@ -2338,6 +2496,12 @@ interface EditorState {
   exportProject: () => NodeForgeProject;
   loadProject: (project: NodeForgeProject) => void;
   markClean: () => void;
+  /** Collect a prefab + its full dependency closure into a transferable package payload. */
+  buildPrefabPackage: (prefabId: string) => { content: PackageContent; assetIds: string[] } | null;
+  /** Collect everything in a folder (and its subfolders) + dependencies, like Unreal's Migrate. */
+  buildFolderPackage: (folderId: string) => { content: PackageContent; assetIds: string[]; name: string } | null;
+  /** Additively merge already-remapped package content + resolved assets into the project. */
+  mergePackage: (content: PackageContent, assets: AssetItem[]) => void;
 }
 
 const deleteWithChildren = (objects: SceneObject[], id: string) => {
@@ -2495,6 +2659,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   editorCinematicPreviewLook: undefined,
   editorCinematicPreviewTransforms: {},
   editorCinematicPreviewHidden: [],
+  editorCinematicPreviewMaterials: {},
   cinematicRecording: false,
   selectedCinematicKeyframe: undefined,
   runtimeStarted: false,
@@ -4262,8 +4427,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       id,
       name,
       duration: Math.max(0.5, duration),
+      frameRate: 24,
       skippable: true,
       actions: [],
+      markers: [],
       createdAt: Date.now(),
     };
     set((state) => ({
@@ -4281,6 +4448,79 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...scene,
         cinematics: (scene.cinematics ?? []).map((cinematic) =>
           cinematic.id === id ? { ...cinematic, ...stripUndefined(patch), duration: Math.max(0.5, patch.duration ?? cinematic.duration) } : cinematic,
+        ),
+      })),
+      isDirty: true,
+    })),
+  duplicateCinematicTake: (id) => {
+    const source = get().activeScene()?.cinematics?.find((cinematic) => cinematic.id === id);
+    if (!source) return undefined;
+    const takeNumber =
+      Math.max(0, ...(get().activeScene()?.cinematics ?? []).filter((cinematic) => (cinematic.takeOf ?? cinematic.id) === (source.takeOf ?? source.id)).map((cinematic) => cinematic.takeNumber ?? 0)) + 1;
+    const nextId = makeId('cinematic');
+    const next: CinematicSequence = {
+      ...source,
+      id: nextId,
+      name: `${source.name} Take ${takeNumber}`,
+      takeOf: source.takeOf ?? source.id,
+      takeNumber,
+      actions: source.actions.map((action) => ({ ...action, id: makeId('caction') })),
+      markers: (source.markers ?? []).map((marker) => ({ ...marker, id: makeId('cmark') })),
+      createdAt: Date.now(),
+    };
+    set((state) => ({
+      scenes: state.scenes.map((scene) =>
+        scene.id === state.activeSceneId ? { ...scene, cinematics: [...(scene.cinematics ?? []), next] } : scene,
+      ),
+      activeCinematicId: nextId,
+      isDirty: true,
+    }));
+    return nextId;
+  },
+  addCinematicMarker: (cinematicId, marker) => {
+    const id = makeId('cmark');
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) =>
+          cinematic.id === cinematicId
+            ? {
+                ...cinematic,
+                markers: [
+                  ...(cinematic.markers ?? []),
+                  { id, time: Math.max(0, marker.time), label: marker.label?.trim() || `Marker ${(cinematic.markers?.length ?? 0) + 1}`, color: marker.color, determinismFence: marker.determinismFence },
+                ].sort((a, b) => a.time - b.time),
+              }
+            : cinematic,
+        ),
+      })),
+      isDirty: true,
+    }));
+    return get().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId) ? id : undefined;
+  },
+  updateCinematicMarker: (cinematicId, markerId, patch) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) =>
+          cinematic.id === cinematicId
+            ? {
+                ...cinematic,
+                markers: (cinematic.markers ?? [])
+                  .map((marker) => (marker.id === markerId ? { ...marker, ...stripUndefined(patch), time: Math.max(0, patch.time ?? marker.time) } : marker))
+                  .sort((a, b) => a.time - b.time),
+              }
+            : cinematic,
+        ),
+      })),
+      isDirty: true,
+    })),
+  removeCinematicMarker: (cinematicId, markerId) =>
+    set((state) => ({
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        cinematics: (scene.cinematics ?? []).map((cinematic) =>
+          cinematic.id === cinematicId ? { ...cinematic, markers: (cinematic.markers ?? []).filter((marker) => marker.id !== markerId) } : cinematic,
         ),
       })),
       isDirty: true,
@@ -4322,6 +4562,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       editorCinematicPreviewLook: state.editorCinematicPreview?.sequenceId === id ? undefined : state.editorCinematicPreviewLook,
       editorCinematicPreviewTransforms: state.editorCinematicPreview?.sequenceId === id ? {} : state.editorCinematicPreviewTransforms,
       editorCinematicPreviewHidden: state.editorCinematicPreview?.sequenceId === id ? [] : state.editorCinematicPreviewHidden,
+      editorCinematicPreviewMaterials: state.editorCinematicPreview?.sequenceId === id ? {} : state.editorCinematicPreviewMaterials,
       isDirty: true,
     })),
   setActiveCinematic: (id) =>
@@ -4334,6 +4575,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             editorCinematicPreviewFade: undefined,
             editorCinematicPreviewTransforms: {},
             editorCinematicPreviewHidden: [],
+            editorCinematicPreviewMaterials: {},
           }
         : { activeCinematicId: id },
     ),
@@ -4519,13 +4761,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (!sequence) return state;
       const previewTime = Math.min(Math.max(time, 0), sequence.duration);
       const objects = scene?.objects ?? [];
+      const sequences = scene?.cinematics ?? [];
       return {
         editorCinematicPreview: { sequenceId: cinematicId, time: previewTime },
-        editorCinematicPreviewCamera: cinematicCameraAt(sequence, objects, previewTime),
-        editorCinematicPreviewFade: cinematicFadeAt(sequence, previewTime),
+        editorCinematicPreviewCamera: cinematicCameraAt(sequence, objects, previewTime, undefined, sequences),
+        editorCinematicPreviewFade: cinematicFadeAt(sequence, previewTime, undefined, sequences),
         editorCinematicPreviewLook: sequence.look,
-        editorCinematicPreviewTransforms: cinematicTransformsAt(sequence, objects, previewTime),
-        editorCinematicPreviewHidden: cinematicHiddenAt(sequence, previewTime),
+        editorCinematicPreviewTransforms: cinematicTransformsAt(sequence, objects, previewTime, sequences),
+        editorCinematicPreviewHidden: cinematicHiddenAt(sequence, previewTime, sequences),
+        editorCinematicPreviewMaterials: cinematicMaterialsAt(sequence, objects, previewTime, sequences),
       };
     }),
   clearCinematicPreview: () =>
@@ -4538,6 +4782,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             editorCinematicPreviewLook: undefined,
             editorCinematicPreviewTransforms: {},
             editorCinematicPreviewHidden: [],
+            editorCinematicPreviewMaterials: {},
             selectedCinematicKeyframe: undefined,
           }
         : state,
@@ -4553,10 +4798,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const scene = state.scenes.find((item) => item.id === state.activeSceneId);
       const sequence = scene?.cinematics?.find((cinematic) => cinematic.id === cinematicId);
       if (!sequence) return state;
+      const sequences = scene?.cinematics ?? [];
       return {
         runtimeCinematic: { sequenceId: cinematicId, time: 0, firedActionIds: [], spawnedObjectIds: [] },
-        runtimeCinematicCamera: initialCinematicCamera(sequence, scene?.objects ?? []),
-        runtimeCinematicFade: initialCinematicFade(sequence),
+        runtimeCinematicCamera: initialCinematicCamera(sequence, scene?.objects ?? [], sequences),
+        runtimeCinematicFade: initialCinematicFade(sequence, sequences),
         runtimeCinematicLook: sequence.look,
       };
     });
@@ -5762,8 +6008,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           ),
           runtimeUITextOverrides: {},
           runtimeCinematic: autoplay ? { sequenceId: autoplay.id, time: 0, firedActionIds: [], spawnedObjectIds: [] } : undefined,
-          runtimeCinematicCamera: initialCinematicCamera(autoplay, objects),
-          runtimeCinematicFade: initialCinematicFade(autoplay),
+          runtimeCinematicCamera: initialCinematicCamera(autoplay, objects, state.scenes.find((s) => s.id === state.activeSceneId)?.cinematics ?? []),
+          runtimeCinematicFade: initialCinematicFade(autoplay, state.scenes.find((s) => s.id === state.activeSceneId)?.cinematics ?? []),
           runtimeCinematicLook: autoplay?.look,
           editorCinematicPreview: undefined,
           editorCinematicPreviewCamera: undefined,
@@ -5771,6 +6017,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           editorCinematicPreviewLook: undefined,
           editorCinematicPreviewTransforms: {},
           editorCinematicPreviewHidden: [],
+          editorCinematicPreviewMaterials: {},
           runtimeStarted: false,
           // Full deep clone so Stop fully resets the scene (restores picked-up/destroyed objects, removes
           // spawned projectiles, reverts transforms/materials/instance variables).
@@ -5834,6 +6081,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         editorCinematicPreviewLook: undefined,
         editorCinematicPreviewTransforms: {},
         editorCinematicPreviewHidden: [],
+        editorCinematicPreviewMaterials: {},
         runtimeStarted: false,
         scenes,
         playSnapshot: undefined,
@@ -6733,6 +6981,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       for (const object of mappedObjects) {
         if (!object.vehicle?.enabled) continue;
         const veh = { ...defaultVehicle(), ...object.vehicle };
+        // A DYNAMIC car lets the Rapier solver own its vertical motion + collision response (so fixed scenery —
+        // buildings, the roundabout — physically STOPS it); a KINEMATIC car has the runtime own the whole
+        // transform (terrain-following Y + suspension) and is never stopped by the solver (it drives through).
+        const dynamic = object.physics?.bodyType === 'dynamic';
         const yaw = object.transform.rotation[1];
         const prevVel = nextVelocities[object.id] ?? [0, 0, 0];
         // Signed forward speed recovered from the stored velocity projected onto the current heading.
@@ -6816,57 +7068,97 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         position[0] += sinY * speed * delta;
         position[2] += cosY * speed * delta;
 
-        // Sample the terrain under each wheel (world space) for the suspension.
-        const wheelGround = wheels.map((w) => {
-          const lx = w.transform.position[0];
-          const lz = w.transform.position[2];
-          return groundAt(position[0] + lx * cosY + lz * sinY, position[2] - lx * sinY + lz * cosY);
-        });
-        const avgGround = wheelGround.length
-          ? wheelGround.reduce((a, b) => a + b, 0) / wheelGround.length
-          : groundAt(position[0], position[2]);
-
-        // Chassis Y rides on the terrain (springy). suspensionStiffness controls how fast it settles.
-        const settle = 1 - Math.exp(-(8 + veh.suspensionStiffness * 40) * Math.min(delta, 0.1));
-        const targetY = avgGround + veh.rideHeight;
-        position[1] = object.transform.position[1] + (targetY - object.transform.position[1]) * settle;
-        const velocity: Vector3Tuple = [sinY * speed, (position[1] - object.transform.position[1]) / Math.max(delta, 1e-4), cosY * speed];
-        nextVelocities[object.id] = velocity;
-
-        // Terrain tilt (pitch from front↔rear ground, roll from left↔right) + accel squat + turn lean.
-        const frontG: number[] = [];
-        const rearG: number[] = [];
-        const leftG: number[] = [];
-        const rightG: number[] = [];
-        wheels.forEach((w, i) => {
-          (w.transform.position[2] >= 0 ? frontG : rearG).push(wheelGround[i]);
-          (w.transform.position[0] <= 0 ? leftG : rightG).push(wheelGround[i]);
-        });
-        const avg = (a: number[], fallback: number) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : fallback);
+        // Signed acceleration (squat/dive + the brake-squeal trigger), shared by both body modes.
         const accelSig = (speed - prevSpeed) / Math.max(delta, 1e-4);
-        const terrainPitch = Math.atan2(avg(rearG, avgGround) - avg(frontG, avgGround), wheelbase);
-        const terrainRoll = Math.atan2(avg(leftG, avgGround) - avg(rightG, avgGround), 1.7);
-        const targetPitch = Math.max(-0.18, Math.min(0.18, terrainPitch + -accelSig * veh.bodyPitch * 0.04));
-        // Lean into the turn, plus an extra drift lean while the tires slip (reads as a slide).
-        const turnLean = -yawRate * speed * veh.bodyRoll * (1 + slip * 1.5);
-        const targetRoll = Math.max(-0.3, Math.min(0.3, terrainRoll + turnLean));
-        const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * settle;
-        const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * settle;
-        vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow] });
-
-        // Wheels: spin around local X (∝ distance travelled), the front pair shows the smoothed steer angle
-        // around local Y, and each wheel bobs toward its own ground contact (visible per-wheel suspension).
         const TWO_PI = Math.PI * 2;
-        wheels.forEach((w, i) => {
-          const base = w.transform.rotation;
-          const spin = (base[0] + (speed / Math.max(0.05, veh.wheelRadius)) * delta) % TWO_PI;
-          const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
-          // Per-wheel suspension: target compression from this wheel's own ground contact, SMOOTHED toward
-          // the previous wheel Y so it glides over terrain noise instead of jittering (the straight-line wobble).
-          const comp = Math.max(-veh.suspensionTravel, Math.min(veh.suspensionTravel, wheelGround[i] - avgGround));
-          const wheelY = w.transform.position[1] + (veh.wheelRestY + comp - w.transform.position[1]) * settle;
-          vehicleWheel.set(w.id, { position: [w.transform.position[0], wheelY, w.transform.position[2]], rotation: [spin, steerY, base[2]] });
-        });
+
+        if (dynamic) {
+          // DYNAMIC body: the Rapier solver owns Y (gravity + resting on the terrain) and resolves contacts, so
+          // fixed scenery stops the car. We only command the horizontal velocity along the heading + the yaw;
+          // leaving the written Y equal to the current Y means the physics post-pass keeps GRAVITY on that axis
+          // (it isn't velocity-overridden) so the car rests on its convex hull instead of fighting a terrain snap.
+          position[1] = object.transform.position[1];
+          // Crash-stop: a contact with solid, non-knockable geometry (a wall/curb — not a cone, not the ground)
+          // scrubs speed so you stop on impact instead of grinding into the wall at full throttle.
+          const hitWall = state.runtimeCollisions.some((c) => {
+            if (c.objectId !== object.id && c.otherObjectId !== object.id) return false;
+            const otherId = c.objectId === object.id ? c.otherObjectId : c.objectId;
+            const other = mappedObjects.find((o) => o.id === otherId);
+            return Boolean(other && other.kind !== 'terrain' && other.physics?.bodyType !== 'dynamic');
+          });
+          if (hitWall) speed = approach(speed, 0, veh.braking * 2.2 * delta);
+          nextVelocities[object.id] = [sinY * speed, 0, cosY * speed];
+
+          // Cosmetic squat/dive + turn lean only (flat city streets, no terrain follow), kept small so the
+          // hard-set rotation keeps the convex collider close to upright while it rests on the ground.
+          const targetPitch = Math.max(-0.08, Math.min(0.08, -accelSig * veh.bodyPitch * 0.04));
+          const turnLean = -yawRate * speed * veh.bodyRoll * (1 + slip * 1.5);
+          const targetRoll = Math.max(-0.14, Math.min(0.14, turnLean));
+          const tiltK = 1 - Math.exp(-12 * Math.min(delta, 0.1));
+          const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * tiltK;
+          const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * tiltK;
+          vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow] });
+
+          // Wheels spin ∝ distance travelled and the front pair steers; no per-wheel terrain bob on flat streets.
+          wheels.forEach((w) => {
+            const base = w.transform.rotation;
+            const spin = (base[0] + (speed / Math.max(0.05, veh.wheelRadius)) * delta) % TWO_PI;
+            const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
+            vehicleWheel.set(w.id, { position: w.transform.position, rotation: [spin, steerY, base[2]] });
+          });
+        } else {
+          // KINEMATIC body: the runtime fully owns the transform (terrain-following Y + suspension), so the car
+          // can never be launched by the solver — but fixed scenery does NOT stop it (it drives through).
+          // Sample the terrain under each wheel (world space) for the suspension.
+          const wheelGround = wheels.map((w) => {
+            const lx = w.transform.position[0];
+            const lz = w.transform.position[2];
+            return groundAt(position[0] + lx * cosY + lz * sinY, position[2] - lx * sinY + lz * cosY);
+          });
+          const avgGround = wheelGround.length
+            ? wheelGround.reduce((a, b) => a + b, 0) / wheelGround.length
+            : groundAt(position[0], position[2]);
+
+          // Chassis Y rides on the terrain (springy). suspensionStiffness controls how fast it settles.
+          const settle = 1 - Math.exp(-(8 + veh.suspensionStiffness * 40) * Math.min(delta, 0.1));
+          const targetY = avgGround + veh.rideHeight;
+          position[1] = object.transform.position[1] + (targetY - object.transform.position[1]) * settle;
+          const velocity: Vector3Tuple = [sinY * speed, (position[1] - object.transform.position[1]) / Math.max(delta, 1e-4), cosY * speed];
+          nextVelocities[object.id] = velocity;
+
+          // Terrain tilt (pitch from front↔rear ground, roll from left↔right) + accel squat + turn lean.
+          const frontG: number[] = [];
+          const rearG: number[] = [];
+          const leftG: number[] = [];
+          const rightG: number[] = [];
+          wheels.forEach((w, i) => {
+            (w.transform.position[2] >= 0 ? frontG : rearG).push(wheelGround[i]);
+            (w.transform.position[0] <= 0 ? leftG : rightG).push(wheelGround[i]);
+          });
+          const avg = (a: number[], fallback: number) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : fallback);
+          const terrainPitch = Math.atan2(avg(rearG, avgGround) - avg(frontG, avgGround), wheelbase);
+          const terrainRoll = Math.atan2(avg(leftG, avgGround) - avg(rightG, avgGround), 1.7);
+          const targetPitch = Math.max(-0.18, Math.min(0.18, terrainPitch + -accelSig * veh.bodyPitch * 0.04));
+          // Lean into the turn, plus an extra drift lean while the tires slip (reads as a slide).
+          const turnLean = -yawRate * speed * veh.bodyRoll * (1 + slip * 1.5);
+          const targetRoll = Math.max(-0.3, Math.min(0.3, terrainRoll + turnLean));
+          const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * settle;
+          const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * settle;
+          vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow] });
+
+          // Wheels: spin around local X (∝ distance travelled), the front pair shows the smoothed steer angle
+          // around local Y, and each wheel bobs toward its own ground contact (visible per-wheel suspension).
+          wheels.forEach((w, i) => {
+            const base = w.transform.rotation;
+            const spin = (base[0] + (speed / Math.max(0.05, veh.wheelRadius)) * delta) % TWO_PI;
+            const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
+            // Per-wheel suspension: target compression from this wheel's own ground contact, SMOOTHED toward
+            // the previous wheel Y so it glides over terrain noise instead of jittering (the straight-line wobble).
+            const comp = Math.max(-veh.suspensionTravel, Math.min(veh.suspensionTravel, wheelGround[i] - avgGround));
+            const wheelY = w.transform.position[1] + (veh.wheelRestY + comp - w.transform.position[1]) * settle;
+            vehicleWheel.set(w.id, { position: [w.transform.position[0], wheelY, w.transform.position[2]], rotation: [spin, steerY, base[2]] });
+          });
+        }
         // Brake lights glow while braking / reversing / handbraking.
         for (const lid of veh.brakeLightIds) vehicleBrake.set(lid, braking || handbrake ? 4 : 0.15);
 
@@ -7545,15 +7837,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           nextRuntimeCinematicLook = undefined;
         } else {
           const prevTime = nextRuntimeCinematic.time;
-          const currentTime = Math.min(sequence.duration, prevTime + delta);
+          const sequenceList = scene?.cinematics ?? [];
+          const timeScale = cinematicTimeScaleAt(sequence, prevTime, sequenceList);
+          const currentTime = Math.min(sequence.duration, prevTime + delta * timeScale);
           const fired = new Set(nextRuntimeCinematic.firedActionIds);
           const spawnedByCinematic = new Set(nextRuntimeCinematic.spawnedObjectIds);
 
-          nextRuntimeCinematicCamera = cinematicCameraAt(sequence, allObjects, currentTime, nextRuntimeCinematicCamera);
-          nextRuntimeCinematicFade = cinematicFadeAt(sequence, currentTime, nextRuntimeCinematicFade);
+          nextRuntimeCinematicCamera = cinematicCameraAt(sequence, allObjects, currentTime, nextRuntimeCinematicCamera, sequenceList);
+          nextRuntimeCinematicFade = cinematicFadeAt(sequence, currentTime, nextRuntimeCinematicFade, sequenceList);
           nextRuntimeCinematicLook = sequence.look;
+          const transformOverrides = cinematicTransformsAt(sequence, allObjects, currentTime, sequenceList);
+          const materialOverrides = cinematicMaterialsAt(sequence, allObjects, currentTime, sequenceList);
+          if (Object.keys(transformOverrides).length || Object.keys(materialOverrides).length) {
+            allObjects = allObjects.map((object) => ({
+              ...object,
+              transform: transformOverrides[object.id] ?? object.transform,
+              renderer:
+                object.renderer && materialOverrides[object.id]
+                  ? { ...object.renderer, overrideMaterial: true, materialOverrides: { ...object.renderer.materialOverrides, ...materialOverrides[object.id] } }
+                  : object.renderer,
+            }));
+          }
 
-          for (const action of sequence.actions) {
+          for (const action of cinematicActionsAt(sequence, sequenceList, currentTime)) {
             const length = Math.max(action.duration ?? 0, 0.001);
             const local = clamp01((currentTime - action.time) / length);
             const active = currentTime >= action.time && currentTime <= action.time + length;
@@ -8026,6 +8332,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         editorCinematicPreviewFade: undefined,
         editorCinematicPreviewTransforms: {},
         editorCinematicPreviewHidden: [],
+        editorCinematicPreviewMaterials: {},
         runtimeTriggers: [],
         runtimeTriggersExit: [],
         runtimeStarted: false,
@@ -8034,5 +8341,91 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     }),
   markClean: () => set({ isDirty: false }),
-}));
 
+  buildPrefabPackage: (prefabId) => {
+    const state = get();
+    const src: PackageSource = {
+      prefabs: state.prefabs,
+      blueprints: state.blueprints,
+      graphs: state.graphs,
+      materials: state.materials,
+      particleSystems: state.particleSystems,
+      skeletons: state.skeletons,
+      skeletalMeshes: state.skeletalMeshes,
+      animations: state.animations,
+      animatorControllers: state.animatorControllers,
+      dataAssets: state.dataAssets,
+      uiDocuments: state.uiDocuments,
+      variables: state.variables,
+      assets: state.assets,
+    };
+    return collectPrefabPackage(src, prefabId);
+  },
+
+  buildFolderPackage: (folderId) => {
+    const state = get();
+    const folder = state.folders.find((f) => f.id === folderId);
+    if (!folder) return null;
+    // The folder + every folder nested under it (an asset's folderId points at exactly one of these).
+    const folderIds = new Set<string>([folderId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const f of state.folders) {
+        if (f.parentId && folderIds.has(f.parentId) && !folderIds.has(f.id)) {
+          folderIds.add(f.id);
+          grew = true;
+        }
+      }
+    }
+    const inFolder = <T extends { id: string; folderId?: string }>(arr: T[]) =>
+      arr.filter((item) => item.folderId && folderIds.has(item.folderId)).map((item) => item.id);
+    const seeds: PackageSeeds = {
+      prefabs: inFolder(state.prefabs),
+      blueprints: inFolder(state.blueprints),
+      materials: inFolder(state.materials),
+      particleSystems: inFolder(state.particleSystems),
+      animatorControllers: inFolder(state.animatorControllers),
+      dataAssets: inFolder(state.dataAssets),
+      uiDocuments: inFolder(state.uiDocuments),
+      assets: inFolder(state.assets),
+    };
+    if (!Object.values(seeds).some((list) => list && list.length)) return null;
+    const src: PackageSource = {
+      prefabs: state.prefabs,
+      blueprints: state.blueprints,
+      graphs: state.graphs,
+      materials: state.materials,
+      particleSystems: state.particleSystems,
+      skeletons: state.skeletons,
+      skeletalMeshes: state.skeletalMeshes,
+      animations: state.animations,
+      animatorControllers: state.animatorControllers,
+      dataAssets: state.dataAssets,
+      uiDocuments: state.uiDocuments,
+      variables: state.variables,
+      assets: state.assets,
+    };
+    return { ...collectPackage(src, seeds), name: folder.name };
+  },
+
+  mergePackage: (content, assets) =>
+    set((state) => ({
+      // Everything was re-id'd on import, so a plain append can't collide with existing content.
+      assets: [...state.assets, ...assets],
+      prefabs: [...state.prefabs, ...content.prefabs],
+      blueprints: [...state.blueprints, ...content.blueprints],
+      graphs: [...state.graphs, ...content.graphs],
+      materials: [...state.materials, ...content.materials],
+      particleSystems: [...state.particleSystems, ...content.particleSystems],
+      skeletons: [...state.skeletons, ...content.skeletons],
+      skeletalMeshes: [...state.skeletalMeshes, ...content.skeletalMeshes],
+      animations: [...state.animations, ...content.animations],
+      animatorControllers: [...state.animatorControllers, ...content.animatorControllers],
+      dataAssets: [...state.dataAssets, ...content.dataAssets],
+      uiDocuments: [...state.uiDocuments, ...content.uiDocuments],
+      variables: [...state.variables, ...content.variables],
+      prefabThumbnailQueue: [...state.prefabThumbnailQueue, ...content.prefabs.map((p) => p.id)],
+      isDirty: true,
+    })),
+}));

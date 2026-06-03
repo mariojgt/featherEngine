@@ -1,7 +1,7 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, TransformControls } from '@react-three/drei';
 import { Camera, Globe, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
-import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
@@ -16,6 +16,7 @@ import { useResolvedMaterial } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, isPrefabDrag, prefabDrag, readAssetDragId, readPrefabDragId } from './dragShared';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
+import { WebGLScreenUILayer } from '../ui/WebGLScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
 import { ImpactParticles } from '../three/ImpactParticles';
@@ -28,7 +29,7 @@ import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { Terrain } from '../three/Terrain';
 import { highestTerrainWorldHeight } from '../terrain/terrain';
-import type { SceneObject } from '../types';
+import type { MaterialOverrides, SceneObject } from '../types';
 
 type DropContext = { camera: THREE.Camera; canvas: HTMLCanvasElement };
 
@@ -233,7 +234,12 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   );
 }
 
-export function SceneObjectView({
+// Memoized: the runtime tick produces a NEW `objects` array every frame but keeps the SAME object reference
+// for anything that didn't move, so static scenery (buildings, roads, props — the bulk of a scene) bails out
+// of re-rendering here. Only objects whose transform/renderer actually changed (the car + its wheels, etc.)
+// re-render. The callbacks/flags it takes are all stable (useCallback / play-constant), so a shallow prop
+// compare is correct. This is the single biggest Play-mode FPS win in object-heavy scenes like the city.
+export const SceneObjectView = memo(function SceneObjectView({
   object,
   selected,
   registerObject,
@@ -289,7 +295,7 @@ export function SceneObjectView({
       {children}
     </group>
   );
-}
+});
 
 type TreeRenderOpts = {
   isPlaying: boolean;
@@ -297,6 +303,7 @@ type TreeRenderOpts = {
   draggingGizmo: boolean;
   previewingCinematic: boolean;
   cinematicPreviewTransforms: Record<string, SceneObject['transform']>;
+  cinematicPreviewMaterials: Record<string, MaterialOverrides>;
   selectedObjectId: string;
   registerObject: (id: string, object: THREE.Group | null) => void;
   isGizmoEngaged: () => boolean;
@@ -337,7 +344,17 @@ function renderObjectTree(objects: SceneObject[], opts: TreeRenderOpts): ReactNo
     const suppressOverride = opts.recording && opts.draggingGizmo && object.id === opts.selectedObjectId;
     const previewTransform =
       opts.previewingCinematic && !suppressOverride ? opts.cinematicPreviewTransforms[object.id] : undefined;
-    const visibleObject = previewTransform ? { ...object, transform: previewTransform } : object;
+    const previewMaterial = opts.previewingCinematic ? opts.cinematicPreviewMaterials[object.id] : undefined;
+    const visibleObject =
+      previewTransform || (previewMaterial && object.renderer)
+        ? {
+            ...object,
+            transform: previewTransform ?? object.transform,
+            renderer: previewMaterial && object.renderer
+              ? { ...object.renderer, overrideMaterial: true, materialOverrides: { ...object.renderer.materialOverrides, ...previewMaterial } }
+              : object.renderer,
+          }
+        : object;
     // Empties are organizational; hide their gizmo box during Play but keep the group so children
     // (and authored particle/effect empties) still position correctly.
     const drawSelf = !(opts.isPlaying && object.kind === 'empty' && !object.effect && !object.particles);
@@ -454,6 +471,7 @@ function SceneContent({
   const cinematicPreviewCamera = useEditorStore((state) => state.editorCinematicPreviewCamera);
   const cinematicPreviewTransforms = useEditorStore((state) => state.editorCinematicPreviewTransforms);
   const cinematicPreviewHidden = useEditorStore((state) => state.editorCinematicPreviewHidden);
+  const cinematicPreviewMaterials = useEditorStore((state) => state.editorCinematicPreviewMaterials);
   const recording = useEditorStore((state) => state.cinematicRecording);
   const editingKeyframe = useEditorStore((state) => Boolean(state.selectedCinematicKeyframe));
   const previewingCinematic = !isPlaying && Boolean(cinematicPreview);
@@ -567,6 +585,7 @@ function SceneContent({
           draggingGizmo,
           previewingCinematic,
           cinematicPreviewTransforms,
+          cinematicPreviewMaterials,
           selectedObjectId,
           registerObject,
           isGizmoEngaged,
@@ -575,6 +594,8 @@ function SceneContent({
       {/* World-space UI widgets anchored to objects (edit + play). Use the UNFILTERED list so signs on
           invisible/empty anchors (e.g. tutorial labels) still show during Play. */}
       {allSceneObjects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
+      {/* WebGL HUD (uikit) for renderMode:'webgl' screen docs — lives in-canvas so PostFx bloom hits it. */}
+      <WebGLScreenUILayer />
       {selectedTarget && !isPlaying && !cameraRigObject && (!previewingCinematic || recording) && (
         <TransformControls
           ref={controlsRef as never}

@@ -49,4 +49,11 @@ export interface Platform {
   ): Promise<string>;
   /** Desktop only: prompt for a folder. Returns the absolute path, or null if cancelled. */
   pickDirectory?(title?: string): Promise<string | null>;
+  /**
+   * Write a portable template/module package (`.nfpack`). Downloads on web; prompts for a save
+   * location on desktop. Returns a short destination label, or null if cancelled.
+   */
+  exportPackage(name: string, pkg: unknown): Promise<string | null>;
+  /** Open a `.nfpack` package file and return its parsed JSON, or null if cancelled. */
+  openPackage(): Promise<unknown | null>;
 }

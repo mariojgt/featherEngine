@@ -25,8 +25,10 @@ import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
+import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 
 const store = () => useEditorStore.getState();
+const projectStore = () => useProjectStore.getState();
 
 const vec3 = z.array(z.number()).length(3).describe('[x, y, z]');
 const asVec3 = (value: number[]) => value as Vector3Tuple;
@@ -96,10 +98,11 @@ const environmentPatchSchema = z.object({
   fogFar: z.number().min(1).optional(),
 });
 const cinematicActionSchema = z.object({
-  type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade']),
+  type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence']),
   time: z.number().min(0).describe('Seconds from cinematic start.'),
   duration: z.number().min(0).optional().describe('Seconds this beat lasts; use for camera/transform/fade interpolation.'),
   ease: z.enum(['linear', 'smooth', 'in', 'out']).optional().describe('Interpolation curve for camera/transform/fade beats. Default smooth (ease in-out); use linear for constant-speed moves.'),
+  interpolation: z.enum(['smooth', 'linear', 'hold']).optional().describe('Keyframe interpolation for camera/object/material tracks. smooth = spline/eased, linear = straight, hold = stepped/no interpolation.'),
   blend: z.number().min(0).max(10).optional().describe('Camera beats only: seconds to glide from the previous camera shot into this one (0 = hard cut, >0 = smooth dolly/blend between shots).'),
   keyframes: z
     .array(
@@ -125,8 +128,22 @@ const cinematicActionSchema = z.object({
     )
     .optional()
     .describe('Transform beats only: an animated object track (requires objectId). With ≥2 keyframes the object flies smoothly (spline) through them; overrides from/to. Prefer this for moving/animating an object.'),
+  materialKeyframes: z
+    .array(
+      z.object({
+        time: z.number().min(0),
+        color: z.string().optional(),
+        metalness: z.number().min(0).max(1).optional(),
+        roughness: z.number().min(0).max(1).optional(),
+        emissiveColor: z.string().optional(),
+        emissiveIntensity: z.number().min(0).max(20).optional(),
+      }),
+    )
+    .optional()
+    .describe('Material beats only: keyframe color/metalness/roughness/emissive/glow over time.'),
   label: z.string().optional(),
   objectId: z.string().optional().describe('Target scene object id for transform/visibility/animation.'),
+  cinematicId: z.string().optional().describe('Subsequence beats only: child cinematic id to nest in this sequence.'),
   prefabId: z.string().optional().describe('Prefab to instantiate temporarily during the cinematic.'),
   spawnKind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane', 'terrain', 'light', 'camera']).optional(),
   name: z.string().optional(),
@@ -151,6 +168,23 @@ const cinematicActionSchema = z.object({
   fadeFrom: z.number().min(0).max(1).optional(),
   fadeTo: z.number().min(0).max(1).optional(),
   fadeColor: z.string().optional(),
+  fromMaterial: z.object({
+    color: z.string().optional(),
+    metalness: z.number().min(0).max(1).optional(),
+    roughness: z.number().min(0).max(1).optional(),
+    emissiveColor: z.string().optional(),
+    emissiveIntensity: z.number().min(0).max(20).optional(),
+  }).optional(),
+  toMaterial: z.object({
+    color: z.string().optional(),
+    metalness: z.number().min(0).max(1).optional(),
+    roughness: z.number().min(0).max(1).optional(),
+    emissiveColor: z.string().optional(),
+    emissiveIntensity: z.number().min(0).max(20).optional(),
+  }).optional(),
+  timeScale: z.number().min(0.05).max(4).optional().describe('Time Dilation beats only: speed multiplier for cinematic playback.'),
+  fromTimeScale: z.number().min(0.05).max(4).optional(),
+  toTimeScale: z.number().min(0.05).max(4).optional(),
 });
 
 function normalizeCinematicAction(input: z.infer<typeof cinematicActionSchema>): Omit<CinematicAction, 'id'> {
@@ -1463,7 +1497,7 @@ export const engineTools = {
 
   create_driving_template: tool({
     description:
-      'Build a complete arcade RACING starter from the bundled car kit: a "choose your car" start menu (5 cars), a marked race circuit (a stadium oval of edge cones + checkpoint gate posts + a start/finish line whose start straight doubles as the grid) on a near-flat streamed terrain world, WASD + mouse-orbit driving with suspension feel (chassis squat/dive/lean + spinning, steering wheels), a real handbrake drift, headlights, brake lights, a full car sound set (looping engine + skid, brake/horn/collision one-shots), and a HUD with a speedometer + lap counter / current & best lap time. The runtime times laps automatically as the car passes the "Checkpoint N" markers in order. Returns the default car objectId.',
+      'Build a complete arcade DRIVING starter from the bundled car kit: a "choose your car" start menu (5 cars), then a drivable CITY on a single flat ground slab (no streamed terrain — a city is flat, so it skips procedural chunk/heightfield streaming for steady FPS) — a square street grid (asphalt + raised sidewalk/lot blocks leaving road gaps) with a varied building skyline, dashed lane centerlines, glowing directional arrow chevrons that guide a 4-checkpoint loop through the streets, and practice zones (a roundabout to circle, a cone slalom to weave, parking bays, a pocket park). WASD + mouse-orbit driving with suspension feel (chassis squat/dive/lean + spinning, steering wheels), a real handbrake drift, headlights, brake lights, a full car sound set (looping engine + skid, brake/horn/collision one-shots), and a HUD with a speedometer + lap counter / current & best lap time. The runtime times laps automatically as the car passes the "Checkpoint N" markers in order. Cars are DYNAMIC rigid bodies (convex hull from the car model), so the buildings + roundabout are SOLID and physically stop the car (it bumps/crash-stops), while the loose cones knock flying; sidewalks/markings/arrows are flat and non-colliding. Returns the default car objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createDrivingTemplate();
@@ -1537,16 +1571,81 @@ export const engineTools = {
     inputSchema: z.object({
       name: z.string().optional(),
       duration: z.number().min(0.5).optional(),
+      frameRate: z.number().min(1).max(120).optional(),
+      folder: z.string().optional(),
       autoplay: z.boolean().optional(),
       actions: z.array(cinematicActionSchema).optional(),
     }),
-    execute: async ({ name, duration = 8, autoplay, actions = [] }) => {
+    execute: async ({ name, duration = 8, frameRate, folder, autoplay, actions = [] }) => {
       const id = store().createCinematic(name ?? 'AI Cinematic', duration);
-      store().updateCinematic(id, { autoplay });
+      store().updateCinematic(id, { autoplay, frameRate, folder });
       const created = actions
         .map((action) => store().addCinematicAction(id, normalizeCinematicAction(action)))
         .filter(Boolean);
       return `Created cinematic "${name ?? 'AI Cinematic'}" with cinematicId ${id} and ${created.length} actions.`;
+    },
+  }),
+
+  create_storyboard_cinematic: tool({
+    description:
+      'Create a complete Sequencer-style storyboard cinematic in one call: a new sequence with film look, fades, camera shots or a smooth camera path, optional autoplay, and an optional end event for gameplay handoff. Prefer this over many low-level add_cinematic_action calls when the user asks for an intro, reveal, boss arrival, vista flyover, or simple cutscene.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      preset: z.enum(STORYBOARD_PRESETS).optional().describe('three-shot-intro = establishing/push/reveal; orbit-reveal = one smooth camera path; gameplay-handoff = intro that ends near a gameplay camera angle.'),
+      subjectObjectId: z.string().optional().describe('Optional object to frame. Omit to frame the active scene center.'),
+      focusPoint: vec3.optional().describe('Optional explicit world focus point. Overrides subject framing when provided.'),
+      duration: z.number().min(3).optional(),
+      autoplay: z.boolean().optional(),
+      includeFades: z.boolean().optional(),
+      endEventName: z.string().optional().describe('Optional custom event fired near the end, e.g. cinematic_finished/start_gameplay.'),
+      letterbox: z.number().min(0).max(3).optional(),
+      grade: z.enum(['none', 'warm', 'teal-orange', 'noir', 'cool', 'sepia', 'custom']).optional(),
+      gradeIntensity: z.number().min(0).max(1).optional(),
+      grain: z.number().min(0).max(1).optional(),
+      vignette: z.number().min(0).max(1).optional(),
+    }),
+    execute: async ({ name, preset, subjectObjectId, focusPoint, duration, autoplay, includeFades, endEventName, letterbox, grade, gradeIntensity, grain, vignette }) => {
+      if (subjectObjectId && !findObject(subjectObjectId)) return `No object with id ${subjectObjectId}.`;
+      const result = createStoryboardCinematic({
+        name,
+        preset,
+        subjectObjectId,
+        focusPoint: focusPoint ? asVec3(focusPoint) : undefined,
+        duration,
+        autoplay,
+        includeFades,
+        endEventName,
+        look: { letterbox, grade, gradeIntensity, grain, vignette },
+      });
+      if (!result) return 'No active scene to add a storyboard cinematic to.';
+      const subject = result.subjectName ? ` around ${result.subjectName}` : '';
+      return `Created ${result.preset} storyboard cinematic${subject}: cinematicId ${result.cinematicId}, ${result.actionCount} actions, focus [${result.focus.join(', ')}].`;
+    },
+  }),
+
+  duplicate_cinematic_take: tool({
+    description:
+      'Duplicate an existing Film Mode cinematic as a new take. Use this before trying alternate edits so the original sequence stays intact.',
+    inputSchema: z.object({ cinematicId: z.string() }),
+    execute: async ({ cinematicId }) => {
+      const id = store().duplicateCinematicTake(cinematicId);
+      return id ? `Duplicated cinematic ${cinematicId} as take ${id}.` : `No cinematic with id ${cinematicId}.`;
+    },
+  }),
+
+  add_cinematic_marker: tool({
+    description:
+      'Add a timeline marker to a Film Mode cinematic. Use markers for named beats, edit notes, determinism fences, or AI/user handoff points.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      time: z.number().min(0),
+      label: z.string().optional(),
+      color: z.string().optional(),
+      determinismFence: z.boolean().optional(),
+    }),
+    execute: async ({ cinematicId, time, label, color, determinismFence }) => {
+      const id = store().addCinematicMarker(cinematicId, { time, label, color, determinismFence });
+      return id ? `Added marker ${id} to cinematic ${cinematicId}.` : `No cinematic with id ${cinematicId}.`;
     },
   }),
 
@@ -1696,6 +1795,61 @@ export const engineTools = {
         animatorControllerId: object.animator?.controllerId ?? null,
       }));
       return JSON.stringify({ id: prefab.id, name: prefab.name, rootId: prefab.rootId, objects });
+    },
+  }),
+
+  export_prefab_package: tool({
+    description:
+      'Export a prefab + its full dependency closure (blueprint, graph, materials, particles, animator/skeleton/animations, sounds, UI, referenced assets) as a portable .nfpack package file the user can share or reimport into another project. Opens a save dialog (desktop) / downloads the file (web). Use when the user wants to package, share, sell, or back up a reusable template.',
+    inputSchema: z.object({
+      prefabId: z.string(),
+      name: z.string().optional().describe('Package name; defaults to the prefab name.'),
+      description: z.string().optional(),
+      author: z.string().optional(),
+      version: z.string().optional().describe('Content semver, e.g. "1.0.0".'),
+      tags: z.array(z.string()).optional(),
+    }),
+    execute: async ({ prefabId, name, description, author, version, tags }) => {
+      if (!findPrefab(prefabId)) return `No prefab with id ${prefabId}.`;
+      const collected = store().buildPrefabPackage(prefabId);
+      if (!collected) return `Couldn't collect dependencies for prefab ${prefabId}.`;
+      await projectStore().exportPrefabPackage(prefabId, { name, description, author, version, tags });
+      const c = collected.content;
+      return `Exporting package "${name ?? findPrefab(prefabId)?.name}" — ${c.prefabs.length} prefab(s), ${c.blueprints.length} blueprint(s), ${c.materials.length} material(s), ${collected.assetIds.length} asset(s). The user chooses where to save it.`;
+    },
+  }),
+
+  export_folder_package: tool({
+    description:
+      "Export EVERYTHING in a project-browser folder (and its subfolders) plus all dependencies as one portable .nfpack package — the equivalent of Unreal's 'Migrate folder'. Use when the user wants to package a whole folder of prefabs/blueprints/materials/etc. at once rather than a single prefab. Find the folderId in the snapshot's folders list.",
+    inputSchema: z.object({
+      folderId: z.string(),
+      name: z.string().optional().describe('Package name; defaults to the folder name.'),
+      description: z.string().optional(),
+      author: z.string().optional(),
+      version: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+    }),
+    execute: async ({ folderId, name, description, author, version, tags }) => {
+      const collected = store().buildFolderPackage(folderId);
+      if (!collected) return `Folder ${folderId} is empty or not found — nothing to export.`;
+      await projectStore().exportFolderPackage(folderId, { name, description, author, version, tags });
+      const c = collected.content;
+      return `Exporting folder package "${name ?? collected.name}" — ${c.prefabs.length} prefab(s), ${c.blueprints.length} blueprint(s), ${c.materials.length} material(s), ${collected.assetIds.length} asset(s). The user chooses where to save it.`;
+    },
+  }),
+
+  import_package: tool({
+    description:
+      'Import a .nfpack package (a prefab + its dependencies, or a whole module) into the current project. Opens a file picker. Import is purely additive — every id is regenerated so it never overwrites or breaks existing objects, blueprints, variables or assets. After import the new prefab(s) appear in the Project browser; instantiate_prefab to place one. Remind the user to back up first if the project matters.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const before = store().prefabs.length;
+      await projectStore().importPackageFromFile();
+      const added = store().prefabs.length - before;
+      return added > 0
+        ? `Imported a package — ${added} new prefab(s) added to the Project browser. Use instantiate_prefab to place one in the scene.`
+        : `Import dialog closed — no package was imported.`;
     },
   }),
 
@@ -1854,16 +2008,33 @@ export const engineTools = {
 
   create_ui_document: tool({
     description:
-      'Create a screen HUD or world UI document with a root panel. Returns uiDocumentId; add elements or presets next.',
+      'Create a screen HUD or world UI document with a root panel. Returns uiDocumentId; add elements or presets next. Set renderMode "webgl" for cinematic UI rendered inside the 3D canvas (gets bloom/post-FX, depth-correct in world space, and required for diegetic in-world screens and element fx).',
     inputSchema: z.object({
       name: z.string().optional(),
       surface: z.enum(['screen', 'world']).optional().describe('Defaults to "screen".'),
+      renderMode: z.enum(['dom', 'webgl']).optional().describe('"dom" (default) = HTML/CSS overlay. "webgl" = rendered in-canvas via uikit; enables bloom, world-space depth occlusion, diegetic surfaces, and element fx.'),
       folderId: z.string().optional(),
     }),
-    execute: async ({ name, surface, folderId }) => {
+    execute: async ({ name, surface, renderMode, folderId }) => {
       const id = store().createUIDocument(name, surface ?? 'screen', folderId);
+      if (renderMode) store().updateUIDocument(id, { renderMode });
       const doc = findUIDocument(id);
-      return `Created ${doc?.surface} UI "${doc?.name}" with uiDocumentId ${id}. Its root panel id is ${doc?.root.id}.`;
+      return `Created ${doc?.surface} UI "${doc?.name}" (${doc?.renderMode ?? 'dom'} renderer) with uiDocumentId ${id}. Its root panel id is ${doc?.root.id}.`;
+    },
+  }),
+
+  set_ui_render_mode: tool({
+    description:
+      'Switch an existing UI document between the DOM overlay and the WebGL (uikit) renderer. WebGL gets bloom/post-FX, depth-correct world placement, diegetic surfaces and element fx; DOM has full CSS. Use on docs from create_ui_template to make them cinematic.',
+    inputSchema: z.object({
+      documentId: z.string(),
+      renderMode: z.enum(['dom', 'webgl']),
+    }),
+    execute: async ({ documentId, renderMode }) => {
+      const doc = findUIDocument(documentId);
+      if (!doc) return `No UI document with id ${documentId}.`;
+      store().updateUIDocument(documentId, { renderMode });
+      return `UI "${doc.name}" now uses the ${renderMode} renderer.`;
     },
   }),
 
@@ -2110,7 +2281,7 @@ export const engineTools = {
 
   update_ui_element: tool({
     description:
-      'Update UI element text/name/class/event/image/style. Style uses CSS-like strings plus flexDirection/textAlign enums.',
+      'Update UI element text/name/class/event/image/style/fx. Style uses CSS-like strings plus flexDirection/textAlign enums. fx applies only when the document renderMode is "webgl".',
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
@@ -2119,6 +2290,7 @@ export const engineTools = {
       className: z.string().optional(),
       onClickEvent: z.string().optional(),
       assetId: z.string().optional(),
+      fx: z.enum(['glow', 'holographic', 'scanline']).optional().describe('WebGL-only visual effect. "glow" blooms via post-FX (use a bright color); "holographic"/"scanline" render translucent. Pass "" via none is not supported here; omit to leave unchanged.'),
       style: z
         .object({
           background: z.string().optional(),
@@ -2168,19 +2340,32 @@ export const engineTools = {
 
   attach_world_ui: tool({
     description:
-      'Anchor a world UI document over an object; bindings can read object variables via self.<key>. Empty documentId detaches.',
+      'Anchor a world UI document over an object; bindings can read object variables via self.<key>. Empty documentId detaches. Set diegetic:true (needs the document renderMode "webgl") to render the UI onto a flat in-world screen — a monitor/terminal/wrist display — oriented by the object transform.',
     inputSchema: z.object({
       objectId: z.string(),
       documentId: z.string().optional().describe('A world UI document id, or empty to detach.'),
+      billboard: z.boolean().optional().describe('Always face the camera (ignored when diegetic).'),
+      diegetic: z.boolean().optional().describe('Render onto an in-world surface via render-to-texture. Requires the document renderMode "webgl".'),
+      surfaceWidth: z.number().optional().describe('Diegetic panel width in world units (default 1.6).'),
+      surfaceHeight: z.number().optional().describe('Diegetic panel height in world units (default 0.9).'),
     }),
-    execute: async ({ objectId, documentId }) => {
+    execute: async ({ objectId, documentId, billboard, diegetic, surfaceWidth, surfaceHeight }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
       if (documentId) {
         const doc = findUIDocument(documentId);
         if (!doc) return `No UI document with id ${documentId}.`;
         if (doc.surface !== 'world') return `UI ${documentId} is a screen document; only "world" docs can be anchored to objects.`;
         store().attachUI(objectId, documentId);
-        return `Anchored world UI ${documentId} to ${objectId}.`;
+        const patch: Record<string, unknown> = {};
+        if (billboard !== undefined) patch.billboard = billboard;
+        if (diegetic !== undefined) patch.diegetic = diegetic;
+        if (surfaceWidth !== undefined) patch.surfaceWidth = surfaceWidth;
+        if (surfaceHeight !== undefined) patch.surfaceHeight = surfaceHeight;
+        if (Object.keys(patch).length) store().updateUIComponent(objectId, patch);
+        const note = diegetic
+          ? ` as a diegetic in-world screen${doc.renderMode !== 'webgl' ? ' — WARNING: set this document renderMode to "webgl" or it will fall back to a DOM widget' : ''}`
+          : '';
+        return `Anchored world UI ${documentId} to ${objectId}${note}.`;
       }
       store().detachUI(objectId);
       return `Detached the world UI from ${objectId}.`;

@@ -851,6 +851,15 @@ export interface UIComponent {
   scale: number;
   /** When true the widget always faces the camera. */
   billboard: boolean;
+  /**
+   * Diegetic mode (requires the document's `renderMode: 'webgl'`): instead of a floating widget,
+   * render the UI onto a flat in-world surface (a monitor/terminal/screen) via render-to-texture,
+   * lit and oriented by the host object's transform. `surfaceWidth`/`surfaceHeight` are the panel's
+   * size in world units (default 1.6 × 0.9).
+   */
+  diegetic?: boolean;
+  surfaceWidth?: number;
+  surfaceHeight?: number;
 }
 
 /**
@@ -1132,7 +1141,7 @@ export interface ParticleSystemDefinition extends ParticleConfig {
   createdAt: number;
 }
 
-export type CinematicActionType = 'camera' | 'transform' | 'visibility' | 'spawn' | 'animation' | 'sound' | 'event' | 'fade';
+export type CinematicActionType = 'camera' | 'transform' | 'visibility' | 'spawn' | 'animation' | 'sound' | 'event' | 'fade' | 'material' | 'timeDilation' | 'subsequence';
 
 /**
  * Interpolation curve applied to a beat's progress (and to camera shot-to-shot blends).
@@ -1140,6 +1149,9 @@ export type CinematicActionType = 'camera' | 'transform' | 'visibility' | 'spawn
  * `in`/`out` accelerate/decelerate at one end.
  */
 export type CinematicEase = 'linear' | 'smooth' | 'in' | 'out';
+
+/** Interpolation mode for keyframed camera/object/material tracks. */
+export type CinematicInterpolation = 'smooth' | 'linear' | 'hold';
 
 /**
  * One keyframe on a camera beat's animated track: the camera's framing at an absolute time
@@ -1173,6 +1185,26 @@ export interface CinematicTransformKeyframe {
   scale: Vector3Tuple;
 }
 
+/** One keyframe on a material/property track. Missing fields hold/interpolate from neighbouring keys. */
+export interface CinematicMaterialKeyframe {
+  /** Absolute time in seconds from the cinematic start. */
+  time: number;
+  color?: string;
+  metalness?: number;
+  roughness?: number;
+  emissiveColor?: string;
+  emissiveIntensity?: number;
+}
+
+export interface CinematicMarker {
+  id: string;
+  time: number;
+  label: string;
+  color?: string;
+  /** Runtime evaluators can split work at this marker when deterministic sampling matters. */
+  determinismFence?: boolean;
+}
+
 export interface CinematicAction {
   id: string;
   type: CinematicActionType;
@@ -1181,6 +1213,8 @@ export interface CinematicAction {
   label?: string;
   /** Easing curve for this beat's from→to interpolation (camera/transform/fade). Defaults to `smooth`. */
   ease?: CinematicEase;
+  /** Keyframe interpolation mode for animated tracks. Defaults to `smooth`. */
+  interpolation?: CinematicInterpolation;
   /**
    * Camera beats only: seconds to glide from the previous camera shot's framing into this one.
    * `0` (or omitted) is a hard cut; any positive value produces a smooth dolly/blend between shots.
@@ -1196,7 +1230,11 @@ export interface CinematicAction {
    * smoothly flies through them over the timeline (overrides the from/to fields on this beat).
    */
   transformKeyframes?: CinematicTransformKeyframe[];
+  /** Material/property keyframes for `type: 'material'` tracks. */
+  materialKeyframes?: CinematicMaterialKeyframe[];
   objectId?: string;
+  /** Subsequence id for `type: 'subsequence'` actions. */
+  cinematicId?: string;
   prefabId?: string;
   spawnKind?: SceneObjectKind;
   name?: string;
@@ -1219,6 +1257,13 @@ export interface CinematicAction {
   fadeFrom?: number;
   fadeTo?: number;
   fadeColor?: string;
+  /** `type: 'material'`: start/end material overrides for color/metal/rough/glow tracks. */
+  fromMaterial?: MaterialOverrides;
+  toMaterial?: MaterialOverrides;
+  /** `type: 'timeDilation'`: playback speed multiplier, or from/to for a speed ramp. */
+  timeScale?: number;
+  fromTimeScale?: number;
+  toTimeScale?: number;
   /** Camera beats only: depth-of-field focus distance in world units ahead of the camera. Used when
    *  the beat has no keyframe track. Splines/blends with the next shot. Needs `aperture > 0` to show. */
   focusDistance?: number;
@@ -1265,8 +1310,17 @@ export interface CinematicSequence {
   id: string;
   name: string;
   duration: number;
+  /** Timeline display/evaluation frame rate for snapping and frame stepping. Defaults to 24. */
+  frameRate?: number;
+  /** Folder/path label in the Cinematics panel, e.g. "Intros/Boss". */
+  folder?: string;
+  /** Source sequence id when this is a duplicated take. */
+  takeOf?: string;
+  /** Human take number; duplicate-take creation increments it. */
+  takeNumber?: number;
   autoplay?: boolean;
   skippable?: boolean;
+  markers?: CinematicMarker[];
   /** The film look (letterbox / grade / grain / vignette) layered over the frame while this plays. */
   look?: CinematicLook;
   actions: CinematicAction[];
@@ -1497,6 +1551,12 @@ export interface UIElement {
   bindings: UIBinding[];
   /** Button only — fires this custom runtime event on click (consumed by event.custom nodes). */
   onClickEvent?: string;
+  /**
+   * WebGL-backend visual effect (only honoured when the document's `renderMode` is `'webgl'`).
+   * `'glow'` adds emissive bloom (pairs with the HUD bloom pass), `'holographic'` an animated
+   * flicker/tint, `'scanline'` a CRT line overlay. Ignored by the DOM backend.
+   */
+  fx?: 'glow' | 'holographic' | 'scanline';
   children: UIElement[];
 }
 
@@ -1505,6 +1565,13 @@ export interface UIDocument {
   id: string;
   name: string;
   surface: UISurface;
+  /**
+   * Rendering backend. `'dom'` (default) draws HTML/CSS as a screen overlay or drei `<Html>`.
+   * `'webgl'` renders the same element tree inside the 3D canvas via @react-three/uikit, so it
+   * picks up post-processing (bloom/glitch), is depth-correct in world space, and can be mapped
+   * onto in-world surfaces (diegetic UI). Bindings, text overrides and click events are identical.
+   */
+  renderMode?: 'dom' | 'webgl';
   /** Always a 'panel' element. */
   root: UIElement;
   /** Raw CSS escape hatch, scoped to this document. */

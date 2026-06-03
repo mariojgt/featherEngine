@@ -4,7 +4,57 @@ import { getPlatform, isDesktop } from '../platform';
 import { blankProject } from '../project/serialize';
 import { buildGameBundle, embedAssets } from '../project/exportGame';
 import { verifyGameBundle } from '../project/verifyBundle';
+import {
+  buildPackage,
+  parsePackage,
+  remapPackageForImport,
+  type NodeForgePackage,
+  type PackageMeta,
+} from '../project/package';
+import type { AssetItem } from '../types';
 import { useEditorStore } from './editorStore';
+
+/** Caller-supplied package metadata; the rest (id, createdAt, engineVersion) is filled in. */
+export type PackageMetaInput = Partial<Omit<PackageMeta, 'engineVersion' | 'createdAt'>>;
+
+/** Decode a data URL into a File so it can be re-imported through the platform asset pipeline. */
+function dataUrlToFile(dataUrl: string, name: string): File {
+  const comma = dataUrl.indexOf(',');
+  const header = dataUrl.slice(0, comma);
+  const mime = /data:([^;]+)/.exec(header)?.[1] ?? 'application/octet-stream';
+  const binary = atob(dataUrl.slice(comma + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], name, { type: mime });
+}
+
+/**
+ * Turn a package's embedded assets (data URLs) into project assets with a runtime url. On a saved
+ * desktop project we write the bytes to disk (persistent `path`); otherwise we keep the data URL as
+ * the url so it still renders and survives a web download (which retains `data`).
+ */
+async function resolvePackageAssets(
+  assets: AssetItem[],
+  projectDir: string | null,
+  platform: Awaited<ReturnType<typeof getPlatform>>,
+): Promise<AssetItem[]> {
+  const onDisk = platform.isDesktop && !!projectDir && projectDir !== 'web';
+  return Promise.all(
+    assets.map(async (asset) => {
+      if (!asset.data) return { ...asset, unresolved: true };
+      if (onDisk) {
+        try {
+          const file = dataUrlToFile(asset.data, asset.name || `${asset.id}`);
+          const { path, url } = await platform.importAsset(projectDir as string, file);
+          return { ...asset, path, url, data: undefined };
+        } catch {
+          return { ...asset, url: asset.data };
+        }
+      }
+      return { ...asset, url: asset.data };
+    }),
+  );
+}
 
 interface RecentProject {
   dir: string;
@@ -30,6 +80,12 @@ interface ProjectState {
   saveAs: (name: string) => Promise<void>;
   exportGame: () => Promise<void>;
   exportProduction: () => Promise<void>;
+  /** Export a prefab + its dependency closure as a portable `.nfpack` package file. */
+  exportPrefabPackage: (prefabId: string, meta?: PackageMetaInput) => Promise<void>;
+  /** Export everything in a folder (and its subfolders) + dependencies as one `.nfpack`, like Unreal's Migrate. */
+  exportFolderPackage: (folderId: string, meta?: PackageMetaInput) => Promise<void>;
+  /** Pick a `.nfpack` file and additively import its content into the current project. */
+  importPackageFromFile: () => Promise<void>;
   useDemo: () => void;
   closeProject: () => void;
   clearError: () => void;
@@ -264,6 +320,107 @@ export const useProjectStore = create<ProjectState>()(
           } catch (error) {
             const message = errorMessage(error);
             set({ error: message, toast: { kind: 'error', message: `Production export failed: ${message}` } });
+          } finally {
+            set({ busy: false });
+          }
+        },
+
+        exportPrefabPackage: async (prefabId, meta) => {
+          if (!get().hasProject) return;
+          set({ busy: true, error: null });
+          try {
+            const editor = useEditorStore.getState();
+            const collected = editor.buildPrefabPackage(prefabId);
+            if (!collected) {
+              set({ toast: { kind: 'error', message: 'Could not find that prefab to export.' } });
+              return;
+            }
+            const prefab = editor.prefabs.find((p) => p.id === prefabId);
+            const name = meta?.name ?? prefab?.name ?? 'Module';
+            // Inline only the assets this prefab actually references (from the live, url-carrying assets).
+            const live = editor.assets.filter((asset) => collected.assetIds.includes(asset.id));
+            const embedded = await embedAssets(live);
+            const pkg = buildPackage('module', collected.content, embedded, {
+              id: crypto.randomUUID(),
+              name,
+              version: '1.0.0',
+              thumbnail: prefab?.thumbnail,
+              ...meta,
+            });
+            const platform = await getPlatform();
+            const destination = await platform.exportPackage(name, pkg);
+            if (destination) {
+              set({ toast: { kind: 'success', message: `Package exported: ${destination}` } });
+            }
+          } catch (error) {
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Package export failed: ${message}` } });
+          } finally {
+            set({ busy: false });
+          }
+        },
+
+        exportFolderPackage: async (folderId, meta) => {
+          if (!get().hasProject) return;
+          set({ busy: true, error: null });
+          try {
+            const editor = useEditorStore.getState();
+            const collected = editor.buildFolderPackage(folderId);
+            if (!collected) {
+              set({ toast: { kind: 'error', message: 'That folder is empty — nothing to export.' } });
+              return;
+            }
+            const name = meta?.name ?? collected.name;
+            const live = editor.assets.filter((asset) => collected.assetIds.includes(asset.id));
+            const embedded = await embedAssets(live);
+            const pkg = buildPackage('module', collected.content, embedded, {
+              id: crypto.randomUUID(),
+              name,
+              version: '1.0.0',
+              ...meta,
+            });
+            const platform = await getPlatform();
+            const destination = await platform.exportPackage(name, pkg);
+            if (destination) {
+              const c = collected.content;
+              set({
+                toast: {
+                  kind: 'success',
+                  message: `Package "${name}" exported (${c.prefabs.length} prefab(s), ${c.blueprints.length} blueprint(s), ${embedded.length} asset(s)): ${destination}`,
+                },
+              });
+            }
+          } catch (error) {
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Package export failed: ${message}` } });
+          } finally {
+            set({ busy: false });
+          }
+        },
+
+        importPackageFromFile: async () => {
+          if (!get().hasProject) return;
+          set({ busy: true, error: null });
+          try {
+            const platform = await getPlatform();
+            const raw = await platform.openPackage();
+            if (!raw) return;
+            const pkg = parsePackage(raw) as NodeForgePackage;
+            const editor = useEditorStore.getState();
+            // Re-id everything so the import is purely additive and can't overwrite existing content.
+            const { content, assets } = remapPackageForImport(pkg, editor.skeletons);
+            const resolved = await resolvePackageAssets(assets, get().projectDir, platform);
+            editor.mergePackage(content, resolved);
+            const count = content.prefabs.length;
+            set({
+              toast: {
+                kind: 'success',
+                message: `Imported "${pkg.meta?.name ?? 'package'}" (${count} prefab${count === 1 ? '' : 's'}). Tip: back up your project before importing packages you don't trust.`,
+              },
+            });
+          } catch (error) {
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message: `Import failed: ${message}` } });
           } finally {
             set({ busy: false });
           }

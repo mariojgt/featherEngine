@@ -120,4 +120,26 @@ export const tauriPlatform: Platform = {
     const dir = await open({ directory: true, multiple: false, title: title ?? 'Choose a folder' });
     return typeof dir === 'string' ? dir : null;
   },
+
+  async exportPackage(name, pkg) {
+    const safe = (name || 'package').replace(/[^\w.\-]+/g, '_');
+    const target = await save({
+      title: 'Export package',
+      defaultPath: `${safe}.nfpack`,
+      filters: [{ name: 'NodeForge package', extensions: ['nfpack', 'json'] }],
+    });
+    if (typeof target !== 'string') return null;
+    await writeTextFile(target, JSON.stringify(pkg));
+    return target;
+  },
+
+  async openPackage() {
+    const target = await open({
+      multiple: false,
+      title: 'Import package',
+      filters: [{ name: 'NodeForge package', extensions: ['nfpack', 'json'] }],
+    });
+    if (typeof target !== 'string') return null;
+    return JSON.parse(await readTextFile(target));
+  },
 };

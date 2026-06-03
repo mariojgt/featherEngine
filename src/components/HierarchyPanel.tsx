@@ -110,7 +110,17 @@ function HierarchyRow({
 }
 
 export function HierarchyPanel() {
-  const sceneObjects = useEditorStore(selectActiveObjects);
+  // The runtime tick (Play) rebuilds the objects array every frame, so subscribing to it directly would
+  // re-render this whole tree 60×/sec — a major FPS sink in object-heavy scenes (the hierarchy doesn't even
+  // show transforms). Subscribe instead to a STRUCTURAL SIGNATURE (id/name/kind/parent/prefab) that only
+  // changes when the tree actually changes; the object list is then a stable ref derived from it.
+  const structureSig = useEditorStore((state) =>
+    selectActiveObjects(state)
+      .map((o) => `${o.id}${o.name}${o.kind}${o.parentId ?? ''}${o.prefabSourceId ?? ''}`)
+      .join(''),
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [structureSig]);
   const activeSceneName = useEditorStore((state) => state.activeScene()?.name ?? 'Scene');
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const createObject = useEditorStore((state) => state.createObject);

@@ -26,7 +26,8 @@ export function ScreenUILayer() {
   const fireCustomEvent = useEditorStore((state) => state.fireCustomEvent);
 
   if (!isPlaying) return null;
-  const docs = uiDocuments.filter((doc) => doc.surface === 'screen' && visible[doc.id]);
+  // `webgl` docs are drawn in-canvas by WebGLScreenUILayer; the DOM overlay handles the rest.
+  const docs = uiDocuments.filter((doc) => doc.surface === 'screen' && doc.renderMode !== 'webgl' && visible[doc.id]);
   if (docs.length === 0) return null;
 
   const ctx = buildUIContext({ variables, runtimeVariableValues, runtimeObjectVariables, isPlaying });

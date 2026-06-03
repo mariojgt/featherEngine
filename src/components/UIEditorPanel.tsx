@@ -248,6 +248,18 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
         </label>
       )}
 
+      {(doc.renderMode === 'webgl') && (
+        <label className="node-field" title="WebGL renderer only. glow blooms via post-FX; holographic/scanline read as translucent panels.">
+          <span>FX (WebGL)</span>
+          <select value={element.fx ?? ''} onChange={(event) => updateUIElement(doc.id, element.id, { fx: (event.target.value || undefined) as UIElement['fx'] })}>
+            <option value="">None</option>
+            <option value="glow">Glow (bloom)</option>
+            <option value="holographic">Holographic</option>
+            <option value="scanline">Scanline</option>
+          </select>
+        </label>
+      )}
+
       {/* Style */}
       <h4 className="ui-inspector-sub">Style</h4>
       <StyleField label="Background" type="color" value={element.style.background ?? '#000000'} onChange={(v) => patchStyle({ background: v })} />
@@ -424,6 +436,25 @@ export function UIEditorPanel() {
                 <input type="checkbox" checked={doc.visibleOnStart} onChange={(event) => updateUIDocument(doc.id, { visibleOnStart: event.target.checked })} />
                 <span>Visible on start</span>
               </label>
+              <div className="ui-surface">
+                <span className="ui-surface-label">Renderer</span>
+                <div className="ui-seg">
+                  <button
+                    className={clsx((doc.renderMode ?? 'dom') === 'dom' && 'active')}
+                    onClick={() => updateUIDocument(doc.id, { renderMode: 'dom' })}
+                    title="HTML/CSS overlay. Simplest, full CSS, but no depth occlusion or post-processing."
+                  >
+                    DOM
+                  </button>
+                  <button
+                    className={clsx(doc.renderMode === 'webgl' && 'active')}
+                    onClick={() => updateUIDocument(doc.id, { renderMode: 'webgl' })}
+                    title="Rendered in the 3D canvas (uikit). Gets bloom/post-FX, is depth-correct in world space, and can be mapped onto in-world surfaces."
+                  >
+                    WebGL ✨
+                  </button>
+                </div>
+              </div>
               <label className="node-field">
                 <span>Raw CSS</span>
                 <textarea className="ui-css" rows={4} value={doc.css ?? ''} placeholder={'.my-class {\n  color: gold;\n}'} onChange={(event) => updateUIDocument(doc.id, { css: event.target.value })} />

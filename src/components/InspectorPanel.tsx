@@ -613,6 +613,19 @@ function UISection({ objectId }: { objectId: string }) {
             <span>Billboard</span>
             <input type="checkbox" checked={ui.billboard} onChange={(event) => updateUIComponent(objectId, { billboard: event.target.checked })} />
           </label>
+          <label className="field-row" title="Render the UI onto a flat in-world screen (monitor/terminal). Needs the widget's renderer set to WebGL.">
+            <span>Diegetic screen</span>
+            <input type="checkbox" checked={ui.diegetic ?? false} onChange={(event) => updateUIComponent(objectId, { diegetic: event.target.checked })} />
+          </label>
+          {ui.diegetic && (
+            <label className="field-row">
+              <span>Surface W×H</span>
+              <span style={{ display: 'flex', gap: 4 }}>
+                <input type="number" step="0.1" value={ui.surfaceWidth ?? 1.6} onChange={(event) => updateUIComponent(objectId, { surfaceWidth: Number(event.target.value) })} />
+                <input type="number" step="0.1" value={ui.surfaceHeight ?? 0.9} onChange={(event) => updateUIComponent(objectId, { surfaceHeight: Number(event.target.value) })} />
+              </span>
+            </label>
+          )}
           <button
             className="full-button"
             onClick={() => {

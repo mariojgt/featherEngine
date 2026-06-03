@@ -68,6 +68,12 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Created prefab';
     case 'inspect_prefab':
       return 'Inspected prefab';
+    case 'export_prefab_package':
+      return 'Exported package';
+    case 'export_folder_package':
+      return 'Exported folder package';
+    case 'import_package':
+      return 'Imported package';
     case 'instantiate_prefab':
       return 'Added prefab to scene';
     case 'open_prefab':
@@ -248,6 +254,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Created UI${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'create_ui_template':
       return `Created ${String(input.template ?? 'HUD')} UI`;
+    case 'set_ui_render_mode':
+      return input.renderMode === 'webgl' ? 'UI → WebGL renderer' : 'UI → DOM renderer';
     case 'add_ui_element':
       return `Added ${String(input.kind ?? 'UI')} element`;
     case 'add_ui_preset':
@@ -261,7 +269,7 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'bind_ui_element':
       return input.expression ? 'Bound UI element' : 'Cleared UI binding';
     case 'attach_world_ui':
-      return input.documentId ? 'Attached world UI' : 'Detached world UI';
+      return input.documentId ? (input.diegetic ? 'Attached diegetic screen' : 'Attached world UI') : 'Detached world UI';
     case 'set_object_variable':
       return `Set ${String(input.key ?? 'variable')}`;
     case 'create_collectible_counter':

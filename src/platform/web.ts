@@ -73,4 +73,26 @@ export const webPlatform: Platform = {
     downloadJson('game.json', bundle);
     return null;
   },
+
+  async exportPackage(name, pkg) {
+    const safe = name.replace(/[^\w.\-]+/g, '_') || 'package';
+    downloadJson(`${safe}.nfpack`, pkg);
+    return `${name} downloaded as ${safe}.nfpack`;
+  },
+
+  async openPackage() {
+    const file = await pickPackageFile();
+    if (!file) return null;
+    return JSON.parse(await file.text());
+  },
 };
+
+function pickPackageFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.nfpack,.json,application/json';
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.click();
+  });
+}

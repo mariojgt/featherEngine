@@ -4116,6 +4116,19 @@ button {
   background: color-mix(in srgb, var(--accent, #5b8cff) 16%, transparent);
 }
 
+.cinematic-template-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.cinematic-template-grid .full-button {
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
 /* Animated camera keyframe track editor (inside the selected camera beat). */
 .cinematic-keyframes {
   display: flex;
@@ -4218,6 +4231,26 @@ button {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
 }
+.seq-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 1 118px;
+  min-width: 90px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(8, 10, 15, 0.35);
+}
+.seq-search input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 .seq-seqbar .seq-seq-select {
   flex: 0 0 auto;
   max-width: 180px;
@@ -4304,6 +4337,17 @@ button {
 }
 .seq-ruler2 span:first-child { transform: translateX(0); }
 .seq-ruler2 span:last-child { transform: translateX(-100%); }
+.seq-marker {
+  position: absolute;
+  top: 2px;
+  width: 7px;
+  height: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 2px;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: auto;
+}
 .seq-rows {
   position: relative;
 }
@@ -4392,6 +4436,60 @@ button {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.mini-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+.mini-toggle.active {
+  border-color: rgba(91, 140, 255, 0.55);
+  color: var(--text);
+  background: rgba(91, 140, 255, 0.12);
+}
+
+.cinematic-marker-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+.cinematic-marker-list button {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
+}
+.cinematic-marker-list span {
+  width: 7px;
+  height: 14px;
+  border-radius: 2px;
+}
+.cinematic-marker-list strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cinematic-marker-list em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
 }
 
 .cinematic-vector-field {
