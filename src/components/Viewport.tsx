@@ -1,19 +1,21 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, PerformanceMonitor, TransformControls } from '@react-three/drei';
 import { Camera, Globe, Gauge, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
+import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
-import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { effectiveSelection, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { recordRender } from '../runtime/perfStats';
 import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { FragmentMesh } from '../three/FragmentMesh';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
-import { FollowCamera, useFollowTarget, computeRestingCameraPose } from '../three/FollowCamera';
+import { FollowCamera, useFollowTarget, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
-import { EditorCamera, editorNav } from '../three/EditorCamera';
+import { EditorCamera, editorNav, type ViewPreset } from '../three/EditorCamera';
+import { ViewCube } from './ViewCube';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, isPrefabDrag, prefabDrag, readAssetDragId, readPrefabDragId } from './dragShared';
@@ -38,6 +40,26 @@ import type { MaterialOverrides, SceneObject } from '../types';
 type DropContext = { camera: THREE.Camera; canvas: HTMLCanvasElement };
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
+
+/** Imperative API the in-Canvas SceneContent exposes to the DOM-side ViewportPanel. */
+type SceneApi = {
+  /** Box-select: select every object whose screen position falls inside the client-space rect. */
+  boxSelect: (rect: { left: number; top: number; right: number; bottom: number }, additive: boolean) => void;
+  /** True while a transform-gizmo handle is hovered or being dragged (suppresses box-select). */
+  isGizmoEngaged: () => boolean;
+};
+
+// Blender-style numpad presets, with the row digits as a no-numpad fallback.
+const VIEW_PRESET_KEYS: Record<string, ViewPreset> = {
+  Numpad5: 'persp',
+  Numpad1: 'front',
+  Numpad3: 'right',
+  Numpad7: 'top',
+  '5': 'persp',
+  '1': 'front',
+  '3': 'right',
+  '7': 'top',
+};
 
 const modes: Array<{ mode: TransformMode; label: string; icon: typeof Move3D }> = [
   { mode: 'translate', label: 'Move', icon: Move3D },
@@ -413,7 +435,12 @@ export const SceneObjectView = memo(function SceneObjectView({
         // instead of reselecting whatever mesh happens to sit behind the handle.
         if (isGizmoEngaged?.()) return;
         event.stopPropagation();
-        selectObject(object.id);
+        // Shift/Ctrl/Cmd-click extends the multi-selection; a plain click replaces it.
+        if (event.nativeEvent.shiftKey || event.nativeEvent.ctrlKey || event.nativeEvent.metaKey) {
+          useEditorStore.getState().toggleSelectObject(object.id);
+        } else {
+          selectObject(object.id);
+        }
       }}
     >
       {drawSelf && <Primitive object={object} selected={selected} />}
@@ -431,6 +458,8 @@ type TreeRenderOpts = {
   cinematicPreviewTransforms: Record<string, SceneObject['transform']>;
   cinematicPreviewMaterials: Record<string, MaterialOverrides>;
   selectedObjectId: string;
+  /** Every selected object id (multi-select) — drives the highlight outline. */
+  selectedSet: Set<string>;
   registerObject: (id: string, object: THREE.Group | null) => void;
   isGizmoEngaged: () => boolean;
 };
@@ -489,7 +518,7 @@ function renderObjectTree(objects: SceneObject[], opts: TreeRenderOpts): ReactNo
       <SceneObjectView
         key={object.id}
         object={visibleObject}
-        selected={object.id === opts.selectedObjectId}
+        selected={opts.selectedSet.has(object.id)}
         registerObject={opts.registerObject}
         isGizmoEngaged={opts.isGizmoEngaged}
         drawSelf={drawSelf}
@@ -509,23 +538,65 @@ function renderObjectTree(objects: SceneObject[], opts: TreeRenderOpts): ReactNo
  * Side/Up/Back/Pitch/Mode in the Inspector visibly moves it — immediate feedback without needing
  * to enter preview or press Play. Purely a viewport gizmo; it never becomes the render camera.
  */
-function CameraIndicator({ object }: { object: SceneObject }) {
-  const cam = useMemo(() => new THREE.PerspectiveCamera(50, 1.5, 0.12, 2.2), []);
+/**
+ * Editor-only camera gizmo (Unreal-style): a little 3D camera body sitting at each follow camera's
+ * resting pose, plus a wireframe frustum showing its view range. Shown for every camera in the scene
+ * so you can see where they are and what they frame; brighter green when its owner is selected, blue
+ * otherwise. Purely visual — it never raycasts (so it can't steal selection) and never ships in-game.
+ */
+function CameraGizmo({ object, selected }: { object: SceneObject; selected: boolean }) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  const color = selected ? '#3DDC97' : '#5B8CFF';
+  // The frustum is a helper for a throwaway camera we re-pose each frame from the resting pose.
+  const cam = useMemo(() => new THREE.PerspectiveCamera(50, 16 / 9, 0.3, 6), []);
   const helper = useMemo(() => new THREE.CameraHelper(cam), [cam]);
   useEffect(() => {
-    helper.material instanceof THREE.LineBasicMaterial && (helper.material.color = new THREE.Color('#3DDC97'));
+    if (helper.material instanceof THREE.LineBasicMaterial) helper.material.color = new THREE.Color(color);
     return () => helper.dispose();
-  }, [helper]);
+  }, [helper, color]);
   useFrame(() => {
     const pose = computeRestingCameraPose(object);
     cam.fov = pose.fov;
+    cam.far = selected ? 9 : 6; // how far the view-range cone is drawn
     cam.position.copy(pose.position);
     cam.lookAt(pose.lookAt);
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld(true);
     helper.update();
+    // Pose the camera body the same way (its local -Z points down the view direction).
+    const group = groupRef.current;
+    if (group) {
+      group.position.copy(pose.position);
+      group.lookAt(pose.lookAt);
+    }
   });
-  return <primitive object={helper} />;
+  const noRaycast = () => null;
+  return (
+    <>
+      <primitive object={helper} />
+      <group ref={groupRef}>
+        {/* body */}
+        <mesh raycast={noRaycast}>
+          <boxGeometry args={[0.42, 0.3, 0.5]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} roughness={0.5} />
+        </mesh>
+        {/* lens, pointing forward (local -Z) */}
+        <mesh raycast={noRaycast} position={[0, 0, -0.32]} rotation={[-Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[0.13, 0.2, 18]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.45} roughness={0.4} />
+        </mesh>
+        {/* two film reels on top, for the classic camera silhouette */}
+        <mesh raycast={noRaycast} position={[-0.08, 0.27, 0.1]} rotation={[0, 0, Math.PI / 2]}>
+          <cylinderGeometry args={[0.11, 0.11, 0.05, 16]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.3} roughness={0.5} />
+        </mesh>
+        <mesh raycast={noRaycast} position={[0.1, 0.27, 0.1]} rotation={[0, 0, Math.PI / 2]}>
+          <cylinderGeometry args={[0.11, 0.11, 0.05, 16]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.3} roughness={0.5} />
+        </mesh>
+      </group>
+    </>
+  );
 }
 
 function CameraRigGizmo({ object }: { object: SceneObject }) {
@@ -576,19 +647,31 @@ function SceneContent({
   snapEnabled,
   snapStep,
   focusNonce,
+  viewCommand,
   previewCamera,
+  sceneApiRef,
+  suppressDeselectRef,
 }: {
   transformMode: TransformMode;
   transformSpace: 'world' | 'local';
   snapEnabled: boolean;
   snapStep: number;
   focusNonce: number;
+  viewCommand: { view: ViewPreset; nonce: number };
   previewCamera: boolean;
+  sceneApiRef: MutableRefObject<SceneApi | null>;
+  suppressDeselectRef: MutableRefObject<boolean>;
 }) {
   const allSceneObjects = useEditorStore(selectActiveObjects);
   const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
+  const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
+  // Effective multi-selection: the set when it includes the active object, else just the active one.
+  const selectedSet = useMemo(
+    () => new Set(selectedObjectIds.includes(selectedObjectId) ? selectedObjectIds : selectedObjectId ? [selectedObjectId] : []),
+    [selectedObjectId, selectedObjectIds],
+  );
   const selectObject = useEditorStore((state) => state.selectObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
   const isPlaying = useEditorStore((state) => state.isPlaying);
@@ -611,10 +694,9 @@ function SceneContent({
   const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
   const followTarget = useFollowTarget();
   const cameraRigObject = cameraRigTarget ? sceneObjects.find((o) => o.id === cameraRigTarget && o.character) : undefined;
-  // The selected character that has a follow camera — gets a live frustum indicator in edit mode.
-  const selectedCameraObject = sceneObjects.find(
-    (o) => o.id === selectedObjectId && o.character?.enabled && o.character.cameraFollow,
-  );
+  // Every object that drives a follow camera (character or vehicle) — each gets a 3D camera gizmo
+  // + frustum in edit mode so you can see where the cameras are and what they frame.
+  const cameraObjects = sceneObjects.filter((object) => resolveCameraConfig(object));
   // The selected physics object — gets a wireframe preview of its true collider shape.
   const selectedColliderObject = sceneObjects.find(
     (o) => o.id === selectedObjectId && o.physics?.enabled,
@@ -649,6 +731,12 @@ function SceneContent({
   }, [selectedObjectId, sceneObjects.length]);
 
   const [draggingGizmo, setDraggingGizmo] = useState(false);
+  // While moving a multi-selection, the start poses of the active object and the others, so each
+  // frame's gizmo delta (from the active object) can be applied to the rest as a group transform.
+  const multiDragRef = useRef<{
+    activeStart: { position: number[]; rotation: number[]; scale: number[] };
+    others: Array<{ id: string; position: number[]; rotation: number[]; scale: number[] }>;
+  } | null>(null);
 
   const syncSelectedTransform = useCallback(() => {
     const target = objectRefs.current.get(selectedObjectId);
@@ -657,6 +745,23 @@ function SceneContent({
     updateTransform(selectedObjectId, 'position', [target.position.x, target.position.y, target.position.z]);
     updateTransform(selectedObjectId, 'rotation', [target.rotation.x, target.rotation.y, target.rotation.z]);
     updateTransform(selectedObjectId, 'scale', [target.scale.x, target.scale.y, target.scale.z]);
+
+    // Group move/rotate/scale: apply the active object's delta-from-start to every other selected one.
+    const md = multiDragRef.current;
+    if (md) {
+      const dp = [target.position.x - md.activeStart.position[0], target.position.y - md.activeStart.position[1], target.position.z - md.activeStart.position[2]];
+      const dr = [target.rotation.x - md.activeStart.rotation[0], target.rotation.y - md.activeStart.rotation[1], target.rotation.z - md.activeStart.rotation[2]];
+      const sr = [
+        md.activeStart.scale[0] ? target.scale.x / md.activeStart.scale[0] : 1,
+        md.activeStart.scale[1] ? target.scale.y / md.activeStart.scale[1] : 1,
+        md.activeStart.scale[2] ? target.scale.z / md.activeStart.scale[2] : 1,
+      ];
+      md.others.forEach((o) => {
+        updateTransform(o.id, 'position', [o.position[0] + dp[0], o.position[1] + dp[1], o.position[2] + dp[2]]);
+        updateTransform(o.id, 'rotation', [o.rotation[0] + dr[0], o.rotation[1] + dr[1], o.rotation[2] + dr[2]]);
+        updateTransform(o.id, 'scale', [o.scale[0] * sr[0], o.scale[1] * sr[1], o.scale[2] * sr[2]]);
+      });
+    }
   }, [selectedObjectId, updateTransform]);
 
   // Record mode: seed the object's pose from the current keyframe sample so grabbing the gizmo
@@ -670,12 +775,41 @@ function SceneContent({
         updateTransform(selectedObjectId, 'scale', sampled.scale);
       }
     }
+    // Snapshot the group's starting poses (siblings move 1:1; the active object is the gizmo pivot).
+    const state = useEditorStore.getState();
+    const ids = effectiveSelection(state);
+    if (ids.length > 1) {
+      const objects = selectActiveObjects(state);
+      const active = objects.find((object) => object.id === selectedObjectId);
+      if (active) {
+        multiDragRef.current = {
+          activeStart: {
+            position: [...active.transform.position],
+            rotation: [...active.transform.rotation],
+            scale: [...active.transform.scale],
+          },
+          others: ids
+            .filter((id) => id !== selectedObjectId)
+            .map((id) => objects.find((object) => object.id === id))
+            .filter((object): object is SceneObject => Boolean(object))
+            .map((object) => ({
+              id: object.id,
+              position: [...object.transform.position],
+              rotation: [...object.transform.rotation],
+              scale: [...object.transform.scale],
+            })),
+        };
+      }
+    } else {
+      multiDragRef.current = null;
+    }
     setDraggingGizmo(true);
   }, [recording, previewingCinematic, cinematicPreviewTransforms, selectedObjectId, updateTransform]);
 
   // Record mode: on release, drop/refresh a transform keyframe at the playhead from the dragged pose.
   const endGizmoDrag = useCallback(() => {
     setDraggingGizmo(false);
+    multiDragRef.current = null;
     const store = useEditorStore.getState();
     if (!store.cinematicRecording || store.isPlaying) return;
     const target = objectRefs.current.get(selectedObjectId);
@@ -690,6 +824,36 @@ function SceneContent({
     });
   }, [selectedObjectId]);
 
+  // Expose box-select to the DOM-side ViewportPanel: project each object's world position to screen
+  // and select everything inside the dragged rectangle. Reads the scene fresh so deps stay stable.
+  const camera = useThree((state) => state.camera);
+  const gl = useThree((state) => state.gl);
+  useEffect(() => {
+    sceneApiRef.current = {
+      isGizmoEngaged: () => isGizmoEngaged(),
+      boxSelect: (rect, additive) => {
+        const cr = gl.domElement.getBoundingClientRect();
+        const v = new THREE.Vector3();
+        const hits: string[] = [];
+        for (const object of selectActiveObjects(useEditorStore.getState())) {
+          if (object.viewModel) continue;
+          const group = objectRefs.current.get(object.id);
+          if (!group) continue;
+          group.getWorldPosition(v).project(camera);
+          if (v.z > 1) continue; // behind the camera
+          const cx = cr.left + (v.x * 0.5 + 0.5) * cr.width;
+          const cy = cr.top + (-v.y * 0.5 + 0.5) * cr.height;
+          if (cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom) hits.push(object.id);
+        }
+        const store = useEditorStore.getState();
+        store.selectObjects(additive ? [...effectiveSelection(store), ...hits] : hits);
+      },
+    };
+    return () => {
+      sceneApiRef.current = null;
+    };
+  }, [camera, gl, isGizmoEngaged, sceneApiRef]);
+
   return (
     <>
       <SceneEnvironment environment={sceneEnvironment} />
@@ -702,6 +866,8 @@ function SceneContent({
           // Grabbing a gizmo handle over empty space hits no mesh and would otherwise fire here and
           // deselect the object — bail so the gizmo keeps the selection while you drag.
           if (isGizmoEngaged()) return;
+          // A box-select drag just ran (and set the selection itself) — don't clear it.
+          if (suppressDeselectRef.current) return;
           selectObject('');
         }}
       >
@@ -713,6 +879,7 @@ function SceneContent({
           cinematicPreviewTransforms,
           cinematicPreviewMaterials,
           selectedObjectId,
+          selectedSet,
           registerObject,
           isGizmoEngaged,
         })}
@@ -737,9 +904,14 @@ function SceneContent({
           scaleSnap={snapEnabled ? 0.25 : null}
         />
       )}
-      {/* Live camera frustum for the selected player — shows where its camera sits/looks and updates
-          as you tune Side/Up/Back/Pitch/Mode. Hidden while playing or looking through the camera. */}
-      {selectedCameraObject && !isPlaying && !previewCamera && !previewingCinematic && <CameraIndicator object={selectedCameraObject} />}
+      {/* 3D camera gizmos + view-range frustums for every follow camera in the scene (Unreal-style),
+          so cameras are visible and their framing updates live. Hidden while playing / previewing. */}
+      {!isPlaying &&
+        !previewCamera &&
+        !previewingCinematic &&
+        cameraObjects.map((object) => (
+          <CameraGizmo key={`cam-gizmo-${object.id}`} object={object} selected={selectedSet.has(object.id)} />
+        ))}
       {/* Camera-placement mode: drag a handle to set the follow-camera offset. Hidden while previewing
           through the camera (you can't grab a handle from inside the lens — toggle preview off to drag). */}
       {cameraRigObject && !isPlaying && !previewCamera && !previewingCinematic && <CameraRigGizmo object={cameraRigObject} />}
@@ -763,7 +935,7 @@ function SceneContent({
       ) : (isPlaying || previewCamera) && followTarget ? (
         <FollowCamera preview={!isPlaying} />
       ) : (
-        <EditorCamera focusNonce={focusNonce} />
+        <EditorCamera focusNonce={focusNonce} viewCommand={viewCommand} />
       )}
       {/* Post-FX (bloom/vignette + cinematic grade/DoF) during Play so the editor matches the shipped
           game look — and also while scrubbing a cinematic preview so grading/focus are visible there. */}
@@ -877,10 +1049,16 @@ const SNAP_STEPS = [0.25, 0.5, 1, 2];
 
 export function ViewportPanel() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
-  const [transformSpace, setTransformSpace] = useState<'world' | 'local'>('world');
-  const [snapEnabled, setSnapEnabled] = useState(false);
-  const [snapStep, setSnapStep] = useState(0.5);
+  // Snap + coordinate space persist across reloads (browser-only viewport prefs).
+  const transformSpace = useViewportPrefs((state) => state.transformSpace);
+  const setTransformSpace = useViewportPrefs((state) => state.setTransformSpace);
+  const snapEnabled = useViewportPrefs((state) => state.snapEnabled);
+  const setSnapEnabled = useViewportPrefs((state) => state.setSnapEnabled);
+  const snapStep = useViewportPrefs((state) => state.snapStep);
+  const setSnapStep = useViewportPrefs((state) => state.setSnapStep);
   const [focusNonce, setFocusNonce] = useState(0);
+  // Bumped to command the editor camera to a standard orientation (ViewCube / numpad presets).
+  const [viewCommand, setViewCommand] = useState<{ view: ViewPreset; nonce: number }>({ view: 'persp', nonce: 0 });
   const [previewCamera, setPreviewCamera] = useState(false);
   // Adaptive resolution for the editor viewport. Without a cap the Canvas renders at native
   // devicePixelRatio (2–3x on Retina = 4–9x the fragments), which is the biggest "editor feels
@@ -927,7 +1105,46 @@ export function ViewportPanel() {
         }
         return;
       }
+      // Select-all in the active scene (Ctrl/Cmd+A).
+      if ((event.metaKey || event.ctrlKey) && key === 'a') {
+        const ids = selectActiveObjects(store).filter((object) => !object.viewModel).map((object) => object.id);
+        if (ids.length) {
+          event.preventDefault();
+          store.selectObjects(ids);
+        }
+        return;
+      }
+      // Copy / paste the selection.
+      if ((event.metaKey || event.ctrlKey) && key === 'c') {
+        if (store.selectedObjectId) {
+          event.preventDefault();
+          store.copySelectedObjects();
+        }
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && key === 'v') {
+        if (store.objectClipboard?.length) {
+          event.preventDefault();
+          store.pasteClipboard();
+        }
+        return;
+      }
+      // Group (Ctrl/Cmd+G) / ungroup (add Shift) the selection.
+      if ((event.metaKey || event.ctrlKey) && key === 'g') {
+        event.preventDefault();
+        if (event.shiftKey) store.ungroupObject(store.selectedObjectId);
+        else store.groupSelectedObjects();
+        return;
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      // View presets (Blender-style numpad, plus the row digits as a fallback).
+      const preset = VIEW_PRESET_KEYS[event.code] ?? VIEW_PRESET_KEYS[key];
+      if (preset) {
+        if (editorNav.flying) return;
+        setViewCommand((command) => ({ view: preset, nonce: command.nonce + 1 }));
+        return;
+      }
 
       switch (key) {
         case 'w':
@@ -937,9 +1154,11 @@ export function ViewportPanel() {
           if (editorNav.flying) return;
           setTransformMode(key === 'w' ? 'translate' : key === 'e' ? 'rotate' : 'scale');
           break;
-        case 'x':
-          setTransformSpace((space) => (space === 'world' ? 'local' : 'world'));
+        case 'x': {
+          const prefs = useViewportPrefs.getState();
+          prefs.setTransformSpace(prefs.transformSpace === 'world' ? 'local' : 'world');
           break;
+        }
         case 'f':
           setFocusNonce((nonce) => nonce + 1);
           break;
@@ -960,6 +1179,49 @@ export function ViewportPanel() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  // Box-select bridge to the in-Canvas scene, plus the live marquee rectangle (client coords).
+  const sceneApiRef = useRef<SceneApi | null>(null);
+  const suppressDeselectRef = useRef(false);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  const [boxRect, setBoxRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
+  // Drag a rectangle over empty viewport space to select everything inside it (Shift = add).
+  const handleViewportMouseDown = (event: React.MouseEvent) => {
+    if (isPlaying || previewCamera) return;
+    // Plain left-drag only — RMB/MMB/Alt belong to the camera; Ctrl/Cmd are reserved.
+    if (event.button !== 0 || event.altKey || event.metaKey || event.ctrlKey) return;
+    // Pressing a transform-gizmo handle starts a drag, not a box-select.
+    if (sceneApiRef.current?.isGizmoEngaged()) return;
+    const additive = event.shiftKey;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let moved = false;
+    const move = (e: MouseEvent) => {
+      if (!moved && (Math.abs(e.clientX - startX) > 4 || Math.abs(e.clientY - startY) > 4)) {
+        moved = true;
+        suppressDeselectRef.current = true; // keep the click-on-empty handler from clearing the box result
+      }
+      if (moved) setBoxRect({ x0: startX, y0: startY, x1: e.clientX, y1: e.clientY });
+    };
+    const up = (e: MouseEvent) => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (moved) {
+        sceneApiRef.current?.boxSelect(
+          { left: Math.min(startX, e.clientX), right: Math.max(startX, e.clientX), top: Math.min(startY, e.clientY), bottom: Math.max(startY, e.clientY) },
+          additive,
+        );
+        // Release the suppression once this event has fully settled (after R3F's pointerMissed).
+        setTimeout(() => {
+          suppressDeselectRef.current = false;
+        }, 0);
+      }
+      setBoxRect(null);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
 
   // Drag-and-drop a model from the project browser onto the ground under the cursor.
   const dropContextRef = useRef<DropContext | null>(null);
@@ -1108,14 +1370,14 @@ export function ViewportPanel() {
           <button
             className={transformSpace === 'local' ? 'active' : undefined}
             title={`Coordinate space: ${transformSpace} (X to toggle)`}
-            onClick={() => setTransformSpace((space) => (space === 'world' ? 'local' : 'world'))}
+            onClick={() => setTransformSpace(transformSpace === 'world' ? 'local' : 'world')}
           >
             <Globe size={15} aria-hidden />
           </button>
           <button
             className={snapEnabled ? 'active' : undefined}
             title="Snap to grid"
-            onClick={() => setSnapEnabled((on) => !on)}
+            onClick={() => setSnapEnabled(!snapEnabled)}
           >
             <Magnet size={15} aria-hidden />
           </button>
@@ -1148,7 +1410,13 @@ export function ViewportPanel() {
           </select>
         </div>
       </div>
-      <div className="scene-drop-zone" onDragOverCapture={handleDragOver} onDropCapture={handleDrop}>
+      <div
+        ref={dropZoneRef}
+        className="scene-drop-zone"
+        onDragOverCapture={handleDragOver}
+        onDropCapture={handleDrop}
+        onMouseDown={handleViewportMouseDown}
+      >
         {hasWebGL ? (
           <WebGLErrorBoundary>
             <Canvas
@@ -1171,7 +1439,10 @@ export function ViewportPanel() {
                 snapEnabled={snapEnabled}
                 snapStep={snapStep}
                 focusNonce={focusNonce}
+                viewCommand={viewCommand}
                 previewCamera={previewCamera}
+                sceneApiRef={sceneApiRef}
+                suppressDeselectRef={suppressDeselectRef}
               />
               <DropController contextRef={dropContextRef} />
             </Canvas>
@@ -1187,7 +1458,23 @@ export function ViewportPanel() {
           <div className="mouse-look-hint">📷 Previewing “{followTarget.name}” camera — edit Side/Up/Back/Pitch/Mode in the Inspector to see it update live</div>
         )}
         {!isPlaying && !previewCamera && !cinematicPreview && (
-          <div className="mouse-look-hint">RMB + WASD/QE fly · Alt+LMB orbit · MMB pan · F focus · W/E/R gizmo · Ctrl+D dupe</div>
+          <div className="mouse-look-hint">LMB-drag box-select · Shift/Ctrl-click multi · RMB fly · Alt+LMB orbit · MMB pan · F focus</div>
+        )}
+        {/* Box-select marquee (drawn relative to the drop zone). */}
+        {boxRect && dropZoneRef.current && (
+          <div
+            className="viewport-marquee"
+            style={{
+              left: Math.min(boxRect.x0, boxRect.x1) - dropZoneRef.current.getBoundingClientRect().left,
+              top: Math.min(boxRect.y0, boxRect.y1) - dropZoneRef.current.getBoundingClientRect().top,
+              width: Math.abs(boxRect.x1 - boxRect.x0),
+              height: Math.abs(boxRect.y1 - boxRect.y0),
+            }}
+          />
+        )}
+        {/* Orientation cube + view presets (hidden during Play / camera preview). */}
+        {!isPlaying && !previewCamera && !cinematicPreview && (
+          <ViewCube onView={(view) => setViewCommand((command) => ({ view, nonce: command.nonce + 1 }))} />
         )}
         {/* Cinematic film look (letterbox / grade / grain) + fade — clipped to the viewport (Unreal-style
             "Game View"), not the whole window. During Play it reads the live runtime cinematic; while

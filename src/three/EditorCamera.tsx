@@ -9,6 +9,24 @@ import { selectActiveObjects, useEditorStore } from '../store/editorStore';
  */
 export const editorNav = { flying: false };
 
+/** Standard camera orientations the ViewCube / numpad presets can request. */
+export type ViewPreset = 'persp' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right';
+
+/** Live editor-camera orientation (yaw/pitch in radians), published each frame so the DOM-side
+ * ViewCube can mirror where the camera is looking. */
+export const editorViewOrientation = { yaw: 0, pitch: 0 };
+
+// yaw/pitch (euler 'YXZ') for each preset. Pitch ±HALF_PI looks straight down/up.
+const PRESET_ORIENT: Record<ViewPreset, { yaw: number; pitch: number }> = {
+  persp: { yaw: 0.7, pitch: -0.42 },
+  top: { yaw: 0, pitch: -Math.PI / 2 + 0.001 },
+  bottom: { yaw: 0, pitch: Math.PI / 2 - 0.001 },
+  front: { yaw: 0, pitch: 0 },
+  back: { yaw: Math.PI, pitch: 0 },
+  right: { yaw: Math.PI / 2, pitch: 0 },
+  left: { yaw: -Math.PI / 2, pitch: 0 },
+};
+
 /**
  * Live framing of the editor viewport camera, refreshed every frame while EditorCamera is mounted.
  * Lets UI outside the Canvas (the Cinematic panel) capture "what I'm looking at right now" as a
@@ -40,7 +58,7 @@ const HALF_PI = Math.PI / 2 - 0.01;
  *  - Wheel (not flying)  → dolly toward the focus point.
  *  - `focusNonce` bumps → frame the selected object (F key, wired from ViewportPanel).
  */
-export function EditorCamera({ focusNonce }: { focusNonce: number }) {
+export function EditorCamera({ focusNonce, viewCommand }: { focusNonce: number; viewCommand?: { view: ViewPreset; nonce: number } }) {
   const camera = useThree((state) => state.camera);
   const gl = useThree((state) => state.gl);
 
@@ -57,6 +75,9 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
     focusing: false,
     focusTarget: new THREE.Vector3(),
     focusDistance: 10,
+    // orientation the focus animation eases toward (unchanged for F-focus, set for view presets)
+    focusYaw: 0,
+    focusPitch: 0,
   });
 
   // Seed orientation from the Canvas-provided camera, framing the world origin like OrbitControls did.
@@ -215,8 +236,26 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
     const radius = 0.6 * Math.max(Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2]), 0.5);
     s.focusTarget.set(position[0], position[1], position[2]);
     s.focusDistance = clamp(radius * 4 + 2, 3, 60);
+    // F-focus keeps the current viewing angle.
+    s.focusYaw = s.yaw;
+    s.focusPitch = s.pitch;
     s.focusing = true;
   }, [focusNonce]);
+
+  // Snap to a standard orientation (ViewCube / numpad presets), framing the selection if any.
+  useEffect(() => {
+    if (!viewCommand || viewCommand.nonce === 0) return;
+    const s = nav.current;
+    const selectedId = useEditorStore.getState().selectedObjectId;
+    const object = selectActiveObjects(useEditorStore.getState()).find((item) => item.id === selectedId);
+    const position = object ? object.transform.position : [s.target.x, s.target.y, s.target.z];
+    s.focusTarget.set(position[0], position[1], position[2]);
+    s.focusDistance = s.distance; // keep the current zoom; only re-orient
+    const orient = PRESET_ORIENT[viewCommand.view];
+    s.focusYaw = orient.yaw;
+    s.focusPitch = orient.pitch;
+    s.focusing = true;
+  }, [viewCommand?.nonce]);
 
   useFrame((_, delta) => {
     const s = nav.current;
@@ -227,15 +266,28 @@ export function EditorCamera({ focusNonce }: { focusNonce: number }) {
     editorCameraPose.lookAt = [s.target.x, s.target.y, s.target.z];
     editorCameraPose.fov = (camera as THREE.PerspectiveCamera).isPerspectiveCamera ? (camera as THREE.PerspectiveCamera).fov : 50;
     editorCameraPose.valid = true;
+    // Publish orientation for the ViewCube.
+    editorViewOrientation.yaw = s.yaw;
+    editorViewOrientation.pitch = s.pitch;
 
     if (s.focusing) {
       s.target.lerp(s.focusTarget, 0.18);
       s.distance += (s.focusDistance - s.distance) * 0.18;
+      // Ease the viewing angle toward the focus orientation (shortest yaw path).
+      let yawDelta = s.focusYaw - s.yaw;
+      yawDelta = Math.atan2(Math.sin(yawDelta), Math.cos(yawDelta));
+      s.yaw += yawDelta * 0.18;
+      s.pitch += (s.focusPitch - s.pitch) * 0.18;
       s.euler.set(s.pitch, s.yaw, 0, 'YXZ');
       camera.quaternion.setFromEuler(s.euler);
       tmpForward.set(0, 0, -1).applyEuler(s.euler);
       camera.position.copy(s.target).addScaledVector(tmpForward, -s.distance);
-      if (s.target.distanceToSquared(s.focusTarget) < 0.0004 && Math.abs(s.distance - s.focusDistance) < 0.02) {
+      if (
+        s.target.distanceToSquared(s.focusTarget) < 0.0004 &&
+        Math.abs(s.distance - s.focusDistance) < 0.02 &&
+        Math.abs(yawDelta) < 0.01 &&
+        Math.abs(s.focusPitch - s.pitch) < 0.01
+      ) {
         s.focusing = false;
       }
       return;

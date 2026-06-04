@@ -232,7 +232,12 @@ export {
 interface EditorState {
   scenes: Scene[];
   activeSceneId: string;
+  /** The "active" object — last clicked; drives the Inspector, gizmo pivot, and all existing single-select consumers. */
   selectedObjectId: string;
+  /** Full multi-selection set. Empty means "use selectedObjectId alone" (see effectiveSelection). */
+  selectedObjectIds: string[];
+  /** In-memory copy/paste buffer: one entry per copied top-level object, holding its subtree. */
+  objectClipboard: Array<{ rootId: string; objects: SceneObject[] }> | null;
   /** Editor-only active terrain brush. Durable sculpt/paint results live on each TerrainComponent. */
   terrainBrush: TerrainBrushSettings;
   /** Object whose follow-camera offset is being positioned with the on-screen gizmo (editor UI only). */
@@ -336,6 +341,9 @@ interface EditorState {
   runtimeTriggers: PhysicsContactEvent[];
   /** Trigger-overlap pairs that ENDED in the previous physics step; drives event.triggerExit. */
   runtimeTriggersExit: PhysicsContactEvent[];
+  /** HP lost per object during the previous tick (any source: Apply Damage node, projectile, melee, contact,
+   *  explosion); drives event.receiveDamage (one-frame delayed, like collisions) + its Damage value-out. */
+  runtimeDamageEvents: Record<string, number>;
   /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
   runtimeSoundQueue: string[];
   /** Live audio state for the driven (camera-follow) vehicle, set each tick by the vehicle pass. Drives the
@@ -383,6 +391,10 @@ interface EditorState {
   activeGraph: () => ProjectGraph | undefined;
   selectedGraphNode: () => NodeForgeNode | undefined;
   selectObject: (id: string) => void;
+  /** Add/remove an object from the multi-selection (Ctrl/Shift-click); the toggled id becomes active. */
+  toggleSelectObject: (id: string) => void;
+  /** Replace the whole selection with `ids` (box-select); the last id becomes active. */
+  selectObjects: (ids: string[]) => void;
   setCameraRigTarget: (id?: string) => void;
   createObject: (kind: SceneObjectKind) => void;
   createObjectWithProps: (kind: SceneObjectKind, options?: CreateObjectOptions) => string;
@@ -391,6 +403,14 @@ interface EditorState {
   deleteObject: (id: string) => void;
   deleteSelectedObject: () => void;
   duplicateSelectedObject: () => void;
+  /** Copy the current selection (each top-level object + its subtree) to the in-memory clipboard. */
+  copySelectedObjects: () => void;
+  /** Paste the clipboard into the active scene (cloned with fresh ids, offset, kept under their parents). Returns the new root ids. */
+  pasteClipboard: () => string[];
+  /** Parent every top-level selected object under a new empty "Group" (created at the origin). */
+  groupSelectedObjects: () => void;
+  /** Dissolve an empty group: reparent its children to the group's parent, then remove the empty. */
+  ungroupObject: (id: string) => void;
   /** Clone an object (and its descendants) `count` times, each offset from the previous copy. Returns the new root ids. */
   duplicateObject: (id: string, options?: { count?: number; offset?: Vector3Tuple }) => string[];
   renameObject: (id: string, name: string) => void;
@@ -792,6 +812,18 @@ export const selectActiveObjects = (state: EditorState): SceneObject[] =>
   state.scenes.find((scene) => scene.id === state.activeSceneId)?.objects ?? [];
 
 /**
+ * The effective selection: the multi-select set when it actually contains the active object,
+ * otherwise just the active object. This lets every single-select consumer keep reading
+ * `selectedObjectId` while multi-select layers on top — any code path that sets only
+ * `selectedObjectId` (create, scene switch, etc.) automatically collapses back to single-select.
+ */
+export const effectiveSelection = (state: EditorState): string[] => {
+  const { selectedObjectId, selectedObjectIds } = state;
+  if (selectedObjectId && selectedObjectIds.includes(selectedObjectId)) return selectedObjectIds;
+  return selectedObjectId ? [selectedObjectId] : [];
+};
+
+/**
  * Apply `fn` to the active scene's objects and mark the project dirty.
  * Non-active scenes keep their identity so scene-list consumers don't thrash.
  * NOTE: do NOT use this in tickRuntime/setPlaying — those must not set isDirty.
@@ -810,6 +842,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   scenes: starterScenes,
   activeSceneId: starterSceneId,
   selectedObjectId: 'obj-player',
+  selectedObjectIds: [],
+  objectClipboard: null,
   terrainBrush: defaultTerrainBrush(),
   isDirty: false,
   assets: [],
@@ -867,6 +901,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeCollisions: [],
   runtimeTriggers: [],
   runtimeTriggersExit: [],
+  runtimeDamageEvents: {},
   runtimeSoundQueue: [],
   runtimeVehicleSound: null,
   runtimeLog: [],
@@ -955,7 +990,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return get().graphs.find((graph) => graph.id === activeBlueprint?.graphId);
   },
   selectedGraphNode: () => get().activeGraph()?.nodes.find((node) => node.id === get().selectedGraphNodeId),
-  selectObject: (id) => set({ selectedObjectId: id }),
+  selectObject: (id) => set({ selectedObjectId: id, selectedObjectIds: [] }),
+  toggleSelectObject: (id) =>
+    set((state) => {
+      if (!id) return state;
+      const current = effectiveSelection(state);
+      const has = current.includes(id);
+      const next = has ? current.filter((value) => value !== id) : [...current, id];
+      return { selectedObjectIds: next, selectedObjectId: has ? next[next.length - 1] ?? '' : id };
+    }),
+  selectObjects: (ids) => {
+    const unique = [...new Set(ids.filter(Boolean))];
+    set({ selectedObjectIds: unique, selectedObjectId: unique[unique.length - 1] ?? '' });
+  },
   setCameraRigTarget: (id) => set({ cameraRigTarget: id }),
   createObject: (kind) =>
     set((state) => {
@@ -1030,29 +1077,154 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
   deleteSelectedObject: () =>
     set((state) => {
-      const objects = selectActiveObjects(state);
-      const remaining = deleteWithChildren(objects, state.selectedObjectId);
-      return { ...mapActiveSceneObjects(state, () => remaining), selectedObjectId: remaining[0]?.id ?? '' };
+      const ids = effectiveSelection(state);
+      if (!ids.length) return state;
+      let remaining = selectActiveObjects(state);
+      ids.forEach((id) => {
+        remaining = deleteWithChildren(remaining, id);
+      });
+      return { ...mapActiveSceneObjects(state, () => remaining), selectedObjectId: remaining[0]?.id ?? '', selectedObjectIds: [] };
     }),
   duplicateSelectedObject: () =>
     set((state) => {
-      const selected = selectActiveObjects(state).find((object) => object.id === state.selectedObjectId);
-      if (!selected) return state;
-      const id = makeId('obj');
-      const copy: SceneObject = {
-        ...structuredClone(selected),
-        id,
-        name: `${selected.name} Copy`,
-        transform: {
-          ...selected.transform,
-          position: [
-            selected.transform.position[0] + 0.8,
-            selected.transform.position[1],
-            selected.transform.position[2] + 0.8,
-          ],
-        },
+      const ids = effectiveSelection(state);
+      const objects = selectActiveObjects(state);
+      const copies: SceneObject[] = [];
+      const newIds: string[] = [];
+      ids.forEach((srcId) => {
+        const selected = objects.find((object) => object.id === srcId);
+        if (!selected) return;
+        const id = makeId('obj');
+        copies.push({
+          ...structuredClone(selected),
+          id,
+          name: `${selected.name} Copy`,
+          transform: {
+            ...selected.transform,
+            position: [
+              selected.transform.position[0] + 0.8,
+              selected.transform.position[1],
+              selected.transform.position[2] + 0.8,
+            ],
+          },
+        });
+        newIds.push(id);
+      });
+      if (!copies.length) return state;
+      return {
+        ...mapActiveSceneObjects(state, (current) => [...current, ...copies]),
+        selectedObjectId: newIds[newIds.length - 1],
+        selectedObjectIds: newIds.length > 1 ? newIds : [],
       };
-      return { ...mapActiveSceneObjects(state, (objects) => [...objects, copy]), selectedObjectId: id };
+    }),
+  copySelectedObjects: () => {
+    const state = get();
+    const ids = effectiveSelection(state);
+    if (!ids.length) return;
+    const objects = selectActiveObjects(state);
+    const selectedSet = new Set(ids);
+    // A selected id is "top-level" only if none of its ancestors are also selected (avoids copying
+    // an object twice when both it and its parent are in the selection).
+    const isTopLevel = (object: SceneObject) => {
+      let parentId = object.parentId;
+      while (parentId) {
+        if (selectedSet.has(parentId)) return false;
+        parentId = objects.find((candidate) => candidate.id === parentId)?.parentId;
+      }
+      return true;
+    };
+    const clipboard: Array<{ rootId: string; objects: SceneObject[] }> = [];
+    ids.forEach((id) => {
+      const object = objects.find((candidate) => candidate.id === id);
+      if (object && isTopLevel(object)) clipboard.push({ rootId: id, objects: collectSubtree(objects, id) });
+    });
+    set({ objectClipboard: clipboard.length ? clipboard : null });
+  },
+  pasteClipboard: () => {
+    const newIds: string[] = [];
+    set((state) => {
+      const clip = state.objectClipboard;
+      if (!clip?.length) return state;
+      const additions: SceneObject[] = [];
+      clip.forEach((group) => {
+        const { objects: clones, rootId: newRoot } = cloneObjectTree(group.objects, group.rootId);
+        // Offset the new root so the paste doesn't sit exactly on the original.
+        const placed = clones.map((object) =>
+          object.id === newRoot
+            ? {
+                ...object,
+                transform: {
+                  ...object.transform,
+                  position: [
+                    object.transform.position[0] + 0.8,
+                    object.transform.position[1],
+                    object.transform.position[2] + 0.8,
+                  ] as Vector3Tuple,
+                },
+              }
+            : object,
+        );
+        additions.push(...placed);
+        newIds.push(newRoot);
+      });
+      if (!additions.length) return state;
+      return {
+        ...mapActiveSceneObjects(state, (current) => [...current, ...additions]),
+        selectedObjectId: newIds[newIds.length - 1] ?? state.selectedObjectId,
+        selectedObjectIds: newIds.length > 1 ? newIds : [],
+      };
+    });
+    return newIds;
+  },
+  groupSelectedObjects: () =>
+    set((state) => {
+      const ids = effectiveSelection(state);
+      if (!ids.length) return state;
+      const objects = selectActiveObjects(state);
+      const selectedSet = new Set(ids);
+      const topLevel = ids.filter((id) => {
+        const object = objects.find((candidate) => candidate.id === id);
+        if (!object) return false;
+        let parentId = object.parentId;
+        while (parentId) {
+          if (selectedSet.has(parentId)) return false;
+          parentId = objects.find((candidate) => candidate.id === parentId)?.parentId;
+        }
+        return true;
+      });
+      if (!topLevel.length) return state;
+      // Group lives at the origin with an identity transform, so reparented children keep their
+      // world pose (parent matrix is identity) — no jump on group, and moving the group moves all.
+      const groupId = makeId('obj');
+      const group = {
+        id: groupId,
+        name: 'Group',
+        kind: 'empty',
+        transform: defaultTransform([0, 0, 0]),
+        ...objectDefaults.empty,
+      } as SceneObject;
+      const topSet = new Set(topLevel);
+      const next = [
+        ...objects.map((object) => (topSet.has(object.id) ? { ...object, parentId: groupId } : object)),
+        group,
+      ];
+      return { ...mapActiveSceneObjects(state, () => next), selectedObjectId: groupId, selectedObjectIds: [] };
+    }),
+  ungroupObject: (id) =>
+    set((state) => {
+      const objects = selectActiveObjects(state);
+      const group = objects.find((object) => object.id === id);
+      if (!group) return state;
+      const childIds = objects.filter((object) => object.parentId === id).map((object) => object.id);
+      if (!childIds.length) return state;
+      const next = objects
+        .map((object) => (object.parentId === id ? { ...object, parentId: group.parentId } : object))
+        .filter((object) => object.id !== id);
+      return {
+        ...mapActiveSceneObjects(state, () => next),
+        selectedObjectId: childIds[childIds.length - 1],
+        selectedObjectIds: childIds.length > 1 ? childIds : [],
+      };
     }),
   duplicateObject: (id, options = {}) => {
     const count = Math.max(1, Math.min(Math.round(options.count ?? 1), 200));
@@ -4239,6 +4411,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeCollisions: [],
           runtimeTriggers: [],
           runtimeTriggersExit: [],
+          runtimeDamageEvents: {},
           runtimeSoundQueue: [],
           runtimeVehicleSound: null,
           runtimeLog: [],
@@ -4324,6 +4497,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCollisions: [],
         runtimeTriggers: [],
         runtimeTriggersExit: [],
+        runtimeDamageEvents: {},
         runtimeSoundQueue: [],
         runtimeVehicleSound: null,
         runtimeLog: [],
@@ -4415,6 +4589,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const nextVisibleUI = { ...state.runtimeVisibleUI };
       const nextUITextOverrides = { ...state.runtimeUITextOverrides };
       const firedEvents = new Set(state.runtimeEventQueue.map((eventName) => eventName.toLowerCase()));
+      // HP each object lost on the PREVIOUS tick — drives event.receiveDamage this frame (one-frame delayed,
+      // like collisions) and its Damage value-out. Damage dealt THIS tick accumulates into `damageThisFrame`
+      // (from the Apply Damage node + every combat-pass source) and becomes next tick's runtimeDamageEvents.
+      const priorDamage = state.runtimeDamageEvents;
+      const damageThisFrame: Record<string, number> = {};
+      const recordDamage = (id: string, amount: number) => {
+        if (amount > 0) damageThisFrame[id] = (damageThisFrame[id] ?? 0) + amount;
+      };
       const currentKeys = state.runtimeKeys;
       const previousKeys = state.runtimePreviousKeys;
       // Transforms at the start of the tick — the diff after scripts run is the motion a
@@ -4583,6 +4765,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return contactMatches(priorTriggerExitIndex, objectId, node.data.otherObjectId);
           case 'event.interact':
             return interactedThisFrame.has(objectId);
+          case 'event.receiveDamage':
+            return (priorDamage[objectId] ?? 0) > 0;
           default:
             return false;
         }
@@ -4640,6 +4824,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             // For Loop's value-out = the current 0-based iteration index (0 when not iterating).
             if (node.data.nodeKind === 'logic.forLoop') return loopIndex.get(nodeId) ?? 0;
+
+            // On Receive Damage's value-out = how much HP this object lost on the hit that fired the event.
+            if (node.data.nodeKind === 'event.receiveDamage') return priorDamage[object.id] ?? 0;
 
             if (node.data.nodeKind === 'input.move') {
               // Move direction from the character's key bindings (falls back to WASD), normalized.
@@ -5131,6 +5318,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               // Shatter the owner (or Target) into small dynamic cubes that fly apart, then remove the original.
               const targetId = resolveTarget(node.data.targetObjectId) || object.id;
               fractureSource(activeObjectById.get(targetId), targetId);
+            }
+
+            if (node.data.nodeKind === 'action.applyDamage') {
+              // Subtract HP from the target's `health` instance var (owner by default; a wired Target reference or
+              // the $self/$player/$trigger/$cast sentinel picks another actor). Mirrors the combat-pass damage:
+              // record it for On Receive Damage, spawn a damage number, and run death (ragdoll/shatter/blast/despawn)
+              // when health reaches 0. The target needs a `health` instance variable, or this is a no-op.
+              const targetId = objectVarTarget(node);
+              const targetObj = activeObjectById.get(targetId);
+              const hasHealth = nextObjectVariables[targetId]?.health !== undefined || targetObj?.variables?.health !== undefined;
+              const amount = Math.max(0, toNumber(valueInput(node, 'amount', Number(node.data.damageAmount ?? 10))));
+              if (targetObj && hasHealth && amount > 0 && !destroyedIds.has(targetId)) {
+                const cur = toNumber(nextObjectVariables[targetId]?.health ?? targetObj.variables?.health ?? 0);
+                if (cur > 0) {
+                  const next = Math.max(0, cur - amount);
+                  mutableObjectVars(targetId, targetObj.variables).health = next;
+                  recordDamage(targetId, amount);
+                  spawned.push(makeDamageNumber(targetObj.transform.position, amount));
+                  if (targetId === playerId) hurt += 1;
+                  if (next > 0 && targetObj.character?.hurtSoundId) sounds.push(targetObj.character.hurtSoundId);
+                  if (next <= 0) killTarget(targetObj, targetId, targetObj.transform.position);
+                }
+              }
             }
 
             if (node.data.nodeKind === 'action.setMaterialColor') {
@@ -6201,6 +6411,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const cur = toNumber(nextObjectVariables[other]?.health ?? target.variables?.health ?? 0);
           const next = Math.max(0, cur - proj.damage);
           mutableObjectVars(other, target.variables).health = next;
+          recordDamage(other, cur - next);
           // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
           if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
           if (next <= 0) killTarget(target, other, obj.transform.position); // explosive → blast; rig → ragdoll; destructible → shatter from hit; prop → despawn
@@ -6259,6 +6470,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const dmg = toNumber(e.variables.enemyDamage ?? 10);
               const cur = toNumber(nextObjectVariables[playerId]?.health ?? player.variables?.health ?? 0);
               mutableObjectVars(playerId, player.variables).health = Math.max(0, cur - dmg);
+              recordDamage(playerId, Math.min(dmg, cur));
               hurt += 1;
               if (player.character?.hurtSoundId) sounds.push(player.character.hurtSoundId);
               cd = 1;
@@ -6308,6 +6520,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const cur = toNumber(nextObjectVariables[target.id]?.health ?? target.variables?.health ?? 0);
           const next = Math.max(0, cur - dmg);
           mutableObjectVars(target.id, target.variables).health = next;
+          recordDamage(target.id, cur - next);
           spawned.push(makeDamageNumber(target.transform.position, dmg));
           spawned.push(makeImpactObject(target.transform.position, '#ffd27f'));
           if (attackerId === playerId) hitMarker += 1;
@@ -6342,6 +6555,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (cur <= 0) continue;
           const next = Math.max(0, cur - blast.dmg);
           mutableObjectVars(o.id, o.variables).health = next;
+          recordDamage(o.id, cur - next);
           if (o.id === playerId) hurt += 1;
           if (next <= 0) killTarget(o, o.id); // chains if `o` is explosive
         }
@@ -6747,6 +6961,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeCollisions: [],
             runtimeTriggers: [],
             runtimeTriggersExit: [],
+            runtimeDamageEvents: {},
             runtimePreviousKeys: {},
             runtimeEventQueue: [],
             runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
@@ -6795,6 +7010,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCollisions: collisions,
         runtimeTriggers: triggers,
         runtimeTriggersExit: triggersExit,
+        runtimeDamageEvents: damageThisFrame,
         runtimePreviousKeys: { ...currentKeys },
         runtimeEventQueue: cinematicEvents,
         runtimeStarted: true,
@@ -7020,6 +7236,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
         runtimeCollisions: [],
+        runtimeDamageEvents: {},
         runtimeSoundQueue: [],
         runtimeVehicleSound: null,
         runtimeLog: [],

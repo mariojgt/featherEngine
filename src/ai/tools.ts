@@ -220,6 +220,7 @@ const NODE_LABELS = [
   'Trigger Enter',
   'Trigger Exit',
   'Interact',
+  'On Receive Damage',
   'Branch',
   'Compare',
   'AND',
@@ -276,6 +277,7 @@ const NODE_LABELS = [
   'Set Quality',
   'Move To',
   'Fracture',
+  'Apply Damage',
   'Save Game',
   'Load Game',
   'Clear Save',
@@ -297,6 +299,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Trigger Enter': 'Events',
   'Trigger Exit': 'Events',
   Interact: 'Events',
+  'On Receive Damage': 'Events',
   Branch: 'Logic',
   Compare: 'Logic',
   AND: 'Logic',
@@ -353,6 +356,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Set Quality': 'Runtime',
   'Move To': 'Runtime',
   Fracture: 'Physics',
+  'Apply Damage': 'Runtime',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
@@ -3040,6 +3044,7 @@ export const engineTools = {
       targetSceneId: z.string().optional().describe('Load Scene: id of the scene to switch to during Play.'),
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1 to add to the player camera (fades automatically).'),
       qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
+      damageAmount: z.number().optional().describe('Apply Damage: HP to subtract from the target\'s health variable. Default 10. Use targetObjectId ($self/$player/$trigger/$cast or an id) to pick who takes it.'),
     }),
     execute: async ({
       blueprintId,
@@ -3093,12 +3098,13 @@ export const engineTools = {
       projectileSpread,
       shakeAmount,
       qualityLevel,
+      damageAmount,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
-      if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
+      if (targetObjectId && !targetObjectId.startsWith('$') && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
       if (projectileTemplateId && !findObject(projectileTemplateId)) return `No object with id ${projectileTemplateId}.`;
       if (cinematicId && !store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;
@@ -3152,6 +3158,7 @@ export const engineTools = {
         projectileSpread,
         shakeAmount,
         qualityLevel,
+        damageAmount,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },
@@ -3229,13 +3236,14 @@ export const engineTools = {
       projectileSpread: z.number().optional().describe('Spawn Projectile: firing-cone half-angle in degrees.'),
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1.'),
       qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
+      damageAmount: z.number().optional().describe('Apply Damage: HP to subtract from the target\'s health variable.'),
     }),
     execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
       if (otherObjectId && !findObject(otherObjectId)) return `No object with id ${otherObjectId}.`;
-      if (targetObjectId && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
+      if (targetObjectId && !targetObjectId.startsWith('$') && !findObject(targetObjectId)) return `No object with id ${targetObjectId}.`;
       if (projectileTemplateId && !findObject(projectileTemplateId)) return `No object with id ${projectileTemplateId}.`;
       if (cinematicId && !store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
       const resolvedDataAssetId = dataAssetId ?? tableId;

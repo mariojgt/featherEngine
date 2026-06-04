@@ -56,6 +56,7 @@ export type GraphNodeKind =
   | 'event.triggerEnter'
   | 'event.triggerExit'
   | 'event.interact'
+  | 'event.receiveDamage'
   | 'logic.branch'
   | 'logic.compare'
   | 'logic.and'
@@ -135,6 +136,7 @@ export type GraphNodeKind =
   | 'action.cameraShake'
   | 'action.moveTo'
   | 'action.fractureObject'
+  | 'action.applyDamage'
   | 'action.setQuality';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
@@ -186,6 +188,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   objectKey?: string;
   /** logic.cast: the blueprint id the target must be running for the cast to succeed. */
   castBlueprintId?: string;
+  /** action.applyDamage: how much `health` to subtract from the target (overridable via the Amount value input). */
+  damageAmount?: number;
   /** action.spawnProjectile: muzzle speed (units/sec) and hit damage. */
   projectileSpeed?: number;
   projectileDamage?: number;

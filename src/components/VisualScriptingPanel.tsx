@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type NodeTypes } from '@xyflow/react';
+import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type Connection, type Edge, type NodeTypes } from '@xyflow/react';
 import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2, Plus, Save, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
-import { NodeForgeGraphNode } from './NodeForgeGraphNode';
+import { NodeForgeGraphNode, outputTypeOf, VALUE_TYPE_COLORS, EXEC_WIRE_COLOR } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
 import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, QualityLevel, UIElement, Vector3Tuple } from '../types';
 import { QUALITY_LEVELS } from '../three/quality';
@@ -19,7 +19,7 @@ export const nodeGroups: Array<{
   {
     title: 'Events',
     icon: Zap,
-    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Trigger Enter', 'Trigger Exit', 'Interact'],
+    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Trigger Enter', 'Trigger Exit', 'Interact', 'On Receive Damage'],
   },
   {
     title: 'Logic',
@@ -49,7 +49,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -496,6 +496,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
   const updatesQuality = node.data.nodeKind === 'action.setQuality';
   const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
+  const appliesDamage = node.data.nodeKind === 'action.applyDamage';
   const updatesCast = node.data.nodeKind === 'logic.cast';
   // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
   // dropdown of THAT blueprint's declared instance variables (Unreal "Cast → As BP_X → pick its variable"):
@@ -696,6 +697,40 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
             />
             <small className="node-hint">Trauma 0–1 added to the camera (fades automatically). 0.6 ≈ a solid hit; 1 = a big explosion.</small>
           </label>
+        )}
+
+        {appliesDamage && (
+          <>
+            <label className="node-field">
+              <span>Target</span>
+              <select
+                value={node.data.targetObjectId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}
+              >
+                <option value="">Self (this object)</option>
+                <option value="$player">Player</option>
+                <option value="$trigger">Trigger toucher ($trigger)</option>
+                <option value="$cast">Cast result ($cast)</option>
+                {sceneObjects.map((object) => (
+                  <option key={object.id} value={object.id}>
+                    {object.name}
+                  </option>
+                ))}
+              </select>
+              <small className="node-hint">Who takes the damage. Or wire an object reference (e.g. a Cast’s "As" pin, $trigger) into the Target input.</small>
+            </label>
+            <label className="node-field">
+              <span>Damage</span>
+              <input
+                type="number"
+                step="1"
+                min="0"
+                value={node.data.damageAmount ?? 10}
+                onChange={(event) => updateGraphNodeData(node.id, { damageAmount: Math.max(0, Number(event.target.value)) })}
+              />
+              <small className="node-hint">HP subtracted from the target’s <code>health</code> variable (the Amount input overrides this). The target needs a <code>health</code> instance variable. At 0 HP it dies.</small>
+            </label>
+          </>
         )}
 
         {updatesQuality && (
@@ -1525,6 +1560,52 @@ export function VisualScriptingPanel() {
     addGraphNode(label, category);
   };
 
+  // Drag a palette entry onto the canvas to drop a node exactly where the cursor is.
+  const onPaletteDragStart = (event: React.DragEvent, label: string, category: GraphNodeCategory) => {
+    event.dataTransfer.setData('application/nodeforge', JSON.stringify({ label, category }));
+    event.dataTransfer.effectAllowed = 'move';
+  };
+  const onCanvasDragOver = (event: React.DragEvent) => {
+    if (event.dataTransfer.types.includes('application/nodeforge')) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    }
+  };
+  const onCanvasDrop = (event: React.DragEvent) => {
+    const raw = event.dataTransfer.getData('application/nodeforge');
+    if (!raw) return;
+    event.preventDefault();
+    const { label, category } = JSON.parse(raw) as { label: string; category: GraphNodeCategory };
+    const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    if (label === 'New Variable') {
+      createVariableNode(position);
+      return;
+    }
+    const id = addGraphNodeToBlueprint(activeBlueprintId, label, category, {}, position);
+    selectGraphNode(id);
+  };
+
+  // Reject wires that cross categories (exec↔value) or loop a node back to itself.
+  const isExecHandle = (handleId?: string | null) => (handleId ?? '').startsWith('exec');
+  const isValidConnection = (connection: Connection | Edge) => {
+    if (connection.source === connection.target) return false;
+    return isExecHandle(connection.sourceHandle) === isExecHandle(connection.targetHandle);
+  };
+
+  // Color wires by what flows through them: neutral for exec, data-type hue for values.
+  const styledEdges = useMemo<Edge[]>(() => {
+    if (!graph) return [];
+    const typeByNode = new Map<string, GraphValueType | 'any'>();
+    for (const node of graph.nodes) {
+      typeByNode.set(node.id, outputTypeOf[node.data.nodeKind] ?? (node.data.valueType as GraphValueType | undefined) ?? 'any');
+    }
+    return graph.edges.map((edge) => {
+      const exec = isExecHandle(edge.sourceHandle);
+      const stroke = exec ? EXEC_WIRE_COLOR : VALUE_TYPE_COLORS[typeByNode.get(edge.source) ?? 'any'];
+      return { ...edge, style: { ...edge.style, stroke, strokeWidth: 2 } };
+    });
+  }, [graph]);
+
   if (!graph || !activeBlueprint) {
     return (
       <section className="panel scripting-panel">
@@ -1584,7 +1665,13 @@ export function VisualScriptingPanel() {
               </h3>
               <div>
                 {nodes.map((node) => (
-                  <button key={node} onClick={() => addPaletteNode(node, title)} title={`Add ${node}`}>
+                  <button
+                    key={node}
+                    draggable
+                    onDragStart={(event) => onPaletteDragStart(event, node, title)}
+                    onClick={() => addPaletteNode(node, title)}
+                    title={`Add ${node} (or drag onto the canvas)`}
+                  >
                     <Plus size={13} aria-hidden />
                     <span>{node}</span>
                   </button>
@@ -1608,14 +1695,17 @@ export function VisualScriptingPanel() {
             event.preventDefault();
             setSearchMenu({ x: event.clientX, y: event.clientY });
           }}
+          onDragOver={onCanvasDragOver}
+          onDrop={onCanvasDrop}
         >
           <ReactFlow
             nodes={graph.nodes}
-            edges={graph.edges}
+            edges={styledEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            isValidConnection={isValidConnection}
             onNodeClick={(_, node) => selectGraphNode(node.id)}
             onPaneClick={() => {
               selectGraphNode(undefined);

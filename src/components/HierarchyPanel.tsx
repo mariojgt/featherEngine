@@ -45,18 +45,27 @@ function HierarchyRow({
   onContextMenu: (event: React.MouseEvent, object: SceneObject) => void;
 }) {
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
+  const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
   const selectObject = useEditorStore((state) => state.selectObject);
+  const toggleSelectObject = useEditorStore((state) => state.toggleSelectObject);
   const openObjectScript = useEditorStore((state) => state.openObjectScript);
   const setObjectParent = useEditorStore((state) => state.setObjectParent);
   const Icon = objectIcon[object.kind];
   const hasChildren = childCount > 0;
   const isInstance = Boolean(object.prefabSourceId);
+  // Highlight the whole multi-selection when it's active, otherwise just the single selected object.
+  const isMulti = selectedObjectIds.includes(selectedObjectId);
+  const isSelected = isMulti ? selectedObjectIds.includes(object.id) : selectedObjectId === object.id;
 
   return (
     <button
-      className={clsx('hierarchy-row', selectedObjectId === object.id && 'selected')}
+      className={clsx('hierarchy-row', isSelected && 'selected')}
       style={{ paddingLeft: 8 + depth * 14 }}
-      onClick={() => selectObject(object.id)}
+      onClick={(event) => {
+        // Shift/Ctrl/Cmd-click extends the selection; a plain click replaces it.
+        if (event.shiftKey || event.metaKey || event.ctrlKey) toggleSelectObject(object.id);
+        else selectObject(object.id);
+      }}
       onDoubleClick={() => {
         // Open the object's blueprint (creating + attaching one if it has none)
         // and reveal the Scripting panel.
@@ -129,6 +138,10 @@ export function HierarchyPanel() {
   const deleteObject = useEditorStore((state) => state.deleteObject);
   const selectObject = useEditorStore((state) => state.selectObject);
   const duplicateSelectedObject = useEditorStore((state) => state.duplicateSelectedObject);
+  const copySelectedObjects = useEditorStore((state) => state.copySelectedObjects);
+  const pasteClipboard = useEditorStore((state) => state.pasteClipboard);
+  const groupSelectedObjects = useEditorStore((state) => state.groupSelectedObjects);
+  const ungroupObject = useEditorStore((state) => state.ungroupObject);
   const setObjectParent = useEditorStore((state) => state.setObjectParent);
   const createPrefabFromObject = useEditorStore((state) => state.createPrefabFromObject);
   const applyInstanceToPrefab = useEditorStore((state) => state.applyInstanceToPrefab);
@@ -169,7 +182,13 @@ export function HierarchyPanel() {
   const openRowMenu = (event: React.MouseEvent, object: SceneObject) => {
     event.preventDefault();
     event.stopPropagation();
-    selectObject(object.id);
+    // Keep an existing multi-selection if you right-click one of its members; otherwise select this row.
+    const sel = useEditorStore.getState();
+    const inSelection = sel.selectedObjectIds.includes(sel.selectedObjectId)
+      ? sel.selectedObjectIds.includes(object.id)
+      : sel.selectedObjectId === object.id;
+    if (!inSelection) selectObject(object.id);
+    const isEmptyGroup = object.kind === 'empty' && (childrenByParent.get(object.id) ?? []).length > 0;
     // Instance roots (carrying a still-existing prefabSourceId) get apply/revert actions.
     const sourcePrefab = object.prefabSourceId ? prefabs.find((prefab) => prefab.id === object.prefabSourceId) : undefined;
     const instanceEntries: ContextMenuEntry[] = sourcePrefab
@@ -207,6 +226,11 @@ export function HierarchyPanel() {
       })),
       'separator',
       { label: 'Duplicate', onClick: () => duplicateSelectedObject() },
+      { label: 'Copy', onClick: () => copySelectedObjects() },
+      { label: 'Paste', onClick: () => pasteClipboard() },
+      'separator',
+      { label: 'Group selection', onClick: () => groupSelectedObjects() },
+      ...(isEmptyGroup ? ([{ label: 'Ungroup', onClick: () => ungroupObject(object.id) }] as ContextMenuEntry[]) : []),
       ...(object.parentId
         ? ([{ label: 'Unparent (move to root)', onClick: () => setObjectParent(object.id, undefined) }] as ContextMenuEntry[])
         : []),

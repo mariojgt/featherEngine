@@ -152,6 +152,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Trigger Enter': 'event.triggerEnter',
   'Trigger Exit': 'event.triggerExit',
   Interact: 'event.interact',
+  'On Receive Damage': 'event.receiveDamage',
   Branch: 'logic.branch',
   Compare: 'logic.compare',
   AND: 'logic.and',
@@ -233,6 +234,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Camera Shake': 'action.cameraShake',
   'Move To': 'action.moveTo',
   Fracture: 'action.fractureObject',
+  'Apply Damage': 'action.applyDamage',
   'Set Quality': 'action.setQuality',
 };
 
@@ -294,6 +296,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return {
         label: 'Interact',
         description: 'Fires when the player presses the interact key while focused on this object (Unreal-style). Mark the object interactable with an "interactable" instance variable; an "interactPrompt" variable sets the on-screen label.',
+      };
+    case 'event.receiveDamage':
+      return {
+        label: 'On Receive Damage',
+        description:
+          "Fires on this object the frame after its `health` instance variable is reduced — by an Apply Damage node, a projectile, a melee swing, enemy contact, or an explosion. The Damage value-out carries how much HP was lost this hit (wire it into a damage number, hit reaction, or low-health check). Unreal-style \"AnyDamage\" event. The object needs a `health` instance variable.",
       };
     case 'action.fireEvent':
       return { label: `Fire: ${eventName}`, description: 'Triggers matching custom event entry nodes.' };
@@ -478,6 +486,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description:
           'Shatters the owner (or Target) into small dynamic cubes that fly apart, then removes the original — breakable crates/walls/rocks. Wire it to a one-shot event (Collision Enter, a shot, a key), not Update.',
       };
+    case 'action.applyDamage':
+      return {
+        label: `Apply Damage ${Number(data.damageAmount ?? 10)}`,
+        description:
+          "Subtracts HP from a target's `health` instance variable (owner by default; set Target to $player/$trigger/$cast or wire a Target reference). When health hits 0 the target dies — rigged actors ragdoll, destructibles shatter, explosives blast, props despawn — and it fires the target's On Receive Damage event. Spawns a floating damage number. The target needs a `health` instance variable (add the 'health' gameplay kit).",
+      };
     case 'action.setQuality':
       return {
         label: `Set Quality: ${data.qualityLevel ?? 'High'}`,
@@ -603,6 +617,10 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
+  }
+
+  if (nodeKind === 'action.applyDamage' && typeof normalized.damageAmount !== 'number') {
+    normalized.damageAmount = 10;
   }
 
   if (nodeKind === 'action.setQuality' && !normalized.qualityLevel) {
