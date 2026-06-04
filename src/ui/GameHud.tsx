@@ -4,7 +4,7 @@
  * (The crosshair + first-person hitmarker live in DynamicCrosshair.) A click-through DOM layer mounted
  * alongside ScreenUILayer in both the editor viewport and the standalone player. Shows only while Play is on.
  */
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 
 /** Turn a KeyboardEvent.code into a short label for the prompt chip ("KeyE" → "E", "Space" → "Space"). */
@@ -26,8 +26,46 @@ export function GameHud() {
   const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
   const equipInventorySlot = useEditorStore((state) => state.equipInventorySlot);
+  const occupants = useEditorStore((state) => state.runtimeVehicleOccupants);
+
+  // Radial weapon wheel: hold Tab to show, release to hide (GTA-style). Tab's default focus-cycling is
+  // suppressed while playing so it never steals focus from the canvas.
+  const [wheelOpen, setWheelOpen] = useState(false);
+  useEffect(() => {
+    if (!isPlaying) {
+      setWheelOpen(false);
+      return;
+    }
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code === 'Tab') {
+        e.preventDefault();
+        setWheelOpen(true);
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === 'Tab') {
+        e.preventDefault();
+        setWheelOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+    };
+  }, [isPlaying]);
 
   if (!isPlaying) return null;
+
+  // GTA-style driving: while the player occupies a car (Enter Vehicle), the follow-camera is on the car and
+  // no character is camera-follow — so suppress the on-foot weapon chrome and show an "exit" prompt instead.
+  const drivingCar = objects.find((object) => object.vehicle?.enabled && object.vehicle.cameraFollow);
+  const occupantId = drivingCar ? occupants[drivingCar.id] : undefined;
+  const driving = Boolean(drivingCar && occupantId);
+  const exitPrompt = driving
+    ? (typeof drivingCar?.variables?.exitPrompt === 'string' && drivingCar.variables.exitPrompt) || 'Exit vehicle'
+    : null;
 
   const focus = focusId ? objects.find((object) => object.id === focusId) : undefined;
   const player = objects.find((object) => object.character?.enabled && object.character.cameraFollow);
@@ -45,7 +83,7 @@ export function GameHud() {
   const controller = animatorControllers.find((item) => item.id === player?.animator?.controllerId);
   const rangedParam = controller?.parameters.find((param) => param.name === 'RangedMode');
   const rangedLive = player && rangedParam ? runtimeAnimators[player.id]?.params[rangedParam.id] : undefined;
-  const showThirdPersonReticle = Boolean(thirdPerson && (activeSlot?.ranged || rangedLive === true));
+  const showThirdPersonReticle = Boolean(!driving && thirdPerson && (activeSlot?.ranged || rangedLive === true));
   const prompt = focus
     ? typeof focus.variables?.interactPrompt === 'string' && focus.variables.interactPrompt
       ? focus.variables.interactPrompt
@@ -150,7 +188,7 @@ export function GameHud() {
           ))}
         </div>
       )}
-      {showAmmo && (
+      {showAmmo && !driving && (
         <div
           style={{
             position: 'absolute',
@@ -168,7 +206,7 @@ export function GameHud() {
         </div>
       )}
       {/* Inventory bar: clickable weapon slots, the equipped one highlighted; ammo shown on the ranged slot. */}
-      {inventory && inventory.slots.length > 0 && player && (
+      {inventory && inventory.slots.length > 0 && player && !driving && (
         <div
           style={{
             position: 'absolute',
@@ -267,6 +305,125 @@ export function GameHud() {
             {interactKey}
           </kbd>
           <span>{prompt}</span>
+        </div>
+      )}
+      {exitPrompt && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '15%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '8px 16px 8px 8px',
+            background: 'rgba(12,14,20,0.72)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: '12px',
+            color: '#fff',
+            fontSize: '16px',
+            fontWeight: 600,
+            backdropFilter: 'blur(6px)',
+            boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+            animation: 'nf-prompt-in 0.12s ease-out',
+          }}
+        >
+          <kbd
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: '30px',
+              height: '30px',
+              padding: '0 8px',
+              background: 'linear-gradient(180deg,#3a4256,#2a2f3e)',
+              border: '1px solid rgba(255,255,255,0.25)',
+              borderBottomWidth: '3px',
+              borderRadius: '7px',
+              fontFamily: 'monospace',
+              fontSize: '14px',
+              fontWeight: 700,
+              color: '#fff',
+            }}
+          >
+            F
+          </kbd>
+          <span>{exitPrompt}</span>
+        </div>
+      )}
+      {/* Radial weapon wheel (hold Tab): the inventory slots arranged around a ring; click to equip. */}
+      {wheelOpen && !driving && inventory && inventory.slots.length > 0 && player && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'radial-gradient(circle at center, rgba(8,11,18,0.55) 0%, rgba(8,11,18,0.78) 60%)',
+            animation: 'nf-prompt-in 0.1s ease-out',
+          }}
+        >
+          <div style={{ position: 'relative', width: '320px', height: '320px', pointerEvents: 'auto' }}>
+            <div
+              style={{
+                position: 'absolute',
+                inset: '92px',
+                borderRadius: '50%',
+                border: '1px solid rgba(125,211,252,0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#9fb2cc',
+                fontSize: '12px',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+              }}
+            >
+              Weapons
+            </div>
+            {inventory.slots.map((slot, i) => {
+              const angle = -Math.PI / 2 + (i / inventory.slots.length) * Math.PI * 2;
+              const left = 160 + Math.cos(angle) * 118;
+              const top = 160 + Math.sin(angle) * 118;
+              const active = inventory.equipped === i;
+              return (
+                <button
+                  key={i}
+                  onClick={() => {
+                    equipInventorySlot(player.id, i);
+                    setWheelOpen(false);
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: `${left}px`,
+                    top: `${top}px`,
+                    transform: 'translate(-50%,-50%)',
+                    width: '84px',
+                    height: '84px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '3px',
+                    cursor: 'pointer',
+                    borderRadius: '50%',
+                    border: active ? '2px solid rgba(125,211,252,0.95)' : '1px solid rgba(148,163,184,0.3)',
+                    background: active ? 'rgba(14,165,233,0.28)' : 'rgba(15,23,42,0.82)',
+                    color: active ? '#e0f7ff' : '#cfd6e6',
+                    boxShadow: active ? '0 0 24px rgba(14,165,233,0.4)' : '0 8px 24px rgba(0,0,0,0.4)',
+                    backdropFilter: 'blur(6px)',
+                    transition: 'all 0.1s ease-out',
+                  }}
+                >
+                  <span style={{ fontSize: '11px', fontWeight: 700, opacity: 0.6 }}>{i + 1}</span>
+                  <span style={{ fontSize: '14px', fontWeight: 700 }}>{slot.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
       <style>{`

@@ -289,7 +289,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // Aim-down-sights: hold the aim key (keyAim) → smoothly zoom in + tuck the camera closer. Read keys
     // via getState so the camera frame loop doesn't re-subscribe on every keypress.
     const aiming = !preview && Boolean(useEditorStore.getState().runtimeKeys[cc.keyAim]);
-    adsBlend.current = THREE.MathUtils.lerp(adsBlend.current, aiming ? 1 : 0, 0.2);
+    adsBlend.current = THREE.MathUtils.lerp(adsBlend.current, aiming ? 1 : 0, smooth(14));
     const ads = adsBlend.current;
 
     if (cc.cameraMode === 'firstPerson') {
@@ -363,6 +363,16 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const side = THREE.MathUtils.lerp(baseSide, baseSide + 0.7, ads); // shift to the shoulder
     const back = THREE.MathUtils.lerp(baseBack, baseBack * 0.5, ads); // pull in
 
+    // Velocity feed-forward: an exponential follow lags a moving target by ~speed/k, which reads as the
+    // character constantly sliding toward the front of frame — the "camera always trailing" feel. Add that
+    // predicted lag back into the target (off the ALREADY-SMOOTHED velocity, so it never snaps) so the camera
+    // lands ON the moving character and keeps its resting framing while walking/sprinting. (followK also
+    // sets the follow stiffness below — raised from 12 so the catch-up is a touch snappier, not rubber-bandy.)
+    const followK = 16;
+    const feedFwd = rv
+      ? new THREE.Vector3(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier).multiplyScalar(1 / followK)
+      : ZERO;
+
     // Horizontal radius + base azimuth from the offset, then add mouse yaw; pitch raises/pulls in.
     const radius = Math.hypot(side, back) || 0.001;
     const azimuth = Math.atan2(side, back) + (cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : 0);
@@ -370,7 +380,8 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const horizontal = radius * Math.cos(pitch);
     desired.current
       .set(x + Math.sin(azimuth) * horizontal, y + up + Math.sin(pitch) * radius, z + Math.cos(azimuth) * horizontal)
-      .add(lookAhead.current);
+      .add(lookAhead.current)
+      .add(feedFwd);
 
     // Spring-arm: cast from the pivot (over the character) toward the desired camera spot; if a wall is in
     // the way, pull the camera in to just before it so it never clips through geometry. Point-blank hits
@@ -396,8 +407,9 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       }
     }
 
-    // Framerate-independent follow lag (k≈12 ≈ the old fixed 0.18 lerp at 60fps, but stable at any framerate).
-    camera.position.lerp(desired.current, smooth(12));
+    // Framerate-independent follow lag (paired with the velocity feed-forward above, so it eases transients
+    // — turns, stops, wall pull-ins — without leaving a steady trail while moving at constant speed).
+    camera.position.lerp(desired.current, smooth(followK));
     camera.lookAt(x + lookAhead.current.x, y + up * 0.4, z + lookAhead.current.z);
     // Vehicle speed-feel: ramp the FOV out toward +10° as the car approaches its top speed (cc.moveSpeed is
     // the vehicle's maxSpeed). Characters never trip this (speedFovTarget stays 0), so their FOV is unchanged.

@@ -235,6 +235,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Move To': 'action.moveTo',
   Fracture: 'action.fractureObject',
   'Apply Damage': 'action.applyDamage',
+  'Enter Vehicle': 'action.enterVehicle',
+  'Exit Vehicle': 'action.exitVehicle',
   'Set Quality': 'action.setQuality',
 };
 
@@ -305,6 +307,18 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       };
     case 'action.fireEvent':
       return { label: `Fire: ${eventName}`, description: 'Triggers matching custom event entry nodes.' };
+    case 'action.enterVehicle':
+      return {
+        label: 'Enter Vehicle',
+        description:
+          'GTA-style: puts the on-foot player into a car. Run it on the CAR\'s blueprint (wire Interact → Enter Vehicle, and mark the car interactable). Hands the follow-camera + HUD to the car, parks/hides the pawn, and sets the Driving variable so the car takes input. Target defaults to this object; set targetObjectId to enter a different car.',
+      };
+    case 'action.exitVehicle':
+      return {
+        label: 'Exit Vehicle',
+        description:
+          'Takes the player back out of the car: the pawn reappears beside the car and regains camera + movement, the car drops its camera. Run it on the CAR\'s blueprint via a Key Down (Interact can\'t fire while driving). The Vector3 input is the car-local exit offset (default 2.2u to the right).',
+      };
     case 'action.translate':
       return { label: `Translate ${axis} ${amount}`, description: 'Moves the attached object when execution reaches this node.' };
     case 'action.rotate':

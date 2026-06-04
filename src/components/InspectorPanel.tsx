@@ -1071,6 +1071,22 @@ function RenderSettingsSection() {
         <span>Vignette</span>
         <input type="checkbox" checked={rs.vignetteEnabled} onChange={(e) => update({ vignetteEnabled: e.target.checked })} />
       </label>
+      <label className="field-row">
+        <span>Minimap</span>
+        <input type="checkbox" checked={rs.minimapEnabled ?? false} onChange={(e) => update({ minimapEnabled: e.target.checked })} />
+      </label>
+      {rs.minimapEnabled && (
+        <>
+          <label className="field-row">
+            <span>Rotate w/ player</span>
+            <input type="checkbox" checked={rs.minimapRotate ?? true} onChange={(e) => update({ minimapRotate: e.target.checked })} />
+          </label>
+          <label className="field-row">
+            <span>Range</span>
+            <input type="number" step={5} value={rs.minimapRange ?? 60} onChange={(e) => update({ minimapRange: Number(e.target.value) })} />
+          </label>
+        </>
+      )}
     </section>
   );
 }

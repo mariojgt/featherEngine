@@ -5,6 +5,7 @@ import { useRuntimeAudio } from '../runtime/useRuntimeAudio';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
+import { MiniMap } from '../ui/MiniMap';
 import { GameView } from './GameView';
 import { CinematicOverlay } from '../components/CinematicOverlay';
 import { DebugOverlay, PlayerErrorBoundary } from './PlayerDiagnostics';
@@ -141,6 +142,7 @@ export function Player() {
         <ScreenUILayer />
         <DynamicCrosshair />
         <GameHud />
+        <MiniMap />
         <CinematicOverlay />
         <DebugOverlay />
       </PlayerErrorBoundary>

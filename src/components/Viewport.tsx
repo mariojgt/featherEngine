@@ -24,6 +24,7 @@ import { ScreenUILayer } from '../ui/ScreenUILayer';
 import { WebGLScreenUILayer } from '../ui/WebGLScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
+import { MiniMap } from '../ui/MiniMap';
 import { ImpactParticles } from '../three/ImpactParticles';
 import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
@@ -1483,6 +1484,7 @@ export function ViewportPanel() {
         <ScreenUILayer />
         <DynamicCrosshair />
         <GameHud />
+        <MiniMap />
       </div>
     </section>
   );

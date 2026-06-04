@@ -276,6 +276,8 @@ const NODE_LABELS = [
   'Camera Shake',
   'Set Quality',
   'Move To',
+  'Enter Vehicle',
+  'Exit Vehicle',
   'Fracture',
   'Apply Damage',
   'Save Game',
@@ -355,6 +357,8 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Camera Shake': 'Runtime',
   'Set Quality': 'Runtime',
   'Move To': 'Runtime',
+  'Enter Vehicle': 'Runtime',
+  'Exit Vehicle': 'Runtime',
   Fracture: 'Physics',
   'Apply Damage': 'Runtime',
   'Save Game': 'Persistence',
@@ -1505,22 +1509,22 @@ export const engineTools = {
 
   create_third_person_template: tool({
     description:
-      'Build a complete open-world (Zelda-like) third-person starter game from bundled assets: a procedural terrain island with foliage + sky/fog, a sword+bow player pawn, a village Elder NPC who gives a 3-step quest (collect 3 relics → return → clear the ruins & reach the shrine), scattered collectible relics with a HUD counter, an enemy encounter + boss in the ruins, and an intro cinematic. Returns pawn objectId.',
+      'Build a complete GTA-style URBAN third-person starter from bundled assets: a dusk neon city block (road grid + sidewalks + neon-trimmed towers + lampposts), a player pawn with a Fist/Bat/Pistol inventory + a hold-Tab weapon wheel + a GTA radar minimap HUD (health/armor arcs + cash), a parked DRIVABLE car you enter with E and exit with F (camera + HUD hand off to the car), wandering PEDESTRIANS (two you can talk to), CASH pickups, and ARMOR/HEALTH shops you spend cash at — all with contextual [E] prompts. Returns pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createThirdPersonTemplate();
-      return id ? `Created open-world third-person starter — pawn objectId ${id}. Press Play: WASD move (hold Shift to sprint), mouse look, LMB sword swing / RMB+LMB bow, Space jump, E to talk to the Elder. Follow the quest: collect the 3 relics, return to the Elder, then clear the northern ruins and reach the shrine.` : `Couldn't build the template.`;
+      return id ? `Created GTA-style urban third-person starter — pawn objectId ${id}. Press Play: WASD move (Shift sprint), mouse look, LMB attack / RMB aim, Tab weapon wheel. Walk the city, grab cash, buy armor/health at the shops, talk to citizens (E), and walk up to the red car → E to drive (WASD) → F to get out.` : `Couldn't build the template.`;
     },
   }),
 
   create_first_person_template: tool({
     description:
-      'Build a complete FPS starter from bundled assets: invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles, HUD (crosshair/ammo/health), explosive barrels, full-body rigged enemies with world-space health bars, a 3-room gated tutorial, a cinematic mood (night-arena environment + bloom + ambient/music), an intro cinematic, and a clear-the-arena win/lose flow. Returns pawn objectId.',
+      'Build a complete cyberpunk-neon FPS starter from bundled assets across TWO scenes. Scene 1 = a training playground: invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles (each gun a distinct fire rate/damage/knockback/sound, grenade lobs an explosive orb), neon HUD (crosshair/weapon/ammo), knock-over cubes, a scoring shooting range, a moving target, a bounce pad, a physics tower, and proximity tutorial signs. Scene 2 = a Call-of-Duty-style "Breach & Clear" MISSION reached from a DEPLOY pad: a neon facility where you breach, eliminate line-of-sight enemy guards across 3 rooms, then reach the extraction zone — with an objective banner, an INTEGRITY (health) bar, MISSION FAILED/COMPLETE overlays, and ENTER to redeploy/return. Night environment + bloom + vignette + ambient bed. Returns pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createFirstPersonTemplate();
       return id
-        ? `Created FPS starter — pawn objectId ${id}. Press Play: an intro cinematic sweeps the arena, then WASD move, mouse look, hold LMB to fire (auto), RMB aim, R reload, 1-5 swap weapons. Clear every enemy for VICTORY; a YOU DIED screen shows if your Health hits 0.`
+        ? `Created FPS starter (two scenes) — pawn objectId ${id}. Press Play in the training room: WASD move, mouse look, hold LMB to fire, RMB aim, R reload, 1-5 swap weapons. Step on the magenta DEPLOY pad to enter the Breach & Clear mission: clear every neon guard, then reach the green extraction zone. Your INTEGRITY bar drops under fire — at 0 it's MISSION FAILED (Enter to redeploy); reaching extraction is MISSION COMPLETE (Enter to return to base).`
         : `Couldn't build the FPS template.`;
     },
   }),
@@ -2517,16 +2521,19 @@ export const engineTools = {
 
   set_render_settings: tool({
     description:
-      'Set project-wide bloom/vignette post-processing used in Play and export.',
+      'Set project-wide bloom/vignette post-processing + the GTA-style minimap/radar, used in Play and export. The radar draws the player (or driven car) at center with building footprints (objects with a `minimapShape` instance var) + colored blips (objects with a `minimapBlip` color var) + health/armor arcs + a cash readout from the player\'s health/maxHealth/armor/money instance vars.',
     inputSchema: z.object({
       bloomEnabled: z.boolean().optional(),
       bloomIntensity: z.number().optional().describe('Bloom strength, ~0.3–2.'),
       bloomThreshold: z.number().optional().describe('Luminance cutoff 0–1; lower = more glow.'),
       bloomRadius: z.number().optional().describe('Bloom spread/smoothing 0–1.'),
       vignetteEnabled: z.boolean().optional(),
+      minimapEnabled: z.boolean().optional().describe('Show the GTA-style radar minimap overlay.'),
+      minimapRotate: z.boolean().optional().describe('Rotate the radar with the player heading (true, GTA-style) or keep north-up (false).'),
+      minimapRange: z.number().optional().describe('World-units half-extent the radar shows around the player (~40–100).'),
     }),
-    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled }) => {
-      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled });
+    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange }) => {
+      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange });
       return 'Updated render/post-processing settings.';
     },
   }),

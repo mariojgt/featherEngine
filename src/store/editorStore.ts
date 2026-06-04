@@ -317,6 +317,9 @@ interface EditorState {
   runtimeCooldowns: Record<string, number>;
   /** Object ids hidden at runtime by action.setVisible (e.g. holstered weapons). */
   runtimeHidden: string[];
+  /** GTA-style vehicle possession: vehicleObjectId → the player pawn id currently driving it (set by the
+   *  Enter Vehicle node, cleared by Exit Vehicle). Lets the HUD follow the occupant pawn while driving. */
+  runtimeVehicleOccupants: Record<string, string>;
   /** The interactable object the local (camera-follow) player is currently focused on — highlighted +
    *  prompted on screen; pressing the interact key fires its event.interact. Null when nothing is in range. */
   runtimeInteractFocusId: string | null;
@@ -891,6 +894,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeFootstep: {},
   runtimeCooldowns: {},
   runtimeHidden: [],
+  runtimeVehicleOccupants: {},
   runtimeInteractFocusId: null,
   runtimeHitMarker: 0,
   runtimeHurt: 0,
@@ -4401,6 +4405,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeHidden: [],
+  runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
       runtimeHurt: 0,
@@ -4487,6 +4492,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeHidden: [],
+  runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
       runtimeHurt: 0,
@@ -4665,6 +4671,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const playerId = activeObjects.find((o) => o.character?.enabled && o.character.cameraFollow)?.id;
       // Objects hidden by action.setVisible — carried across frames so weapons stay holstered.
       const nextHidden = new Set<string>(state.runtimeHidden);
+      // GTA-style vehicle possession (Enter/Exit Vehicle nodes). `nextOccupants` carries which pawn drives
+      // which car across frames; the request arrays are this-frame edges the movedObjects pass applies as
+      // component-flag flips (camera/HUD/vehicle-pass all read those flags, so control hands off + reverts on Stop).
+      const nextOccupants: Record<string, string> = { ...state.runtimeVehicleOccupants };
+      const vehicleEnter: Array<{ player: string; vehicle: string }> = [];
+      const vehicleExit: Array<{ player: string; vehicle: string; offset: Vector3Tuple }> = [];
       // Animator parameter writes requested by animator.setX nodes this frame, keyed by object id.
       const animatorWrites: Record<string, Array<{ name: string; value: number | boolean; trigger?: boolean }>> = {};
       // One-shot montage requests this frame (Play Animation node + external HUD equips), keyed by target id.
@@ -5491,6 +5503,38 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               else nextHidden.add(target);
             }
 
+            if (node.data.nodeKind === 'action.enterVehicle') {
+              // GTA-style: the on-foot camera-follow player gets into the target car (default: the owner of
+              // this graph — wire Interact on the car → Enter Vehicle). The movedObjects pass disables the
+              // pawn (camera/move/script) + hides it, and hands the follow-camera to the car; Driving=1 lets
+              // auto-cars take input. No-op if the car is already occupied.
+              const vehicleId = resolveTarget(node.data.targetObjectId) ?? object.id;
+              const player = playerId;
+              if (player && vehicleId && player !== vehicleId && !nextOccupants[vehicleId]) {
+                vehicleEnter.push({ player, vehicle: vehicleId });
+                nextOccupants[vehicleId] = player;
+                nextHidden.add(player);
+                const dv = variableByName.get('Driving');
+                if (dv) nextVariableValues[dv.id] = 1;
+              }
+            }
+
+            if (node.data.nodeKind === 'action.exitVehicle') {
+              // Reverse of Enter: the occupant pawn reappears beside the car (car-local `vectorValue` offset,
+              // default 2.2u to the right) and regains camera/move/script; the car drops camera-follow. Wire a
+              // Key Down on the CAR's blueprint → Exit Vehicle (Interact won't fire while driving).
+              const vehicleId = resolveTarget(node.data.targetObjectId) ?? object.id;
+              const player = vehicleId ? nextOccupants[vehicleId] : undefined;
+              if (vehicleId && player) {
+                const offset = (Array.isArray(node.data.vectorValue) ? node.data.vectorValue : [2.2, 0, 0]) as Vector3Tuple;
+                vehicleExit.push({ player, vehicle: vehicleId, offset });
+                delete nextOccupants[vehicleId];
+                nextHidden.delete(player);
+                const dv = variableByName.get('Driving');
+                if (dv) nextVariableValues[dv.id] = 0;
+              }
+            }
+
             if (node.data.nodeKind === 'action.spawnAttached' && node.data.assetId) {
               // Equip: spawn the weapon model attached to the owner's bone/socket, replacing any weapon
               // already on that slot. The grip offset rides on the attachment so it's map-independent.
@@ -5938,7 +5982,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
       }
 
+      // Vehicle possession flips (Enter/Exit Vehicle) — applied this transition frame only. Building the
+      // lookup maps here (after the vehicle pass) lets Exit place the pawn at the car's freshest position.
+      const enterPawns = new Set<string>(vehicleEnter.map((r) => r.player));
+      const enterCars = new Set<string>(vehicleEnter.map((r) => r.vehicle));
+      const exitCars = new Set<string>(vehicleExit.map((r) => r.vehicle));
+      const exitPawnPos = new Map<string, Vector3Tuple>();
+      for (const r of vehicleExit) {
+        const car = mappedObjectById.get(r.vehicle);
+        const carPos = vehicleBody.get(r.vehicle)?.position ?? car?.transform.position ?? [0, 0, 0];
+        const carYaw = (vehicleBody.get(r.vehicle)?.rotation ?? car?.transform.rotation ?? [0, 0, 0])[1];
+        const right: Vector3Tuple = [Math.cos(carYaw), 0, -Math.sin(carYaw)];
+        const fwd: Vector3Tuple = [Math.sin(carYaw), 0, Math.cos(carYaw)];
+        exitPawnPos.set(r.player, [
+          carPos[0] + right[0] * r.offset[0] + fwd[0] * r.offset[2],
+          carPos[1] + r.offset[1],
+          carPos[2] + right[2] * r.offset[0] + fwd[2] * r.offset[2],
+        ]);
+      }
+
       const movedObjects = mappedObjects.map((object) => {
+        // Vehicle possession: on the enter/exit edge, flip the pawn + car component flags so the follow
+        // camera + HUD + vehicle pass switch control (these all key off character/vehicle enabled+cameraFollow).
+        if (enterPawns.has(object.id)) {
+          return {
+            ...object,
+            character: object.character ? { ...object.character, enabled: false, cameraFollow: false } : object.character,
+            script: object.script ? { ...object.script, enabled: false } : object.script,
+          };
+        }
+        const exitPos = exitPawnPos.get(object.id);
+        if (exitPos) {
+          return {
+            ...object,
+            transform: { ...object.transform, position: exitPos },
+            character: object.character ? { ...object.character, enabled: true, cameraFollow: true } : object.character,
+            script: object.script ? { ...object.script, enabled: true } : object.script,
+          };
+        }
+        if ((enterCars.has(object.id) || exitCars.has(object.id)) && object.vehicle) {
+          const vb2 = vehicleBody.get(object.id);
+          const base = vb2 ? { ...object, transform: { ...object.transform, position: vb2.position, rotation: vb2.rotation } } : object;
+          return { ...base, vehicle: { ...base.vehicle!, enabled: true, cameraFollow: enterCars.has(object.id) } };
+        }
         // Vehicle body / wheel / brake-light updates computed in the vehicle pass above.
         const vb = vehicleBody.get(object.id);
         if (vb) return { ...object, transform: { ...object.transform, position: vb.position, rotation: vb.rotation } };
@@ -6073,7 +6159,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Face the actual velocity (not raw input) so turning eases in/out with the slide. Strafe faces the camera.
           const moveLen = Math.hypot(hVelX, hVelZ);
           if (!(cc.strafe && cc.mouseLook) && moveLen > 0.05) {
-            rotation[1] = lerpAngle(rotation[1], Math.atan2(hVelX, hVelZ) + cc.modelYawOffset, cc.turnSpeed * delta);
+            // Framerate-independent easing (was turnSpeed*delta, which turns faster at low FPS and can
+            // overshoot >1 on a hitch); exp gives the same ~0.18 feel at 60fps but a smooth turn at any rate.
+            rotation[1] = lerpAngle(rotation[1], Math.atan2(hVelX, hVelZ) + cc.modelYawOffset, 1 - Math.exp(-cc.turnSpeed * Math.min(delta, 0.1)));
           }
           // Strafe: always face the camera yaw so the character can move in all 8 directions (2D blend).
           if (cc.strafe && cc.mouseLook) {
@@ -6953,6 +7041,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeFootstep: {},
             runtimeCooldowns: {},
             runtimeHidden: [],
+  runtimeVehicleOccupants: {},
             runtimeInteractFocusId: null,
             runtimeEnemyCooldown: {},
             runtimeSurfaceSound: {},
@@ -7000,6 +7089,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeFootstep: nextFootstep,
         runtimeCooldowns: nextCooldowns,
         runtimeHidden: [...nextHidden],
+        runtimeVehicleOccupants: nextOccupants,
         runtimeInteractFocusId: interactFocusId,
         runtimeHitMarker: hitMarker,
         runtimeHurt: hurt,
@@ -7228,6 +7318,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeHidden: [],
+  runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
       runtimeHurt: 0,

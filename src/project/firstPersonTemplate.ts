@@ -606,6 +606,9 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
       rollSpeed: 0,
       rollDuration: 0.1,
     },
+    // The player has INTEGRITY (health) so mission guard fire can hurt them; the runtime mirrors it into the
+    // `Health` project var each frame for the mission HUD. Harmless in the training room (nothing shoots back).
+    variables: { health: 100 },
     script: { blueprintId, graphId, enabled: true },
   };
 
@@ -874,6 +877,8 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
       { target: 'text', expression: `TargetsLeft > 0 ? '◎  Targets Left  ' + TargetsLeft : '✓  Range Cleared'` },
       { target: 'color', expression: `TargetsLeft > 0 ? '#ff7be0' : '#39ff9e'` },
     ], '◎  Targets Left  6');
+    // Hide the training-range counter once the player deploys into the mission (the mission has its own HUD).
+    pill.bindings = [{ target: 'visible', expression: 'InMission < 1' }];
     pill.children = [objText];
     objRoot.children = [pill];
     extraUIDocs.push({ id: makeId('ui'), name: 'Objective', surface: 'screen', root: objRoot, css: '', visibleOnStart: true, createdAt: Date.now() });
@@ -943,13 +948,320 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     }
   }
 
+  // ============================================================================================
+  // MISSION — "BREACH & CLEAR": a separate neon facility scene, reached from a glowing DEPLOY pad in
+  // the training room. Infiltrate, eliminate every hostile across three rooms, then reach the green
+  // extraction zone. Take fire and your INTEGRITY drops — at zero it's MISSION FAILED (Enter to redeploy).
+  // It REUSES the same player pawn + arm rigs + weapon graph (same object ids in both scenes, which is
+  // safe because scenes serialize independently), so all five guns, the HUD and the animators work here too.
+  // ============================================================================================
+  const missionSceneId = store.createScene('Mission — Breach & Clear');
+  store.updateSceneEnvironment(missionSceneId, {
+    skyMode: 'procedural', skyTopColor: '#070512', skyHorizonColor: '#2a0f47', skyGroundColor: '#05030c',
+    environmentIntensity: 0.45, sunColor: '#ff4fd8', sunIntensity: 0.45, sunAzimuth: 210, sunElevation: 14,
+    fogEnabled: true, fogColor: '#0a0618', fogNear: 12, fogFar: 70,
+  });
+  store.setSceneAudio(missionSceneId, { ambientSoundId: ambientSound?.id });
+
+  // Mission project variables: player Health (mirrored from the pawn), the objective MissionStage, a live
+  // GuardsLeft tally (same snapshot trick as the range), and InMission to gate the mission HUD off in the base.
+  const healthVarId = makeId('var');
+  const stageVarId = makeId('var');
+  const guardsLeftVarId = makeId('var');
+  const guardsAliveVarId = makeId('var');
+  const inMissionVarId = makeId('var');
+  const guardFireSfx = soundByFile.get('fps_rifle_fire.mp3');
+
+  const missionObjects: SceneObject[] = [];
+  const mBlock = (name: string, position: Vector3Tuple, scale: Vector3Tuple, color: string, opts: BlockOpts = {}): SceneObject => {
+    const renderer: MeshRendererComponent = {
+      ...defaultRenderer('cube', color),
+      metalness: opts.metalness ?? 0.08,
+      roughness: opts.roughness ?? 0.85,
+      ...(opts.emissive ? { materialOverrides: { emissiveColor: opts.emissive, emissiveIntensity: opts.intensity ?? 1.2 } } : {}),
+    };
+    const obj: SceneObject = { id: makeId('obj'), name, kind: 'cube', transform: { position, rotation: opts.rotation ?? [0, 0, 0], scale }, renderer };
+    if (opts.solid !== false) obj.physics = fixedBox();
+    missionObjects.push(obj);
+    return obj;
+  };
+
+  // --- GUARD AI (one blueprint, shared by every hostile) ---
+  // Each guard runs three parallel branches off Update: (1) re-add itself to the GuardsAlive tally, (2) advance
+  // on the player when in aggro range, (3) when it has LINE OF SIGHT and is in range, face the player and fire a
+  // neon round on its own cooldown (Cooldown is keyed per-object, so all guards fire on independent timers).
+  // Guards are kinematic capsules with `health`; a player round drops health → at 0 the engine despawns them
+  // (no rig → no ragdoll), so they fall out of the GuardsAlive tally and GuardsLeft ticks down.
+  const guardAi = miniBlueprint('Guard AI', '#ff5a4d', (n, e) => {
+    const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
+      const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
+    };
+    const upd = node('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Guard brain — runs each frame.' });
+    // (1) Stay-alive tally.
+    const getAlive = node('Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: guardsAliveVarId, valueType: 'number', hasInput: false });
+    const incAlive = node('Add', 'Math', 260, 200, { nodeKind: 'math.add', amount: 1, description: 'Count myself among the living.' });
+    const setAlive = node('Set Variable', 'Variables', 480, 40, { nodeKind: 'variable.set', variableId: guardsAliveVarId, valueType: 'number' });
+    e.push(execEdge(upd, setAlive), valueEdge(getAlive, incAlive, 'a'), valueEdge(incAlive, setAlive, 'value'));
+    // (2) Advance on the player (only between a min stand-off and the aggro radius).
+    const dist1 = node('Distance To Player', 'Runtime', 40, 380, { nodeKind: 'ai.distanceToPlayer', hasInput: false });
+    const cmpFar = node('Compare', 'Logic', 280, 360, { nodeKind: 'logic.compare', compareOp: '>', numberValue: 4, description: 'Not point-blank?' });
+    const cmpAggro = node('Compare', 'Logic', 280, 480, { nodeKind: 'logic.compare', compareOp: '<', numberValue: 24, description: 'Within aggro?' });
+    const andChase = node('AND', 'Logic', 500, 400, { nodeKind: 'logic.and' });
+    const brChase = node('Branch', 'Logic', 700, 360, { nodeKind: 'logic.branch' });
+    const dir = node('Direction To Player', 'Runtime', 700, 520, { nodeKind: 'ai.directionToPlayer', hasInput: false });
+    const mv = node('Move', 'Runtime', 920, 360, { nodeKind: 'action.move', amount: 2.4, description: 'Push toward the player.' });
+    e.push(execEdge(upd, brChase), valueEdge(dist1, cmpFar, 'a'), valueEdge(dist1, cmpAggro, 'a'), valueEdge(cmpFar, andChase, 'a'), valueEdge(cmpAggro, andChase, 'b'), valueEdge(andChase, brChase, 'condition'), execEdge(brChase, mv), valueEdge(dir, mv, 'vector'));
+    // (3) Engage with fire when it can see the player.
+    const dist2 = node('Distance To Player', 'Runtime', 40, 660, { nodeKind: 'ai.distanceToPlayer', hasInput: false });
+    const cmpFire = node('Compare', 'Logic', 280, 640, { nodeKind: 'logic.compare', compareOp: '<', numberValue: 26, description: 'In firing range?' });
+    const los = node('Has Line Of Sight', 'Runtime', 280, 760, { nodeKind: 'ai.hasLineOfSight', hasInput: false });
+    const andFire = node('AND', 'Logic', 500, 680, { nodeKind: 'logic.and' });
+    const brFire = node('Branch', 'Logic', 700, 660, { nodeKind: 'logic.branch' });
+    const face = node('Face Player', 'Runtime', 900, 660, { nodeKind: 'action.facePlayer', description: 'Track the player.' });
+    const cd = node('Cooldown', 'Logic', 1100, 660, { nodeKind: 'logic.cooldown', numberValue: 1.1, description: 'Fire cadence (per guard).' });
+    const shoot = node('Spawn Projectile', 'Runtime', 1320, 660, { nodeKind: 'action.spawnProjectile', projectileSpeed: 34, projectileDamage: 9, projectileLife: 3, projectileColor: '#ff5a4d', projectileSize: 0.18, projectileKnockback: 0, description: 'Fire a round at the player.' });
+    e.push(execEdge(upd, brFire), valueEdge(dist2, cmpFire, 'a'), valueEdge(cmpFire, andFire, 'a'), valueEdge(los, andFire, 'b'), valueEdge(andFire, brFire, 'condition'), execEdge(brFire, face), execEdge(face, cd), execEdge(cd, shoot));
+    if (guardFireSfx) e.push(execEdge(shoot, node('Play Sound', 'Audio', 1540, 660, { nodeKind: 'action.playSound', assetId: guardFireSfx, description: 'Guard shot.' })));
+  });
+
+  // --- GUARD DIRECTOR: snapshot GuardsAlive → GuardsLeft, then zero it so the living re-add next frame. ---
+  const guardDir = miniBlueprint('Guard Director', '#ffd082', (n, e) => {
+    const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
+      const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
+    };
+    const upd = node('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Hostile tally.' });
+    const get = node('Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: guardsAliveVarId, valueType: 'number', hasInput: false });
+    const setLeft = node('Set Variable', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: guardsLeftVarId, valueType: 'number', description: 'Stable count for the HUD.' });
+    const reset = node('Set Variable', 'Variables', 560, 40, { nodeKind: 'variable.set', variableId: guardsAliveVarId, valueType: 'number', numberValue: 0, description: 'Living guards re-add themselves.' });
+    e.push(execEdge(upd, setLeft), valueEdge(get, setLeft, 'value'), execEdge(setLeft, reset));
+  });
+
+  // --- MISSION DIRECTOR: arms the run on Start, advances to EXTRACT when all guards are down, and handles
+  //     ENTER to redeploy after death / return to base after winning (both reload the training scene). ---
+  const missionDir = miniBlueprint('Mission Director', '#ff2bd6', (n, e) => {
+    const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
+      const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
+    };
+    // Start: flip the mission HUD on, reset the stage, top up Health.
+    const st = node('Start', 'Events', 40, 40, { nodeKind: 'event.start', hasInput: false, description: 'Arm the mission.' });
+    const sIn = node('Set Variable', 'Variables', 280, 40, { nodeKind: 'variable.set', variableId: inMissionVarId, valueType: 'number', numberValue: 1 });
+    const sStage = node('Set Variable', 'Variables', 520, 40, { nodeKind: 'variable.set', variableId: stageVarId, valueType: 'number', numberValue: 0 });
+    const sHp = node('Set Variable', 'Variables', 760, 40, { nodeKind: 'variable.set', variableId: healthVarId, valueType: 'number', numberValue: 100, description: 'Full integrity.' });
+    e.push(execEdge(st, sIn), execEdge(sIn, sStage), execEdge(sStage, sHp));
+    // Update: once engaged (stage 1) and the sector is clear → EXTRACT (stage 2).
+    const upd = node('Update', 'Events', 40, 220, { nodeKind: 'event.update', hasInput: false });
+    const gStage = node('Get Variable', 'Variables', 40, 360, { nodeKind: 'variable.get', variableId: stageVarId, valueType: 'number', hasInput: false });
+    const cStage = node('Compare', 'Logic', 280, 340, { nodeKind: 'logic.compare', compareOp: '==', numberValue: 1, description: 'In the fight?' });
+    const gGuards = node('Get Variable', 'Variables', 40, 480, { nodeKind: 'variable.get', variableId: guardsLeftVarId, valueType: 'number', hasInput: false });
+    const cGuards = node('Compare', 'Logic', 280, 460, { nodeKind: 'logic.compare', compareOp: '<=', numberValue: 0, description: 'All clear?' });
+    const andClear = node('AND', 'Logic', 500, 400, { nodeKind: 'logic.and' });
+    const brClear = node('Branch', 'Logic', 700, 360, { nodeKind: 'logic.branch' });
+    const setEx = node('Set Variable', 'Variables', 920, 360, { nodeKind: 'variable.set', variableId: stageVarId, valueType: 'number', numberValue: 2, description: 'Sector clear → extract.' });
+    e.push(execEdge(upd, brClear), valueEdge(gStage, cStage, 'a'), valueEdge(gGuards, cGuards, 'a'), valueEdge(cStage, andClear, 'a'), valueEdge(cGuards, andClear, 'b'), valueEdge(andClear, brClear, 'condition'), execEdge(brClear, setEx));
+    // Enter → redeploy after death.
+    const kd = node('Key Down: Enter', 'Events', 40, 640, { nodeKind: 'event.keyDown', keyCode: 'Enter', hasInput: false, description: 'Redeploy after failing.' });
+    const gHp = node('Get Variable', 'Variables', 40, 780, { nodeKind: 'variable.get', variableId: healthVarId, valueType: 'number', hasInput: false });
+    const cDead = node('Compare', 'Logic', 280, 760, { nodeKind: 'logic.compare', compareOp: '<=', numberValue: 0, description: 'Dead?' });
+    const brDead = node('Branch', 'Logic', 500, 640, { nodeKind: 'logic.branch' });
+    const back1 = node('Load Scene', 'Runtime', 720, 640, { nodeKind: 'action.loadScene', targetSceneId: sceneId, description: 'Back to the training base.' });
+    e.push(execEdge(kd, brDead), valueEdge(gHp, cDead, 'a'), valueEdge(cDead, brDead, 'condition'), execEdge(brDead, back1));
+    // Enter → return to base after completing.
+    const kw = node('Key Down: Enter', 'Events', 40, 940, { nodeKind: 'event.keyDown', keyCode: 'Enter', hasInput: false, description: 'Return after completing.' });
+    const gStageW = node('Get Variable', 'Variables', 40, 1080, { nodeKind: 'variable.get', variableId: stageVarId, valueType: 'number', hasInput: false });
+    const cWin = node('Compare', 'Logic', 280, 1060, { nodeKind: 'logic.compare', compareOp: '>=', numberValue: 3, description: 'Complete?' });
+    const brWin = node('Branch', 'Logic', 500, 940, { nodeKind: 'logic.branch' });
+    const back2 = node('Load Scene', 'Runtime', 720, 940, { nodeKind: 'action.loadScene', targetSceneId: sceneId });
+    e.push(execEdge(kw, brWin), valueEdge(gStageW, cWin, 'a'), valueEdge(cWin, brWin, 'condition'), execEdge(brWin, back2));
+  });
+
+  // --- BREACH ZONE: entering the facility starts the firefight (stage 0 → 1, once). ---
+  const entryBp = miniBlueprint('Breach Trigger', '#15e8ff', (n, e) => {
+    const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
+      const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
+    };
+    const tin = node('Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: pawnId, hasInput: false, description: 'Player breaches the facility.' });
+    const get = node('Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: stageVarId, valueType: 'number', hasInput: false });
+    const cmp = node('Compare', 'Logic', 300, 180, { nodeKind: 'logic.compare', compareOp: '<', numberValue: 1, description: 'Not engaged yet?' });
+    const br = node('Branch', 'Logic', 520, 40, { nodeKind: 'logic.branch' });
+    const set = node('Set Variable', 'Variables', 740, 40, { nodeKind: 'variable.set', variableId: stageVarId, valueType: 'number', numberValue: 1, description: 'Engage hostiles.' });
+    e.push(execEdge(tin, br), valueEdge(get, cmp, 'a'), valueEdge(cmp, br, 'condition'), execEdge(br, set));
+  });
+
+  // --- EXTRACTION ZONE: reaching it once the sector is clear (stage ≥ 2) completes the mission (stage 3). ---
+  const exitBp = miniBlueprint('Extraction Trigger', '#39ff9e', (n, e) => {
+    const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
+      const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
+    };
+    const tin = node('Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: pawnId, hasInput: false, description: 'Player reaches the LZ.' });
+    const get = node('Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: stageVarId, valueType: 'number', hasInput: false });
+    const cmp = node('Compare', 'Logic', 300, 180, { nodeKind: 'logic.compare', compareOp: '>=', numberValue: 2, description: 'Sector cleared?' });
+    const br = node('Branch', 'Logic', 520, 40, { nodeKind: 'logic.branch' });
+    const set = node('Set Variable', 'Variables', 740, 40, { nodeKind: 'variable.set', variableId: stageVarId, valueType: 'number', numberValue: 3, description: 'Mission complete!' });
+    e.push(execEdge(tin, br), valueEdge(get, cmp, 'a'), valueEdge(cmp, br, 'condition'), execEdge(br, set));
+  });
+
+  // --- DEPLOY PAD (lives in the TRAINING room): stepping on it loads the mission scene. ---
+  const deployBp = miniBlueprint('Deploy Pad', '#ff2bd6', (n, e) => {
+    const tin = makeId('node'); const load = makeId('node');
+    n.push(graphNode(tin, 'Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: pawnId, hasInput: false, description: 'Deploy into the mission.' }));
+    n.push(graphNode(load, 'Load Scene', 'Runtime', 300, 40, { nodeKind: 'action.loadScene', targetSceneId: missionSceneId, description: 'Start Breach & Clear.' }));
+    e.push(execEdge(tin, load));
+  });
+
+  // --- BASE DIRECTOR (lives in the TRAINING room): turns the mission HUD off whenever you're at base. ---
+  const baseDir = miniBlueprint('Base Director', '#3DDC97', (n, e) => {
+    const st = makeId('node'); const set = makeId('node');
+    n.push(graphNode(st, 'Start', 'Events', 40, 40, { nodeKind: 'event.start', hasInput: false, description: 'Training base — mission HUD off.' }));
+    n.push(graphNode(set, 'Set Variable', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: inMissionVarId, valueType: 'number', numberValue: 0 }));
+    e.push(execEdge(st, set));
+  });
+
+  // --- Build the facility (directors first so the tally snapshots before the guards re-add). ---
+  missionObjects.push({ id: makeId('obj'), name: 'Guard Director', kind: 'empty', transform: { position: [0, 4, 25], rotation: [0, 0, 0], scale: [1, 1, 1] }, script: { blueprintId: guardDir.blueprintId, graphId: guardDir.graphId, enabled: true } });
+  missionObjects.push({ id: makeId('obj'), name: 'Mission Director', kind: 'empty', transform: { position: [0, 4, 20], rotation: [0, 0, 0], scale: [1, 1, 1] }, script: { blueprintId: missionDir.blueprintId, graphId: missionDir.graphId, enabled: true } });
+
+  // Dark reflective floor (matches the training room) + a containing perimeter so you can't walk off the world.
+  missionObjects.push({ id: makeId('obj'), name: 'Mission Floor', kind: 'cube', transform: { position: [0, -0.1, 18], rotation: [0, 0, 0], scale: [42, 0.2, 54] }, renderer: { ...defaultRenderer('cube', '#0c0a16'), metalness: 0.55, roughness: 0.32 }, physics: fixedBox() });
+  const WALL2 = '#15121f';
+  mBlock('Bound Back', [0, 2.5, -8], [40, 5, 1], WALL2, { roughness: 0.6, metalness: 0.3 });
+  mBlock('Bound Far', [0, 2.5, 44], [40, 5, 1], WALL2, { roughness: 0.6, metalness: 0.3 });
+  mBlock('Bound Left', [-20, 2.5, 18], [1, 5, 53], WALL2, { roughness: 0.6, metalness: 0.3 });
+  mBlock('Bound Right', [20, 2.5, 18], [1, 5, 53], WALL2, { roughness: 0.6, metalness: 0.3 });
+
+  // The facility: an outer shell (x[-14,14], z[10,40]) with a front breach gap (x[-3,3]) and two internal walls
+  // whose doorways are STAGGERED (left at z=22, right at z=32) so the player snakes through all three rooms.
+  mBlock('Facility Front L', [-8.5, 2, 10], [11, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 });
+  mBlock('Facility Front R', [8.5, 2, 10], [11, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 });
+  mBlock('Facility Back', [0, 2, 40], [28, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 });
+  mBlock('Facility Left', [-14, 2, 25], [1, 4, 30], WALL2, { metalness: 0.3, roughness: 0.6 });
+  mBlock('Facility Right', [14, 2, 25], [1, 4, 30], WALL2, { metalness: 0.3, roughness: 0.6 });
+  mBlock('Inner Wall A R', [3.5, 2, 22], [21, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 }); // gap on the left (x -12..-7)
+  mBlock('Inner Wall A L', [-13, 2, 22], [2, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 });
+  mBlock('Inner Wall B L', [-3.5, 2, 32], [21, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 }); // gap on the right (x 7..12)
+  mBlock('Inner Wall B R', [13, 2, 32], [2, 4, 1], WALL2, { metalness: 0.3, roughness: 0.6 });
+
+  // Neon signature trim + a glowing breach line at the entrance and a green ring at extraction.
+  mBlock('Mission Neon L', [-13.9, 2.8, 25], [0.08, 0.1, 29], CYAN, { emissive: CYAN, intensity: 2, solid: false });
+  mBlock('Mission Neon R', [13.9, 2.8, 25], [0.08, 0.1, 29], MAGENTA, { emissive: MAGENTA, intensity: 2, solid: false });
+  mBlock('Mission Neon Back', [0, 3.7, 39.9], [26, 0.1, 0.08], '#39ff9e', { emissive: '#39ff9e', intensity: 1.6, solid: false });
+  mBlock('Breach Glow', [0, 0.06, 10], [6, 0.12, 1], CYAN, { emissive: CYAN, intensity: 1.6, solid: false });
+  mBlock('Extraction Pad', [0, 0.06, 38], [4.4, 0.12, 4.4], '#39ff9e', { emissive: '#39ff9e', intensity: 1.7, solid: false });
+
+  // Cover crates to fight around.
+  ([[-4, 15], [5, 19], [0, 27], [-9, 30], [4, 35]] as Array<[number, number]>).forEach(([x, z]) =>
+    mBlock('Crate', [x, 0.55, z], [1.4, 1.1, 1.4], '#1b1530', { roughness: 0.6, metalness: 0.35 }),
+  );
+
+  // Moody point lights, green over the extraction zone.
+  ([{ p: [0, 5, 6], c: CYAN, i: 6 }, { p: [-7, 4.5, 16], c: MAGENTA, i: 6 }, { p: [7, 4.5, 18], c: CYAN, i: 6 }, { p: [0, 4.5, 27], c: MAGENTA, i: 6 }, { p: [0, 4.5, 37], c: '#39ff9e', i: 7 }] as Array<{ p: Vector3Tuple; c: string; i: number }>).forEach((l, i) =>
+    missionObjects.push({ id: makeId('obj'), name: `Mission Light ${i + 1}`, kind: 'light', transform: { position: l.p, rotation: [0, 0, 0], scale: [1, 1, 1] }, light: { type: 'point', color: l.c, intensity: l.i, distance: 28, angle: Math.PI / 6, castShadow: false } }),
+  );
+
+  // Hostiles — neon-red kinematic troopers with health, spread across the three rooms.
+  const makeGuard = (name: string, x: number, z: number) =>
+    missionObjects.push({
+      id: makeId('obj'), name, kind: 'capsule',
+      transform: { position: [x, 1.1, z], rotation: [0, 0, 0], scale: [0.85, 1.1, 0.85] },
+      renderer: { ...defaultRenderer('capsule', '#181226'), metalness: 0.35, roughness: 0.4, materialOverrides: { emissiveColor: '#ff5a4d', emissiveIntensity: 0.7 } },
+      physics: { ...fixedBox('capsule'), bodyType: 'kinematic' },
+      script: { blueprintId: guardAi.blueprintId, graphId: guardAi.graphId, enabled: true },
+      variables: { health: 40, maxHealth: 40 },
+    });
+  const guardSpots: Array<[number, number]> = [[-7, 16], [7, 18], [-6, 27], [8, 26], [-7, 36], [7, 37]];
+  guardSpots.forEach(([x, z], i) => makeGuard(`Hostile ${i + 1}`, x, z));
+  const guardCount = guardSpots.length;
+
+  // Trigger volumes (sensors): breach at the entrance, extraction at the LZ.
+  missionObjects.push({ id: makeId('obj'), name: 'Breach Zone', kind: 'empty', transform: { position: [0, 1.5, 10], rotation: [0, 0, 0], scale: [6, 3, 2] }, physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 }, script: { blueprintId: entryBp.blueprintId, graphId: entryBp.graphId, enabled: true } });
+  missionObjects.push({ id: makeId('obj'), name: 'Extraction Zone', kind: 'empty', transform: { position: [0, 1.2, 38], rotation: [0, 0, 0], scale: [4.4, 3, 4.4] }, physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 }, script: { blueprintId: exitBp.blueprintId, graphId: exitBp.graphId, enabled: true } });
+
+  // The mission re-uses the exact player pawn + arm rigs (same ids → the shared weapon graph drives them here too).
+  missionObjects.push(structuredClone(pawn));
+  arms.forEach((a) => missionObjects.push(structuredClone(a)));
+
+  // --- TRAINING ROOM additions: the DEPLOY pad + trigger, a Base Director, and a sign. ---
+  block('Deploy Pad', [9, 0.06, 6.5], [2.6, 0.12, 2.6], '#ff2bd6', { emissive: '#ff2bd6', intensity: 1.7, solid: false });
+  tutorialObjects.push({ id: makeId('obj'), name: 'Deploy Trigger', kind: 'empty', transform: { position: [9, 0.8, 6.5], rotation: [0, 0, 0], scale: [2.6, 1.6, 2.6] }, physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 }, script: { blueprintId: deployBp.blueprintId, graphId: deployBp.graphId, enabled: true } });
+  tutorialObjects.push({ id: makeId('obj'), name: 'Base Director', kind: 'empty', transform: { position: [0, 4, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, script: { blueprintId: baseDir.blueprintId, graphId: baseDir.graphId, enabled: true } });
+  makeSign('Deploy', 'Step onto the MAGENTA pad (right) to deploy into the\nBREACH & CLEAR mission — clear every hostile, then extract.', [9, 0, 4.2], '#ff2bd6', 2);
+
+  // --- Mission HUD docs (global, gated by InMission so the training room stays clean). ---
+  // Objective banner — one bound line drives the whole flow from MissionStage + GuardsLeft.
+  {
+    const root = uiElement('panel', 'Mission Obj Root', { width: '100%', height: '100%', position: 'relative', padding: '0' });
+    const pill = boundElement('panel', 'Mission Objective', {
+      position: 'absolute', left: '50%', display: 'flex',
+      custom: { top: '56px', transform: 'translateX(-50%)', background: 'rgba(8,6,18,0.7)', padding: '8px 22px', borderRadius: '999px', border: '1px solid rgba(21,232,255,0.45)', boxShadow: '0 0 22px rgba(21,232,255,0.3)', pointerEvents: 'none' },
+    }, [{ target: 'visible', expression: 'InMission >= 1' }]);
+    const txt = boundElement('text', 'Mission Objective Text', {
+      color: '#15e8ff', fontSize: '13px', fontWeight: '800', textAlign: 'center',
+      custom: { whiteSpace: 'nowrap', letterSpacing: '2px', textTransform: 'uppercase', textShadow: '0 0 12px rgba(21,232,255,0.7)' },
+    }, [
+      { target: 'text', expression: `MissionStage < 1 ? '◆  INFILTRATE — Breach the facility ahead' : MissionStage < 2 ? (GuardsLeft > 0 ? '⚔  ELIMINATE — Hostiles remaining: ' + GuardsLeft : '⚔  Sector clear — hold') : MissionStage < 3 ? '◎  EXTRACT — Reach the green extraction zone' : '✓  MISSION COMPLETE'` },
+      { target: 'color', expression: `MissionStage < 2 ? '#ff7be0' : MissionStage < 3 ? '#15e8ff' : '#39ff9e'` },
+    ], '◆  INFILTRATE');
+    pill.children = [txt];
+    root.children = [pill];
+    extraUIDocs.push({ id: makeId('ui'), name: 'Mission Objective', surface: 'screen', root, css: '', visibleOnStart: true, createdAt: Date.now() });
+  }
+  // Integrity bar (bottom-left), colour shifts as Health drops.
+  {
+    const root = uiElement('panel', 'Integrity Root', { width: '100%', height: '100%', position: 'relative', padding: '0' });
+    const box = boundElement('panel', 'Integrity Box', {
+      position: 'absolute', display: 'flex', flexDirection: 'column',
+      custom: { left: '32px', bottom: '28px', gap: '5px', pointerEvents: 'none' },
+    }, [{ target: 'visible', expression: 'InMission >= 1' }]);
+    const label = boundElement('text', 'Integrity Label', {
+      color: '#ff7be0', fontSize: '10px', fontWeight: '800',
+      custom: { letterSpacing: '3px', textTransform: 'uppercase', textShadow: '0 0 10px rgba(255,123,224,0.6)' },
+    }, [{ target: 'text', expression: `'INTEGRITY  ' + Health` }], 'INTEGRITY  100');
+    const bar = boundElement('bar', 'Integrity Bar', {
+      width: '240px', height: '14px', background: 'rgba(10,8,22,0.7)', borderRadius: '8px', color: '#39ff9e',
+      custom: { border: '1px solid rgba(21,232,255,0.4)', boxShadow: '0 0 16px rgba(21,232,255,0.25)' },
+    }, [
+      { target: 'fill', expression: `Health / 100` },
+      { target: 'color', expression: `Health > 50 ? '#39ff9e' : Health > 25 ? '#ffd27f' : '#ff2bd6'` },
+    ]);
+    box.children = [label, bar];
+    root.children = [box];
+    extraUIDocs.push({ id: makeId('ui'), name: 'Integrity', surface: 'screen', root, css: '', visibleOnStart: true, createdAt: Date.now() });
+  }
+  // Full-screen MISSION FAILED / MISSION COMPLETE overlays (shown purely by their visible bindings).
+  const overlay = (name: string, titleText: string, subText: string, titleColor: string, backColor: string, visibleExpr: string) => {
+    const root = uiElement('panel', `${name} Root`, { width: '100%', height: '100%', position: 'relative', padding: '0' });
+    const back = boundElement('panel', `${name} Back`, {
+      position: 'absolute', display: 'flex', flexDirection: 'column',
+      custom: { top: '0', left: '0', right: '0', bottom: '0', alignItems: 'center', justifyContent: 'center', gap: '16px', background: backColor, pointerEvents: 'none' },
+    }, [{ target: 'visible', expression: visibleExpr }]);
+    const title = uiElement('text', `${name} Title`, {
+      color: titleColor, fontSize: '54px', fontWeight: '800', textAlign: 'center',
+      custom: { letterSpacing: '8px', textTransform: 'uppercase', textShadow: `0 0 32px ${titleColor}cc` },
+    }, titleText);
+    const sub = uiElement('text', `${name} Sub`, {
+      color: 'rgba(226,238,255,0.9)', fontSize: '16px', fontWeight: '600', textAlign: 'center',
+      custom: { letterSpacing: '2px' },
+    }, subText);
+    back.children = [title, sub];
+    root.children = [back];
+    extraUIDocs.push({ id: makeId('ui'), name, surface: 'screen', root, css: '', visibleOnStart: true, createdAt: Date.now() });
+  };
+  overlay('Mission Failed', 'Mission Failed', 'Press ENTER to redeploy', '#ff2bd6', 'rgba(12,2,8,0.74)', 'InMission >= 1 && Health <= 0');
+  overlay('Mission Complete', 'Mission Complete', 'Press ENTER to return to base', '#39ff9e', 'rgba(2,12,7,0.72)', 'MissionStage >= 3');
+
+  // Mission project variables (defaults match the guard count so the HUD reads right on frame 1).
+  const healthVar: ProjectVariable = { id: healthVarId, name: 'Health', type: 'number', defaultValue: 100, persistent: false, createdAt: Date.now() };
+  const stageVar: ProjectVariable = { id: stageVarId, name: 'MissionStage', type: 'number', defaultValue: 0, persistent: false, createdAt: Date.now() };
+  const guardsLeftVar: ProjectVariable = { id: guardsLeftVarId, name: 'GuardsLeft', type: 'number', defaultValue: guardCount, persistent: false, createdAt: Date.now() };
+  const guardsAliveVar: ProjectVariable = { id: guardsAliveVarId, name: 'GuardsAlive', type: 'number', defaultValue: guardCount, persistent: false, createdAt: Date.now() };
+  const inMissionVar: ProjectVariable = { id: inMissionVarId, name: 'InMission', type: 'number', defaultValue: 0, persistent: false, createdAt: Date.now() };
+
   const hud = createFpsHud();
 
   // --- Commit everything atomically. ---
   useEditorStore.setState((draft) => ({
     animatorControllers: [...draft.animatorControllers, ...built.map((w) => w.controller)],
     activeAnimatorControllerId: built[0].controller.id,
-    variables: [...draft.variables, weaponVar, slotVar, ammoVar, magVar, targetsLeftVar, targetsAliveVar],
+    variables: [...draft.variables, weaponVar, slotVar, ammoVar, magVar, targetsLeftVar, targetsAliveVar, healthVar, stageVar, guardsLeftVar, guardsAliveVar, inMissionVar],
     blueprints: [...draft.blueprints, blueprint, ...extraBlueprints],
     graphs: [...draft.graphs, graph, ...extraGraphs],
     activeBlueprintId: blueprintId,
@@ -958,7 +1270,9 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId
         ? { ...scene, objects: [...scene.objects, ground, ...props, ...tutorialObjects, ...arms, pawn] }
-        : scene,
+        : scene.id === missionSceneId
+          ? { ...scene, objects: [...scene.objects, ...missionObjects] }
+          : scene,
     ),
     selectedObjectId: pawnId,
     isDirty: true,

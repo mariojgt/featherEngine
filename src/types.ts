@@ -137,6 +137,8 @@ export type GraphNodeKind =
   | 'action.moveTo'
   | 'action.fractureObject'
   | 'action.applyDamage'
+  | 'action.enterVehicle'
+  | 'action.exitVehicle'
   | 'action.setQuality';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
@@ -839,6 +841,14 @@ export interface RenderSettings {
   /** Bloom smoothing/spread (0–1). */
   bloomRadius: number;
   vignetteEnabled: boolean;
+  /** GTA-style minimap/radar overlay (src/ui/MiniMap.tsx). When on, a circular radar draws the player at
+   *  center, building footprints (objects with a `minimapShape` instance var) and colored blips (objects
+   *  with a `minimapBlip` color var), plus health/armor arcs + a money readout from the player's vars. */
+  minimapEnabled?: boolean;
+  /** Rotate the radar with the player's heading (GTA-style). False = north-up. */
+  minimapRotate?: boolean;
+  /** World-units half-extent the radar shows around the player (default ~60). */
+  minimapRange?: number;
   /** Unreal-style scalability preset (Low/Medium/High/Epic). Drives render resolution (DPR), shadow
    *  count + map size, post-FX MSAA, and bloom mip blur via the profiles in `src/three/quality.ts`.
    *  Changeable on the viewport, by the AI, and from the "Set Quality" Blueprint node. */
