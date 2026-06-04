@@ -53,7 +53,7 @@ export const nodeGroups: Array<{
   {
     title: 'Physics',
     icon: Boxes,
-    nodes: ['Apply Force'],
+    nodes: ['Apply Force', 'Fracture'],
   },
   {
     title: 'Persistence',
@@ -528,7 +528,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'action.setRagdoll' ||
     node.data.nodeKind === 'action.burstParticles' ||
     node.data.nodeKind === 'action.setParticlesEmitting' ||
-    node.data.nodeKind === 'action.spawnParticleSystem';
+    node.data.nodeKind === 'action.spawnParticleSystem' ||
+    node.data.nodeKind === 'action.fractureObject';
   const selectedUIDoc = uiDocuments.find((doc) => doc.id === node.data.documentId);
   const eventName = node.data.eventName || 'CustomEvent';
   const selectedVariable = variables.find((variable) => variable.id === node.data.variableId);

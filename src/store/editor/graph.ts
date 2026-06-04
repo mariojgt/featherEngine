@@ -231,6 +231,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Spawn Particle System': 'action.spawnParticleSystem',
   'Camera Shake': 'action.cameraShake',
   'Move To': 'action.moveTo',
+  Fracture: 'action.fractureObject',
 };
 
 export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
@@ -243,7 +244,7 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
   if (nodeKind.startsWith('save.')) return 'Persistence';
   if (nodeKind.startsWith('material.')) return 'Material';
   if (nodeKind.startsWith('ui.')) return 'UI';
-  if (nodeKind === 'action.applyForce') return 'Physics';
+  if (nodeKind === 'action.applyForce' || nodeKind === 'action.fractureObject') return 'Physics';
   if (nodeKind === 'action.playSound') return 'Audio';
   return 'Runtime';
 };
@@ -468,6 +469,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return {
         label: `Set Movement Mode: ${data.movementMode ?? 'walking'}`,
         description: "Sets how the owner (or Target) character moves until changed — walking / swimming (buoyant) / climbing (wall) / flying (free 3D). Drives the swimming/climbing animator params. Wire Trigger Enter→swimming, Trigger Exit→walking for a water volume (Unreal SetMovementMode).",
+      };
+    case 'action.fractureObject':
+      return {
+        label: 'Fracture',
+        description:
+          'Shatters the owner (or Target) into small dynamic cubes that fly apart, then removes the original — breakable crates/walls/rocks. Wire it to a one-shot event (Collision Enter, a shot, a key), not Update.',
       };
     case 'action.print':
       return { label: `Print: ${data.message || 'message'}`, description: 'Logs its message to the on-screen console during Play.' };

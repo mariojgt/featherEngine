@@ -53,8 +53,11 @@ export function PostFx() {
     children.push(<Vignette key="vignette" offset={0.32} darkness={0.72} eskil={false} />);
   }
   if (!children.length) return null;
+  // MSAA on the composer's HDR target is one of the biggest Play-mode GPU costs (a multisampled float
+  // framebuffer + per-frame resolve over the whole screen). 2x keeps edges clean enough while roughly
+  // halving that bandwidth vs 4x — a meaningful win on integrated GPUs with little visible quality loss.
   return (
-    <EffectComposer multisampling={4}>
+    <EffectComposer multisampling={2}>
       {children}
     </EffectComposer>
   );

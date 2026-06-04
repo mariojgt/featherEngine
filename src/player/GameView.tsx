@@ -23,6 +23,7 @@ import { ProjectileVisual } from '../three/ProjectileVisual';
 import { PostFx } from '../three/PostFx';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { Terrain } from '../three/Terrain';
+import { FragmentMesh } from '../three/FragmentMesh';
 import type { SceneObject, Vector3Tuple } from '../types';
 
 /** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
@@ -57,6 +58,11 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   // Cameras and empties are invisible scaffolding at runtime.
   if (object.kind === 'camera' || object.kind === 'empty' || !renderer || !renderer.enabled) {
     return null;
+  }
+
+  // A spawned fracture shard renders its raw generated geometry (from the geometry cache).
+  if (renderer.fragmentKey) {
+    return <FragmentMesh geometryKey={renderer.fragmentKey} resolved={resolved} />;
   }
 
   // A skinned model with an enabled animator plays its clips (state machine or single clip).

@@ -32,6 +32,18 @@ export function getModelGeometry(key: string | undefined): ModelGeometry | undef
   return key ? cache.get(key) : undefined;
 }
 
+/**
+ * Cache arbitrary geometry under a key. Used by the fracture system to register a generated shard's
+ * mesh so BOTH the renderer ([../three/FragmentMesh.tsx]) and the convex-hull collider
+ * ([physicsWorld.ts], via the shard's `modelAssetId`) read the exact same vertices. Bumps the
+ * version so a collider built before this ran gets rebuilt.
+ */
+export function registerRawGeometry(key: string, vertices: Float32Array, indices: Uint32Array): void {
+  if (!key) return;
+  cache.set(key, { vertices, indices });
+  version++;
+}
+
 const reuse = new THREE.Matrix4();
 const identity = new THREE.Matrix4();
 

@@ -1481,6 +1481,72 @@ function PhysicsSection({
   );
 }
 
+function FractureSection({ objectId, fracture }: { objectId: string; fracture?: import('../types').FractureComponent }) {
+  const setObjectFracture = useEditorStore((state) => state.setObjectFracture);
+
+  if (!fracture?.enabled) {
+    return (
+      <section className="inspector-section">
+        <h3>Destructible</h3>
+        <p className="field-hint">
+          Make this object shatter into physics pieces — automatically when it takes a hard hit or is destroyed by
+          damage, or from the "Fracture" Blueprint node.
+        </p>
+        <button className="full-button" onClick={() => setObjectFracture(objectId, { enabled: true })}>
+          Make Destructible
+        </button>
+      </section>
+    );
+  }
+
+  const isGrid = fracture.pattern === 'uniform';
+  return (
+    <section className="inspector-section">
+      <h3>Destructible</h3>
+      <label className="field-row">
+        <span>Pattern</span>
+        <select value={fracture.pattern} onChange={(e) => setObjectFracture(objectId, { pattern: e.target.value as import('../types').FracturePattern })}>
+          <option value="uniform">Uniform grid (boxes)</option>
+          <option value="chunks">Chunks (big shards)</option>
+          <option value="shatter">Shatter (small shards)</option>
+        </select>
+      </label>
+      <label className="field-row">
+        <span>Detail / count</span>
+        <NumberInput value={fracture.pieces} min={2} max={6} step={1} onChange={(v) => setObjectFracture(objectId, { pieces: Math.round(v) })} />
+      </label>
+      {!isGrid && (
+        <>
+          <RangeField label="Irregularity" value={fracture.jitter} onChange={(jitter) => setObjectFracture(objectId, { jitter })} />
+          <label className="field-row">
+            <span>Seed</span>
+            <NumberInput value={fracture.seed} min={1} step={1} onChange={(v) => setObjectFracture(objectId, { seed: Math.round(v) })} />
+          </label>
+          <label className="field-row">
+            <span>Small near impact</span>
+            <input type="checkbox" checked={fracture.focusImpact} onChange={(e) => setObjectFracture(objectId, { focusImpact: e.target.checked })} />
+          </label>
+        </>
+      )}
+      <label className="field-row">
+        <span>Burst force</span>
+        <NumberInput value={fracture.strength} min={0} step={0.5} onChange={(v) => setObjectFracture(objectId, { strength: v })} />
+      </label>
+      <label className="field-row">
+        <span>Break on impact</span>
+        <NumberInput value={fracture.impactThreshold} min={0} step={0.5} onChange={(v) => setObjectFracture(objectId, { impactThreshold: v })} />
+      </label>
+      <p className="field-hint">
+        Break on impact = hit speed (units/sec) that auto-shatters it; 0 = only when destroyed by damage or a Fracture
+        node. Needs physics enabled to be hit. {isGrid ? `${fracture.pieces ** 3} pieces.` : 'Change Seed for a different-looking break.'}
+      </p>
+      <button className="full-button" onClick={() => setObjectFracture(objectId, { enabled: false })}>
+        Not Destructible
+      </button>
+    </section>
+  );
+}
+
 export function InspectorPanel() {
   const object = useEditorStore((state) => state.selectedObject());
   const renameObject = useEditorStore((state) => state.renameObject);
@@ -1679,6 +1745,10 @@ export function InspectorPanel() {
                 Add Dynamic Body
               </button>
             </section>
+          )}
+
+          {object.renderer && object.kind !== 'terrain' && (
+            <FractureSection objectId={object.id} fracture={object.fracture} />
           )}
 
           <ParticleSection objectId={object.id} particles={object.particles} imageAssets={imageAssets} />

@@ -274,6 +274,7 @@ const NODE_LABELS = [
   'Load Scene',
   'Camera Shake',
   'Move To',
+  'Fracture',
   'Save Game',
   'Load Game',
   'Clear Save',
@@ -349,6 +350,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Load Scene': 'Runtime',
   'Camera Shake': 'Runtime',
   'Move To': 'Runtime',
+  Fracture: 'Physics',
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
@@ -888,6 +890,28 @@ export const engineTools = {
         collider: patch.collider as ColliderType | undefined,
       });
       return `Updated physics of ${id}.`;
+    },
+  }),
+
+  set_fracture: tool({
+    description:
+      'Make an object DESTRUCTIBLE (configured on the object itself). It shatters into small dynamic cubes that fly apart: automatically when hit fast enough (set impactThreshold > 0, needs physics enabled to be hit), when destroyed by damage (give it a "health" instance var), or via the "Fracture" Blueprint node. Set enabled:false to turn it off.',
+    inputSchema: z.object({
+      id: z.string(),
+      enabled: z.boolean().optional().describe('Turn destructibility on/off. Default on.'),
+      pattern: z.enum(['uniform', 'chunks', 'shatter']).optional().describe("Cut style: 'uniform' even grid, 'chunks' few big irregular pieces, 'shatter' many small bits."),
+      pieces: z.number().int().min(2).max(6).optional().describe('Detail / base piece count (higher = more, smaller pieces).'),
+      jitter: z.number().min(0).max(1).optional().describe('Irregularity 0–1 (chunks/shatter): how uneven the piece sizes are.'),
+      seed: z.number().int().min(1).optional().describe('Seed for a repeatable break; change for a different look.'),
+      strength: z.number().min(0).optional().describe('Burst force on the pieces (default 3).'),
+      impactThreshold: z.number().min(0).optional().describe('Hit speed (units/sec) that auto-shatters on contact; 0 = only on death / Fracture node.'),
+      focusImpact: z.boolean().optional().describe('Make pieces smaller near the hit point and bigger away (radial).'),
+    }),
+    execute: async ({ id, ...patch }) => {
+      const object = findObject(id);
+      if (!object) return `No object with id ${id}.`;
+      store().setObjectFracture(id, { ...patch, enabled: patch.enabled ?? true });
+      return patch.enabled === false ? `Made ${id} non-destructible.` : `Made ${id} destructible (${patch.pattern ?? 'chunks'}).`;
     },
   }),
 
@@ -1497,11 +1521,11 @@ export const engineTools = {
 
   create_film_mode_template: tool({
     description:
-      'Build the Film Mode cinematic tutorial template: staged objects, director camera, autoplay cinematic with fades, camera cut, transform, temporary spawn, visibility, and event beats. Returns cinematicId.',
+      'Build the Film Mode cinematic template: a self-running CYBERPUNK CITY flythrough. Lays a neon street canyon from the bundled city kit (road + raised sidewalk tiles down a long avenue, building blocks + skyscrapers lining both sides, holo-billboards, neon curb rails, a rooftop satellite dish), sets a rainy-night neon environment with strong bloom + vignette, and authors an ~18s autoplay cinematic: a smooth 5-keyframe camera flythrough down the avenue that pulls up to reveal the skyline, with 2.39 letterbox, a teal/orange grade, fade bookends, a slowly sweeping dish, and a cinematic_finished event. Returns cinematicId.',
     inputSchema: z.object({}),
     execute: async () => {
-      const id = createFilmModeTemplate();
-      return id ? `Created Film Mode cinematic tutorial with cinematicId ${id}. Press Play to watch it.` : `Couldn't build the Film Mode template.`;
+      const id = await createFilmModeTemplate();
+      return id ? `Created the Cyberpunk City cinematic with cinematicId ${id}. Press Play to watch the neon flythrough.` : `Couldn't build the Film Mode template.`;
     },
   }),
 

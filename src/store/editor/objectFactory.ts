@@ -2,6 +2,7 @@ import type {
   AssetType,
   ColliderType,
   CompareOperator,
+  FractureComponent,
   GraphValue,
   GraphValueType,
   NodeForgeNodeData,
@@ -14,6 +15,7 @@ import type {
 } from '../../types';
 
 import { withParticleDefaults } from '../../runtime/particlePresets';
+import { registerRawGeometry } from '../../runtime/meshGeometryCache';
 import { defaultTerrain } from '../../terrain/terrain';
 import { cloneGraphValue } from './graph';
 import { makeId } from './ids';
@@ -297,6 +299,214 @@ export const makeSpawnedObject = (spawnKind: SceneObjectKind, position: Vector3T
     ...objectDefaults[spawnKind],
     physics: { ...defaultPhysics('dynamic', collider), enabled: true },
   } as SceneObject;
+};
+
+/** Default destructible config, applied when an object is first made fracturable. */
+export const defaultFracture = (): FractureComponent => ({
+  enabled: true,
+  pattern: 'chunks',
+  pieces: 3,
+  jitter: 0.5,
+  seed: 1,
+  strength: 3,
+  impactThreshold: 0,
+  focusImpact: true,
+});
+
+/** Deterministic PRNG (mulberry32) so a seed reproduces the same break. */
+const mulberry32 = (seed: number) => {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+/** An axis-aligned cell in the object's normalised local box space [-0.5, 0.5]³. */
+interface FractureCell {
+  min: number[];
+  max: number[];
+}
+
+const clampHalf = (v: number) => Math.max(-0.5, Math.min(0.5, v));
+
+/** Even grid of n³ equal cells. */
+const gridCells = (n: number): FractureCell[] => {
+  const cells: FractureCell[] = [];
+  const s = 1 / n;
+  for (let i = 0; i < n; i++)
+    for (let j = 0; j < n; j++)
+      for (let k = 0; k < n; k++)
+        cells.push({ min: [-0.5 + i * s, -0.5 + j * s, -0.5 + k * s], max: [-0.5 + (i + 1) * s, -0.5 + (j + 1) * s, -0.5 + (k + 1) * s] });
+  return cells;
+};
+
+// ── Angular shards (icosphere-based) ──────────────────────────────────────────
+// A subdivided icosahedron gives a triangulated surface; each surface triangle + the shared centre
+// apex is one tetrahedral SHARD. All shards share the centre + their surface vertices, so they tile
+// the volume with no overlap (no physics interpenetration) — and each piece is angular, like a real
+// shatter rather than a Lego cube.
+
+let shardSeq = 0;
+
+interface Sphere {
+  verts: number[][]; // unit-sphere positions
+  faces: number[][]; // triangle vertex indices
+}
+
+/** Build a `detail`-times-subdivided icosphere (detail 0 = 20 faces, 1 = 80, 2 = 320). */
+const icosphere = (detail: number): Sphere => {
+  const t = (1 + Math.sqrt(5)) / 2;
+  let verts: number[][] = [
+    [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
+    [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
+    [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
+  ].map((v) => {
+    const l = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / l, v[1] / l, v[2] / l];
+  });
+  let faces: number[][] = [
+    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+    [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+  ];
+  for (let d = 0; d < detail; d++) {
+    const mid = new Map<string, number>();
+    const midpoint = (a: number, b: number) => {
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      const found = mid.get(key);
+      if (found !== undefined) return found;
+      const m = [(verts[a][0] + verts[b][0]) / 2, (verts[a][1] + verts[b][1]) / 2, (verts[a][2] + verts[b][2]) / 2];
+      const l = Math.hypot(m[0], m[1], m[2]);
+      const idx = verts.push([m[0] / l, m[1] / l, m[2] / l]) - 1;
+      mid.set(key, idx);
+      return idx;
+    };
+    const next: number[][] = [];
+    for (const [a, b, c] of faces) {
+      const ab = midpoint(a, b);
+      const bc = midpoint(b, c);
+      const ca = midpoint(c, a);
+      next.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
+    }
+    faces = next;
+  }
+  return { verts, faces };
+};
+
+/** Break an object into angular tetrahedral shards radiating from its centre. */
+const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefined, detail: number): SceneObject[] => {
+  const cfg = { ...defaultFracture(), ...source.fracture };
+  const rng = mulberry32((cfg.seed || 1) >>> 0);
+  const jitter = Math.max(0, Math.min(cfg.jitter ?? 0, 1));
+  const kick = Math.max(0, cfg.strength ?? 3);
+  const [px, py, pz] = source.transform.position;
+  const [sx, sy, sz] = source.transform.scale;
+  const rx = sx / 2;
+  const ry = sy / 2;
+  const rz = sz / 2;
+  const color = source.renderer?.color ?? '#9aa3b2';
+
+  const { verts, faces } = icosphere(detail);
+  // Per-vertex radial jitter (shared across faces → shards still tile without gaps/overlap).
+  const rad = verts.map(() => 1 + (rng() - 0.5) * jitter * 0.5);
+  const P = (i: number): [number, number, number] => [verts[i][0] * rx * rad[i], verts[i][1] * ry * rad[i], verts[i][2] * rz * rad[i]];
+
+  // Impact point in object-local space → flings shards outward from the hit.
+  const focus = origin && cfg.focusImpact ? [origin[0] - px, origin[1] - py, origin[2] - pz] : undefined;
+
+  return faces.map((f) => {
+    const a = P(f[0]);
+    const b = P(f[1]);
+    const c = P(f[2]);
+    // Tetra: centre apex + the three surface points.
+    const vertices = new Float32Array([0, 0, 0, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]);
+    const indices = new Uint32Array([0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]);
+    const key = `shard_${source.id}_${shardSeq++}`;
+    registerRawGeometry(key, vertices, indices);
+
+    const mx = (a[0] + b[0] + c[0]) / 3;
+    const my = (a[1] + b[1] + c[1]) / 3;
+    const mz = (a[2] + b[2] + c[2]) / 3;
+    const dirX = focus ? mx - focus[0] : mx;
+    const dirY = focus ? my - focus[1] : my;
+    const dirZ = focus ? mz - focus[2] : mz;
+    const len = Math.hypot(dirX, dirY, dirZ) || 1;
+
+    return {
+      id: makeId('shard'),
+      name: `${source.name} Shard`,
+      kind: 'cube',
+      transform: { position: [px, py, pz], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      renderer: {
+        ...defaultRenderer('cube', color),
+        metalness: source.renderer?.metalness ?? 0.1,
+        roughness: source.renderer?.roughness ?? 0.7,
+        modelAssetId: key, // drives the convex-hull collider
+        fragmentKey: key, // drives rendering
+      },
+      physics: { ...defaultPhysics('dynamic', 'convex'), enabled: true },
+      variables: { __impulse: [(dirX / len) * kick, (dirY / len) * kick + kick * 0.4, (dirZ / len) * kick] },
+    } as SceneObject;
+  });
+};
+
+/**
+ * Break an object into dynamic pieces that fly apart. 'uniform' = an even box grid (good for brick
+ * walls); 'chunks' / 'shatter' = angular tetrahedral SHARDS (like a real shatter, not Lego cubes).
+ * Pattern/detail/jitter/seed come from the object's fracture config; `origin` (world-space hit point)
+ * makes pieces fly outward from it. Each piece carries a one-shot kick in `variables.__impulse`
+ * (applied once by tickRuntime). The caller destroys the original.
+ */
+export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple): SceneObject[] => {
+  const cfg = { ...defaultFracture(), ...source.fracture };
+  const base = Math.max(2, Math.min(Math.round(cfg.pieces) || 2, 6));
+
+  if (cfg.pattern !== 'uniform') {
+    // detail 0 = 20 shards, 1 = 80, 2 = 320. Scale with pieces; shatter goes finer than chunks.
+    const detail = cfg.pattern === 'shatter' ? (base >= 4 ? 2 : 1) : base >= 4 ? 1 : 0;
+    return makeFractureShards(source, origin, detail);
+  }
+
+  // 'uniform' → even box grid.
+  const kick = Math.max(0, cfg.strength ?? 3);
+  const [px, py, pz] = source.transform.position;
+  const [sx, sy, sz] = source.transform.scale;
+  const color = source.renderer?.color ?? '#9aa3b2';
+  const focus =
+    origin && cfg.focusImpact
+      ? [clampHalf((origin[0] - px) / (sx || 1)), clampHalf((origin[1] - py) / (sy || 1)), clampHalf((origin[2] - pz) / (sz || 1))]
+      : undefined;
+
+  return gridCells(base).map((c) => {
+    const cx = (c.min[0] + c.max[0]) / 2;
+    const cy = (c.min[1] + c.max[1]) / 2;
+    const cz = (c.min[2] + c.max[2]) / 2;
+    const hx = c.max[0] - c.min[0];
+    const hy = c.max[1] - c.min[1];
+    const hz = c.max[2] - c.min[2];
+    const dirX = focus ? cx - focus[0] : cx;
+    const dirY = focus ? cy - focus[1] : cy;
+    const dirZ = focus ? cz - focus[2] : cz;
+    const len = Math.hypot(dirX, dirY, dirZ) || 1;
+    return {
+      id: makeId('chunk'),
+      name: `${source.name} Chunk`,
+      kind: 'cube',
+      transform: {
+        position: [px + cx * sx, py + cy * sy, pz + cz * sz],
+        rotation: [0, 0, 0],
+        scale: [Math.max(hx * sx, 0.04), Math.max(hy * sy, 0.04), Math.max(hz * sz, 0.04)],
+      },
+      renderer: { ...defaultRenderer('cube', color), metalness: source.renderer?.metalness ?? 0.1, roughness: source.renderer?.roughness ?? 0.7 },
+      physics: { ...defaultPhysics('dynamic', 'box'), enabled: true },
+      variables: { __impulse: [(dirX / len) * kick, (dirY / len) * kick + kick * 0.4, (dirZ / len) * kick] },
+    };
+  });
 };
 
 /** A runtime-spawned emitter that references a particle-system asset (Spawn Particle System node). */

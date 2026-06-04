@@ -39,6 +39,7 @@ import {
   type Scene,
   type SceneObject,
   type SceneObjectKind,
+  type FractureComponent,
   type ScriptBlueprint,
   type BlueprintVariable,
   type SkeletonAsset,
@@ -165,8 +166,10 @@ import {
   compareValues,
   getAssetType,
   graphValueToString,
+  defaultFracture,
   inferGraphType,
   makeAttachedWeapon,
+  makeFractureChunks,
   makeDamageNumber,
   makeExplosion,
   makeImpactObject,
@@ -433,6 +436,8 @@ interface EditorState {
   clearTerrainEdits: (objectId: string, edits?: 'height' | 'paint' | 'all') => void;
   updatePhysics: (id: string, patch: Partial<PhysicsComponent>) => void;
   togglePhysics: (id: string) => void;
+  /** Make an object destructible / patch its fracture config (seeds defaults on first use). */
+  setObjectFracture: (id: string, patch: Partial<FractureComponent>) => void;
   /** Enable/disable the animator on an object (seeds a default component when first enabled). */
   toggleAnimator: (id: string) => void;
   /** Patch an object's animator component (clip, speed, loop). No-op if it has no animator. */
@@ -1502,6 +1507,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const current = withPhysicsDefaults(object.physics ?? defaultPhysics());
           return { ...object, physics: { ...current, enabled: !current.enabled } };
         }),
+      ),
+    ),
+  setObjectFracture: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id ? { ...object, fracture: { ...defaultFracture(), ...object.fracture, ...patch } } : object,
+        ),
       ),
     ),
   toggleAnimator: (id) =>
@@ -4428,15 +4441,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const meleeSwings = new Set<string>(); // characters that started an attack swing this frame (melee hit-test)
       // On lethal damage: a rigged target (character/animator) goes LIMP like the player (ragdoll), so it crumples
       // instead of vanishing; a simple prop (e.g. the target dummy) just despawns.
-      const dieOrRagdoll = (target: SceneObject | undefined, id: string) => {
+      // Destructibles already shattered this frame, so one hit doesn't spawn chunks twice.
+      const fracturedIds = new Set<string>();
+      /** Replace a destructible object with its dynamic box chunks, then remove the original.
+       *  `origin` is the world-space hit point (smaller pieces near it, flung outward from it). */
+      const fractureSource = (src: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
+        if (!src || fracturedIds.has(id) || destroyedIds.has(id)) return false;
+        fracturedIds.add(id);
+        for (const chunk of makeFractureChunks(src, origin)) spawned.push(chunk);
+        destroyedIds.add(id);
+        return true;
+      };
+      const dieOrRagdoll = (target: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
         if (target && (target.character?.enabled || target.animator?.enabled)) setRagdoll(id, true);
+        else if (target?.fracture?.enabled && fractureSource(target, id, origin)) return;
         else destroyedIds.add(id);
       };
       // Explosions: an object with an `explosive` instance var bursts on death (barrels, grenades) — queued here,
       // then processed after the hit passes so blasts can CHAIN (a barrel killed by another barrel explodes too).
       const explodeQueue: Array<{ pos: Vector3Tuple; dmg: number; radius: number }> = [];
       const exploded = new Set<string>();
-      const killTarget = (target: SceneObject | undefined, id: string) => {
+      const killTarget = (target: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
         if (target?.variables?.explosive) {
           if (exploded.has(id)) return;
           exploded.add(id);
@@ -4446,7 +4471,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             dmg: toNumber(target.variables.explosionDamage ?? 60),
             radius: toNumber(target.variables.explosionRadius ?? 4.5),
           });
-        } else dieOrRagdoll(target, id);
+        } else dieOrRagdoll(target, id, origin);
       };
       // Per-character movement-mode override (Set Movement Mode node) — persists across frames, updated by the
       // node in the script pass, then read by the character + animator passes below.
@@ -5094,6 +5119,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               destroyedIds.add(node.data.targetObjectId || object.id);
             }
 
+            if (node.data.nodeKind === 'action.fractureObject') {
+              // Shatter the owner (or Target) into small dynamic cubes that fly apart, then remove the original.
+              const targetId = resolveTarget(node.data.targetObjectId) || object.id;
+              fractureSource(activeObjectById.get(targetId), targetId);
+            }
+
             if (node.data.nodeKind === 'action.setMaterialColor') {
               if (nextRenderer) {
                 const color = graphValueToString(valueInput(node, 'color', node.data.materialColor ?? '#ffffff'));
@@ -5427,6 +5458,42 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       for (const object of mappedObjects) {
         if (!object.vehicle?.enabled) continue;
         const veh = { ...defaultVehicle(), ...object.vehicle };
+        // UPGRADE SCALING (Need-for-Speed-style garage): optional project variables let an in-game shop tune the
+        // DRIVEN car at runtime with no per-car code — each is an upgrade LEVEL (0 = stock) the runtime turns into
+        // a small percentage step. SpeedLevel raises top speed, AccelLevel sharpens the launch, GripLevel tightens
+        // cornering + handbrake grip. Absent vars = stock handling, so this is invisible to non-upgrade games. Only
+        // the player car (camera-follow) is scaled (the menu's idle cars stay stock).
+        if (object.id === vehiclePlayerId) {
+          const upgradeLevel = (name: string): number => {
+            const v = variableByName.get(name);
+            return v ? Math.max(0, toNumber(nextVariableValues[v.id] ?? v.defaultValue)) : 0;
+          };
+          const speedLvl = upgradeLevel('SpeedLevel');
+          const accelLvl = upgradeLevel('AccelLevel');
+          const gripLvl = upgradeLevel('GripLevel');
+          if (speedLvl) {
+            veh.maxSpeed *= 1 + 0.16 * speedLvl;
+            veh.maxReverseSpeed *= 1 + 0.16 * speedLvl;
+          }
+          if (accelLvl) veh.acceleration *= 1 + 0.2 * accelLvl;
+          if (gripLvl) {
+            veh.gripFactor = Math.min(0.995, veh.gripFactor + 0.012 * gripLvl);
+            veh.handbrakeGrip = Math.min(0.6, veh.handbrakeGrip + 0.02 * gripLvl);
+          }
+          // NITRO / boost (also opt-in via a project var): a boost pad's graph sets "Nitro" to 1; while it's
+          // above 0 the runtime lifts top speed + launch (a NFS-style surge), then DRAINS it back to 0 over ~2s.
+          // Done here (not via Apply Force) because the vehicle pass force-sets the car's velocity each frame, so
+          // a Rapier impulse would be overwritten — feeding the speed integrator is what actually accelerates it.
+          const nitroVar = variableByName.get('Nitro');
+          if (nitroVar) {
+            const nitro = Math.max(0, Math.min(1, toNumber(nextVariableValues[nitroVar.id] ?? nitroVar.defaultValue)));
+            if (nitro > 0) {
+              veh.maxSpeed *= 1 + 0.7 * nitro;
+              veh.acceleration *= 1 + 1.6 * nitro;
+              nextVariableValues[nitroVar.id] = Math.max(0, nitro - delta * 0.5);
+            }
+          }
+        }
         // A DYNAMIC car lets the Rapier solver own its vertical motion + collision response (so fixed scenery —
         // buildings, the roundabout — physically STOPS it); a KINEMATIC car has the runtime own the whole
         // transform (terrain-following Y + suspension) and is never stopped by the solver (it drives through).
@@ -5932,6 +5999,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let triggersExit: PhysicsContactEvent[] = [];
       let groundedIds: string[] = [];
       let resolvedObjects = movedObjects;
+      // Fracture chunks carry a one-shot outward kick; apply it the frame their body first exists, then clear it.
+      const kickedChunkIds = new Set<string>();
+      for (const o of movedObjects) {
+        const kick = o.variables?.__impulse;
+        if (Array.isArray(kick) && kick.length === 3) {
+          physicsImpulses[o.id] = [Number(kick[0]), Number(kick[1]), Number(kick[2])];
+          kickedChunkIds.add(o.id);
+        }
+      }
       const physics = getActivePhysics();
       if (physics) {
         const result = physics.frame(movedObjects, prevTransforms, physicsImpulses, delta);
@@ -5977,6 +6053,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         groundedIds = [...groundedSet];
       }
       const resolvedObjectById = new Map(resolvedObjects.map((object) => [object.id, object]));
+      // Auto-fracture: a destructible object shatters when it (or the thing it hit) is moving fast enough on
+      // contact. No contact-force readout exists, so approximate the impact with this-frame speed.
+      if (collisions.length) {
+        const speedOf = (id: string) => {
+          const cur = resolvedObjectById.get(id)?.transform.position;
+          const prev = prevTransforms.get(id)?.position;
+          if (!cur || !prev) return 0;
+          return Math.hypot(cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2]) / Math.max(delta, 1e-4);
+        };
+        for (const contact of collisions) {
+          for (const [selfId, otherId] of [
+            [contact.objectId, contact.otherObjectId],
+            [contact.otherObjectId, contact.objectId],
+          ] as Array<[string, string]>) {
+            const obj = resolvedObjectById.get(selfId);
+            const threshold = obj?.fracture?.enabled ? obj.fracture.impactThreshold : 0;
+            if (!threshold || threshold <= 0) continue;
+            if (Math.max(speedOf(selfId), speedOf(otherId)) >= threshold) {
+              fractureSource(obj, selfId, resolvedObjectById.get(otherId)?.transform.position);
+            }
+          }
+        }
+      }
       const currentCollisionIndex = buildContactIndex(collisions);
 
       // Swim / climb modes: maintain the "inside a volume" sets from trigger enter/exit against objects
@@ -6096,7 +6195,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           mutableObjectVars(other, target.variables).health = next;
           // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
           if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
-          if (next <= 0) killTarget(target, other); // explosive → blast; rig → ragdoll; prop → despawn
+          if (next <= 0) killTarget(target, other, obj.transform.position); // explosive → blast; rig → ragdoll; destructible → shatter from hit; prop → despawn
           // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
           // hurt vignette if the LOCAL player was the one hit.
           spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
@@ -6307,6 +6406,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       let allObjects = [...resolvedObjects, ...spawned];
       for (const id of destroyedIds) allObjects = deleteWithChildren(allObjects, id);
+      // Drop the one-shot fracture kick now it's been applied, so chunks aren't re-kicked every frame.
+      if (kickedChunkIds.size) {
+        allObjects = allObjects.map((o) => {
+          if (!kickedChunkIds.has(o.id)) return o;
+          const { __impulse: _used, ...rest } = o.variables ?? {};
+          return { ...o, variables: rest };
+        });
+      }
       const cinematicEvents: string[] = [];
       const startingCinematic = pendingCinematicId ? { sequenceId: pendingCinematicId, time: 0, firedActionIds: [], spawnedObjectIds: [] } : undefined;
       let nextRuntimeCinematic = startingCinematic ?? state.runtimeCinematic;

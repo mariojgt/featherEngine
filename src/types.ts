@@ -133,7 +133,8 @@ export type GraphNodeKind =
   | 'action.spawnParticleSystem'
   | 'action.loadScene'
   | 'action.cameraShake'
-  | 'action.moveTo';
+  | 'action.moveTo'
+  | 'action.fractureObject';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -282,6 +283,9 @@ export interface MeshRendererComponent {
   materialId?: string;
   /** Per-object tweaks applied on top of the assigned material — written by runtime "Set Material" nodes, never mutating the shared definition. */
   materialOverrides?: MaterialOverrides;
+  /** Runtime-only: a key into the raw-geometry cache for a spawned fracture shard — the renderer draws
+   *  this raw mesh instead of a built-in primitive or model. Never serialized (shards are transient). */
+  fragmentKey?: string;
 }
 
 export type TerrainFoliageMode = 'grass' | 'trees' | 'mixed';
@@ -1026,6 +1030,30 @@ export interface SceneObject {
   /** Set on the ROOT of an object stamped from a prefab — the source prefab's id. Lets the editor
    * find all instances of a prefab. Instances are independent copies; this is just provenance. */
   prefabSourceId?: string;
+  /** Destructible setup — when enabled, the object shatters into dynamic cubes on impact/damage or the Fracture node. */
+  fracture?: FractureComponent;
+}
+
+/** How the pieces are cut: an even grid, big irregular chunks, or many small bits. */
+export type FracturePattern = 'uniform' | 'chunks' | 'shatter';
+
+/** Makes an object destructible. Shatters into dynamic box pieces that burst apart. */
+export interface FractureComponent {
+  enabled: boolean;
+  /** Cut style: 'uniform' even grid, 'chunks' few big irregular pieces, 'shatter' many small bits. */
+  pattern: FracturePattern;
+  /** Detail / base piece count (2–6). Higher = more, smaller pieces. */
+  pieces: number;
+  /** Irregularity 0–1: how uneven the piece sizes are (chunks/shatter only). */
+  jitter: number;
+  /** Seed so a break is repeatable; change it for a different-looking break. */
+  seed: number;
+  /** Burst impulse applied to each piece when it breaks. */
+  strength: number;
+  /** Auto-shatter when hit at this speed (units/sec) or faster; 0 = only on death/Fracture node. */
+  impactThreshold: number;
+  /** Make pieces smaller near the impact point and bigger away (radial fracture). */
+  focusImpact: boolean;
 }
 
 /** One equippable inventory slot (a weapon/item). An empty `weaponAssetId` is the "unarmed" slot. */

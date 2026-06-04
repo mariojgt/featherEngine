@@ -145,7 +145,7 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'create_first_person_template':
       return 'Built FPS template';
     case 'create_film_mode_template':
-      return 'Built Film Mode template';
+      return 'Built Cyberpunk Cinematic template';
     case 'create_cinematic':
       return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'add_cinematic_action':
@@ -194,6 +194,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.particleSystemId ? 'Attached particle system' : 'Detached particle system';
     case 'set_physics':
       return input.isTrigger ? 'Configured trigger' : 'Configured physics';
+    case 'set_fracture':
+      return input.enabled === false ? 'Removed destructible' : 'Made destructible';
     case 'set_light':
       return `Configured ${String(input.type ?? '')} light`.replace('  ', ' ');
     case 'set_render_settings':

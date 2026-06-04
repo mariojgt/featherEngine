@@ -8,6 +8,7 @@ import { useProjectStore } from '../store/projectStore';
 import { recordRender } from '../runtime/perfStats';
 import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
+import { FragmentMesh } from '../three/FragmentMesh';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget, computeRestingCameraPose } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
@@ -102,6 +103,11 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   // Built-in geometries use the standard (flipped) UV convention; only load when not using a model.
   const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
   const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
+
+  // A spawned fracture shard renders its raw generated geometry (from the geometry cache).
+  if (renderer?.fragmentKey) {
+    return <FragmentMesh geometryKey={renderer.fragmentKey} resolved={resolved} />;
+  }
 
   // A skinned model with an enabled animator plays its clips; otherwise the model is static.
   if (object.animator?.enabled && resolvedAnimator.meshUrl) {
@@ -1124,7 +1130,10 @@ export function ViewportPanel() {
             <Canvas
               className="scene-canvas"
               shadows
-              dpr={dpr}
+              // During Play the bloom/HDR post pass is the dominant GPU cost and it scales with resolution, so
+              // render Play at native 1× (not the editor's 1.5×) — ~halves every full-screen pass and avoids the
+              // PerformanceMonitor thrashing dpr 1↔1.5 (each switch reallocates framebuffers = a hitch/spike).
+              dpr={isPlaying ? 1 : dpr}
               gl={{ powerPreference: 'high-performance' }}
               performance={{ min: 0.5 }}
               camera={{ position: [6, 4.2, 7], fov: 46 }}
