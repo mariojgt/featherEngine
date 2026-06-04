@@ -1,4 +1,5 @@
-import { EffectComposer, Bloom, Vignette, DepthOfField } from '@react-three/postprocessing';
+import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR } from '@react-three/postprocessing';
+import { SMAAPreset } from 'postprocessing';
 import { useEditorStore } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
 import { qualityProfile } from './quality';
@@ -16,6 +17,38 @@ export function PostFx() {
   const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook);
   const profile = qualityProfile(rs?.quality);
   const children = [];
+  // Ambient occlusion FIRST so the contact-shadow darkening it adds in crevices/corners is in the
+  // color buffer before bloom samples luminance. N8AO is a high-quality, depth+normal SSAO; it's
+  // gated to the High/Epic presets (half-resolution on High to keep it cheap, full-res on Epic).
+  if (profile.ssao) {
+    children.push(
+      <N8AO
+        key="ssao"
+        aoRadius={1.0}
+        intensity={2.2}
+        distanceFalloff={1}
+        quality={profile.msaa >= 4 ? 'high' : 'medium'}
+        halfRes={profile.msaa < 4}
+      />,
+    );
+  }
+  // Screen-space reflections: glossy floors / wet streets reflect the scene. The heaviest effect
+  // here, so Epic-only. Before bloom, so reflected neon/emissive still glows. Temporal resolve keeps
+  // it from being noisy; maxRoughness limits it to fairly smooth surfaces (matte stays matte).
+  if (profile.ssr) {
+    children.push(
+      <SSR
+        key="ssr"
+        temporalResolve
+        intensity={1}
+        maxRoughness={0.4}
+        ENABLE_BLUR
+        blurMix={0.4}
+        maxDepthDifference={10}
+        rayStep={0.5}
+      />,
+    );
+  }
   if (rs?.bloomEnabled) {
     children.push(
       <Bloom
@@ -53,6 +86,14 @@ export function PostFx() {
   }
   if (rs?.vignetteEnabled) {
     children.push(<Vignette key="vignette" offset={0.32} darkness={0.72} eskil={false} />);
+  }
+  // Edge anti-aliasing LAST, on the final resolved image. On Low/Medium (msaa: 0) this is the only AA
+  // the scene gets; on High/Epic it cleans up the shader/specular aliasing multisampling can't touch.
+  // Preset scales with the tier (Epic → ULTRA). Cheap relative to MSAA, so it's a near-free quality win.
+  if (profile.smaa) {
+    children.push(
+      <SMAA key="smaa" preset={profile.msaa >= 4 ? SMAAPreset.ULTRA : profile.msaa >= 2 ? SMAAPreset.HIGH : SMAAPreset.MEDIUM} />,
+    );
   }
   if (!children.length) return null;
   // MSAA on the composer's HDR target is one of the biggest Play-mode GPU costs (a multisampled float

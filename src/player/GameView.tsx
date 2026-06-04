@@ -5,7 +5,7 @@ import {
   PerformanceMonitor,
   PerspectiveCamera,
 } from '@react-three/drei';
-import { Suspense, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
+import { Suspense, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useThree } from '@react-three/fiber';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
@@ -21,6 +21,16 @@ import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { PostFx } from '../three/PostFx';
+import { ShadowLOD } from '../three/ShadowLOD';
+import { ModelInstances } from '../three/ModelInstances';
+import {
+  useInstancingEnabled,
+  useIsInstanced,
+  computeInstanceBatches,
+  batchSignature,
+  InstancedIdsContext,
+  EMPTY_INSTANCE_BATCHES,
+} from '../three/modelInstancing';
 import { qualityProfile } from '../three/quality';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { Terrain } from '../three/Terrain';
@@ -45,6 +55,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
     : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
+  const instanced = useIsInstanced(object.id);
   const resolvedAnimator = useResolvedAnimator(object);
   const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
   const builtinNormalTexture = useAssetTexture(usingModel ? undefined : resolved.normalUrl, true);
@@ -95,6 +106,9 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
       </Suspense>
     );
   }
+
+  // Drawn by a shared InstancedMesh batch (see ModelInstances) — don't also draw it individually.
+  if (usingModel && instanced) return null;
 
   // An imported model replaces the built-in mesh when one is assigned and resolvable.
   if (usingModel) {
@@ -237,6 +251,25 @@ function GameScene() {
   // Objects holstered/hidden at runtime (action.setVisible) aren't rendered.
   const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id));
 
+  // GPU instancing for repeated static decoration (same path as the editor). The player is always
+  // runtime, so it's gated only on the toggle. Batches are kept structurally stable (the object array
+  // gets a new identity every frame) so the InstancedMeshes aren't rebuilt 60×/s.
+  const instancingOn = useInstancingEnabled();
+  const rawInstanceBatches = instancingOn ? computeInstanceBatches(objects) : EMPTY_INSTANCE_BATCHES;
+  const instanceSig = batchSignature(rawInstanceBatches);
+  const instanceBatchesRef = useRef<Map<string, SceneObject[]>>(EMPTY_INSTANCE_BATCHES);
+  const instanceSigRef = useRef('');
+  if (instanceSig !== instanceSigRef.current) {
+    instanceSigRef.current = instanceSig;
+    instanceBatchesRef.current = rawInstanceBatches;
+  }
+  const instanceBatches = instanceBatchesRef.current;
+  const instancedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const objs of instanceBatches.values()) for (const o of objs) ids.add(o.id);
+    return ids;
+  }, [instanceBatches]);
+
   // Camera priority: a character's follow camera, then an authored camera object, then free-orbit.
   const followTarget = useFollowTarget();
   const cameraObject = useMemo(() => objects.find((object) => object.kind === 'camera'), [objects]);
@@ -259,7 +292,11 @@ function GameScene() {
         <OrbitControls makeDefault enableDamping dampingFactor={0.07} minDistance={2.5} maxDistance={24} />
       )}
 
-      <group>{renderGameTree(objects, focusId)}</group>
+      {/* Shared InstancedMesh batches for repeated static decoration (off unless toggled). */}
+      <ModelInstances batches={instanceBatches} />
+      <InstancedIdsContext.Provider value={instancedIds}>
+        <group>{renderGameTree(objects, focusId)}</group>
+      </InstancedIdsContext.Provider>
 
       {/* World-space UI widgets (health bars, nameplates) anchored at each object's position. */}
       {objects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
@@ -292,6 +329,7 @@ export function GameView() {
       camera={{ position: [6, 4.2, 7], fov: 50 }}
     >
       <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+      <ShadowLOD />
       <GameScene />
     </Canvas>
   );

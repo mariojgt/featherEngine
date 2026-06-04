@@ -3,6 +3,12 @@ import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
 import { registerModelGeometry } from '../runtime/meshGeometryCache';
+import { qualityProfile } from './quality';
+import { applyAnisotropy } from './textureQuality';
+
+/** Anisotropy for the current quality preset, read non-reactively (textures persist across changes). */
+const currentAnisotropy = (): number =>
+  qualityProfile(useEditorStore.getState().renderSettings?.quality).maxAnisotropy;
 
 /** Resolve any asset id to its runtime URL (blob:/asset:// in the editor, data: in an export). */
 export function useAssetUrl(assetId?: string): string | undefined {
@@ -34,14 +40,17 @@ function acquireTexture(url: string, flipY: boolean): THREE.Texture {
     existing.refs += 1;
     return existing.texture;
   }
+  const anisotropy = currentAnisotropy();
   const texture = new THREE.TextureLoader().load(url, (loaded) => {
     loaded.colorSpace = THREE.SRGBColorSpace;
     loaded.flipY = flipY;
+    loaded.anisotropy = anisotropy;
     loaded.needsUpdate = true;
   });
-  // Set the UV/color conventions up front too, so the first GPU upload uses them.
+  // Set the UV/color/filtering conventions up front too, so the first GPU upload uses them.
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.flipY = flipY;
+  texture.anisotropy = anisotropy;
   textureCache.set(key, { texture, refs: 1 });
   return texture;
 }
@@ -114,6 +123,7 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
   const normalTexture = useAssetTexture(material?.normalUrl, false);
 
   const clone = useMemo(() => {
+    const anisotropy = currentAnisotropy();
     const root = scene.clone(true);
     root.traverse((node) => {
       const mesh = node as THREE.Mesh;
@@ -121,6 +131,10 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
       const cloneMat = (mat: THREE.Material) => {
         const next = mat.clone();
         const std = next as THREE.MeshStandardMaterial;
+        // Anisotropic filtering on every baked map keeps the model's textures crisp at grazing angles.
+        for (const map of [std.map, std.normalMap, std.roughnessMap, std.metalnessMap, std.emissiveMap, std.aoMap]) {
+          applyAnisotropy(map, anisotropy);
+        }
         next.userData.__original = {
           color: std.color?.clone(),
           metalness: typeof std.metalness === 'number' ? std.metalness : undefined,
@@ -135,19 +149,7 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(cloneMat) : cloneMat(mesh.material);
     });
 
-    // Normalize an EXTREME baked scale (e.g. FBX→glTF exports that bake a 100× node matrix, making a
-    // model hundreds of units big). Wrapping it so its largest dimension ≈ 1 unit keeps the object's
-    // own transform.scale intuitive (scale 1 ≈ 1 unit). Normal-sized models (0.05–20u) are left as-is.
-    root.updateWorldMatrix(true, true);
-    const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 20 || (maxDim > 1e-6 && maxDim < 0.05)) {
-      const wrapper = new THREE.Group();
-      wrapper.scale.setScalar(1 / maxDim);
-      wrapper.add(root);
-      return wrapper;
-    }
-    return root;
+    return normalizeModelScale(root);
   }, [scene]);
 
   // Cache the merged geometry (in the clone's local space, so the normalization
@@ -218,4 +220,61 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
   ]);
 
   return <primitive object={clone} />;
+}
+
+/**
+ * Normalize an EXTREME baked scale (e.g. FBX→glTF exports that bake a 100× node matrix, making a model
+ * hundreds of units big). Wraps `root` so its largest dimension ≈ 1 unit, keeping the object's own
+ * transform.scale intuitive (scale 1 ≈ 1 unit). Normal-sized models (0.05–20u) are returned unchanged.
+ * Shared by ModelAsset and the instancing extractor so an instanced model is sized IDENTICALLY to the
+ * per-object one — diverging here would make instanced decor the wrong size.
+ */
+export function normalizeModelScale(root: THREE.Object3D): THREE.Object3D {
+  root.updateWorldMatrix(true, true);
+  const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  if (maxDim > 20 || (maxDim > 1e-6 && maxDim < 0.05)) {
+    const wrapper = new THREE.Group();
+    wrapper.scale.setScalar(1 / maxDim);
+    wrapper.add(root);
+    return wrapper;
+  }
+  return root;
+}
+
+export interface InstanceSubmesh {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+  /** The submesh's transform relative to the model root (incl. the scale-normalization wrapper). */
+  localMatrix: THREE.Matrix4;
+}
+
+/**
+ * Extract the renderable submeshes of a glTF scene for GPU instancing: each is a (geometry, material,
+ * local-matrix-within-the-model) triple. Geometry and material are SHARED from the loaded glTF (one
+ * upload, reused across all instances). The local matrix bakes in the same scale-normalization
+ * ModelAsset applies, so a per-submesh InstancedMesh placed at an object's world transform matches
+ * exactly what the non-instanced ModelAsset would draw. Read-only on the source scene.
+ */
+export function extractInstanceSubmeshes(scene: THREE.Object3D, anisotropy: number): InstanceSubmesh[] {
+  // Clone the graph (shares geometry + materials — one GPU upload, reused) so we never mutate the
+  // shared useGLTF-cached scene when normalizeModelScale reparents under a wrapper.
+  const root = normalizeModelScale(scene.clone(true));
+  root.updateWorldMatrix(true, true);
+  const out: InstanceSubmesh[] = [];
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    // A multi-material mesh uses geometry groups; instancing one material per submesh covers the
+    // common single-material case. Use the first material for grouped meshes (rare for decor props).
+    const material = mats[0];
+    if (!material) return;
+    const std = material as THREE.MeshStandardMaterial;
+    for (const map of [std.map, std.normalMap, std.roughnessMap, std.metalnessMap, std.emissiveMap, std.aoMap]) {
+      applyAnisotropy(map, anisotropy);
+    }
+    out.push({ geometry: mesh.geometry, material, localMatrix: mesh.matrixWorld.clone() });
+  });
+  return out;
 }

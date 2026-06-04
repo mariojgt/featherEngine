@@ -31,6 +31,15 @@ import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
 import { PostFx } from '../three/PostFx';
+import { ShadowLOD } from '../three/ShadowLOD';
+import { ModelInstances } from '../three/ModelInstances';
+import {
+  useInstancingEnabled,
+  useIsInstanced,
+  computeInstanceBatches,
+  batchSignature,
+  InstancedIdsContext,
+} from '../three/modelInstancing';
 import { qualityProfile, QUALITY_LEVELS } from '../three/quality';
 import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
@@ -104,6 +113,9 @@ const SHARED_GEO = {
   plane: new THREE.PlaneGeometry(1, 1, 12, 12),
 };
 
+/** Stable empty batch map reused when instancing is off — avoids allocating a Map every render. */
+const EMPTY_BATCHES: Map<string, SceneObject[]> = new Map();
+
 function Primitive({ object, selected }: { object: SceneObject; selected: boolean }) {
   // Floating combat damage number.
   if (object.effect?.kind === 'damage') return <DamageNumber effect={object.effect} />;
@@ -123,6 +135,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
       : baseResolved;
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
+  const instanced = useIsInstanced(object.id);
   const resolvedAnimator = useResolvedAnimator(object);
   // Built-in geometries use the standard (flipped) UV convention; only load when not using a model.
   const builtinBaseTexture = useAssetTexture(usingModel ? undefined : resolved.baseColorUrl, true);
@@ -162,6 +175,10 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
       </Suspense>
     );
   }
+
+  // This object's model is currently drawn by a shared InstancedMesh batch (see ModelInstances) — don't
+  // also draw it individually. The batch handles its transform; the group still exists for hierarchy.
+  if (usingModel && instanced) return null;
 
   // An imported model replaces the built-in mesh when one is assigned and resolvable.
   if (usingModel) {
@@ -692,6 +709,26 @@ function SceneContent({
       !object.viewModel &&
       !((isPlaying ? runtimeHidden : cinematicPreviewHidden).includes(object.id)),
   );
+  // GPU instancing for repeated static decoration models (Play-only, toggle in the F8 overlay). Batches
+  // recompute structurally only — the active-scene array gets a new identity every tick, so we keep the
+  // SAME batches object until the membership SIGNATURE changes (object added/removed/hidden), which stops
+  // the InstancedMeshes from being torn down and rebuilt 60×/s when nothing structural moved.
+  const instancingOn = useInstancingEnabled();
+  const rawInstanceBatches = instancingOn && isPlaying ? computeInstanceBatches(sceneObjects) : EMPTY_BATCHES;
+  const instanceSig = batchSignature(rawInstanceBatches);
+  const instanceBatchesRef = useRef<Map<string, SceneObject[]>>(EMPTY_BATCHES);
+  const instanceSigRef = useRef('');
+  if (instanceSig !== instanceSigRef.current) {
+    instanceSigRef.current = instanceSig;
+    instanceBatchesRef.current = rawInstanceBatches;
+  }
+  const instanceBatches = instanceBatchesRef.current;
+  const instancedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const objs of instanceBatches.values()) for (const o of objs) ids.add(o.id);
+    return ids;
+  }, [instanceBatches]);
+
   const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
   const followTarget = useFollowTarget();
   const cameraRigObject = cameraRigTarget ? sceneObjects.find((o) => o.id === cameraRigTarget && o.character) : undefined;
@@ -858,6 +895,9 @@ function SceneContent({
   return (
     <>
       <SceneEnvironment environment={sceneEnvironment} />
+      {/* Shared InstancedMesh batches for repeated static decoration models (Play-only; off unless toggled). */}
+      <ModelInstances batches={instanceBatches} />
+      <InstancedIdsContext.Provider value={instancedIds}>
       <group
         onPointerMissed={(event: MouseEvent) => {
           // While playing, clicks belong to the game, not editor selection.
@@ -885,6 +925,7 @@ function SceneContent({
           isGizmoEngaged,
         })}
       </group>
+      </InstancedIdsContext.Provider>
       {/* World-space UI widgets anchored to objects (edit + play). Use the UNFILTERED list so signs on
           invisible/empty anchors (e.g. tutorial labels) still show during Play. */}
       {allSceneObjects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
@@ -1434,6 +1475,7 @@ export function ViewportPanel() {
               <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
               <RenderStatsProbe />
               <LightBudget />
+              <ShadowLOD />
               <SceneContent
                 transformMode={transformMode}
                 transformSpace={transformSpace}

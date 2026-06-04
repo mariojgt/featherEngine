@@ -186,6 +186,22 @@ export function SceneSettingsPanel() {
         )}
 
         <label className="field-row">
+          <span><ImageIcon size={13} aria-hidden /> IBL Map</span>
+          <select
+            value={environment.environmentMapAssetId ?? ''}
+            onChange={(event) => updateEnvironment({ environmentMapAssetId: event.target.value || undefined })}
+            title="Image-based lighting: an equirectangular panorama/HDRI drives reflections + ambient light. Studio = built-in light rig."
+          >
+            <option value="">Studio (default)</option>
+            {imageAssets.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="field-row">
           <span>Env Light</span>
           <input
             type="number"

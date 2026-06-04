@@ -65,6 +65,13 @@ const wtPos = new THREE.Vector3();
 const wtQuat = new THREE.Quaternion();
 const wtScale = new THREE.Vector3();
 const wtEuler = new THREE.Euler();
+// Separate scratch for composing an INPUT world matrix (can't share the wt* output temps: we compose
+// the input, then decompose the result back into wt*, so input and output must not alias).
+const wlMat = new THREE.Matrix4();
+const wlPos = new THREE.Vector3();
+const wlQuat = new THREE.Quaternion();
+const wlScale = new THREE.Vector3(1, 1, 1);
+const wlEuler = new THREE.Euler();
 
 type PosRot = { position: Vector3Tuple; rotation: Vector3Tuple };
 
@@ -82,10 +89,10 @@ function worldToLocalUnder(
   position: Vector3Tuple,
   rotation: Vector3Tuple,
 ): PosRot {
-  const world = new THREE.Matrix4().compose(
-    new THREE.Vector3(position[0], position[1], position[2]),
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(rotation[0], rotation[1], rotation[2], 'XYZ')),
-    new THREE.Vector3(1, 1, 1),
+  const world = wlMat.compose(
+    wlPos.set(position[0], position[1], position[2]),
+    wlQuat.setFromEuler(wlEuler.set(rotation[0], rotation[1], rotation[2], 'XYZ')),
+    wlScale.set(1, 1, 1),
   );
   const local = worldMatrixOf(byId, parentId).invert().multiply(world);
   local.decompose(wtPos, wtQuat, wtScale);

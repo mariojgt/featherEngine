@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getPerfSnapshot, type PerfSnapshot } from '../runtime/perfStats';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useInstancingEnabled, toggleInstancing } from '../three/modelInstancing';
 
 interface Counts {
   objects: number;
@@ -54,6 +55,7 @@ export function PerfOverlay() {
   const [snap, setSnap] = useState<PerfSnapshot>(ZERO_SNAPSHOT);
   const [counts, setCounts] = useState<Counts>({ objects: 0, scripted: 0, dynamicBodies: 0, lights: 0 });
   const stressCount = useRef(200);
+  const instancingOn = useInstancingEnabled();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -148,6 +150,23 @@ export function PerfOverlay() {
               </button>
             ))}
           </div>
+          <button
+            onClick={toggleInstancing}
+            style={{
+              width: '100%',
+              marginTop: 6,
+              background: instancingOn ? 'rgba(94,224,138,0.18)' : 'rgba(255,255,255,0.06)',
+              border: `1px solid ${instancingOn ? 'rgba(94,224,138,0.4)' : 'rgba(255,255,255,0.15)'}`,
+              borderRadius: 5,
+              color: instancingOn ? '#9af0bb' : '#aeb6c6',
+              cursor: 'pointer',
+              padding: '3px 0',
+              fontSize: 10,
+            }}
+            title="Experimental: batch repeated static decoration models into instanced draws during Play."
+          >
+            instancing: {instancingOn ? 'ON' : 'off'}
+          </button>
           <div style={{ marginTop: 6, opacity: 0.4, fontSize: 10 }}>F8 toggle · Play to measure sim</div>
         </>
       )}

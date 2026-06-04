@@ -89,6 +89,7 @@ import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '..
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
 import { publishTransforms, clearTransformBuffer } from '../runtime/transformBuffer';
+import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSight } from '../runtime/aiPerception';
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
 import { resolveMaterial } from '../three/materialResolve';
 import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
@@ -4383,6 +4384,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Spin up a fresh Rapier world to own the simulation for this play session.
         startPhysics();
         clearTransformBuffer();
+        clearPerception();
         return {
           isPlaying,
           runtimeTime: 0,
@@ -4470,6 +4472,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Tear the physics world down so the next play session starts clean.
       stopPhysics();
       clearTransformBuffer();
+      clearPerception();
       return {
         isPlaying,
         runtimeTime: 0,
@@ -4539,6 +4542,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tickRuntime: (delta) =>
     set((state) => {
       if (!state.isPlaying) return state;
+      beginPerceptionFrame(); // advance the AI perception clock (throttled line-of-sight cache)
       const activeObjects = selectActiveObjects(state);
       const activeObjectById = new Map(activeObjects.map((object) => [object.id, object]));
       // These index Maps are WeakMap-cached on their source array identity, so during
@@ -4809,9 +4813,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           let nextRenderer = object.renderer;
           const runtime = graphRuntime;
 
+          // One cycle-guard set reused across every value-input evaluation for this object instead of
+          // a fresh `new Set` per edge. Cleared and re-seeded with the consumer node at each top-level
+          // call, so each traversal still starts clean — identical semantics, far less GC churn.
+          const valueVisited = new Set<string>();
           function valueInput(node: NodeForgeNode, handle: string, fallback?: GraphValue): GraphValue | undefined {
             const edge = runtime.incomingValueByHandle.get(node.id)?.get(handle);
-            return edge ? evaluateValue(edge.source, new Set([node.id])) : fallback;
+            if (!edge) return fallback;
+            valueVisited.clear();
+            valueVisited.add(node.id);
+            return evaluateValue(edge.source, valueVisited);
           }
 
           function evaluateValue(nodeId: string, visited: Set<string>): GraphValue | undefined {
@@ -4919,6 +4930,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if (!aiPlayer || aiPlayer.id === object.id) return false;
               const phys = getActivePhysics();
               if (!phys) return true;
+              // Perception runs at ~20 Hz, not the full tick rate: serve a recent cached result if one
+              // exists (≤50 ms old), so a scene of N enemies costs ~N/3 raycasts/frame, not N. Also
+              // collapses repeat evaluations of this same node within one frame.
+              const cachedLos = cachedLineOfSight(object.id);
+              if (cachedLos !== undefined) return cachedLos;
               const pp = aiPlayer.transform.position;
               const ep = position;
               const ox = ep[0];
@@ -4935,9 +4951,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if (!selfAlreadyExcluded) aiLineOfSightExclude.add(object.id);
               const hit = phys.castRay([ox, oy, oz], [dx, dy, dz], dist, aiLineOfSightExclude);
               if (!selfAlreadyExcluded) aiLineOfSightExclude.delete(object.id);
-              if (!hit) return true;
-              if (hit.objectId === aiPlayer.id) return true;
-              return hit.distance >= dist - 0.15;
+              const visible = !hit || hit.objectId === aiPlayer.id || hit.distance >= dist - 0.15;
+              storeLineOfSight(object.id, visible);
+              return visible;
             }
 
             if (node.data.nodeKind === 'animator.getParam') {
@@ -6543,9 +6559,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const dx = pp[0] - e.transform.position[0];
             const dz = pp[2] - e.transform.position[2];
             const near = Math.hypot(dx, dz) < toNumber(e.variables.attackRange ?? 1.6);
-            // A wall between the enemy and the player blocks the swipe (no hitting through cover).
+            // Only spend a line-of-sight raycast when a hit could actually land this frame: the enemy
+            // is in range, its attack cooldown has elapsed, and the player has health to lose.
+            // Otherwise the cover check is moot, so skip it (most nearby enemies are mid-cooldown).
             let blocked = false;
-            if (near && physics) {
+            if (near && cd <= 0 && hasHealth && physics) {
+              // A wall between the enemy and the player blocks the swipe (no hitting through cover).
               const ep = e.transform.position;
               const dir3: Vector3Tuple = [pp[0] - ep[0], pp[1] - ep[1], pp[2] - ep[2]];
               const dist3 = Math.hypot(dir3[0], dir3[1], dir3[2]);
@@ -7007,6 +7026,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           });
           startPhysics();
           clearTransformBuffer();
+          clearPerception();
           publishTransforms(freshObjects);
           const autoplay = targetScene.cinematics?.find((cinematic) => cinematic.autoplay);
           return {

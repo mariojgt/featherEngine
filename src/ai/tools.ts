@@ -86,6 +86,10 @@ const environmentPatchSchema = z.object({
   skyHorizonColor: z.string().optional().describe('Procedural horizon hex color.'),
   skyGroundColor: z.string().optional().describe('Procedural lower-sky/ground-tint hex color.'),
   skyTextureAssetId: z.string().optional().describe('Image asset id for an equirectangular panorama, or "" to clear.'),
+  environmentMapAssetId: z
+    .string()
+    .optional()
+    .describe('Image asset id of an equirectangular panorama/HDRI used as the image-based-lighting (IBL) source — real reflections + ambient sampled from it, replacing the studio light rig. Independent of skyMode. "" to clear (back to studio).'),
   skyRotation: z.number().optional().describe('Sky dome yaw in degrees.'),
   environmentIntensity: z.number().min(0).optional().describe('Built-in ambient/environment light strength.'),
   sunColor: z.string().optional().describe('Directional sun hex color.'),
@@ -802,15 +806,21 @@ export const engineTools = {
     description:
       'Set the active scene sky/fog/base lighting. Use this for mood, time of day, sunset/night/daylight, panorama skyboxes, and fog. This is scene-level World Settings, not a Blueprint node.',
     inputSchema: environmentPatchSchema,
-    execute: async ({ skyTextureAssetId, ...patch }) => {
+    execute: async ({ skyTextureAssetId, environmentMapAssetId, ...patch }) => {
       if (skyTextureAssetId) {
         const asset = findAsset(skyTextureAssetId);
         if (!asset) return `No asset with id ${skyTextureAssetId}.`;
         if (asset.type !== 'image') return `Asset ${skyTextureAssetId} is a ${asset.type}, not an image — sky panoramas must be image assets.`;
       }
+      if (environmentMapAssetId) {
+        const asset = findAsset(environmentMapAssetId);
+        if (!asset) return `No asset with id ${environmentMapAssetId}.`;
+        if (asset.type !== 'image') return `Asset ${environmentMapAssetId} is a ${asset.type}, not an image — IBL maps must be equirectangular image assets.`;
+      }
       const environmentPatch: Partial<SceneEnvironmentSettings> = {
         ...patch,
         ...(skyTextureAssetId !== undefined ? { skyTextureAssetId: skyTextureAssetId || undefined } : {}),
+        ...(environmentMapAssetId !== undefined ? { environmentMapAssetId: environmentMapAssetId || undefined } : {}),
       };
       store().updateSceneEnvironment(store().activeSceneId, environmentPatch);
       return `Updated scene environment (${Object.keys(environmentPatch).join(', ') || 'defaults'}).`;

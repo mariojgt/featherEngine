@@ -9,6 +9,8 @@ import {
   sunPositionFromEnvironment,
   withSceneEnvironmentDefaults,
 } from './environmentSettings';
+import { useEditorStore } from '../store/editorStore';
+import { qualityProfile } from './quality';
 
 const skyVertexShader = `
 varying vec3 vDirection;
@@ -131,6 +133,21 @@ export function SceneEnvironment({
   const env = withSceneEnvironmentDefaults(environment);
   const sunPosition = useMemo(() => sunPositionFromEnvironment(env), [env]);
   const lightIntensity = Math.max(0, env.environmentIntensity);
+  // IBL cubemap resolution follows the quality preset — sharper reflections at High/Epic.
+  const envResolution = qualityProfile(useEditorStore((state) => state.renderSettings?.quality)).envResolution;
+
+  // Optional image-based lighting: an equirectangular panorama/HDRI drives ambient + reflections,
+  // replacing the studio Lightformer rig when set. Loads the same way as any image asset.
+  const envMapUrl = useAssetUrl(env.environmentMapAssetId);
+  const envMapTexture = useAssetTexture(envMapUrl, false);
+  useEffect(() => {
+    if (envMapTexture) envMapTexture.mapping = THREE.EquirectangularReflectionMapping;
+  }, [envMapTexture]);
+  const useImageIbl = Boolean(env.environmentMapAssetId && envMapTexture);
+  const iblRotation = useMemo(
+    () => new THREE.Euler(0, THREE.MathUtils.degToRad(env.skyRotation), 0),
+    [env.skyRotation],
+  );
 
   return (
     <>
@@ -139,11 +156,15 @@ export function SceneEnvironment({
 
       <ambientLight intensity={0.38 + lightIntensity * 0.24} />
       <directionalLight position={sunPosition} color={env.sunColor} intensity={Math.max(0, env.sunIntensity)} castShadow={shadows} />
-      <Environment resolution={256}>
-        <Lightformer intensity={1.2 * lightIntensity} position={[0, 6, 0]} scale={[10, 10, 1]} />
-        <Lightformer intensity={0.7 * lightIntensity} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
-        <Lightformer intensity={0.5 * lightIntensity} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
-      </Environment>
+      {useImageIbl ? (
+        <Environment map={envMapTexture} environmentIntensity={lightIntensity} environmentRotation={iblRotation} />
+      ) : (
+        <Environment resolution={envResolution}>
+          <Lightformer intensity={1.2 * lightIntensity} position={[0, 6, 0]} scale={[10, 10, 1]} />
+          <Lightformer intensity={0.7 * lightIntensity} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
+          <Lightformer intensity={0.5 * lightIntensity} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
+        </Environment>
+      )}
 
       {env.skyMode === 'procedural' && <ProceduralSky environment={env} />}
       {env.skyMode === 'image' && <ImageSky environment={env} />}

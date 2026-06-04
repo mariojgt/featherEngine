@@ -8,6 +8,7 @@ export const defaultSceneEnvironment = (): SceneEnvironmentSettings => ({
   skyHorizonColor: '#F0B56A',
   skyGroundColor: '#121926',
   skyTextureAssetId: undefined,
+  environmentMapAssetId: undefined,
   skyRotation: 0,
   environmentIntensity: 1,
   sunColor: '#FFE1A3',

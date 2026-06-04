@@ -876,6 +876,13 @@ export interface SceneEnvironmentSettings {
   skyGroundColor: string;
   /** Equirectangular panorama image asset used when skyMode is "image". */
   skyTextureAssetId?: string;
+  /**
+   * Optional equirectangular image asset used as the image-based lighting (IBL) source — real
+   * reflections + ambient light sampled from a panorama/HDRI. When set it replaces the built-in
+   * studio Lightformer rig. Independent of `skyMode`, so the visible sky and the lighting source can
+   * differ (e.g. procedural sky on screen, HDRI driving reflections). Cleared = studio default.
+   */
+  environmentMapAssetId?: string;
   /** Sky dome yaw in degrees. */
   skyRotation: number;
   /** Strength of the built-in ambient/environment light rig. */
