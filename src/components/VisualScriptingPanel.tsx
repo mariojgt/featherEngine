@@ -4,7 +4,8 @@ import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2,
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
-import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, UIElement, Vector3Tuple } from '../types';
+import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, QualityLevel, UIElement, Vector3Tuple } from '../types';
+import { QUALITY_LEVELS } from '../three/quality';
 
 const nodeTypes: NodeTypes = {
   nodeforge: NodeForgeGraphNode,
@@ -48,7 +49,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -493,6 +494,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesLoop = node.data.nodeKind === 'logic.forLoop';
   const updatesLoadScene = node.data.nodeKind === 'action.loadScene';
   const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
+  const updatesQuality = node.data.nodeKind === 'action.setQuality';
   const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
   const updatesCast = node.data.nodeKind === 'logic.cast';
   // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
@@ -693,6 +695,23 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               onChange={(event) => updateGraphNodeData(node.id, { shakeAmount: Math.max(0, Math.min(1, Number(event.target.value))) })}
             />
             <small className="node-hint">Trauma 0–1 added to the camera (fades automatically). 0.6 ≈ a solid hit; 1 = a big explosion.</small>
+          </label>
+        )}
+
+        {updatesQuality && (
+          <label className="node-field">
+            <span>Quality</span>
+            <select
+              value={node.data.qualityLevel ?? 'High'}
+              onChange={(event) => updateGraphNodeData(node.id, { qualityLevel: event.target.value as QualityLevel })}
+            >
+              {QUALITY_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">Sets the game quality preset at runtime (resolution, shadows, post-FX). Lower = faster.</small>
           </label>
         )}
 

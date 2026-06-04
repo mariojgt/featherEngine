@@ -2949,6 +2949,244 @@ button {
   font-size: 12.5px;
 }
 
+/* ---------- Content browser (Unreal-style split) ---------- */
+.asset-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(84px, 116px) minmax(0, 1fr);
+}
+
+.asset-body.no-folders {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Left: folder sources column. */
+.asset-folders {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 4px 12px;
+  border-right: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.folder-row {
+  gap: 4px;
+}
+
+.folder-row.root {
+  font-weight: 600;
+}
+
+.tree-twist {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: none;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.tree-twist:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+/* Right: content pane. */
+.asset-content {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.asset-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+}
+
+.crumb-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.crumb-part svg {
+  color: var(--muted);
+}
+
+.breadcrumb .crumb {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb .crumb:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.breadcrumb .crumb-part:last-child .crumb {
+  color: var(--text);
+}
+
+.tile-size {
+  flex: none;
+  width: 72px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.asset-view {
+  position: relative;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 8px;
+  user-select: none;
+}
+
+/* Rubber-band box-selection rectangle. */
+.marquee {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid var(--primary);
+  background: rgba(91, 140, 255, 0.14);
+  border-radius: 2px;
+}
+
+.asset-view.drop {
+  outline: 1px dashed var(--primary);
+  outline-offset: -4px;
+  border-radius: 8px;
+  background: rgba(91, 140, 255, 0.06);
+}
+
+.asset-view.grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+}
+
+.asset-view.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Tile (grid mode). */
+.asset-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+  text-align: center;
+}
+
+.asset-tile:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.asset-tile.selected {
+  background: rgba(91, 140, 255, 0.16);
+  border-color: var(--primary);
+}
+
+.asset-tile.active {
+  border-color: var(--success);
+}
+
+.asset-tile.drop,
+.asset-tile.drop-into {
+  border-color: var(--success);
+  box-shadow: inset 0 0 0 1px var(--success);
+}
+
+.asset-tile-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgba(8, 10, 15, 0.45);
+  overflow: hidden;
+}
+
+.asset-tile-thumb svg {
+  color: var(--muted);
+}
+
+.asset-tile-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.asset-tile-img.prefab {
+  object-fit: contain;
+  background: #11141c;
+}
+
+.asset-tile.folder-tile .asset-tile-thumb {
+  background: rgba(91, 140, 255, 0.08);
+}
+
+.asset-tile.folder-tile .asset-tile-thumb svg {
+  color: #cdd6ff;
+}
+
+.asset-tile-name {
+  display: block;
+  width: 100%;
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+.asset-tile-name .tree-label {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Secondary detail in list mode (type/size). */
+.tree-sub {
+  margin-left: auto;
+  padding-left: 8px;
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* ---------- Context menu ---------- */
 .context-menu {
   position: fixed;
@@ -4398,6 +4636,29 @@ button {
 .seq-clip2.sound,
 .seq-clip2.event { background: #6a4b86; }
 .seq-clip2.animation { background: #2e6f7a; }
+/* Resizable clips drop their side padding so the edge grips sit flush against the ends. */
+.seq-clip2.resizable { padding: 0; }
+.seq-clip-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  pointer-events: none;
+}
+.seq-clip2.resizable .seq-clip-label { padding: 0 2px; }
+/* Edge grips: thin draggable handles at each end of a clip for resizing its duration. */
+.seq-clip-grip {
+  flex: 0 0 auto;
+  width: 7px;
+  align-self: stretch;
+  cursor: ew-resize;
+  background: rgba(255, 255, 255, 0.18);
+  z-index: 3;
+}
+.seq-clip-grip.left { border-radius: 3px 0 0 3px; }
+.seq-clip-grip.right { border-radius: 0 3px 3px 0; }
+.seq-clip-grip:hover { background: rgba(255, 255, 255, 0.55); }
 /* Faint bar spanning a keyframe track's first→last key. */
 .seq-track-span {
   position: absolute;

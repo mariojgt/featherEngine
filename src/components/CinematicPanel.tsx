@@ -269,6 +269,23 @@ export function CinematicPanel() {
     addBeat({ type: 'fade', time: Math.max(0, active.duration - 1.2), duration: 1.2, label: 'Fade out', fadeFrom: 0, fadeTo: 1, fadeColor: '#000000' });
   };
 
+  // Drop a single fade at the playhead so fades can be stacked anywhere (e.g. fade out before a
+  // cut, fade back in on the next shot). Unlike the bookends, these aren't pinned to start/end.
+  const fadeCount = active?.actions.filter((action) => action.type === 'fade').length ?? 0;
+  const addFade = (direction: 'out' | 'in') => {
+    if (!active) return;
+    const reuseColor = [...active.actions].reverse().find((action) => action.type === 'fade')?.fadeColor ?? '#000000';
+    addBeat({
+      type: 'fade',
+      time: beatTime,
+      duration: 1.2,
+      label: direction === 'out' ? `Fade out ${fadeCount + 1}` : `Fade in ${fadeCount + 1}`,
+      fadeFrom: direction === 'out' ? 0 : 1,
+      fadeTo: direction === 'out' ? 1 : 0,
+      fadeColor: reuseColor,
+    });
+  };
+
   const addMarkerAtPlayhead = () => {
     if (!active) return;
     addCinematicMarker(active.id, { time: beatTime, label: `Marker ${(active.markers?.length ?? 0) + 1}`, color: '#FFD166' });
@@ -435,15 +452,21 @@ export function CinematicPanel() {
 
   // ----- Direct timeline manipulation: drag a clip to retime it, drag a keyframe diamond to move it -----
   const tracksRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<null | { kind: 'clip' | 'ckf' | 'tkf'; actionId: string; index?: number; startX: number; startTime: number; moved: boolean }>(null);
+  const dragRef = useRef<null | { kind: 'clip' | 'resize-l' | 'resize-r' | 'ckf' | 'tkf'; actionId: string; index?: number; startX: number; startTime: number; startDuration?: number; moved: boolean }>(null);
 
-  const timeFromPointer = (clientX: number) => {
+  // Raw pointer delta in seconds (no snapping to the clip start) — used for edge-resize math.
+  const deltaSecondsFromPointer = (clientX: number) => {
     const el = tracksRef.current;
     const drag = dragRef.current;
     if (!el || !drag || !active) return 0;
     const width = el.getBoundingClientRect().width || 1;
-    const deltaSeconds = ((clientX - drag.startX) / width) * Math.max(active.duration, 0.5);
-    return snapTime(drag.startTime + deltaSeconds);
+    return ((clientX - drag.startX) / width) * Math.max(active.duration, 0.5);
+  };
+
+  const timeFromPointer = (clientX: number) => {
+    const drag = dragRef.current;
+    if (!drag) return 0;
+    return snapTime(drag.startTime + deltaSecondsFromPointer(clientX));
   };
 
   const onTimelinePointerMove = (event: React.PointerEvent) => {
@@ -451,13 +474,32 @@ export function CinematicPanel() {
     if (!drag || !active || running) return;
     if (!drag.moved && Math.abs(event.clientX - drag.startX) < 3) return;
     drag.moved = true;
-    const time = timeFromPointer(event.clientX);
     const target = active.actions.find((action) => action.id === drag.actionId);
     if (!target) return;
-    if (drag.kind === 'clip') updateCinematicAction(active.id, drag.actionId, { time });
-    else if (drag.kind === 'ckf' && drag.index != null) setKeyframeTime(target, drag.index, time);
-    else if (drag.kind === 'tkf' && drag.index != null) setTransformKeyframeTime(target, drag.index, time);
-    previewCinematic(active.id, time);
+    if (drag.kind === 'clip') {
+      const time = timeFromPointer(event.clientX);
+      updateCinematicAction(active.id, drag.actionId, { time });
+      previewCinematic(active.id, time);
+    } else if (drag.kind === 'resize-r') {
+      // Drag the right edge: keep the start fixed, grow/shrink the duration.
+      const duration = Math.max(0.1, snapTime((drag.startDuration ?? 0.5) + deltaSecondsFromPointer(event.clientX)));
+      updateCinematicAction(active.id, drag.actionId, { duration });
+      previewCinematic(active.id, drag.startTime + duration);
+    } else if (drag.kind === 'resize-l') {
+      // Drag the left edge: keep the right edge (end) fixed, move start + adjust duration.
+      const end = drag.startTime + (drag.startDuration ?? 0.5);
+      const time = Math.max(0, Math.min(end - 0.1, timeFromPointer(event.clientX)));
+      updateCinematicAction(active.id, drag.actionId, { time, duration: Math.max(0.1, end - time) });
+      previewCinematic(active.id, time);
+    } else if (drag.kind === 'ckf' && drag.index != null) {
+      const time = timeFromPointer(event.clientX);
+      setKeyframeTime(target, drag.index, time);
+      previewCinematic(active.id, time);
+    } else if (drag.kind === 'tkf' && drag.index != null) {
+      const time = timeFromPointer(event.clientX);
+      setTransformKeyframeTime(target, drag.index, time);
+      previewCinematic(active.id, time);
+    }
   };
 
   const onTimelinePointerUp = (action: CinematicAction) => {
@@ -469,6 +511,23 @@ export function CinematicPanel() {
   const beginClipDrag = (event: React.PointerEvent, action: CinematicAction) => {
     event.currentTarget.setPointerCapture?.(event.pointerId);
     dragRef.current = { kind: 'clip', actionId: action.id, startX: event.clientX, startTime: action.time, moved: false };
+    setSelectedActionId(action.id);
+    selectCinematicKeyframe(null);
+  };
+
+  // Start an edge-resize drag (left or right grip on a clip). stopPropagation keeps it from also
+  // starting a whole-clip move.
+  const beginClipResize = (event: React.PointerEvent, action: CinematicAction, edge: 'l' | 'r') => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = {
+      kind: edge === 'l' ? 'resize-l' : 'resize-r',
+      actionId: action.id,
+      startX: event.clientX,
+      startTime: action.time,
+      startDuration: action.duration ?? 0.5,
+      moved: false,
+    };
     setSelectedActionId(action.id);
     selectCinematicKeyframe(null);
   };
@@ -567,17 +626,45 @@ export function CinematicPanel() {
           );
         });
       } else {
+        // Clips with a real span (fade, material, time-dilation, animation…) get edge grips so the
+        // duration can be stretched directly on the timeline. Instantaneous beats (events, spawn,
+        // visibility) have no meaningful duration, so they stay move-only.
+        const hasSpan = (action.duration ?? 0) > 0;
         nodes.push(
           <button
             key={`${action.id}-clip`}
-            className={`seq-clip2 ${action.type}${action.id === selectedActionId ? ' active' : ''}`}
+            className={`seq-clip2 ${action.type}${action.id === selectedActionId ? ' active' : ''}${hasSpan ? ' resizable' : ''}`}
             style={{ left: `${pct(action.time)}%`, width: `${Math.max(2, ((action.duration ?? 0.12) / Math.max(active.duration, 0.5)) * 100)}%` }}
-            title={`${actionTitle(action)} — ${action.time.toFixed(2)}s (drag to retime)`}
+            title={`${actionTitle(action)} — ${action.time.toFixed(2)}s${hasSpan ? ` · ${action.duration!.toFixed(2)}s (drag body to move, edges to resize)` : ' (drag to retime)'}`}
             onPointerDown={(event) => beginClipDrag(event, action)}
             onPointerMove={onTimelinePointerMove}
             onPointerUp={() => onTimelinePointerUp(action)}
           >
-            {actionTitle(action)}
+            {hasSpan && (
+              <span
+                className="seq-clip-grip left"
+                title="Drag to change when the fade starts"
+                onPointerDown={(event) => beginClipResize(event, action, 'l')}
+                onPointerMove={onTimelinePointerMove}
+                onPointerUp={(event) => {
+                  event.stopPropagation();
+                  onTimelinePointerUp(action);
+                }}
+              />
+            )}
+            <span className="seq-clip-label">{actionTitle(action)}</span>
+            {hasSpan && (
+              <span
+                className="seq-clip-grip right"
+                title="Drag to change the fade duration"
+                onPointerDown={(event) => beginClipResize(event, action, 'r')}
+                onPointerMove={onTimelinePointerMove}
+                onPointerUp={(event) => {
+                  event.stopPropagation();
+                  onTimelinePointerUp(action);
+                }}
+              />
+            )}
           </button>,
         );
       }
@@ -1608,8 +1695,22 @@ export function CinematicPanel() {
                   >
                     Subsequence
                   </button>
-                  <button className="full-button" onClick={addFadeBookends}>
-                    Fade in &amp; out
+                  <button
+                    className="full-button"
+                    title="Add a fade to black (or current fade colour) starting at the playhead"
+                    onClick={() => addFade('out')}
+                  >
+                    Fade out (at playhead)
+                  </button>
+                  <button
+                    className="full-button"
+                    title="Add a fade from black (or current fade colour) starting at the playhead"
+                    onClick={() => addFade('in')}
+                  >
+                    Fade in (at playhead)
+                  </button>
+                  <button className="full-button" title="Add a fade-in at the start and a fade-out at the end of the sequence" onClick={addFadeBookends}>
+                    Fade in &amp; out (bookends)
                   </button>
                 </div>
               </details>

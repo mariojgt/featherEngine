@@ -1,6 +1,7 @@
 import { EffectComposer, Bloom, Vignette, DepthOfField } from '@react-three/postprocessing';
 import { useEditorStore } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
+import { qualityProfile } from './quality';
 
 /**
  * Project post-processing pass, driven by `renderSettings` and the live cinematic. Bloom makes
@@ -13,6 +14,7 @@ export function PostFx() {
   const rs = useEditorStore((state) => state.renderSettings);
   const pose = useEditorStore((state) => state.runtimeCinematicCamera ?? state.editorCinematicPreviewCamera);
   const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook);
+  const profile = qualityProfile(rs?.quality);
   const children = [];
   if (rs?.bloomEnabled) {
     children.push(
@@ -21,7 +23,7 @@ export function PostFx() {
         intensity={rs.bloomIntensity}
         luminanceThreshold={rs.bloomThreshold}
         luminanceSmoothing={rs.bloomRadius}
-        mipmapBlur
+        mipmapBlur={profile.bloomMipmap}
       />,
     );
   }
@@ -57,7 +59,7 @@ export function PostFx() {
   // framebuffer + per-frame resolve over the whole screen). 2x keeps edges clean enough while roughly
   // halving that bandwidth vs 4x — a meaningful win on integrated GPUs with little visible quality loss.
   return (
-    <EffectComposer multisampling={2}>
+    <EffectComposer multisampling={profile.msaa}>
       {children}
     </EffectComposer>
   );

@@ -242,6 +242,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Added Data Asset row';
     case 'set_data_asset_cell':
       return 'Set Data Asset cell';
+    case 'set_quality':
+      return `Set quality to ${String(input.level ?? '')}`.trim();
     case 'add_node':
       return `Added "${String(input.type ?? 'node')}" node`;
     case 'connect_nodes':

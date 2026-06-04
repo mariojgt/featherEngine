@@ -273,6 +273,7 @@ const NODE_LABELS = [
   'Random',
   'Load Scene',
   'Camera Shake',
+  'Set Quality',
   'Move To',
   'Fracture',
   'Save Game',
@@ -349,6 +350,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   Random: 'Values',
   'Load Scene': 'Runtime',
   'Camera Shake': 'Runtime',
+  'Set Quality': 'Runtime',
   'Move To': 'Runtime',
   Fracture: 'Physics',
   'Save Game': 'Persistence',
@@ -2525,6 +2527,18 @@ export const engineTools = {
     },
   }),
 
+  set_quality: tool({
+    description:
+      'Set the project-wide game QUALITY (scalability) preset, Unreal-style. Low/Medium/High/Epic trade visual fidelity for performance — it scales render resolution (DPR), shadow casting + map size, post-FX MSAA, and bloom blur. Applies live in the editor viewport, Play, and export. Use Low when the user reports lag/low FPS, Epic for screenshots/showcase. Also exposed on the viewport and as the "Set Quality" Blueprint node (for in-game settings menus).',
+    inputSchema: z.object({
+      level: z.enum(['Low', 'Medium', 'High', 'Epic']).describe('Low = fastest (no shadows, 0.75x res); Epic = best (4x shadows budget, 2x res, 4x MSAA).'),
+    }),
+    execute: async ({ level }) => {
+      store().updateRenderSettings({ quality: level });
+      return `Set game quality to ${level}.`;
+    },
+  }),
+
   add_ui_preset: tool({
     description:
       'Insert a ready-made UI widget. Presets include healthBar, counter, label, button, panel, image. Returns elementId.',
@@ -3025,6 +3039,7 @@ export const engineTools = {
       loopCount: z.number().int().optional().describe('For Loop: how many times to fire the Body output. Default 4, capped at 10000.'),
       targetSceneId: z.string().optional().describe('Load Scene: id of the scene to switch to during Play.'),
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1 to add to the player camera (fades automatically).'),
+      qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
     }),
     execute: async ({
       blueprintId,
@@ -3077,6 +3092,7 @@ export const engineTools = {
       targetSceneId,
       projectileSpread,
       shakeAmount,
+      qualityLevel,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
@@ -3135,6 +3151,7 @@ export const engineTools = {
         targetSceneId,
         projectileSpread,
         shakeAmount,
+        qualityLevel,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },
@@ -3211,6 +3228,7 @@ export const engineTools = {
       targetSceneId: z.string().optional().describe('Load Scene: scene id to switch to during Play.'),
       projectileSpread: z.number().optional().describe('Spawn Projectile: firing-cone half-angle in degrees.'),
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1.'),
+      qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
     }),
     execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;

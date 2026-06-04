@@ -126,6 +126,7 @@ export const nodeDescriptions: Record<string, string> = {
   'Load Game': 'Restores persistent variables from local save storage.',
   'Clear Save': 'Deletes a local save slot.',
   Print: 'Logs a message to the on-screen console during Play.',
+  'Set Quality': 'Sets the game quality preset (Low/Medium/High/Epic) at runtime — adjusts resolution, shadows, and post-FX.',
 };
 
 export const keyLabels: Record<string, string> = {
@@ -232,6 +233,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Camera Shake': 'action.cameraShake',
   'Move To': 'action.moveTo',
   Fracture: 'action.fractureObject',
+  'Set Quality': 'action.setQuality',
 };
 
 export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
@@ -476,6 +478,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description:
           'Shatters the owner (or Target) into small dynamic cubes that fly apart, then removes the original — breakable crates/walls/rocks. Wire it to a one-shot event (Collision Enter, a shot, a key), not Update.',
       };
+    case 'action.setQuality':
+      return {
+        label: `Set Quality: ${data.qualityLevel ?? 'High'}`,
+        description:
+          'Sets the game quality preset (Low/Medium/High/Epic) at runtime — adjusts render resolution, shadow budget, and post-FX. Wire to a settings menu button or a custom event.',
+      };
     case 'action.print':
       return { label: `Print: ${data.message || 'message'}`, description: 'Logs its message to the on-screen console during Play.' };
     case 'ui.show':
@@ -595,6 +603,10 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
+  }
+
+  if (nodeKind === 'action.setQuality' && !normalized.qualityLevel) {
+    normalized.qualityLevel = 'High';
   }
 
   if (nodeKind === 'action.moveTo' && typeof normalized.numberValue !== 'number') {

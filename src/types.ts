@@ -134,7 +134,8 @@ export type GraphNodeKind =
   | 'action.loadScene'
   | 'action.cameraShake'
   | 'action.moveTo'
-  | 'action.fractureObject';
+  | 'action.fractureObject'
+  | 'action.setQuality';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -252,6 +253,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
    *  'swimming' (buoyant float; jump=up, crouch=down), 'climbing' (XZ locked, fwd/back = up/down), or
    *  'flying' (no gravity, free 3D; jump=up, crouch=down). Drives the swimming/climbing animator sources. */
   movementMode?: 'walking' | 'swimming' | 'climbing' | 'flying';
+  /** action.setQuality: scalability preset this node applies at runtime (Low/Medium/High/Epic). */
+  qualityLevel?: QualityLevel;
   hasInput?: boolean;
   hasOutput?: boolean;
 }
@@ -832,7 +835,14 @@ export interface RenderSettings {
   /** Bloom smoothing/spread (0–1). */
   bloomRadius: number;
   vignetteEnabled: boolean;
+  /** Unreal-style scalability preset (Low/Medium/High/Epic). Drives render resolution (DPR), shadow
+   *  count + map size, post-FX MSAA, and bloom mip blur via the profiles in `src/three/quality.ts`.
+   *  Changeable on the viewport, by the AI, and from the "Set Quality" Blueprint node. */
+  quality?: QualityLevel;
 }
+
+/** Game quality / scalability preset, Low → Epic (the project-wide rendering budget). */
+export type QualityLevel = 'Low' | 'Medium' | 'High' | 'Epic';
 
 export type SkyMode = 'color' | 'procedural' | 'image';
 

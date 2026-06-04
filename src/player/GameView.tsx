@@ -21,6 +21,7 @@ import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { PostFx } from '../three/PostFx';
+import { qualityProfile } from '../three/quality';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { Terrain } from '../three/Terrain';
 import { FragmentMesh } from '../three/FragmentMesh';
@@ -278,11 +279,14 @@ export function GameView() {
   // after export. Start at a capped DPR and let PerformanceMonitor lower it when the frame rate dips,
   // then restore it once there's headroom again (smoothness over a slightly softer image under load).
   const [dpr, setDpr] = useState(1.5);
+  // Honour the project's game-quality preset: cap render resolution + toggle shadows to its budget.
+  const quality = useEditorStore((state) => state.renderSettings.quality);
+  const qProfile = qualityProfile(quality);
   return (
     <Canvas
       className="game-canvas"
-      shadows
-      dpr={dpr}
+      shadows={qProfile.shadows}
+      dpr={Math.min(dpr, qProfile.dpr)}
       gl={{ powerPreference: 'high-performance' }}
       performance={{ min: 0.5 }}
       camera={{ position: [6, 4.2, 7], fov: 50 }}

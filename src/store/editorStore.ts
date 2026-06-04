@@ -33,6 +33,7 @@ import {
   type ParticleConfig,
   type ParticleSystemDefinition,
   type RenderSettings,
+  type QualityLevel,
   type SceneEnvironmentSettings,
   type ProjectVariable,
   type RigidBodyType,
@@ -4434,6 +4435,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let pendingCinematicId: string | undefined;
       // A Load Scene node fired this frame → switch the active scene at the end of the tick (project vars carry over).
       let pendingSceneId: string | undefined;
+      // A Set Quality node fired this frame → apply the new scalability preset at the end of the tick.
+      let pendingQuality: QualityLevel | undefined;
       // Combat feedback counters (bumped on hits / when the local player is hurt) + per-enemy attack cooldowns.
       let hitMarker = state.runtimeHitMarker;
       let hurt = state.runtimeHurt;
@@ -5069,6 +5072,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'action.cameraShake') {
               cameraShake = Math.min(1, cameraShake + Math.max(0, toNumber(valueInput(node, 'amount', Number(node.data.shakeAmount ?? 0.6)))));
+            }
+
+            if (node.data.nodeKind === 'action.setQuality') {
+              // Last Set Quality this tick wins; applied to renderSettings in the returned patch (no isDirty).
+              pendingQuality = node.data.qualityLevel ?? 'High';
             }
 
             if (node.data.nodeKind === 'action.setParticlesEmitting') {
@@ -6752,6 +6760,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeCinematicCamera: undefined,
             runtimeCinematicFade: undefined,
             runtimeCinematicLook: autoplay?.look,
+            ...(pendingQuality && pendingQuality !== state.renderSettings.quality
+              ? { renderSettings: { ...state.renderSettings, quality: pendingQuality } }
+              : {}),
           };
         }
       }
@@ -6798,6 +6809,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematicFade: nextRuntimeCinematicFade,
         runtimeCinematicLook: nextRuntimeCinematicLook,
         scenes: nextScenes,
+        // A Set Quality node fired → update the project's render settings (no isDirty: tickRuntime never dirties).
+        ...(pendingQuality && pendingQuality !== state.renderSettings.quality
+          ? { renderSettings: { ...state.renderSettings, quality: pendingQuality } }
+          : {}),
       };
     }),
   onNodesChange: (changes) =>

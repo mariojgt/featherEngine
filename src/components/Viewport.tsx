@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, PerformanceMonitor, TransformControls } from '@react-three/drei';
-import { Camera, Globe, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
+import { Camera, Globe, Gauge, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
@@ -28,6 +28,7 @@ import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
 import { PostFx } from '../three/PostFx';
+import { qualityProfile, QUALITY_LEVELS } from '../three/quality';
 import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { Terrain } from '../three/Terrain';
@@ -821,35 +822,39 @@ function RenderStatsProbe() {
   return null;
 }
 
-/** Max simultaneous shadow-casting lights during Play. Forward rendering makes each one a full extra
- *  depth pass, so over-budget scenes (e.g. the car-select menu's 10 spotlights) cap here. */
-const MAX_SHADOW_CASTERS = 8;
-
 /**
- * Shadow budget: during Play, keep shadows on the first N shadow-capable lights and disable the rest.
- * Deliberately re-evaluated ONLY when the caster COUNT changes (lights spawned/destroyed) — never
- * per-frame or by camera distance — because toggling `castShadow` triggers a shader recompile, and
- * doing that every frame would cost more than it saves. Authored intent is remembered in userData and
- * restored when the scene drops back under budget. Stop resets it (lights re-render from props).
+ * Shadow budget: during Play, keep shadows on the first N shadow-capable lights and disable the rest,
+ * where N comes from the active quality preset (`maxShadowCasters` — 0 on Low, up to 16 on Epic).
+ * Forward rendering makes each shadow-caster a full extra depth pass, so over-budget scenes (e.g. the
+ * car-select menu's 10 spotlights) cap here. Deliberately re-evaluated ONLY when the caster COUNT or the
+ * quality level CHANGES — never per-frame or by camera distance — because toggling `castShadow` triggers
+ * a shader recompile, and doing that every frame would cost more than it saves. Authored intent is
+ * remembered in userData and restored when the scene drops back under budget. Stop resets it.
  */
 function LightBudget() {
   const scene = useThree((state) => state.scene);
   const evaluatedCount = useRef(-1);
+  const evaluatedQuality = useRef<string | undefined>(undefined);
   useFrame(() => {
-    if (!useEditorStore.getState().isPlaying) {
+    const editorState = useEditorStore.getState();
+    if (!editorState.isPlaying) {
       evaluatedCount.current = -1;
+      evaluatedQuality.current = undefined;
       return;
     }
+    const quality = editorState.renderSettings.quality;
+    const maxCasters = qualityProfile(quality).maxShadowCasters;
     const casters: THREE.Light[] = [];
     scene.traverse((obj) => {
       const light = obj as THREE.Light & { shadow?: unknown };
       if (light.isLight && light.shadow) casters.push(light);
     });
-    if (casters.length === evaluatedCount.current) return;
+    if (casters.length === evaluatedCount.current && quality === evaluatedQuality.current) return;
     evaluatedCount.current = casters.length;
+    evaluatedQuality.current = quality;
     casters.forEach((light, i) => {
       if (light.userData.nfWantsShadow === undefined) light.userData.nfWantsShadow = light.castShadow;
-      light.castShadow = Boolean(light.userData.nfWantsShadow) && i < MAX_SHADOW_CASTERS;
+      light.castShadow = Boolean(light.userData.nfWantsShadow) && i < maxCasters;
     });
   });
   return null;
@@ -891,6 +896,10 @@ export function ViewportPanel() {
     state.prefabs.find((prefab) => prefab.id === state.editingPrefabId)?.name ?? 'Prefab',
   );
   const closePrefabEditor = useEditorStore((state) => state.closePrefabEditor);
+  // Game quality (scalability) preset — drives render resolution, shadows, and post-FX MSAA.
+  const quality = useEditorStore((state) => state.renderSettings.quality);
+  const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
+  const qProfile = qualityProfile(quality);
   const followTarget = useFollowTarget();
   const showMouseHint = isPlaying && Boolean(followTarget?.character?.mouseLook);
   // Camera preview (look through the player camera) and gizmo positioning are mutually exclusive —
@@ -1123,17 +1132,32 @@ export function ViewportPanel() {
             ))}
           </select>
         </div>
+        <div className="segmented" aria-label="Game quality">
+          <Gauge size={15} aria-hidden style={{ marginLeft: 6, opacity: 0.8 }} />
+          <select
+            className="snap-step"
+            value={quality ?? 'High'}
+            title="Game quality (scalability) — resolution, shadows, and post-FX. Lower = faster."
+            onChange={(event) => updateRenderSettings({ quality: event.target.value as (typeof QUALITY_LEVELS)[number] })}
+          >
+            {QUALITY_LEVELS.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div className="scene-drop-zone" onDragOverCapture={handleDragOver} onDropCapture={handleDrop}>
         {hasWebGL ? (
           <WebGLErrorBoundary>
             <Canvas
               className="scene-canvas"
-              shadows
+              shadows={qProfile.shadows}
               // During Play the bloom/HDR post pass is the dominant GPU cost and it scales with resolution, so
-              // render Play at native 1× (not the editor's 1.5×) — ~halves every full-screen pass and avoids the
-              // PerformanceMonitor thrashing dpr 1↔1.5 (each switch reallocates framebuffers = a hitch/spike).
-              dpr={isPlaying ? 1 : dpr}
+              // render Play at the quality preset's DPR; in edit mode let PerformanceMonitor adapt but never
+              // exceed the preset's cap (each dpr switch reallocates framebuffers = a hitch/spike).
+              dpr={isPlaying ? qProfile.dpr : Math.min(dpr, qProfile.dpr)}
               gl={{ powerPreference: 'high-performance' }}
               performance={{ min: 0.5 }}
               camera={{ position: [6, 4.2, 7], fov: 46 }}

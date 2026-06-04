@@ -9,6 +9,7 @@ import {
   Database,
   Dices,
   Equal,
+  Gauge,
   GitBranch,
   GitMerge,
   Hash,
@@ -99,6 +100,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
   'action.cameraShake': Vibrate,
+  'action.setQuality': Gauge,
   'action.moveTo': Waypoints,
   'action.loadScene': Layers,
   'action.destroyObject': Trash2,
@@ -352,6 +354,8 @@ function nodeDetail(
       return data.saveSlot ?? 'slot1';
     case 'action.print':
       return `“${data.message ?? ''}”`;
+    case 'action.setQuality':
+      return data.qualityLevel ?? 'High';
     default:
       return null;
   }
