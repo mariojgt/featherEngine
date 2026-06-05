@@ -580,6 +580,7 @@ function UISection({ objectId }: { objectId: string }) {
   const setActiveUIDocument = useEditorStore((state) => state.setActiveUIDocument);
   const setObjectVariable = useEditorStore((state) => state.setObjectVariable);
   const [newKey, setNewKey] = useState('');
+  const [newTag, setNewTag] = useState('');
 
   const worldDocs = uiDocuments.filter((doc) => doc.surface === 'world');
   const ui = object?.ui;
@@ -647,6 +648,64 @@ function UISection({ objectId }: { objectId: string }) {
           </button>
         </>
       )}
+
+      <h3 style={{ marginTop: 10 }}>Tags</h3>
+      <p className="field-hint">
+        Label this object so a <code>Find Actor By Tag</code> node can locate it (stored as the <code>tags</code> instance variable).
+      </p>
+      {(() => {
+        const tagsRaw = typeof variables.tags === 'string' ? variables.tags : '';
+        const tagList = tagsRaw.split(',').map((t) => t.trim()).filter(Boolean);
+        const writeTags = (next: string[]) => setObjectVariable(objectId, 'tags', Array.from(new Set(next)).join(','));
+        return (
+          <>
+            {tagList.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                {tagList.map((tag) => (
+                  <span
+                    key={tag}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 6px', borderRadius: 6, background: 'rgba(120,140,200,0.18)', fontSize: 12 }}
+                  >
+                    {tag}
+                    <button
+                      title={`Remove tag "${tag}"`}
+                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'inherit', padding: 0, lineHeight: 1 }}
+                      onClick={() => writeTags(tagList.filter((t) => t !== tag))}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="field-row">
+              <input
+                placeholder="new tag (e.g. Objective, Enemy)"
+                value={newTag}
+                onChange={(event) => setNewTag(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && newTag.trim()) {
+                    writeTags([...tagList, newTag.trim()]);
+                    setNewTag('');
+                  }
+                }}
+              />
+              <button
+                className="full-button"
+                onClick={() => {
+                  const tag = newTag.trim();
+                  if (tag) {
+                    writeTags([...tagList, tag]);
+                    setNewTag('');
+                  }
+                }}
+              >
+                Add tag
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       <h3 style={{ marginTop: 10 }}>Instance Variables</h3>
       <p className="field-hint">Per-object data read by world UI as <code>self.&lt;key&gt;</code> and by scripts.</p>

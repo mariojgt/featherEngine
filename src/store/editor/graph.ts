@@ -204,6 +204,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Get Move Input': 'input.move',
   'Get Drive Input': 'input.driveInput',
   'Get Vehicle Speed': 'query.vehicleSpeed',
+  'Find Actor By Blueprint': 'query.findActorByBlueprint',
+  'Find Actor By Tag': 'query.findActorByTag',
   Move: 'action.move',
   Drive: 'action.drive',
   Jump: 'action.jump',
@@ -534,6 +536,18 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return { label: 'Get Rotation', description: "Outputs an actor's rotation as Euler degrees [x,y,z] (Unreal GetActorRotation). Defaults to this object; pick a Target or wire a reference into Target." };
     case 'action.getScale':
       return { label: 'Get Scale', description: "Outputs an actor's scale [x,y,z] (Unreal GetActorScale3D). Defaults to this object; pick a Target or wire a reference into Target." };
+    case 'query.findActorByBlueprint':
+      return {
+        label: `Find Actor (BP) · ${data.findMode === 'nearest' ? 'nearest' : 'first'}`,
+        description:
+          "Searches the live scene for an actor running the chosen Blueprint and outputs a reference to it (Unreal Get Actor Of Class). Mode: 'first' (deterministic, cheap — the boss/objective) or 'nearest' to the owner (the AI case). Returns nothing if none match. Wire the reference into a Cast (to validate + access its typed variables), or straight into Get/Set Object Var / Get Position. Gate it behind an event or Cooldown — don't run it on raw Update in a big scene.",
+      };
+    case 'query.findActorByTag':
+      return {
+        label: `Find Actor (Tag: ${data.stringValue || 'any'})${data.findMode === 'nearest' ? ' · nearest' : ' · first'}`,
+        description:
+          "Searches the live scene for an actor with the given Tag and outputs a reference to it. The Tag matches the chips in an object's Inspector ‘Tags’ section (or a Set Object Var on the `tags` variable), or a truthy variable named the tag (e.g. `interactable`). Leave Tag blank to find any tagged actor. Class-independent. Mode first/nearest. Returns nothing if none match. Gate behind an event or Cooldown, not raw Update.",
+      };
     case 'action.setPosition':
       return { label: 'Set Position', description: "Teleports this object to a world position (wire a Vector3 into Position). Snap/place the owner." };
     case 'action.setRotation':
@@ -693,6 +707,13 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.numberValue = 1;
   }
 
+  if (nodeKind === 'query.findActorByBlueprint' || nodeKind === 'query.findActorByTag') {
+    if (normalized.findMode !== 'nearest') normalized.findMode = 'first';
+  }
+  if (nodeKind === 'query.findActorByTag' && typeof normalized.objectKey !== 'string') {
+    normalized.objectKey = 'tags';
+  }
+
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
   }
@@ -767,6 +788,8 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     nodeKind === 'input.move' ||
     nodeKind === 'input.driveInput' ||
     nodeKind === 'query.vehicleSpeed' ||
+    nodeKind === 'query.findActorByBlueprint' ||
+    nodeKind === 'query.findActorByTag' ||
     nodeKind === 'query.grounded' ||
     nodeKind === 'animator.getParam' ||
     nodeKind === 'animator.getState' ||

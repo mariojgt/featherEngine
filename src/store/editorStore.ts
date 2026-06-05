@@ -318,6 +318,9 @@ interface EditorState {
   runtimeCooldowns: Record<string, number>;
   /** Per (object:node) remaining seconds for latent Delay nodes — when one hits 0 the node's output fires. */
   runtimeDelays: Record<string, number>;
+  /** Targeted custom events queued for delivery NEXT tick: objectId → event names to fire on that actor
+   *  (Fire Event with a Target, one-frame-delayed like collisions). */
+  runtimeActorEvents: Record<string, string[]>;
   /** Object ids hidden at runtime by action.setVisible (e.g. holstered weapons). */
   runtimeHidden: string[];
   /** GTA-style vehicle possession: vehicleObjectId → the player pawn id currently driving it (set by the
@@ -897,6 +900,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeFootstep: {},
   runtimeCooldowns: {},
   runtimeDelays: {},
+  runtimeActorEvents: {},
   runtimeHidden: [],
   runtimeVehicleOccupants: {},
   runtimeInteractFocusId: null,
@@ -4410,6 +4414,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeDelays: {},
+      runtimeActorEvents: {},
       runtimeHidden: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
@@ -4499,6 +4504,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeDelays: {},
+      runtimeActorEvents: {},
       runtimeHidden: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
@@ -4624,6 +4630,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       );
       // Impulses requested by action.applyForce this frame, applied to bodies post-step.
       const physicsImpulses: Record<string, Vector3Tuple> = {};
+      // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
+      // Self writes still mutate the owner's tuples directly; these are merged into the object list before
+      // the character/physics passes, so a teleported kinematic/fixed body follows (physics.frame reads the
+      // post-script transform). Last write wins. Keyed by target object id.
+      const nextTransforms: Record<string, { position?: Vector3Tuple; rotation?: Vector3Tuple; scale?: Vector3Tuple }> = {};
+      // Targeted custom events (Fire Event with a Target) → delivered to that actor NEXT frame (one-frame
+      // delay, like runtimeCollisions), since each object runs its own graph in its own context.
+      const nextActorEvents: Record<string, string[]> = {};
+      const incomingActorEvents = state.runtimeActorEvents ?? {};
       // Side effects collected while executing graphs this frame.
       const sounds: string[] = [];
       const spawned: SceneObject[] = [];
@@ -4778,6 +4793,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const aiLineOfSightExclude = new Set<string>();
       for (const o of activeObjects) if (o.projectile || isRagdoll(o.id)) aiLineOfSightExclude.add(o.id);
 
+      // Per-tick memo for "Find Actor" nodes, keyed by `${ownerId}:${nodeId}`. A find is an O(n) scan;
+      // caching the resolved id per (owner,node) collapses repeat evaluations within one frame to one scan
+      // (e.g. a Cast + two Get Object Vars all reading the same Find Actor pin). '' = computed, none found.
+      const findActorCache = new Map<string, string>();
+
       // Whether a graph event-root fires for `objectId` this frame. Hoisted out of the per-object
       // loop (defined once per tick, not per scripted object) and shared by BOTH the early-skip below
       // and the root dispatch further down, so the firing rules can't drift between the two.
@@ -4793,8 +4813,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const keyCode = node.data.keyCode ?? 'KeyW';
             return Boolean(previousKeys[keyCode]) && !currentKeys[keyCode];
           }
-          case 'event.custom':
-            return firedEvents.has((node.data.eventName || 'CustomEvent').toLowerCase());
+          case 'event.custom': {
+            const name = (node.data.eventName || 'CustomEvent').toLowerCase();
+            // Global broadcast (UI buttons / no-target Fire Event) OR a targeted Fire Event aimed at THIS
+            // actor last frame (one-frame-delayed delivery).
+            return firedEvents.has(name) || (incomingActorEvents[objectId]?.includes(name) ?? false);
+          }
           case 'event.collisionEnter':
             return contactMatches(priorCollisionIndex, objectId, node.data.otherObjectId);
           case 'event.triggerEnter':
@@ -4812,7 +4836,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Run each object's script graph. Physics-enabled objects are simulated by Rapier
       // in the post-pass below, so here we only collect scripted motion + side effects.
-      const mappedObjects = activeObjects.map((object) => {
+      let mappedObjects = activeObjects.map((object) => {
           if (destroyedIds.has(object.id)) return object;
           // A limp (ragdolling) body doesn't run its scripts — so a dead enemy stops chasing/shooting.
           if (isRagdoll(object.id)) return object;
@@ -4928,6 +4952,72 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'query.grounded') {
               return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
+            }
+
+            // Find Actor (Unreal Get Actor Of Class / With Tag): scan the live scene for an actor matching a
+            // blueprint or an instance-var "tag", returning its id (a reference). Skips self, the dead
+            // (ragdolls), and transient projectiles/effects. 'first' breaks early (cheap); 'nearest' keeps the
+            // closest by squared horizontal distance (no sqrt). Memoized per (owner,node) for the frame.
+            if (node.data.nodeKind === 'query.findActorByBlueprint' || node.data.nodeKind === 'query.findActorByTag') {
+              const cacheKey = `${object.id}:${nodeId}`;
+              const memo = findActorCache.get(cacheKey);
+              if (memo !== undefined) return memo || undefined;
+
+              const byTag = node.data.nodeKind === 'query.findActorByTag';
+              const blueprintId = node.data.castBlueprintId;
+              // `tag` = the tag to find (the prominent field; matches the Inspector "Tags" chips).
+              // `tagKey` = which instance variable holds the tag list (default 'tags', what the Tags UI writes).
+              const tag = typeof node.data.stringValue === 'string' ? node.data.stringValue.trim() : '';
+              const tagKey = node.data.objectKey || 'tags';
+              const nearest = node.data.findMode === 'nearest';
+              // A blueprint find with no blueprint chosen can't match anything — bail (avoids a scan).
+              if (!byTag && !blueprintId) {
+                findActorCache.set(cacheKey, '');
+                return undefined;
+              }
+              let best: string | undefined;
+              let bestDist = Infinity;
+              for (const candidate of activeObjects) {
+                if (candidate.id === object.id || destroyedIds.has(candidate.id)) continue;
+                if (candidate.projectile || candidate.effect || isRagdoll(candidate.id)) continue;
+                let match: boolean;
+                if (byTag) {
+                  const listed = candidate.variables?.[tagKey];
+                  if (!tag) {
+                    // No specific tag → match any actor that HAS the tag variable (flag-style, like `interactable`).
+                    match = listed !== undefined;
+                  } else {
+                    match = false;
+                    // (1) the tag is one of the comma-separated values in the `tags` variable (the Inspector chips),
+                    //     or the whole value equals the tag.
+                    if (listed !== undefined) {
+                      const sv = String(listed);
+                      if (sv === tag || sv.split(',').some((token) => token.trim() === tag)) match = true;
+                    }
+                    // (2) or the actor has a truthy instance variable literally NAMED the tag (flag idiom, e.g. a
+                    //     `boss` or `interactable` var) — so it matches however you tagged the object.
+                    if (!match) {
+                      const flag = candidate.variables?.[tag];
+                      if (flag !== undefined && flag !== false && flag !== 0 && flag !== '') match = true;
+                    }
+                  }
+                } else {
+                  match = candidate.script?.blueprintId === blueprintId;
+                }
+                if (!match) continue;
+                if (!nearest) {
+                  best = candidate.id;
+                  break;
+                }
+                const cp = candidate.transform.position;
+                const dist = (cp[0] - position[0]) ** 2 + (cp[2] - position[2]) ** 2;
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  best = candidate.id;
+                }
+              }
+              findActorCache.set(cacheKey, best ?? '');
+              return best;
             }
 
             if (node.data.nodeKind === 'ai.distanceToPlayer') {
@@ -5268,49 +5358,80 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return false;
             }
 
-            // Teleport the owner to a world position (wire a Vector3 into "position").
+            // Teleport an actor to a world position (wire a Vector3 into "position"). Owner by default;
+            // a Target ($self/$player/$trigger/$cast/id or wired ref) teleports that actor instead.
             if (node.data.nodeKind === 'action.setPosition') {
               const p = valueInput(node, 'position');
               if (Array.isArray(p)) {
-                position[0] = Number(p[0]) || 0;
-                position[1] = Number(p[1]) || 0;
-                position[2] = Number(p[2]) || 0;
-                changed = true;
+                const next: Vector3Tuple = [Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0];
+                const tid = objectVarTarget(node);
+                if (tid === object.id) {
+                  position[0] = next[0];
+                  position[1] = next[1];
+                  position[2] = next[2];
+                  changed = true;
+                } else {
+                  (nextTransforms[tid] ??= {}).position = next;
+                }
               }
             }
 
-            // Set the owner's rotation from Euler DEGREES (wire a Vector3 into "rotation").
+            // Set an actor's rotation from Euler DEGREES (wire a Vector3 into "rotation").
             if (node.data.nodeKind === 'action.setRotation') {
               const r = valueInput(node, 'rotation');
               if (Array.isArray(r)) {
                 const d = Math.PI / 180;
-                rotation[0] = (Number(r[0]) || 0) * d;
-                rotation[1] = (Number(r[1]) || 0) * d;
-                rotation[2] = (Number(r[2]) || 0) * d;
-                changed = true;
+                const next: Vector3Tuple = [(Number(r[0]) || 0) * d, (Number(r[1]) || 0) * d, (Number(r[2]) || 0) * d];
+                const tid = objectVarTarget(node);
+                if (tid === object.id) {
+                  rotation[0] = next[0];
+                  rotation[1] = next[1];
+                  rotation[2] = next[2];
+                  changed = true;
+                } else {
+                  (nextTransforms[tid] ??= {}).rotation = next;
+                }
               }
             }
 
-            // Set the owner's scale (wire a Vector3 into "scale").
+            // Set an actor's scale (wire a Vector3 into "scale").
             if (node.data.nodeKind === 'action.setScale') {
               const s = valueInput(node, 'scale');
               if (Array.isArray(s)) {
-                scale[0] = Number(s[0]) || 0;
-                scale[1] = Number(s[1]) || 0;
-                scale[2] = Number(s[2]) || 0;
-                changed = true;
+                const next: Vector3Tuple = [Number(s[0]) || 0, Number(s[1]) || 0, Number(s[2]) || 0];
+                const tid = objectVarTarget(node);
+                if (tid === object.id) {
+                  scale[0] = next[0];
+                  scale[1] = next[1];
+                  scale[2] = next[2];
+                  changed = true;
+                } else {
+                  (nextTransforms[tid] ??= {}).scale = next;
+                }
               }
             }
 
-            // Yaw the owner to face a world position on the ground plane (wire a Vector3 into "target").
+            // Yaw an actor to face a world position on the ground plane (wire a Vector3 into "point";
+            // the actor to rotate comes from "target"/targetObjectId, default owner).
             if (node.data.nodeKind === 'action.lookAt') {
-              const t = valueInput(node, 'target');
+              const t = valueInput(node, 'point');
               if (Array.isArray(t)) {
-                const dx = (Number(t[0]) || 0) - position[0];
-                const dz = (Number(t[2]) || 0) - position[2];
-                if (dx !== 0 || dz !== 0) {
-                  rotation[1] = Math.atan2(dx, dz) + (object.character?.modelYawOffset ?? 0);
-                  changed = true;
+                const tid = objectVarTarget(node);
+                const from = tid === object.id ? position : activeObjectById.get(tid)?.transform.position;
+                const yawOffset = (tid === object.id ? object : activeObjectById.get(tid))?.character?.modelYawOffset ?? 0;
+                if (from) {
+                  const dx = (Number(t[0]) || 0) - from[0];
+                  const dz = (Number(t[2]) || 0) - from[2];
+                  if (dx !== 0 || dz !== 0) {
+                    const yaw = Math.atan2(dx, dz) + yawOffset;
+                    if (tid === object.id) {
+                      rotation[1] = yaw;
+                      changed = true;
+                    } else {
+                      const cur = activeObjectById.get(tid)?.transform.rotation ?? [0, 0, 0];
+                      (nextTransforms[tid] ??= {}).rotation = [cur[0], yaw, cur[2]];
+                    }
+                  }
                 }
               }
             }
@@ -5438,7 +5559,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'action.fireEvent') {
               const eventName = (node.data.eventName || 'CustomEvent').toLowerCase();
-              (runtime.customEventRoots.get(eventName) ?? []).forEach((candidate) => executeFrom(candidate.id, visited));
+              // A Target ($player/$trigger/$cast/id or wired ref) other than self = call the event on THAT
+              // actor's blueprint, delivered next frame (Unreal call-event-on-reference). No target = fire
+              // this graph's own matching Custom Event roots synchronously, as before.
+              const tid = objectVarTarget(node);
+              if (tid && tid !== object.id) {
+                (nextActorEvents[tid] ??= []).push(eventName);
+              } else {
+                (runtime.customEventRoots.get(eventName) ?? []).forEach((candidate) => executeFrom(candidate.id, visited));
+              }
             }
 
             if (node.data.nodeKind === 'action.playSound' && node.data.assetId) {
@@ -5917,6 +6046,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const drivingActive =
         !drivingVar || toNumber(nextVariableValues[drivingVar.id] ?? drivingVar.defaultValue) > 0.5;
       const vehiclePlayerId = activeObjects.find((o) => o.vehicle?.enabled && o.vehicle.cameraFollow)?.id;
+      // Apply cross-object transform writes (Set Position/Rotation/Scale/Look At with a Target) onto the
+      // object list before the character/physics passes — so a teleported physics body follows (physics.frame
+      // reads the post-script transform) and non-physics actors move too.
+      if (Object.keys(nextTransforms).length) {
+        mappedObjects = mappedObjects.map((object) => {
+          const patch = nextTransforms[object.id];
+          if (!patch || destroyedIds.has(object.id)) return object;
+          return {
+            ...object,
+            transform: {
+              position: patch.position ?? object.transform.position,
+              rotation: patch.rotation ?? object.transform.rotation,
+              scale: patch.scale ?? object.transform.scale,
+            },
+          };
+        });
+      }
       const mappedObjectById = new Map(mappedObjects.map((object) => [object.id, object]));
       // One terrain sampler for the whole tick: filters terrain objects once and memoizes
       // height queries on a grid (terrain transforms are identical across the mapped/moved/
@@ -7251,6 +7397,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeFootstep: {},
             runtimeCooldowns: {},
             runtimeDelays: {},
+            runtimeActorEvents: {},
             runtimeHidden: [],
   runtimeVehicleOccupants: {},
             runtimeInteractFocusId: null,
@@ -7300,6 +7447,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeFootstep: nextFootstep,
         runtimeCooldowns: nextCooldowns,
         runtimeDelays: nextDelays,
+        runtimeActorEvents: nextActorEvents,
         runtimeHidden: [...nextHidden],
         runtimeVehicleOccupants: nextOccupants,
         runtimeInteractFocusId: interactFocusId,
@@ -7530,6 +7678,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeDelays: {},
+      runtimeActorEvents: {},
       runtimeHidden: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,

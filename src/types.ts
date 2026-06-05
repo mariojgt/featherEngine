@@ -115,6 +115,8 @@ export type GraphNodeKind =
   | 'input.driveInput'
   | 'query.grounded'
   | 'query.vehicleSpeed'
+  | 'query.findActorByBlueprint'
+  | 'query.findActorByTag'
   | 'action.move'
   | 'action.drive'
   | 'action.jump'
@@ -208,8 +210,11 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   elementId?: string;
   /** variable.getObject/setObject: key on the owning object's instance variables. */
   objectKey?: string;
-  /** logic.cast: the blueprint id the target must be running for the cast to succeed. */
+  /** logic.cast / query.findActorByBlueprint: the blueprint id the target must be running. */
   castBlueprintId?: string;
+  /** query.findActorByBlueprint/findActorByTag: which match wins — the FIRST in scene order (cheap,
+   *  deterministic, for the single boss/objective) or the NEAREST to the owner (the AI case). */
+  findMode?: 'first' | 'nearest';
   /** action.applyDamage: how much `health` to subtract from the target (overridable via the Amount value input). */
   damageAmount?: number;
   /** action.spawnProjectile: muzzle speed (units/sec) and hit damage. */

@@ -63,7 +63,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -512,6 +512,10 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
   const appliesDamage = node.data.nodeKind === 'action.applyDamage';
   const updatesCast = node.data.nodeKind === 'logic.cast';
+  const findsActorByBlueprint = node.data.nodeKind === 'query.findActorByBlueprint';
+  const findsActorByTag = node.data.nodeKind === 'query.findActorByTag';
+  const findsActor = findsActorByBlueprint || findsActorByTag;
+  const firesTargetedEvent = node.data.nodeKind === 'action.fireEvent';
   // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
   // dropdown of THAT blueprint's declared instance variables (Unreal "Cast → As BP_X → pick its variable"):
   //  - Self / blank        → this blueprint (the owner)
@@ -524,7 +528,12 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   // BP_X" → the picker is typed automatically, no manual blueprint pick).
   const targetWire = activeGraph?.edges.find((edge) => edge.target === node.id && edge.targetHandle === 'target');
   const wiredSource = targetWire ? activeGraph?.nodes.find((n) => n.id === targetWire.source) : undefined;
-  const wiredCastBlueprintId = wiredSource?.data.nodeKind === 'logic.cast' ? wiredSource.data.castBlueprintId : undefined;
+  // A wired Target whose source is a Cast OR a Find Actor By Blueprint carries a known blueprint type, so the
+  // downstream Variable picker auto-scopes to that blueprint's declared instance variables (Unreal "As BP_X").
+  const wiredCastBlueprintId =
+    wiredSource?.data.nodeKind === 'logic.cast' || wiredSource?.data.nodeKind === 'query.findActorByBlueprint'
+      ? wiredSource.data.castBlueprintId
+      : undefined;
   const isTargetWired = Boolean(targetWire);
   // The "context" blueprint whose declared variables fill the Variable dropdown.
   const needsTypePick = !isTargetWired && (targetSel === '$cast' || targetSel === '$trigger');
@@ -1038,7 +1047,69 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
           </label>
         )}
 
-        {readsTransformTarget && (
+        {findsActor && (
+          <>
+            {findsActorByBlueprint && (
+              <label className="node-field">
+                <span>Of Blueprint (class)</span>
+                <select
+                  value={node.data.castBlueprintId ?? ''}
+                  onChange={(event) => updateGraphNodeData(node.id, { castBlueprintId: event.target.value || undefined })}
+                >
+                  <option value="">— pick a blueprint —</option>
+                  {blueprints.map((bp) => (
+                    <option key={bp.id} value={bp.id}>
+                      {bp.name}
+                    </option>
+                  ))}
+                </select>
+                <small className="node-hint">
+                  Finds an actor running this blueprint. Wire the output into a Cast (to access its typed variables) or
+                  into Get/Set Object Var / Get Position’s Target.
+                </small>
+              </label>
+            )}
+            {findsActorByTag && (
+              <>
+                <label className="node-field">
+                  <span>Tag</span>
+                  <input
+                    value={node.data.stringValue ?? ''}
+                    placeholder="e.g. test, Enemy, Objective"
+                    onChange={(event) => updateGraphNodeData(node.id, { stringValue: event.target.value })}
+                  />
+                  <small className="node-hint">
+                    The tag to find — must match a chip in the target object’s Inspector “Tags” section. Leave blank to find any tagged actor.
+                  </small>
+                </label>
+                <label className="node-field">
+                  <span>Variable key (advanced)</span>
+                  <input
+                    value={node.data.objectKey ?? ''}
+                    placeholder="tags"
+                    onChange={(event) => updateGraphNodeData(node.id, { objectKey: event.target.value })}
+                  />
+                  <small className="node-hint">
+                    Which instance variable holds the tag list — defaults to “tags” (what the Tags section writes). Change only for custom flag vars.
+                  </small>
+                </label>
+              </>
+            )}
+            <label className="node-field">
+              <span>Mode</span>
+              <select
+                value={node.data.findMode ?? 'first'}
+                onChange={(event) => updateGraphNodeData(node.id, { findMode: event.target.value as 'first' | 'nearest' })}
+              >
+                <option value="first">First found (cheap, deterministic)</option>
+                <option value="nearest">Nearest to me</option>
+              </select>
+              <small className="node-hint">Run it on an event or behind a Cooldown — not raw Update — in a large scene.</small>
+            </label>
+          </>
+        )}
+
+        {(readsTransformTarget || firesTargetedEvent) && (
           <label className="node-field">
             <span>Target</span>
             <select
@@ -1059,7 +1130,9 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
             <small className="node-hint">
               {isTargetWired
                 ? 'Driven by the wired Target pin — this dropdown is ignored while connected.'
-                : 'Which actor to read — self, the player, the trigger toucher, a Cast result, or a specific object. Or wire a reference into the Target input.'}
+                : firesTargetedEvent
+                  ? 'Self fires this graph’s own Custom Event now. A Target fires the event on THAT actor’s blueprint next frame (Unreal call-event-on-reference). Or wire a reference into Target.'
+                  : 'Which actor to read — self, the player, the trigger toucher, a Cast result, or a specific object. Or wire a reference into the Target input.'}
             </small>
           </label>
         )}

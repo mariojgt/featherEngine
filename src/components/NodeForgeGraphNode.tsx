@@ -36,6 +36,7 @@ import {
   RefreshCw,
   RotateCw,
   Save,
+  Search,
   Send,
   Sigma,
   Palette,
@@ -171,6 +172,8 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.getPosition': Crosshair,
   'action.getRotation': RotateCw,
   'action.getScale': Scaling,
+  'query.findActorByBlueprint': Search,
+  'query.findActorByTag': Search,
   'action.setPosition': Move,
   'action.setRotation': RotateCw,
   'action.setScale': Scaling,
@@ -258,6 +261,8 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'action.getPosition',
   'action.getRotation',
   'action.getScale',
+  'query.findActorByBlueprint',
+  'query.findActorByTag',
   'value.number',
   'value.random',
   'value.string',
@@ -320,13 +325,25 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'z', label: 'Z' },
       ];
     case 'action.setPosition':
-      return [{ id: 'position', label: 'Position' }];
+      return [
+        { id: 'position', label: 'Position' },
+        { id: 'target', label: 'Target' },
+      ];
     case 'action.setRotation':
-      return [{ id: 'rotation', label: 'Rotation' }];
+      return [
+        { id: 'rotation', label: 'Rotation' },
+        { id: 'target', label: 'Target' },
+      ];
     case 'action.setScale':
-      return [{ id: 'scale', label: 'Scale' }];
+      return [
+        { id: 'scale', label: 'Scale' },
+        { id: 'target', label: 'Target' },
+      ];
     case 'action.lookAt':
-      return [{ id: 'target', label: 'Target' }];
+      return [
+        { id: 'point', label: 'Point' },
+        { id: 'target', label: 'Target' },
+      ];
     case 'math.clamp':
       return [
         { id: 'value', label: 'Value' },
@@ -378,6 +395,8 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       ];
     case 'action.print':
       return [{ id: 'message', label: 'Message' }];
+    case 'action.fireEvent':
+      return [{ id: 'target', label: 'Target' }];
     case 'animator.setFloat':
     case 'animator.setBool':
       return [{ id: 'value', label: 'Value' }];
