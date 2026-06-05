@@ -14,6 +14,7 @@ import type {
 } from '../../types';
 
 import { makeId } from './ids';
+import { keyLabelByCode } from '../../utils/keyboardCodes';
 
 export const defaultValueForType = (type: GraphValueType): GraphValue => {
   if (type === 'number') return 0;
@@ -103,6 +104,7 @@ export const nodeDescriptions: Record<string, string> = {
   Translate: 'Moves the attached object.',
   Rotate: 'Rotates the attached object.',
   'Apply Force': 'Adds force to a rigid body.',
+  'Set Physics': 'Enables, disables, or configures a target physics body at runtime.',
   'Spawn Object': 'Creates an object instance.',
   'Destroy Object': 'Removes an object during Play.',
   'Play Sound': 'Plays an audio source.',
@@ -127,18 +129,6 @@ export const nodeDescriptions: Record<string, string> = {
   'Clear Save': 'Deletes a local save slot.',
   Print: 'Logs a message to the on-screen console during Play.',
   'Set Quality': 'Sets the game quality preset (Low/Medium/High/Epic) at runtime — adjusts resolution, shadows, and post-FX.',
-};
-
-export const keyLabels: Record<string, string> = {
-  KeyW: 'W',
-  KeyA: 'A',
-  KeyS: 'S',
-  KeyD: 'D',
-  Space: 'Space',
-  ArrowUp: 'Arrow Up',
-  ArrowDown: 'Arrow Down',
-  ArrowLeft: 'Arrow Left',
-  ArrowRight: 'Arrow Right',
 };
 
 export const nodeKindByLabel: Record<string, GraphNodeKind> = {
@@ -192,6 +182,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   Rotate: 'action.rotate',
   'Apply Force': 'action.applyForce',
   'Apply Impulse': 'action.applyImpulse',
+  'Set Physics': 'action.setPhysics',
   'Set Velocity': 'action.setVelocity',
   'Get Velocity': 'query.velocity',
   'Fire Event': 'action.fireEvent',
@@ -286,6 +277,7 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
     nodeKind === 'action.applyForce' ||
     nodeKind === 'action.applyImpulse' ||
     nodeKind === 'action.applyTorque' ||
+    nodeKind === 'action.setPhysics' ||
     nodeKind === 'action.setVelocity' ||
     nodeKind === 'query.velocity' ||
     nodeKind === 'action.fractureObject'
@@ -298,7 +290,7 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
 export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNodeData, 'label' | 'description'> => {
   const eventName = data.eventName || 'CustomEvent';
   const keyCode = data.keyCode || 'KeyW';
-  const keyLabel = keyLabels[keyCode] ?? keyCode;
+  const keyLabel = keyLabelByCode(keyCode);
   const axis = (data.axis || 'z').toUpperCase();
   const amount = Number(data.amount ?? -3.6);
 
@@ -599,6 +591,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description:
           "Hard-sets a DYNAMIC physics body's linear velocity (units/sec) — wire a Vector3 into Velocity. Overrides momentum/gravity for that body this frame (it keeps coasting at that velocity after). Use for conveyor belts, projectiles, dashes, precise launches. No effect on character/kinematic/fixed bodies. Target defaults to self.",
       };
+    case 'action.setPhysics':
+      return {
+        label: `Set Physics ${data.physicsEnabled === false ? 'Off' : 'On'}`,
+        description:
+          'Enables, disables, or reconfigures the Target object\'s physics body at runtime. Change body type, collider, trigger mode, mass, gravity, friction, and damping. Target defaults to self and supports $player/$trigger/$cast or a wired Target reference. Physics rebuilds from these values during Play and resets on Stop.',
+      };
     case 'action.applyTorque':
       return {
         label: `Apply Torque ${Number(data.amount ?? 4)} · ${(data.axis || 'y').toUpperCase()}`,
@@ -810,6 +808,18 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
   if (nodeKind === 'action.applyTorque') {
     if (typeof normalized.amount !== 'number') normalized.amount = 4;
     if (!normalized.axis) normalized.axis = 'y';
+  }
+
+  if (nodeKind === 'action.setPhysics') {
+    if (typeof normalized.physicsEnabled !== 'boolean') normalized.physicsEnabled = true;
+    if (!normalized.physicsBodyType) normalized.physicsBodyType = 'dynamic';
+    if (!normalized.physicsCollider) normalized.physicsCollider = 'box';
+    if (typeof normalized.physicsIsTrigger !== 'boolean') normalized.physicsIsTrigger = false;
+    if (typeof normalized.physicsMass !== 'number') normalized.physicsMass = 1;
+    if (typeof normalized.physicsGravityScale !== 'number') normalized.physicsGravityScale = 1;
+    if (typeof normalized.physicsFriction !== 'number') normalized.physicsFriction = 0.6;
+    if (typeof normalized.physicsLinearDamping !== 'number') normalized.physicsLinearDamping = 0;
+    if (typeof normalized.physicsAngularDamping !== 'number') normalized.physicsAngularDamping = 0.05;
   }
 
   if (nodeKind === 'action.applyDamage' && typeof normalized.damageAmount !== 'number') {

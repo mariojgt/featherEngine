@@ -1,15 +1,21 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type Connection, type Edge, type NodeTypes } from '@xyflow/react';
 import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2, Plus, Save, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { nodeDescriptions, nodeKindByLabel } from '../store/editor/graph';
 import { NodeForgeGraphNode, outputTypeOf, VALUE_TYPE_COLORS, EXEC_WIRE_COLOR } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
-import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, NodeForgeNodeData, QualityLevel, UIElement, Vector3Tuple } from '../types';
+import type { GraphNodeCategory, GraphNodeKind, GraphValue, GraphValueType, NodeForgeNode, NodeForgeNodeData, QualityLevel, UIElement, Vector3Tuple } from '../types';
 import { QUALITY_LEVELS } from '../three/quality';
+import { KEY_CODE_OPTIONS, keyLabelByCode } from '../utils/keyboardCodes';
 
 const nodeTypes: NodeTypes = {
   nodeforge: NodeForgeGraphNode,
 };
+
+const defaultEdgeOptions = { animated: true, type: 'smoothstep' } as const;
+const connectionLineStyle = { stroke: '#5B8CFF', strokeWidth: 2 } as const;
+const snapGrid: [number, number] = [24, 24];
 
 export const nodeGroups: Array<{
   title: GraphNodeCategory;
@@ -68,7 +74,7 @@ export const nodeGroups: Array<{
   {
     title: 'Physics',
     icon: Boxes,
-    nodes: ['Apply Force', 'Apply Impulse', 'Apply Torque', 'Set Velocity', 'Get Velocity', 'Fracture'],
+    nodes: ['Apply Force', 'Apply Impulse', 'Apply Torque', 'Set Physics', 'Set Velocity', 'Get Velocity', 'Fracture'],
   },
   {
     title: 'Persistence',
@@ -83,20 +89,17 @@ export const nodeGroups: Array<{
 ];
 
 export const baseNodeChoices: NodeChoice[] = nodeGroups.flatMap((group) =>
-  group.nodes.map((label) => ({ label, category: group.title })),
+  group.nodes.map((label) => {
+    const nodeKind = nodeKindByLabel[label];
+    return {
+      label,
+      category: group.title,
+      description: nodeDescriptions[label],
+      nodeKind,
+      valueType: nodeKind ? outputTypeOf[nodeKind] ?? 'exec' : 'exec',
+    };
+  }),
 );
-
-const keyOptions = [
-  ['KeyW', 'W'],
-  ['KeyA', 'A'],
-  ['KeyS', 'S'],
-  ['KeyD', 'D'],
-  ['Space', 'Space'],
-  ['ArrowUp', 'Arrow Up'],
-  ['ArrowDown', 'Arrow Down'],
-  ['ArrowLeft', 'Arrow Left'],
-  ['ArrowRight', 'Arrow Right'],
-];
 
 const spawnKinds: Array<['cube' | 'sphere' | 'capsule' | 'plane', string]> = [
   ['cube', 'Cube'],
@@ -531,6 +534,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
   const updatesQuality = node.data.nodeKind === 'action.setQuality';
   const updatesEnvironment = node.data.nodeKind === 'action.setEnvironment';
+  const updatesPhysics = node.data.nodeKind === 'action.setPhysics';
   const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
   const appliesDamage = node.data.nodeKind === 'action.applyDamage';
   const updatesCast = node.data.nodeKind === 'logic.cast';
@@ -627,12 +631,21 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               value={node.data.keyCode ?? 'KeyW'}
               onChange={(event) => updateGraphNodeData(node.id, { keyCode: event.target.value })}
             >
-              {keyOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
+              {KEY_CODE_OPTIONS.map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.group} · {option.label}
                 </option>
               ))}
+              {!KEY_CODE_OPTIONS.some((option) => option.code === node.data.keyCode) && node.data.keyCode && (
+                <option value={node.data.keyCode}>{node.data.keyCode} (custom)</option>
+              )}
             </select>
+            <input
+              value={node.data.keyCode ?? 'KeyW'}
+              placeholder="KeyboardEvent.code or Mouse0"
+              onChange={(event) => updateGraphNodeData(node.id, { keyCode: event.target.value.trim() || 'KeyW' })}
+            />
+            <small className="node-hint">Current: {keyLabelByCode(node.data.keyCode)}. Type any KeyboardEvent.code or Mouse0/Mouse1/Mouse2 for mouse buttons.</small>
           </label>
         )}
 
@@ -1239,7 +1252,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
           </>
         )}
 
-        {(readsTransformTarget || firesTargetedEvent) && (
+        {(readsTransformTarget || firesTargetedEvent || updatesPhysics) && (
           <label className="node-field">
             <span>Target</span>
             <select
@@ -1262,9 +1275,85 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 ? 'Driven by the wired Target pin — this dropdown is ignored while connected.'
                 : firesTargetedEvent
                   ? 'Self fires this graph’s own Custom Event now. A Target fires the event on THAT actor’s blueprint next frame (Unreal call-event-on-reference). Or wire a reference into Target.'
+                  : updatesPhysics
+                    ? 'Which actor to configure — self, the player, the trigger toucher, a Cast result, or a specific object. Or wire a reference into the Target input.'
                   : 'Which actor to read — self, the player, the trigger toucher, a Cast result, or a specific object. Or wire a reference into the Target input.'}
             </small>
           </label>
+        )}
+
+        {updatesPhysics && (
+          <>
+            <div className="node-field-group-title">
+              <Boxes size={13} aria-hidden />
+              <span>Runtime Physics Options</span>
+            </div>
+            <label className="library-check" title="Enable or disable the target object's physics body during Play">
+              <input
+                type="checkbox"
+                checked={node.data.physicsEnabled !== false}
+                onChange={(event) => updateGraphNodeData(node.id, { physicsEnabled: event.target.checked })}
+              />
+              <span>Physics enabled</span>
+            </label>
+            <div className="node-field-grid two">
+              <label className="node-field">
+                <span>Body Type</span>
+                <select
+                  value={node.data.physicsBodyType ?? 'dynamic'}
+                  onChange={(event) => updateGraphNodeData(node.id, { physicsBodyType: event.target.value as 'dynamic' | 'fixed' | 'kinematic' })}
+                >
+                  <option value="dynamic">Dynamic</option>
+                  <option value="fixed">Fixed</option>
+                  <option value="kinematic">Kinematic</option>
+                </select>
+              </label>
+              <label className="node-field">
+                <span>Collider</span>
+                <select
+                  value={node.data.physicsCollider ?? 'box'}
+                  onChange={(event) => updateGraphNodeData(node.id, { physicsCollider: event.target.value as 'box' | 'sphere' | 'capsule' | 'mesh' | 'convex' })}
+                >
+                  <option value="box">Box</option>
+                  <option value="sphere">Sphere</option>
+                  <option value="capsule">Capsule</option>
+                  <option value="mesh">Mesh</option>
+                  <option value="convex">Convex</option>
+                </select>
+              </label>
+            </div>
+            <label className="library-check" title="Trigger colliders fire overlap events but do not block or push">
+              <input
+                type="checkbox"
+                checked={Boolean(node.data.physicsIsTrigger)}
+                onChange={(event) => updateGraphNodeData(node.id, { physicsIsTrigger: event.target.checked })}
+              />
+              <span>Trigger collider</span>
+            </label>
+            <div className="node-field-grid two">
+              <label className="node-field">
+                <span>Mass</span>
+                <input type="number" step="0.1" min="0.001" value={node.data.physicsMass ?? 1} onChange={(event) => updateGraphNodeData(node.id, { physicsMass: Math.max(0.001, Number(event.target.value)) })} />
+              </label>
+              <label className="node-field">
+                <span>Gravity Scale</span>
+                <input type="number" step="0.1" value={node.data.physicsGravityScale ?? 1} onChange={(event) => updateGraphNodeData(node.id, { physicsGravityScale: Number(event.target.value) })} />
+              </label>
+              <label className="node-field">
+                <span>Friction</span>
+                <input type="number" step="0.05" min="0" value={node.data.physicsFriction ?? 0.6} onChange={(event) => updateGraphNodeData(node.id, { physicsFriction: Math.max(0, Number(event.target.value)) })} />
+              </label>
+              <label className="node-field">
+                <span>Linear Damping</span>
+                <input type="number" step="0.05" min="0" value={node.data.physicsLinearDamping ?? 0} onChange={(event) => updateGraphNodeData(node.id, { physicsLinearDamping: Math.max(0, Number(event.target.value)) })} />
+              </label>
+              <label className="node-field">
+                <span>Angular Damping</span>
+                <input type="number" step="0.05" min="0" value={node.data.physicsAngularDamping ?? 0.05} onChange={(event) => updateGraphNodeData(node.id, { physicsAngularDamping: Math.max(0, Number(event.target.value)) })} />
+              </label>
+            </div>
+            <small className="node-hint">These options apply during Play when execution reaches this node. Wire Target for a specific actor, or leave it as Self.</small>
+          </>
         )}
 
         {updatesTargetObject && (
@@ -1757,9 +1846,12 @@ export function VisualScriptingPanel() {
   const selectedGraphNode = useEditorStore((state) => state.selectedGraphNode());
   const selectGraphNode = useEditorStore((state) => state.selectGraphNode);
   const instanceCount = sceneObjects.filter((object) => object.script?.blueprintId === activeBlueprintId).length;
+  const selectedNodeDetail = selectedGraphNode?.data.label ?? 'Blueprint Graph';
 
   const { screenToFlowPosition } = useReactFlow();
+  const flowShellRef = useRef<HTMLDivElement | null>(null);
   const [searchMenu, setSearchMenu] = useState<{ x: number; y: number } | null>(null);
+  const [copiedNode, setCopiedNode] = useState<NodeForgeNode | null>(null);
 
   const nodeChoices = useMemo<NodeChoice[]>(
     () => [
@@ -1768,12 +1860,18 @@ export function VisualScriptingPanel() {
         {
           label: `Get ${variable.name}`,
           category: 'Variables' as GraphNodeCategory,
+          description: `Read ${variable.name} (${variable.type}).`,
+          nodeKind: 'variable.get' as GraphNodeKind,
+          valueType: variable.type,
           nodeLabel: 'Get Variable',
           data: { variableId: variable.id, valueType: variable.type },
         },
         {
           label: `Set ${variable.name}`,
           category: 'Variables' as GraphNodeCategory,
+          description: `Write ${variable.name} (${variable.type}).`,
+          nodeKind: 'variable.set' as GraphNodeKind,
+          valueType: 'exec' as const,
           nodeLabel: 'Set Variable',
           data: { variableId: variable.id, valueType: variable.type },
         },
@@ -1833,6 +1931,42 @@ export function VisualScriptingPanel() {
     const id = addGraphNodeToBlueprint(activeBlueprintId, label, category, {}, position);
     selectGraphNode(id);
   };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (!flowShellRef.current?.contains(document.activeElement)) return;
+      const isCopy = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c';
+      const isPaste = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v';
+      const isDelete = event.key === 'Delete' || event.key === 'Backspace';
+      if (isCopy && selectedGraphNode) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setCopiedNode(selectedGraphNode);
+      }
+      if (isPaste && copiedNode) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const id = addGraphNodeToBlueprint(
+          activeBlueprintId,
+          copiedNode.data.label,
+          copiedNode.data.category,
+          copiedNode.data,
+          { x: copiedNode.position.x + 36, y: copiedNode.position.y + 36 },
+        );
+        selectGraphNode(id);
+        setCopiedNode({ ...copiedNode, id, position: { x: copiedNode.position.x + 36, y: copiedNode.position.y + 36 } });
+      }
+      if (isDelete && selectedGraphNode) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        deleteGraphNode(selectedGraphNode.id);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
+  }, [activeBlueprintId, addGraphNodeToBlueprint, copiedNode, deleteGraphNode, selectGraphNode, selectedGraphNode]);
 
   // Reject wires that cross categories (exec↔value) or loop a node back to itself.
   const isExecHandle = (handleId?: string | null) => (handleId ?? '').startsWith('exec');
@@ -1902,15 +2036,22 @@ export function VisualScriptingPanel() {
 
       <div className="scripting-body">
         <aside className="node-palette">
-          <div className="blueprint-card">
-            <strong>{activeBlueprint.name}</strong>
-            <span>{activeBlueprint.description}</span>
+          <div className="blueprint-card graph-overview-card">
+            <div>
+              <strong>{activeBlueprint.name}</strong>
+              <span>{activeBlueprint.description}</span>
+            </div>
+            <div className="graph-overview-stats">
+              <span>{graph.nodes.length} nodes</span>
+              <span>{graph.edges.length} wires</span>
+            </div>
           </div>
           {nodeGroups.map(({ title, icon: Icon, nodes }) => (
             <section key={title}>
               <h3>
                 <Icon size={14} aria-hidden />
                 <span>{title}</span>
+                <small>{nodes.length}</small>
               </h3>
               <div>
                 {nodes.map((node) => (
@@ -1921,8 +2062,13 @@ export function VisualScriptingPanel() {
                     onClick={() => addPaletteNode(node, title)}
                     title={`Add ${node} (or drag onto the canvas)`}
                   >
-                    <Plus size={13} aria-hidden />
-                    <span>{node}</span>
+                    <span className="node-palette-icon">
+                      <Plus size={12} aria-hidden />
+                    </span>
+                    <span className="node-palette-copy">
+                      <span>{node}</span>
+                      <small>{nodeDescriptions[node] ?? `${title} node`}</small>
+                    </span>
                   </button>
                 ))}
               </div>
@@ -1932,9 +2078,12 @@ export function VisualScriptingPanel() {
 
         <div
           className="flow-shell"
+          ref={flowShellRef}
+          tabIndex={0}
           // Capture-phase: runs before ReactFlow's own pointer handlers, so node
           // selection works reliably even inside the docked panel. ReactFlow tags
           // each node wrapper with data-id.
+          onPointerDown={() => flowShellRef.current?.focus()}
           onClickCapture={(event) => {
             const nodeEl = (event.target as HTMLElement).closest('.react-flow__node');
             const id = nodeEl?.getAttribute('data-id');
@@ -1947,6 +2096,10 @@ export function VisualScriptingPanel() {
           onDragOver={onCanvasDragOver}
           onDrop={onCanvasDrop}
         >
+          <div className="flow-hud" aria-hidden>
+            <span>{selectedNodeDetail}</span>
+            <small>{graph.nodes.length} nodes / {graph.edges.length} wires{copiedNode ? ' / copied' : ''}</small>
+          </div>
           <ReactFlow
             nodes={graph.nodes}
             edges={styledEdges}
@@ -1955,16 +2108,26 @@ export function VisualScriptingPanel() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             isValidConnection={isValidConnection}
+            edgesFocusable
+            edgesReconnectable
             onNodeClick={(_, node) => selectGraphNode(node.id)}
+            onEdgeDoubleClick={(event, edge) => {
+              event.stopPropagation();
+              onEdgesChange([{ id: edge.id, type: 'remove' }]);
+            }}
+            onSelectionChange={({ nodes }) => {
+              const id = nodes[0]?.id;
+              if (id !== selectedGraphNode?.id) selectGraphNode(id);
+            }}
             onPaneClick={() => {
               selectGraphNode(undefined);
               setSearchMenu(null);
             }}
-            deleteKeyCode={['Delete', 'Backspace']}
-            defaultEdgeOptions={{ animated: true, type: 'smoothstep' }}
-            connectionLineStyle={{ stroke: '#5B8CFF', strokeWidth: 2 }}
+            deleteKeyCode={[]}
+            defaultEdgeOptions={defaultEdgeOptions}
+            connectionLineStyle={connectionLineStyle}
             snapToGrid
-            snapGrid={[24, 24]}
+            snapGrid={snapGrid}
             fitView
           >
             <MiniMap pannable zoomable nodeStrokeWidth={3} />

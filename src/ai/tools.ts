@@ -328,6 +328,7 @@ const NODE_LABELS = [
   'Get Rotation',
   'Get Scale',
   'Apply Impulse',
+  'Set Physics',
   'Set Velocity',
   'Get Velocity',
   'Find Actor By Blueprint',
@@ -439,6 +440,7 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Get Rotation': 'Runtime',
   'Get Scale': 'Runtime',
   'Apply Impulse': 'Physics',
+  'Set Physics': 'Physics',
   'Set Velocity': 'Physics',
   'Get Velocity': 'Physics',
   'Find Actor By Blueprint': 'Runtime',
@@ -449,18 +451,6 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Set Scale': 'Runtime',
   'Look At': 'Runtime',
 };
-
-const KEY_CODES = [
-  'KeyW',
-  'KeyA',
-  'KeyS',
-  'KeyD',
-  'Space',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-] as const;
 
 const findObject = (id: string) => selectActiveObjects(store()).find((object) => object.id === id);
 const findBlueprint = (id: string) => store().blueprints.find((blueprint) => blueprint.id === id);
@@ -3113,7 +3103,7 @@ export const engineTools = {
     inputSchema: z.object({
       blueprintId: z.string(),
       type: z.enum(NODE_LABELS),
-      keyCode: z.enum(KEY_CODES).optional(),
+      keyCode: z.string().optional().describe('Key Down/Up: any KeyboardEvent.code such as KeyW, KeyE, Digit1, ShiftLeft, Enter, F1, ArrowUp, or mouse code Mouse0/Mouse1/Mouse2.'),
       axis: z.enum(['x', 'y', 'z']).optional(),
       space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
       amount: z.number().optional(),
@@ -3168,6 +3158,15 @@ export const engineTools = {
       qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
       damageAmount: z.number().optional().describe('Apply Damage: HP to subtract from the target\'s health variable. Default 10. Use targetObjectId ($self/$player/$trigger/$cast or an id) to pick who takes it.'),
       envPatch: runtimeEnvironmentPatchSchema.optional().describe('Set Environment: runtime patch over sky/fog/sun fields. Include only fields to change.'),
+      physicsEnabled: z.boolean().optional().describe('Set Physics: enable/disable target physics body during Play.'),
+      physicsBodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional().describe('Set Physics: body type.'),
+      physicsCollider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional().describe('Set Physics: collider shape.'),
+      physicsIsTrigger: z.boolean().optional().describe('Set Physics: trigger/sensor collider.'),
+      physicsMass: z.number().optional().describe('Set Physics: mass.'),
+      physicsGravityScale: z.number().optional().describe('Set Physics: gravity scale.'),
+      physicsFriction: z.number().optional().describe('Set Physics: friction.'),
+      physicsLinearDamping: z.number().optional().describe('Set Physics: linear damping.'),
+      physicsAngularDamping: z.number().optional().describe('Set Physics: angular damping.'),
     }),
     execute: async ({
       blueprintId,
@@ -3224,6 +3223,15 @@ export const engineTools = {
       qualityLevel,
       damageAmount,
       envPatch,
+      physicsEnabled,
+      physicsBodyType,
+      physicsCollider,
+      physicsIsTrigger,
+      physicsMass,
+      physicsGravityScale,
+      physicsFriction,
+      physicsLinearDamping,
+      physicsAngularDamping,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
@@ -3286,6 +3294,15 @@ export const engineTools = {
         qualityLevel,
         damageAmount,
         envPatch,
+        physicsEnabled,
+        physicsBodyType,
+        physicsCollider,
+        physicsIsTrigger,
+        physicsMass,
+        physicsGravityScale,
+        physicsFriction,
+        physicsLinearDamping,
+        physicsAngularDamping,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },
@@ -3315,7 +3332,7 @@ export const engineTools = {
     inputSchema: z.object({
       blueprintId: z.string(),
       nodeId: z.string(),
-      keyCode: z.enum(KEY_CODES).optional(),
+      keyCode: z.string().optional().describe('Key Down/Up: any KeyboardEvent.code such as KeyW, KeyE, Digit1, ShiftLeft, Enter, F1, ArrowUp, or mouse code Mouse0/Mouse1/Mouse2.'),
       axis: z.enum(['x', 'y', 'z']).optional(),
       space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
       amount: z.number().optional(),
@@ -3366,6 +3383,15 @@ export const engineTools = {
       qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
       damageAmount: z.number().optional().describe('Apply Damage: HP to subtract from the target\'s health variable.'),
       envPatch: runtimeEnvironmentPatchSchema.optional().describe('Set Environment: runtime patch over sky/fog/sun fields. Include only fields to change.'),
+      physicsEnabled: z.boolean().optional().describe('Set Physics: enable/disable target physics body during Play.'),
+      physicsBodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional().describe('Set Physics: body type.'),
+      physicsCollider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional().describe('Set Physics: collider shape.'),
+      physicsIsTrigger: z.boolean().optional().describe('Set Physics: trigger/sensor collider.'),
+      physicsMass: z.number().optional().describe('Set Physics: mass.'),
+      physicsGravityScale: z.number().optional().describe('Set Physics: gravity scale.'),
+      physicsFriction: z.number().optional().describe('Set Physics: friction.'),
+      physicsLinearDamping: z.number().optional().describe('Set Physics: linear damping.'),
+      physicsAngularDamping: z.number().optional().describe('Set Physics: angular damping.'),
     }),
     execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;

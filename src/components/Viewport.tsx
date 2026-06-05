@@ -1138,6 +1138,8 @@ export function ViewportPanel() {
   // Unreal-style viewport hotkeys: gizmo modes, focus, duplicate, delete, deselect, space toggle.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (document.activeElement?.closest('.flow-shell')) return;
       const store = useEditorStore.getState();
       if (store.isPlaying) return;
       // Don't steal keystrokes while typing in a field.

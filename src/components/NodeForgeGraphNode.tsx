@@ -58,6 +58,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { GraphNodeKind, GraphNodeTone, GraphValueType, NodeForgeNode } from '../types';
+import { keyLabelByCode } from '../utils/keyboardCodes';
 
 /** Wire/handle colors per data type. 'any' = type not statically known (e.g. variable.get). */
 export const VALUE_TYPE_COLORS: Record<GraphValueType | 'any', string> = {
@@ -114,18 +115,6 @@ const valueTypeLabels: Record<GraphValueType | 'any', string> = {
   string: 'String',
   vector3: 'Vec3',
   any: 'Value',
-};
-
-const keyLabels: Record<string, string> = {
-  KeyW: 'W',
-  KeyA: 'A',
-  KeyS: 'S',
-  KeyD: 'D',
-  Space: 'Space',
-  ArrowUp: '↑',
-  ArrowDown: '↓',
-  ArrowLeft: '←',
-  ArrowRight: '→',
 };
 
 const toneIcon: Record<GraphNodeTone, typeof Zap> = {
@@ -199,6 +188,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.applyForce': Wind,
   'action.applyImpulse': Zap,
   'action.applyTorque': RotateCw,
+  'action.setPhysics': Box,
   'action.setVelocity': Gauge,
   'action.setEnvironment': Palette,
   'query.velocity': Gauge,
@@ -415,6 +405,14 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'vector', label: 'Force' },
         { id: 'amount', label: 'Amount' },
       ];
+    case 'action.setPhysics':
+      return [
+        { id: 'target', label: 'Target' },
+        { id: 'enabled', label: 'Enabled' },
+        { id: 'mass', label: 'Mass' },
+        { id: 'gravityScale', label: 'Gravity' },
+        { id: 'friction', label: 'Friction' },
+      ];
     case 'action.setVelocity':
       return [{ id: 'vector', label: 'Velocity' }];
     case 'query.velocity':
@@ -516,7 +514,7 @@ function nodeDetail(
     case 'event.keyDown':
     case 'event.keyUp': {
       const code = data.keyCode ?? 'KeyW';
-      return `Key ${keyLabels[code] ?? code}`;
+      return `Key ${keyLabelByCode(code)}`;
     }
     case 'event.custom':
     case 'action.fireEvent':
@@ -566,32 +564,56 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   const dataAssets = useEditorStore((state) => state.dataAssets);
   const detail = nodeDetail(data, variables, dataAssets);
   const storeSelected = useEditorStore((state) => state.selectedGraphNodeId === id);
+  const isSelected = selected || storeSelected;
 
   // Output data type: drives the value-out port color and its "Number/Bool/…" label.
   const outType: GraphValueType | 'any' | null = isValueProducer
     ? outputTypeOf[data.nodeKind] ?? (data.valueType as GraphValueType | undefined) ?? 'any'
     : null;
 
+  const showInlineDescription = valueInputs.length === 0;
+  const pinTop = valueInputs.length ? (detail ? 110 : 92) : 82;
+  const pinStep = 28;
+
   // Handles are absolutely positioned, so reserve height for the lowest pin/label.
-  let pinBottom = valueInputs.length ? 82 + (valueInputs.length - 1) * 22 + 18 : 0;
+  let pinBottom = valueInputs.length ? pinTop + (valueInputs.length - 1) * pinStep + 30 : 0;
   if (data.nodeKind === 'logic.forLoop' || data.nodeKind === 'logic.forEachActor') pinBottom = Math.max(pinBottom, 124);
   if (data.nodeKind === 'logic.cast') pinBottom = Math.max(pinBottom, 122);
   // Raycast has 4 stacked outputs (Hit/Actor/Point/Distance).
-  if (data.nodeKind === 'query.raycast') pinBottom = Math.max(pinBottom, 168);
+  if (data.nodeKind === 'query.raycast') pinBottom = Math.max(pinBottom, pinTop + 3 * pinStep + 30);
+
+  const inputPinCount = (data.hasInput !== false && !isValueProducer ? 1 : 0) + valueInputs.length;
+  const outputPinCount =
+    (data.hasOutput !== false && !isValueProducer ? 1 : 0) +
+    (isValueProducer && outType && data.nodeKind !== 'query.raycast' ? 1 : 0) +
+    (data.nodeKind === 'query.raycast' ? 4 : 0) +
+    (data.nodeKind === 'logic.cast' ? 1 : 0) +
+    (data.nodeKind === 'event.receiveDamage' ? 1 : 0) +
+    (data.nodeKind === 'logic.forLoop' || data.nodeKind === 'logic.forEachActor' ? 2 : 0);
+  const nodeMode = isEvent ? 'Event' : isValueProducer ? 'Pure' : 'Exec';
 
   return (
     <div
-      className={`nodeforge-node ${data.tone} ${isEvent ? 'is-event' : ''} ${selected || storeSelected ? 'selected' : ''}`}
+      className={`nodeforge-node ${data.tone} ${isEvent ? 'is-event' : ''} ${isValueProducer ? 'is-pure' : ''} ${valueInputs.length ? 'has-value-inputs' : ''} ${isSelected ? 'selected' : ''}`}
       style={pinBottom ? { minHeight: pinBottom } : undefined}
+      aria-selected={isSelected}
+      title={`${data.label} · ${data.category}`}
       // Select directly so the inspector always opens, independent of ReactFlow's
       // pointer-based selection (which can be unreliable inside a docked panel).
       onClick={() => useEditorStore.getState().selectGraphNode(id)}
       onPointerDown={() => useEditorStore.getState().selectGraphNode(id)}
     >
+      {inputPinCount > 0 && <span className="nfn-port-rail in" aria-hidden />}
+      {outputPinCount > 0 && <span className="nfn-port-rail out" aria-hidden />}
+      <span className="nfn-selection-mark" aria-hidden />
+
       {data.hasInput !== false && !isValueProducer && (
-        <Handle id="exec-in" className="node-port exec-port target" type="target" position={Position.Left} />
+        <Handle id="exec-in" className="node-port exec-port target" type="target" position={Position.Left} style={{ top: 42 }} />
       )}
 
+      {valueInputs.map((input, index) => (
+        <span key={`${input.id}-row`} className="nfn-port-row" style={{ top: pinTop + index * pinStep }} aria-hidden />
+      ))}
       {valueInputs.map((input, index) => (
         <Handle
           key={input.id}
@@ -599,12 +621,12 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           className="node-port value-port target"
           type="target"
           position={Position.Left}
-          style={{ top: 82 + index * 22 }}
+          style={{ top: pinTop + index * pinStep }}
         />
       ))}
       {/* Labels aligned to each input handle so it's clear which pin is which. */}
       {valueInputs.map((input, index) => (
-        <span key={`${input.id}-label`} className="nfn-port-label in" style={{ top: 82 + index * 22 }}>
+        <span key={`${input.id}-label`} className="nfn-port-label in" style={{ top: pinTop + index * pinStep }}>
           {input.label}
         </span>
       ))}
@@ -617,17 +639,25 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           <span className="nfn-kicker">{data.category}</span>
           <strong className="nfn-label">{data.label}</strong>
         </div>
+        <span className="nfn-mode">{nodeMode}</span>
       </header>
 
-      <div className="nfn-body">
-        {detail && <span className="nfn-detail">{detail}</span>}
-        {/* Input labels are now drawn beside their handles; only show the description
-            when there are no value inputs, so the port rows stay readable. */}
-        {valueInputs.length === 0 && data.description && <p className="nfn-desc">{data.description}</p>}
-      </div>
+      {(detail || (showInlineDescription && data.description)) && (
+        <div className="nfn-body">
+          {detail && <span className="nfn-detail">{detail}</span>}
+          {showInlineDescription && data.description && <p className="nfn-desc">{data.description}</p>}
+        </div>
+      )}
+
+      {!valueInputs.length && (
+        <footer className="nfn-foot" aria-hidden>
+          <span>{inputPinCount} in</span>
+          <span>{outputPinCount} out</span>
+        </footer>
+      )}
 
       {data.hasOutput !== false && !isValueProducer && (
-        <Handle id="exec-out" className="node-port exec-port source" type="source" position={Position.Right} />
+        <Handle id="exec-out" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: 42 }} />
       )}
 
       {isValueProducer && outType && data.nodeKind !== 'query.raycast' && (
@@ -637,9 +667,9 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
             className={`node-port value-port value-${outType} source`}
             type="source"
             position={Position.Right}
-            style={{ top: 82 }}
+            style={{ top: pinTop }}
           />
-          <span className="nfn-port-label out" style={{ top: 82 }}>
+          <span className="nfn-port-label out" style={{ top: pinTop }}>
             {valueTypeLabels[outType]}
           </span>
         </>
@@ -661,9 +691,9 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
               className={`node-port value-port value-${out.type} source`}
               type="source"
               position={Position.Right}
-              style={{ top: 82 + index * 22 }}
+              style={{ top: pinTop + index * pinStep }}
             />
-            <span className="nfn-port-label out" style={{ top: 82 + index * 22 }}>
+            <span className="nfn-port-label out" style={{ top: pinTop + index * pinStep }}>
               {out.label}
             </span>
           </span>
@@ -672,16 +702,16 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
       {/* Cast is an exec gate that ALSO outputs the validated actor as a typed reference ("As <Blueprint>"),
           wired into a Get/Set Object Var's Target — the Unreal "Cast → As BP_X" pin. */}
       {data.nodeKind === 'logic.cast' && (
-        <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 104 }} />
+        <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + pinStep }} />
       )}
 
       {/* On Receive Damage: an event (exec-out above) that ALSO exposes the HP lost on this hit as a value-out. */}
       {data.nodeKind === 'event.receiveDamage' && (
         <>
-          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 78, fontSize: 10, opacity: 0.7 }}>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>
             Damage
           </span>
-          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 84 }} />
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
         </>
       )}
 
@@ -689,28 +719,28 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           "Body" exec output and the current loop index value-out (Unreal-style ForLoop). */}
       {data.nodeKind === 'logic.forLoop' && (
         <>
-          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 78, fontSize: 10, opacity: 0.7 }}>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>
             Body
           </span>
-          <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: 84 }} />
-          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 100, fontSize: 10, opacity: 0.7 }}>
+          <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
+          <span className="nfn-pin-label" style={{ top: pinTop + pinStep - 4 }}>
             Index
           </span>
-          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 106 }} />
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + pinStep + 2 }} />
         </>
       )}
 
       {/* For Each Actor: "Body" fires per matching actor (current actor on value-out); default exec-out = "Completed". */}
       {data.nodeKind === 'logic.forEachActor' && (
         <>
-          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 78, fontSize: 10, opacity: 0.7 }}>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>
             Body
           </span>
-          <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: 84 }} />
-          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 100, fontSize: 10, opacity: 0.7 }}>
+          <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
+          <span className="nfn-pin-label" style={{ top: pinTop + pinStep - 4 }}>
             Actor
           </span>
-          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 106 }} />
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + pinStep + 2 }} />
         </>
       )}
     </div>

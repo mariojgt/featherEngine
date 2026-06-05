@@ -18,6 +18,9 @@ import { NodeInspector, nodeGroups, baseNodeChoices } from './VisualScriptingPan
 import type { GraphNodeCategory, UIDocument } from '../types';
 
 const nodeTypes: NodeTypes = { nodeforge: NodeForgeGraphNode };
+const defaultEdgeOptions = { animated: true, type: 'smoothstep' } as const;
+const connectionLineStyle = { stroke: '#5B8CFF', strokeWidth: 2 } as const;
+const snapGrid: [number, number] = [24, 24];
 
 // The node groups worth showing for UI behaviour (the full palette is overkill here).
 const UI_GROUPS = nodeGroups.filter((g) => ['Events', 'UI', 'Variables', 'Logic', 'Math', 'Values'].includes(g.title));
@@ -114,10 +117,10 @@ function Flow({ doc }: { doc: UIDocument }) {
             setSearchMenu(null);
           }}
           deleteKeyCode={['Delete', 'Backspace']}
-          defaultEdgeOptions={{ animated: true, type: 'smoothstep' }}
-          connectionLineStyle={{ stroke: '#5B8CFF', strokeWidth: 2 }}
+          defaultEdgeOptions={defaultEdgeOptions}
+          connectionLineStyle={connectionLineStyle}
           snapToGrid
-          snapGrid={[24, 24]}
+          snapGrid={snapGrid}
           fitView
         >
           <MiniMap pannable zoomable nodeStrokeWidth={3} />

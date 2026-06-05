@@ -95,6 +95,7 @@ export type GraphNodeKind =
   | 'action.applyForce'
   | 'action.applyImpulse'
   | 'action.applyTorque'
+  | 'action.setPhysics'
   | 'action.setVelocity'
   | 'query.velocity'
   | 'action.fireEvent'
@@ -185,6 +186,16 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   /** action.applyImpulse: whether axis/vector values are interpreted in world axes or the target actor's local axes. */
   space?: 'world' | 'local';
   amount?: number;
+  /** action.setPhysics: enables/disables/configures the target object's runtime physics body. */
+  physicsEnabled?: boolean;
+  physicsBodyType?: RigidBodyType;
+  physicsCollider?: ColliderType;
+  physicsIsTrigger?: boolean;
+  physicsMass?: number;
+  physicsGravityScale?: number;
+  physicsFriction?: number;
+  physicsLinearDamping?: number;
+  physicsAngularDamping?: number;
   valueType?: GraphValueType;
   numberValue?: number;
   stringValue?: string;

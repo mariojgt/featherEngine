@@ -4358,7 +4358,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         isDirty: true,
       };
     }),
-  selectGraphNode: (selectedGraphNodeId) => set({ selectedGraphNodeId }),
+  selectGraphNode: (selectedGraphNodeId) => {
+    if (get().selectedGraphNodeId !== selectedGraphNodeId) set({ selectedGraphNodeId });
+  },
   updateGraphNodeData: (id, patch) =>
     set((state) => ({
       // Find the node in whichever graph holds it (blueprint OR material graph).
@@ -4743,6 +4745,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // the character/physics passes, so a teleported kinematic/fixed body follows (physics.frame reads the
       // post-script transform). Last write wins. Keyed by target object id.
       const nextTransforms: Record<string, { position?: Vector3Tuple; rotation?: Vector3Tuple; scale?: Vector3Tuple }> = {};
+      const nextPhysics: Record<string, Partial<PhysicsComponent>> = {};
       // Targeted custom events (Fire Event with a Target) → delivered to that actor NEXT frame (one-frame
       // delay, like runtimeCollisions), since each object runs its own graph in its own context.
       const nextActorEvents: Record<string, string[]> = {};
@@ -5779,6 +5782,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   setVelocities[velTargetId] = v;
                   nextVelocities[velTargetId] = v; // so Get Velocity reflects it the same frame
                 }
+              }
+            }
+
+            if (node.data.nodeKind === 'action.setPhysics') {
+              const physicsTargetId = objectVarTarget(node);
+              const physicsTarget = activeObjectById.get(physicsTargetId);
+              if (physicsTarget) {
+                nextPhysics[physicsTargetId] = {
+                  enabled: toBoolean(valueInput(node, 'enabled', node.data.physicsEnabled ?? true)),
+                  bodyType: node.data.physicsBodyType ?? 'dynamic',
+                  collider: node.data.physicsCollider ?? 'box',
+                  isTrigger: Boolean(node.data.physicsIsTrigger),
+                  mass: Math.max(0.001, toNumber(valueInput(node, 'mass', Number(node.data.physicsMass ?? 1)))),
+                  gravityScale: toNumber(valueInput(node, 'gravityScale', Number(node.data.physicsGravityScale ?? 1))),
+                  friction: Math.max(0, toNumber(valueInput(node, 'friction', Number(node.data.physicsFriction ?? 0.6)))),
+                  linearDamping: Math.max(0, Number(node.data.physicsLinearDamping ?? 0)),
+                  angularDamping: Math.max(0, Number(node.data.physicsAngularDamping ?? 0.05)),
+                };
               }
             }
 
@@ -6871,6 +6892,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               },
             },
           };
+        }
+        const physicsPatch = nextPhysics[object.id];
+        if (physicsPatch) {
+          return { ...object, physics: withPhysicsDefaults({ ...defaultPhysics(), ...object.physics, ...physicsPatch }) };
         }
         // Particle bursts (impacts): count down their life; despawn when spent.
         if (object.effect) {
@@ -8061,11 +8086,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => {
       const activeBlueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
       if (!activeBlueprint) return state;
-      // Pure selection/dimension changes shouldn't mark the project dirty.
+      const structuralChanges = changes.filter((change) => change.type !== 'select' && change.type !== 'dimensions');
+      if (structuralChanges.length === 0) return state;
+      // Pure selection/dimension changes shouldn't mark the project dirty or be persisted.
       const dirtied = changes.some((change) => change.type !== 'select' && change.type !== 'dimensions');
       return {
         graphs: state.graphs.map((graph) =>
-          graph.id === activeBlueprint.graphId ? { ...graph, nodes: applyNodeChanges(changes, graph.nodes) } : graph,
+          graph.id === activeBlueprint.graphId ? { ...graph, nodes: applyNodeChanges(structuralChanges, graph.nodes) } : graph,
         ),
         ...(dirtied ? { isDirty: true } : {}),
       };
