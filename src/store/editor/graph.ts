@@ -149,16 +149,19 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Key Up': 'event.keyUp',
   'Custom Event': 'event.custom',
   'Collision Enter': 'event.collisionEnter',
+  'Collision Exit': 'event.collisionExit',
   'Trigger Enter': 'event.triggerEnter',
   'Trigger Exit': 'event.triggerExit',
   Interact: 'event.interact',
   'On Receive Damage': 'event.receiveDamage',
+  Timer: 'event.timer',
   Branch: 'logic.branch',
   Compare: 'logic.compare',
   AND: 'logic.and',
   OR: 'logic.or',
   Cast: 'logic.cast',
   'For Loop': 'logic.forLoop',
+  'For Each Actor': 'logic.forEachActor',
   NOT: 'logic.not',
   'Do Once': 'logic.doOnce',
   Delay: 'logic.delay',
@@ -188,6 +191,9 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Translate Z -1': 'action.translate',
   Rotate: 'action.rotate',
   'Apply Force': 'action.applyForce',
+  'Apply Impulse': 'action.applyImpulse',
+  'Set Velocity': 'action.setVelocity',
+  'Get Velocity': 'query.velocity',
   'Fire Event': 'action.fireEvent',
   'Spawn Object': 'action.spawnObject',
   'Spawn Prefab': 'action.spawnPrefab',
@@ -206,6 +212,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Get Vehicle Speed': 'query.vehicleSpeed',
   'Find Actor By Blueprint': 'query.findActorByBlueprint',
   'Find Actor By Tag': 'query.findActorByTag',
+  Raycast: 'query.raycast',
   Move: 'action.move',
   Drive: 'action.drive',
   Jump: 'action.jump',
@@ -214,6 +221,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set Ragdoll': 'action.setRagdoll',
   'Spawn Projectile': 'action.spawnProjectile',
   'Set Visible': 'action.setVisible',
+  'Set Active': 'action.setActive',
   'Spawn Attached': 'action.spawnAttached',
   'Play Animation': 'action.playAnimation',
   'Play Cinematic': 'action.playCinematic',
@@ -272,7 +280,14 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
   if (nodeKind.startsWith('save.')) return 'Persistence';
   if (nodeKind.startsWith('material.')) return 'Material';
   if (nodeKind.startsWith('ui.')) return 'UI';
-  if (nodeKind === 'action.applyForce' || nodeKind === 'action.fractureObject') return 'Physics';
+  if (
+    nodeKind === 'action.applyForce' ||
+    nodeKind === 'action.applyImpulse' ||
+    nodeKind === 'action.setVelocity' ||
+    nodeKind === 'query.velocity' ||
+    nodeKind === 'action.fractureObject'
+  )
+    return 'Physics';
   if (nodeKind === 'action.playSound') return 'Audio';
   return 'Runtime';
 };
@@ -302,6 +317,13 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
           ? 'Fires when this object starts touching the selected other object.'
           : 'Fires when this object starts touching any solid collider.',
       };
+    case 'event.collisionExit':
+      return {
+        label: 'Collision Exit',
+        description: data.otherObjectId
+          ? 'Fires when this object stops touching the selected other object.'
+          : 'Fires when this object stops touching a solid collider it was in contact with (e.g. left the ground, slid off a wall).',
+      };
     case 'event.triggerEnter':
       return {
         label: 'Trigger Enter',
@@ -315,6 +337,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description: data.otherObjectId
           ? 'Fires when this object stops overlapping the selected trigger participant (e.g. walks away).'
           : 'Fires when this object stops overlapping a trigger collider.',
+      };
+    case 'event.timer':
+      return {
+        label: `Timer: ${Number(data.numberValue ?? 1)}s`,
+        description:
+          'Fires repeatedly every N seconds during Play, on its own (no Update needed). Set the interval (seconds). Use for spawners, ticking damage, periodic AI re-think, regen. Unlike Cooldown (which gates an Update chain), Timer is its own event entry point.',
       };
     case 'event.interact':
       return {
@@ -464,6 +492,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         label: `Set Visible ${data.visible === false ? 'Off' : 'On'}`,
         description: 'Shows or hides the owner (or Target) object during Play — used to equip/holster weapons.',
       };
+    case 'action.setActive':
+      return {
+        label: `Set Active ${data.booleanValue === false ? 'Off' : 'On'}`,
+        description:
+          'Fully activates or deactivates the owner (or Target). OFF = the object stops rendering, stops running its script, drops its physics collider, and is ignored by AI/Find — like switching it off. ON = back to normal. Use for doors/hazards/spawned enemies you toggle. Stronger than Set Visible (which only hides the mesh). Wire a Boolean into "on", or set it on the node.',
+      };
     case 'action.spawnAttached':
       return {
         label: 'Spawn Attached',
@@ -506,6 +540,14 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return { label: `Cooldown: ${Number(data.numberValue ?? 1)}s`, description: 'Gate: lets execution through at most once every N seconds. Use for fire rate / spawn rate.' };
     case 'logic.not':
       return { label: 'NOT', description: 'Inverts a boolean — true becomes false and false becomes true. Wire a bool into Value.' };
+    case 'logic.forEachActor': {
+      const filter = data.castBlueprintId ? 'Blueprint' : `Tag: ${data.stringValue || 'any'}`;
+      return {
+        label: `For Each Actor (${filter})`,
+        description:
+          'Fires its "Body" output once for EVERY actor matching a Blueprint or a Tag — the iterating form of Unreal "Get All Actors Of Class". The current actor is on the value-out (wire it into a Cast / Get Position / Set Object Var / Apply Damage Target inside the Body). Fires "Completed" once after. Pick a Blueprint, or set a Tag (matches the object\'s Tags). Skips self/dead/disabled. Gate behind an event/Cooldown — it scans every matching actor each time it runs.',
+      };
+    }
     case 'logic.doOnce':
       return { label: 'Do Once', description: 'Gate: lets execution through ONLY the first time it is reached this Play session, then blocks forever. Use to fire one-shot setup from an event that can repeat (a trigger, a key).' };
     case 'logic.delay':
@@ -541,6 +583,30 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         label: `Find Actor (BP) · ${data.findMode === 'nearest' ? 'nearest' : 'first'}`,
         description:
           "Searches the live scene for an actor running the chosen Blueprint and outputs a reference to it (Unreal Get Actor Of Class). Mode: 'first' (deterministic, cheap — the boss/objective) or 'nearest' to the owner (the AI case). Returns nothing if none match. Wire the reference into a Cast (to validate + access its typed variables), or straight into Get/Set Object Var / Get Position. Gate it behind an event or Cooldown — don't run it on raw Update in a big scene.",
+      };
+    case 'action.applyImpulse':
+      return {
+        label: 'Apply Impulse',
+        description:
+          'Gives a target an INSTANT velocity kick (a one-shot impulse) — jumps, explosions, knockback, launches. Wire a Vector3 into Force (or set an axis + amount). Unlike Apply Force (a push applied over the frame), this is immediate. On a DYNAMIC body it adds to its momentum; on a CHARACTER it becomes a one-shot launch velocity. Target defaults to self.',
+      };
+    case 'action.setVelocity':
+      return {
+        label: 'Set Velocity',
+        description:
+          "Hard-sets a DYNAMIC physics body's linear velocity (units/sec) — wire a Vector3 into Velocity. Overrides momentum/gravity for that body this frame (it keeps coasting at that velocity after). Use for conveyor belts, projectiles, dashes, precise launches. No effect on character/kinematic/fixed bodies. Target defaults to self.",
+      };
+    case 'query.velocity':
+      return {
+        label: 'Get Velocity',
+        description:
+          "Outputs an actor's current velocity [x,y,z] (units/sec) — its speed and direction of travel. Works for dynamic physics bodies, characters, and vehicles. Wire into Make/➗ math for speed-based logic, or into a speedometer. Target defaults to self.",
+      };
+    case 'query.raycast':
+      return {
+        label: `Raycast ${Number(data.numberValue ?? 20)}u`,
+        description:
+          "Casts a ray from this object (chest height) and reports what it hits. Outputs: Hit (true if something solid is in the way), Hit Actor (a reference to the object hit — wire into Cast / Get Position / Set Object Var), Hit Point (world position of the impact), and Distance. Direction defaults to the object's forward; wire a Vector3 into Direction (e.g. Direction To Player) and a number into Distance to aim/range it. Use for ground checks, shooting/aim, AI sensing, interaction probes. Skips self, the dead, and projectiles.",
       };
     case 'query.findActorByTag':
       return {
@@ -707,11 +773,19 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.numberValue = 1;
   }
 
+  if (nodeKind === 'event.timer' && typeof normalized.numberValue !== 'number') {
+    normalized.numberValue = 1; // fire interval (seconds)
+  }
+
   if (nodeKind === 'query.findActorByBlueprint' || nodeKind === 'query.findActorByTag') {
     if (normalized.findMode !== 'nearest') normalized.findMode = 'first';
   }
   if (nodeKind === 'query.findActorByTag' && typeof normalized.objectKey !== 'string') {
     normalized.objectKey = 'tags';
+  }
+
+  if (nodeKind === 'query.raycast' && typeof normalized.numberValue !== 'number') {
+    normalized.numberValue = 20; // default ray length (units)
   }
 
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
@@ -790,6 +864,8 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     nodeKind === 'query.vehicleSpeed' ||
     nodeKind === 'query.findActorByBlueprint' ||
     nodeKind === 'query.findActorByTag' ||
+    nodeKind === 'query.raycast' ||
+    nodeKind === 'query.velocity' ||
     nodeKind === 'query.grounded' ||
     nodeKind === 'animator.getParam' ||
     nodeKind === 'animator.getState' ||

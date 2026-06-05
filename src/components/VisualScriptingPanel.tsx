@@ -19,12 +19,12 @@ export const nodeGroups: Array<{
   {
     title: 'Events',
     icon: Zap,
-    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Trigger Enter', 'Trigger Exit', 'Interact', 'On Receive Damage'],
+    nodes: ['Start', 'Update', 'Key Down', 'Key Up', 'Custom Event', 'Collision Enter', 'Collision Exit', 'Trigger Enter', 'Trigger Exit', 'Interact', 'On Receive Damage', 'Timer'],
   },
   {
     title: 'Logic',
     icon: GitBranch,
-    nodes: ['Branch', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop'],
+    nodes: ['Branch', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop', 'For Each Actor'],
   },
   {
     title: 'Math',
@@ -63,12 +63,12 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
     icon: Boxes,
-    nodes: ['Apply Force', 'Fracture'],
+    nodes: ['Apply Force', 'Apply Impulse', 'Set Velocity', 'Get Velocity', 'Fracture'],
   },
   {
     title: 'Persistence',
@@ -478,7 +478,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'value.boolean' ||
     node.data.nodeKind === 'logic.branch' ||
     node.data.nodeKind === 'animator.setBool' ||
-    node.data.nodeKind === 'action.setParticlesEmitting';
+    node.data.nodeKind === 'action.setParticlesEmitting' ||
+    node.data.nodeKind === 'action.setActive';
   const updatesNumberValue =
     node.data.nodeKind === 'value.number' ||
     node.data.nodeKind === 'math.add' ||
@@ -486,7 +487,10 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'math.lerp' ||
     node.data.nodeKind === 'logic.compare' ||
     node.data.nodeKind === 'animator.setFloat' ||
-    node.data.nodeKind === 'action.burstParticles';
+    node.data.nodeKind === 'action.burstParticles' ||
+    node.data.nodeKind === 'event.timer' ||
+    node.data.nodeKind === 'logic.cooldown' ||
+    node.data.nodeKind === 'logic.delay';
   const updatesParamName =
     node.data.nodeKind === 'animator.setFloat' ||
     node.data.nodeKind === 'animator.setBool' ||
@@ -515,6 +519,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const findsActorByBlueprint = node.data.nodeKind === 'query.findActorByBlueprint';
   const findsActorByTag = node.data.nodeKind === 'query.findActorByTag';
   const findsActor = findsActorByBlueprint || findsActorByTag;
+  const forEachActor = node.data.nodeKind === 'logic.forEachActor';
   const firesTargetedEvent = node.data.nodeKind === 'action.fireEvent';
   // Resolve the "context" blueprint behind a Get/Set Object Var's Target, so the Variable field becomes a TYPED
   // dropdown of THAT blueprint's declared instance variables (Unreal "Cast → As BP_X → pick its variable"):
@@ -531,7 +536,9 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   // A wired Target whose source is a Cast OR a Find Actor By Blueprint carries a known blueprint type, so the
   // downstream Variable picker auto-scopes to that blueprint's declared instance variables (Unreal "As BP_X").
   const wiredCastBlueprintId =
-    wiredSource?.data.nodeKind === 'logic.cast' || wiredSource?.data.nodeKind === 'query.findActorByBlueprint'
+    wiredSource?.data.nodeKind === 'logic.cast' ||
+    wiredSource?.data.nodeKind === 'query.findActorByBlueprint' ||
+    wiredSource?.data.nodeKind === 'logic.forEachActor'
       ? wiredSource.data.castBlueprintId
       : undefined;
   const isTargetWired = Boolean(targetWire);
@@ -548,7 +555,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
           : sceneObjects.find((o) => o.id === targetSel)?.script?.blueprintId);
   const ctxBlueprint = blueprints.find((b) => b.id === ctxBlueprintId);
   const ctxVars = ctxBlueprint?.variables ?? [];
-  const updatesOtherObject = node.data.nodeKind === 'event.collisionEnter' || node.data.nodeKind === 'event.triggerEnter';
+  const updatesOtherObject =
+    node.data.nodeKind === 'event.collisionEnter' ||
+    node.data.nodeKind === 'event.collisionExit' ||
+    node.data.nodeKind === 'event.triggerEnter' ||
+    node.data.nodeKind === 'event.triggerExit';
   // The transform getters (Get Position/Rotation/Scale) read an actor via the full sentinel set, like
   // Get Object Var — so they get their own richer Target dropdown ($player/$trigger/$cast resolve at runtime).
   const readsTransformTarget =
@@ -561,7 +572,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'action.burstParticles' ||
     node.data.nodeKind === 'action.setParticlesEmitting' ||
     node.data.nodeKind === 'action.spawnParticleSystem' ||
-    node.data.nodeKind === 'action.fractureObject';
+    node.data.nodeKind === 'action.fractureObject' ||
+    node.data.nodeKind === 'action.setActive';
   const selectedUIDoc = uiDocuments.find((doc) => doc.id === node.data.documentId);
   const eventName = node.data.eventName || 'CustomEvent';
   const selectedVariable = variables.find((variable) => variable.id === node.data.variableId);
@@ -630,7 +642,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 ? 'B fallback'
                 : node.data.nodeKind === 'math.lerp'
                   ? 'T fallback'
-                  : 'Number'}
+                  : node.data.nodeKind === 'event.timer'
+                    ? 'Interval (seconds)'
+                    : node.data.nodeKind === 'logic.cooldown' || node.data.nodeKind === 'logic.delay'
+                      ? 'Seconds'
+                      : 'Number'}
             </span>
             <input
               type="number"
@@ -1045,6 +1061,40 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               onChange={(event) => updateGraphNodeData(node.id, { message: event.target.value })}
             />
           </label>
+        )}
+
+        {forEachActor && (
+          <>
+            <label className="node-field">
+              <span>Of Blueprint (optional)</span>
+              <select
+                value={node.data.castBlueprintId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { castBlueprintId: event.target.value || undefined })}
+              >
+                <option value="">— none (use Tag) —</option>
+                {blueprints.map((bp) => (
+                  <option key={bp.id} value={bp.id}>
+                    {bp.name}
+                  </option>
+                ))}
+              </select>
+              <small className="node-hint">Iterate every actor running this blueprint. Leave blank to filter by Tag instead.</small>
+            </label>
+            {!node.data.castBlueprintId && (
+              <label className="node-field">
+                <span>Tag</span>
+                <input
+                  value={node.data.stringValue ?? ''}
+                  placeholder="e.g. Enemy, Pickup"
+                  onChange={(event) => updateGraphNodeData(node.id, { stringValue: event.target.value })}
+                />
+                <small className="node-hint">Iterate every actor with this Tag (from the object Inspector's Tags section).</small>
+              </label>
+            )}
+            <small className="node-hint">
+              Body fires once per matching actor; wire its value-out (the current Actor) into a Cast / Get Position / Set Object Var / Apply Damage Target.
+            </small>
+          </>
         )}
 
         {findsActor && (

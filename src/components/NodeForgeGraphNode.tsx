@@ -32,10 +32,12 @@ import {
   Repeat,
   Play,
   Plus,
+  Power,
   Radio,
   RefreshCw,
   RotateCw,
   Save,
+  ScanLine,
   Search,
   Send,
   Sigma,
@@ -90,6 +92,7 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'logic.or': 'boolean',
   'logic.not': 'boolean',
   'query.grounded': 'boolean',
+  'query.raycast': 'boolean',
   'value.vector3': 'vector3',
   'ai.playerLocation': 'vector3',
   'input.move': 'vector3',
@@ -102,6 +105,7 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'action.getPosition': 'vector3',
   'action.getRotation': 'vector3',
   'action.getScale': 'vector3',
+  'query.velocity': 'vector3',
 };
 
 const valueTypeLabels: Record<GraphValueType | 'any', string> = {
@@ -146,13 +150,16 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'event.keyUp': Keyboard,
   'event.custom': Radio,
   'event.collisionEnter': Crosshair,
+  'event.collisionExit': Crosshair,
   'event.triggerEnter': Crosshair,
   'event.receiveDamage': ShieldAlert,
+  'event.timer': Timer,
   'logic.branch': GitBranch,
   'logic.compare': Equal,
   'logic.and': Ampersand,
   'logic.or': GitMerge,
   'logic.forLoop': Repeat,
+  'logic.forEachActor': Repeat,
   'logic.not': Ban,
   'logic.doOnce': CircleDot,
   'logic.delay': Timer,
@@ -174,6 +181,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.getScale': Scaling,
   'query.findActorByBlueprint': Search,
   'query.findActorByTag': Search,
+  'query.raycast': ScanLine,
   'action.setPosition': Move,
   'action.setRotation': RotateCw,
   'action.setScale': Scaling,
@@ -189,6 +197,9 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.translate': Move,
   'action.rotate': RotateCw,
   'action.applyForce': Wind,
+  'action.applyImpulse': Zap,
+  'action.setVelocity': Gauge,
+  'query.velocity': Gauge,
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
   'action.cameraShake': Vibrate,
@@ -214,6 +225,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.setCamera': Crosshair,
   'action.spawnProjectile': Send,
   'action.setVisible': Sparkles,
+  'action.setActive': Power,
   'ai.distanceToPlayer': Crosshair,
   'ai.directionToPlayer': Move,
   'ai.playerLocation': Crosshair,
@@ -263,6 +275,8 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'action.getScale',
   'query.findActorByBlueprint',
   'query.findActorByTag',
+  'query.raycast',
+  'query.velocity',
   'value.number',
   'value.random',
   'value.string',
@@ -368,6 +382,11 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
     case 'action.getRotation':
     case 'action.getScale':
       return [{ id: 'target', label: 'Target' }];
+    case 'query.raycast':
+      return [
+        { id: 'direction', label: 'Direction' },
+        { id: 'distance', label: 'Distance' },
+      ];
     case 'logic.cast':
       return [{ id: 'object', label: 'Object' }];
     case 'logic.forLoop':
@@ -389,10 +408,15 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
     case 'action.rotate':
       return [{ id: 'amount', label: 'Amount' }];
     case 'action.applyForce':
+    case 'action.applyImpulse':
       return [
         { id: 'vector', label: 'Force' },
         { id: 'amount', label: 'Amount' },
       ];
+    case 'action.setVelocity':
+      return [{ id: 'vector', label: 'Velocity' }];
+    case 'query.velocity':
+      return [{ id: 'target', label: 'Target' }];
     case 'action.print':
       return [{ id: 'message', label: 'Message' }];
     case 'action.fireEvent':
@@ -416,6 +440,8 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       return [{ id: 'on', label: 'On' }];
     case 'action.setVisible':
       return [{ id: 'visible', label: 'Visible' }];
+    case 'action.setActive':
+      return [{ id: 'on', label: 'On' }];
     case 'action.burstParticles':
       return [{ id: 'count', label: 'Count' }];
     case 'action.setParticlesEmitting':
@@ -540,8 +566,10 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
 
   // Handles are absolutely positioned, so reserve height for the lowest pin/label.
   let pinBottom = valueInputs.length ? 82 + (valueInputs.length - 1) * 22 + 18 : 0;
-  if (data.nodeKind === 'logic.forLoop') pinBottom = Math.max(pinBottom, 124);
+  if (data.nodeKind === 'logic.forLoop' || data.nodeKind === 'logic.forEachActor') pinBottom = Math.max(pinBottom, 124);
   if (data.nodeKind === 'logic.cast') pinBottom = Math.max(pinBottom, 122);
+  // Raycast has 4 stacked outputs (Hit/Actor/Point/Distance).
+  if (data.nodeKind === 'query.raycast') pinBottom = Math.max(pinBottom, 168);
 
   return (
     <div
@@ -594,7 +622,7 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
         <Handle id="exec-out" className="node-port exec-port source" type="source" position={Position.Right} />
       )}
 
-      {isValueProducer && outType && (
+      {isValueProducer && outType && data.nodeKind !== 'query.raycast' && (
         <>
           <Handle
             id="value-out"
@@ -608,6 +636,30 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           </span>
         </>
       )}
+
+      {/* Raycast: four stacked outputs — Hit (bool), Actor (reference), Point (vec3), Distance (number). */}
+      {data.nodeKind === 'query.raycast' &&
+        (
+          [
+            { id: 'value-out', label: 'Hit', type: 'boolean' as const },
+            { id: 'actor', label: 'Actor', type: 'any' as const },
+            { id: 'point', label: 'Point', type: 'vector3' as const },
+            { id: 'distance', label: 'Distance', type: 'number' as const },
+          ]
+        ).map((out, index) => (
+          <span key={out.id}>
+            <Handle
+              id={out.id}
+              className={`node-port value-port value-${out.type} source`}
+              type="source"
+              position={Position.Right}
+              style={{ top: 82 + index * 22 }}
+            />
+            <span className="nfn-port-label out" style={{ top: 82 + index * 22 }}>
+              {out.label}
+            </span>
+          </span>
+        ))}
 
       {/* Cast is an exec gate that ALSO outputs the validated actor as a typed reference ("As <Blueprint>"),
           wired into a Get/Set Object Var's Target — the Unreal "Cast → As BP_X" pin. */}
@@ -635,6 +687,20 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
           <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: 84 }} />
           <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 100, fontSize: 10, opacity: 0.7 }}>
             Index
+          </span>
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 106 }} />
+        </>
+      )}
+
+      {/* For Each Actor: "Body" fires per matching actor (current actor on value-out); default exec-out = "Completed". */}
+      {data.nodeKind === 'logic.forEachActor' && (
+        <>
+          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 78, fontSize: 10, opacity: 0.7 }}>
+            Body
+          </span>
+          <Handle id="exec-body" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: 84 }} />
+          <span className="nfn-pin-label" style={{ position: 'absolute', right: 14, top: 100, fontSize: 10, opacity: 0.7 }}>
+            Actor
           </span>
           <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: 106 }} />
         </>

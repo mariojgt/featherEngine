@@ -219,8 +219,12 @@ export interface PhysicsFrameResult {
   triggers: PhysicsContactEvent[];
   /** Sensor/trigger pairs that ENDED this step (drives event.triggerExit — proximity prompts). */
   triggersExit: PhysicsContactEvent[];
+  /** Solid-contact pairs that ENDED this step (drives event.collisionExit). */
+  collisionsExit: PhysicsContactEvent[];
   /** Character-controller object ids that are standing on the ground this frame. */
   grounded: string[];
+  /** Post-step linear velocity of each DYNAMIC body, keyed by object id (drives the Get Velocity node). */
+  velocities: Map<string, Vector3Tuple>;
 }
 
 export interface PhysicsContactEvent {
@@ -496,6 +500,7 @@ class PhysicsRuntime {
     prevTransforms: Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>,
     impulses: Record<string, Vector3Tuple>,
     delta: number,
+    setVelocities: Record<string, Vector3Tuple> = {},
   ): PhysicsFrameResult {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     this.world.timestep = dt;
@@ -562,6 +567,9 @@ class PhysicsRuntime {
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
         const impulse = impulses[object.id];
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
+        // Set Velocity node: hard-set the body's linear velocity (overrides the transform-derived velocity).
+        const sv = setVelocities[object.id];
+        if (sv) body.setLinvel({ x: sv[0], y: sv[1], z: sv[2] }, true);
       } else if (type === 'kinematic') {
         body.setNextKinematicTranslation({ x: cur[0], y: cur[1], z: cur[2] });
         body.setNextKinematicRotation(quatFromEuler(curRot));
@@ -606,14 +614,17 @@ class PhysicsRuntime {
     const collisions: PhysicsContactEvent[] = [];
     const triggers: PhysicsContactEvent[] = [];
     const triggersExit: PhysicsContactEvent[] = [];
+    const collisionsExit: PhysicsContactEvent[] = [];
     this.events.drainCollisionEvents((h1, h2, started) => {
       const a = this.handleToId.get(h1);
       const b = this.handleToId.get(h2);
       if (!a || !b) return;
       const isTrigger = this.handleToTrigger.get(h1) || this.handleToTrigger.get(h2);
-      // Exit events (started=false) feed event.triggerExit for proximity prompts; we only track sensor exits.
+      // Exit events (started=false): sensors feed event.triggerExit (proximity prompts), solid contacts
+      // feed event.collisionExit (e.g. left the ground / stopped touching a wall).
       if (!started) {
-        if (isTrigger) triggersExit.push({ objectId: a, otherObjectId: b }, { objectId: b, otherObjectId: a });
+        const exitList = isTrigger ? triggersExit : collisionsExit;
+        exitList.push({ objectId: a, otherObjectId: b }, { objectId: b, otherObjectId: a });
         return;
       }
       const list = isTrigger ? triggers : collisions;
@@ -621,7 +632,12 @@ class PhysicsRuntime {
     });
 
     const transforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+    const velocities = new Map<string, Vector3Tuple>();
     for (const [id, entry] of this.entries) {
+      if (entry.body.isDynamic()) {
+        const lv = entry.body.linvel();
+        velocities.set(id, [lv.x, lv.y, lv.z]);
+      }
       const t = entry.body.translation();
       const q = entry.body.rotation();
       reuseQuat.set(q.x, q.y, q.z, q.w);
@@ -649,7 +665,7 @@ class PhysicsRuntime {
       if (t) t.rotation = object.transform.rotation;
     }
 
-    return { transforms, collisions, triggers, triggersExit, grounded: [...grounded] };
+    return { transforms, collisions, triggers, triggersExit, collisionsExit, grounded: [...grounded], velocities };
   }
 
   /**

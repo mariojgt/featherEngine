@@ -321,8 +321,12 @@ interface EditorState {
   /** Targeted custom events queued for delivery NEXT tick: objectId → event names to fire on that actor
    *  (Fire Event with a Target, one-frame-delayed like collisions). */
   runtimeActorEvents: Record<string, string[]>;
+  /** Per (object:node) seconds until the next fire of a Timer event node (decremented each tick). */
+  runtimeTimers: Record<string, number>;
   /** Object ids hidden at runtime by action.setVisible (e.g. holstered weapons). */
   runtimeHidden: string[];
+  /** Object ids deactivated at runtime by action.setActive (no render/script/physics/AI). */
+  runtimeDisabled: string[];
   /** GTA-style vehicle possession: vehicleObjectId → the player pawn id currently driving it (set by the
    *  Enter Vehicle node, cleared by Exit Vehicle). Lets the HUD follow the occupant pawn while driving. */
   runtimeVehicleOccupants: Record<string, string>;
@@ -350,6 +354,8 @@ interface EditorState {
   runtimeTriggers: PhysicsContactEvent[];
   /** Trigger-overlap pairs that ENDED in the previous physics step; drives event.triggerExit. */
   runtimeTriggersExit: PhysicsContactEvent[];
+  /** Solid-contact pairs that ENDED in the previous physics step; drives event.collisionExit. */
+  runtimeCollisionsExit: PhysicsContactEvent[];
   /** HP lost per object during the previous tick (any source: Apply Damage node, projectile, melee, contact,
    *  explosion); drives event.receiveDamage (one-frame delayed, like collisions) + its Damage value-out. */
   runtimeDamageEvents: Record<string, number>;
@@ -901,7 +907,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeCooldowns: {},
   runtimeDelays: {},
   runtimeActorEvents: {},
+  runtimeTimers: {},
   runtimeHidden: [],
+  runtimeDisabled: [],
   runtimeVehicleOccupants: {},
   runtimeInteractFocusId: null,
   runtimeHitMarker: 0,
@@ -911,6 +919,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeMovementMode: {},
   runtimeMontageRequests: {},
   runtimeCollisions: [],
+  runtimeCollisionsExit: [],
   runtimeTriggers: [],
   runtimeTriggersExit: [],
   runtimeDamageEvents: {},
@@ -4415,7 +4424,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeCooldowns: {},
       runtimeDelays: {},
       runtimeActorEvents: {},
+      runtimeTimers: {},
       runtimeHidden: [],
+      runtimeDisabled: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
@@ -4425,6 +4436,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
           runtimeCollisions: [],
+          runtimeCollisionsExit: [],
           runtimeTriggers: [],
           runtimeTriggersExit: [],
           runtimeDamageEvents: {},
@@ -4505,7 +4517,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeCooldowns: {},
       runtimeDelays: {},
       runtimeActorEvents: {},
+      runtimeTimers: {},
       runtimeHidden: [],
+      runtimeDisabled: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
@@ -4515,6 +4529,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
         runtimeCollisions: [],
+        runtimeCollisionsExit: [],
         runtimeTriggers: [],
         runtimeTriggersExit: [],
         runtimeDamageEvents: {},
@@ -4586,7 +4601,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const priorCollisionIndex = buildContactIndex(state.runtimeCollisions);
       const priorTriggerIndex = buildContactIndex(state.runtimeTriggers);
       const priorTriggerExitIndex = buildContactIndex(state.runtimeTriggersExit);
+      const priorCollisionExitIndex = buildContactIndex(state.runtimeCollisionsExit);
       const graphRuntimes = getGraphRuntimeMap(state.graphs);
+      // Timer events: advance each Timer node's countdown once per tick (NOT inside eventRootFires, which is
+      // a pure predicate called twice per tick). A timer that reaches 0 fires this frame and re-arms to its
+      // interval. firedTimers is read by eventRootFires; nextTimers is persisted.
+      const nextTimers: Record<string, number> = {};
+      const firedTimers = new Set<string>();
+      const timerStep = delta || 1 / 60;
+      for (const obj of activeObjects) {
+        if (!obj.script?.enabled || isRagdoll(obj.id)) continue;
+        const gr = graphRuntimes.get(obj.script.graphId);
+        if (!gr) continue;
+        for (const node of gr.eventRoots) {
+          if (node.data.nodeKind !== 'event.timer') continue;
+          const key = `${obj.id}:${node.id}`;
+          const interval = Math.max(0.05, Number(node.data.numberValue ?? 1));
+          let remaining = (state.runtimeTimers[key] ?? interval) - timerStep;
+          if (remaining <= 0) {
+            firedTimers.add(key);
+            remaining += interval;
+            if (remaining <= 0) remaining = interval; // huge frame / tiny interval: don't burst-fire
+          }
+          nextTimers[key] = remaining;
+        }
+      }
       const runtimeTime = state.runtimeTime + delta;
       const nextVelocities = { ...state.runtimeVelocities };
       // Per-frame Vehicle drive input set by the "Drive" blueprint node (throttle/steer/handbrake).
@@ -4628,8 +4667,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           { position: object.transform.position, rotation: object.transform.rotation },
         ]),
       );
-      // Impulses requested by action.applyForce this frame, applied to bodies post-step.
+      // Impulses requested by action.applyForce/applyImpulse this frame, applied to bodies post-step.
       const physicsImpulses: Record<string, Vector3Tuple> = {};
+      // Hard velocity sets requested by action.setVelocity this frame (dynamic bodies), applied in physics.frame.
+      const setVelocities: Record<string, Vector3Tuple> = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
       // Self writes still mutate the owner's tuples directly; these are merged into the object list before
       // the character/physics passes, so a teleported kinematic/fixed body follows (physics.frame reads the
@@ -4695,6 +4736,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const playerId = activeObjects.find((o) => o.character?.enabled && o.character.cameraFollow)?.id;
       // Objects hidden by action.setVisible — carried across frames so weapons stay holstered.
       const nextHidden = new Set<string>(state.runtimeHidden);
+      // Deactivated objects (Set Active off): no render, no script, no physics body, ignored by AI. Persisted
+      // across frames; toggled by the action.setActive node. Disabled ids are merged into runtimeHidden on output.
+      const nextDisabled = new Set<string>(state.runtimeDisabled);
       // GTA-style vehicle possession (Enter/Exit Vehicle nodes). `nextOccupants` carries which pawn drives
       // which car across frames; the request arrays are this-frame edges the movedObjects pass applies as
       // component-flag flips (camera/HUD/vehicle-pass all read those flags, so control hands off + reverts on Stop).
@@ -4791,12 +4835,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // identical for every `ai.hasLineOfSight` evaluation this frame, so build it once here instead
       // of rescanning all objects inside each enemy's evaluation.
       const aiLineOfSightExclude = new Set<string>();
-      for (const o of activeObjects) if (o.projectile || isRagdoll(o.id)) aiLineOfSightExclude.add(o.id);
+      for (const o of activeObjects) if (o.projectile || isRagdoll(o.id) || nextDisabled.has(o.id)) aiLineOfSightExclude.add(o.id);
 
       // Per-tick memo for "Find Actor" nodes, keyed by `${ownerId}:${nodeId}`. A find is an O(n) scan;
       // caching the resolved id per (owner,node) collapses repeat evaluations within one frame to one scan
       // (e.g. a Cast + two Get Object Vars all reading the same Find Actor pin). '' = computed, none found.
       const findActorCache = new Map<string, string>();
+
+      // Per-tick memo for Raycast nodes (keyed `${ownerId}:${nodeId}`): one physics ray serves all four of
+      // a Raycast node's outputs (Hit/Actor/Point/Distance) within the frame instead of casting per pin.
+      const raycastCache = new Map<string, { hit: boolean; actor: string | undefined; point: Vector3Tuple; distance: number }>();
 
       // Whether a graph event-root fires for `objectId` this frame. Hoisted out of the per-object
       // loop (defined once per tick, not per scripted object) and shared by BOTH the early-skip below
@@ -4821,6 +4869,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
           case 'event.collisionEnter':
             return contactMatches(priorCollisionIndex, objectId, node.data.otherObjectId);
+          case 'event.collisionExit':
+            return contactMatches(priorCollisionExitIndex, objectId, node.data.otherObjectId);
           case 'event.triggerEnter':
             return contactMatches(priorTriggerIndex, objectId, node.data.otherObjectId);
           case 'event.triggerExit':
@@ -4829,6 +4879,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return interactedThisFrame.has(objectId);
           case 'event.receiveDamage':
             return (priorDamage[objectId] ?? 0) > 0;
+          case 'event.timer':
+            return firedTimers.has(`${objectId}:${node.id}`);
           default:
             return false;
         }
@@ -4838,6 +4890,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // in the post-pass below, so here we only collect scripted motion + side effects.
       let mappedObjects = activeObjects.map((object) => {
           if (destroyedIds.has(object.id)) return object;
+          // A deactivated object (Set Active off) runs no script.
+          if (nextDisabled.has(object.id)) return object;
           // A limp (ragdolling) body doesn't run its scripts — so a dead enemy stops chasing/shooting.
           if (isRagdoll(object.id)) return object;
           // Bail before allocating anything for the common case: scriptless scenery (most of a
@@ -4874,10 +4928,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (!edge) return fallback;
             valueVisited.clear();
             valueVisited.add(node.id);
-            return evaluateValue(edge.source, valueVisited);
+            // Pass which OUTPUT pin of the source we're reading, so multi-output value nodes (Raycast:
+            // Hit/Actor/Point/Distance) can return a different value per handle.
+            return evaluateValue(edge.source, valueVisited, edge.sourceHandle ?? 'value-out');
           }
 
-          function evaluateValue(nodeId: string, visited: Set<string>): GraphValue | undefined {
+          function evaluateValue(nodeId: string, visited: Set<string>, sourceHandle = 'value-out'): GraphValue | undefined {
             if (visited.has(nodeId)) return undefined;
             visited.add(nodeId);
             const node = runtime.nodesById.get(nodeId);
@@ -4899,6 +4955,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             // For Loop's value-out = the current 0-based iteration index (0 when not iterating).
             if (node.data.nodeKind === 'logic.forLoop') return loopIndex.get(nodeId) ?? 0;
+
+            // For Each Actor's value-out = the current iteration's actor reference (a wired Body chain reads it).
+            if (node.data.nodeKind === 'logic.forEachActor') return forEachCurrent.get(nodeId);
 
             // On Receive Damage's value-out = how much HP this object lost on the hit that fired the event.
             if (node.data.nodeKind === 'event.receiveDamage') return priorDamage[object.id] ?? 0;
@@ -4978,7 +5037,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               let best: string | undefined;
               let bestDist = Infinity;
               for (const candidate of activeObjects) {
-                if (candidate.id === object.id || destroyedIds.has(candidate.id)) continue;
+                if (candidate.id === object.id || destroyedIds.has(candidate.id) || nextDisabled.has(candidate.id)) continue;
                 if (candidate.projectile || candidate.effect || isRagdoll(candidate.id)) continue;
                 let match: boolean;
                 if (byTag) {
@@ -5018,6 +5077,55 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
               findActorCache.set(cacheKey, best ?? '');
               return best;
+            }
+
+            // Raycast: one ray, four outputs (selected by sourceHandle). Origin = owner chest; direction =
+            // a wired Vector3 or the owner's forward; length = wired number or the node's distance field.
+            if (node.data.nodeKind === 'query.raycast') {
+              const cacheKey = `${object.id}:${nodeId}`;
+              let result = raycastCache.get(cacheKey);
+              if (!result) {
+                const maxDistance = Math.max(0.01, toNumber(valueInput(node, 'distance', Number(node.data.numberValue ?? 20))));
+                const dirInput = valueInput(node, 'direction');
+                let dir: Vector3Tuple;
+                if (Array.isArray(dirInput) && (dirInput[0] || dirInput[1] || dirInput[2])) {
+                  dir = [Number(dirInput[0]) || 0, Number(dirInput[1]) || 0, Number(dirInput[2]) || 0];
+                } else {
+                  const facing = rotation[1] - (object.character?.modelYawOffset ?? 0);
+                  dir = [Math.sin(facing), 0, Math.cos(facing)];
+                }
+                const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+                const nd: Vector3Tuple = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
+                const origin: Vector3Tuple = [position[0], position[1] + 0.9, position[2]];
+                const phys = getActivePhysics();
+                let hitRes: { objectId: string; distance: number } | null = null;
+                if (phys) {
+                  const hadSelf = aiLineOfSightExclude.has(object.id);
+                  if (!hadSelf) aiLineOfSightExclude.add(object.id);
+                  hitRes = phys.castRay(origin, nd, maxDistance, aiLineOfSightExclude);
+                  if (!hadSelf) aiLineOfSightExclude.delete(object.id);
+                }
+                const dist = hitRes ? hitRes.distance : maxDistance;
+                result = {
+                  hit: Boolean(hitRes),
+                  actor: hitRes?.objectId,
+                  point: [origin[0] + nd[0] * dist, origin[1] + nd[1] * dist, origin[2] + nd[2] * dist],
+                  distance: dist,
+                };
+                raycastCache.set(cacheKey, result);
+              }
+              if (sourceHandle === 'actor') return result.actor;
+              if (sourceHandle === 'point') return [result.point[0], result.point[1], result.point[2]] as Vector3Tuple;
+              if (sourceHandle === 'distance') return result.distance;
+              return result.hit; // 'value-out' = Hit (bool)
+            }
+
+            // Get Velocity: an actor's current velocity [x,y,z]. Tracked in nextVelocities for dynamic bodies
+            // (written back from the physics step), characters, and vehicles.
+            if (node.data.nodeKind === 'query.velocity') {
+              const tid = objectVarTarget(node);
+              const v = nextVelocities[tid];
+              return (v ? [v[0], v[1], v[2]] : [0, 0, 0]) as Vector3Tuple;
             }
 
             if (node.data.nodeKind === 'ai.distanceToPlayer') {
@@ -5281,6 +5389,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return;
             }
 
+            // For Each Actor: fire the "Body" output once per actor matching a Blueprint (castBlueprintId) or
+            // a Tag (stringValue) — the iterating form of "Get All Actors Of Class". The current actor is on
+            // the value-out. Skips self/dead/disabled/projectiles. Then fires "Completed". (Snapshot the matches
+            // first so Body logic that destroys/spawns can't disturb the iteration.)
+            if (node.data.nodeKind === 'logic.forEachActor') {
+              const byBlueprint = Boolean(node.data.castBlueprintId);
+              const tag = typeof node.data.stringValue === 'string' ? node.data.stringValue.trim() : '';
+              const key = node.data.objectKey || 'tags';
+              const matches: string[] = [];
+              if (byBlueprint || tag) {
+                for (const c of activeObjects) {
+                  if (c.id === object.id || destroyedIds.has(c.id) || nextDisabled.has(c.id)) continue;
+                  if (c.projectile || c.effect || isRagdoll(c.id)) continue;
+                  let hit: boolean;
+                  if (byBlueprint) {
+                    hit = c.script?.blueprintId === node.data.castBlueprintId;
+                  } else {
+                    const listed = c.variables?.[key];
+                    const sv = listed === undefined ? undefined : String(listed);
+                    hit =
+                      (sv !== undefined && (sv === tag || sv.split(',').some((t) => t.trim() === tag))) ||
+                      (() => {
+                        const flag = c.variables?.[tag];
+                        return flag !== undefined && flag !== false && flag !== 0 && flag !== '';
+                      })();
+                  }
+                  if (hit) matches.push(c.id);
+                }
+              }
+              const bodyTargets = runtime.outgoingByHandle.get(nodeId)?.get('exec-body') ?? [];
+              for (const actorId of matches) {
+                forEachCurrent.set(nodeId, actorId);
+                bodyTargets.forEach((targetId) => executeFrom(targetId, new Set([nodeId])));
+              }
+              forEachCurrent.delete(nodeId);
+              (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              return;
+            }
+
             const shouldContinue = applyAction(node, visited);
             if (shouldContinue !== false) {
               (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
@@ -5289,6 +5436,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
           // Current 0-based index of each active For Loop on this owner, read by the loop's value-out.
           const loopIndex = new Map<string, number>();
+          // Current actor reference of each active For Each Actor on this owner, read by its value-out.
+          const forEachCurrent = new Map<string, string>();
 
           // The most recent successful Cast target on THIS owner this execution — resolved by the "$cast"
           // sentinel so downstream Get/Set Object Var act on the cast actor's instance variables.
@@ -5482,6 +5631,38 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 // Accumulate as an impulse (force over the frame); Rapier divides by mass on apply.
                 const accrued = physicsImpulses[forceTargetId] ?? [0, 0, 0];
                 physicsImpulses[forceTargetId] = [accrued[0] + force[0] * delta, accrued[1] + force[1] * delta, accrued[2] + force[2] * delta];
+              }
+            }
+
+            // Apply Impulse: an INSTANT velocity kick (no *delta) — same target handling as Apply Force.
+            if (node.data.nodeKind === 'action.applyImpulse') {
+              const impVector = valueInput(node, 'vector');
+              const amount = toNumber(valueInput(node, 'amount', Number(node.data.amount ?? 8)));
+              const imp = Array.isArray(impVector)
+                ? (impVector as Vector3Tuple)
+                : ([0, 0, 0].map((value, index) => (index === axisIndex(node.data.axis) ? amount : value)) as Vector3Tuple);
+              const impTargetId = resolveTarget(node.data.targetObjectId) || object.id;
+              const impTarget = activeObjectById.get(impTargetId);
+              if (impTarget?.character?.enabled) {
+                const prevLaunch = characterLaunch[impTargetId] ?? [0, 0, 0];
+                characterLaunch[impTargetId] = [prevLaunch[0] + imp[0], Math.max(prevLaunch[1], imp[1]), prevLaunch[2] + imp[2]];
+              } else if (impTarget?.physics?.enabled && impTarget.physics.bodyType === 'dynamic') {
+                const accrued = physicsImpulses[impTargetId] ?? [0, 0, 0];
+                physicsImpulses[impTargetId] = [accrued[0] + imp[0], accrued[1] + imp[1], accrued[2] + imp[2]];
+              }
+            }
+
+            // Set Velocity: hard-set a DYNAMIC body's linear velocity (physics.frame applies it via setLinvel).
+            if (node.data.nodeKind === 'action.setVelocity') {
+              const velVector = valueInput(node, 'vector');
+              if (Array.isArray(velVector)) {
+                const velTargetId = resolveTarget(node.data.targetObjectId) || object.id;
+                const velTarget = activeObjectById.get(velTargetId);
+                if (velTarget?.physics?.enabled && velTarget.physics.bodyType === 'dynamic') {
+                  const v: Vector3Tuple = [Number(velVector[0]) || 0, Number(velVector[1]) || 0, Number(velVector[2]) || 0];
+                  setVelocities[velTargetId] = v;
+                  nextVelocities[velTargetId] = v; // so Get Velocity reflects it the same frame
+                }
               }
             }
 
@@ -5827,6 +6008,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const visible = toBoolean(valueInput(node, 'visible', node.data.visible ?? true));
               if (visible) nextHidden.delete(target);
               else nextHidden.add(target);
+            }
+
+            if (node.data.nodeKind === 'action.setActive') {
+              // Fully (de)activate the owner (or Target): off = no render, no script, no physics body, ignored
+              // by AI; on = back to normal. Distinct from Set Visible (which only hides the mesh).
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const on = toBoolean(valueInput(node, 'on', node.data.booleanValue ?? true));
+              if (on) nextDisabled.delete(target);
+              else nextDisabled.add(target);
             }
 
             if (node.data.nodeKind === 'action.enterVehicle') {
@@ -6354,6 +6544,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
 
       const movedObjects = mappedObjects.map((object) => {
+        // A deactivated object skips the character/vehicle movement passes entirely.
+        if (nextDisabled.has(object.id)) return object;
         // Vehicle possession: on the enter/exit edge, flip the pawn + car component flags so the follow
         // camera + HUD + vehicle pass switch control (these all key off character/vehicle enabled+cameraFollow).
         if (enterPawns.has(object.id)) {
@@ -6655,6 +6847,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let collisions: PhysicsContactEvent[] = [];
       let triggers: PhysicsContactEvent[] = [];
       let triggersExit: PhysicsContactEvent[] = [];
+      let collisionsExit: PhysicsContactEvent[] = [];
       let groundedIds: string[] = [];
       let resolvedObjects = movedObjects;
       // Fracture chunks carry a one-shot outward kick; apply it the frame their body first exists, then clear it.
@@ -6668,11 +6861,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       const physics = getActivePhysics();
       if (physics) {
-        const result = physics.frame(movedObjects, prevTransforms, physicsImpulses, delta);
+        // Deactivated objects are excluded from the physics objects list, so syncBodies removes their
+        // bodies (no collision) until re-enabled.
+        const physicsObjects = nextDisabled.size ? movedObjects.filter((o) => !nextDisabled.has(o.id)) : movedObjects;
+        const result = physics.frame(physicsObjects, prevTransforms, physicsImpulses, delta, setVelocities);
         collisions = result.collisions;
         triggers = result.triggers;
         triggersExit = result.triggersExit;
+        collisionsExit = result.collisionsExit;
         groundedIds = result.grounded;
+        // Publish dynamic bodies' post-step velocity so Get Velocity (and vehicleSpeed) read the real value.
+        for (const [id, v] of result.velocities) nextVelocities[id] = v;
         const groundedSet = new Set(groundedIds);
         resolvedObjects = movedObjects.map((object) => {
           // While ragdolling the limp body owns the transform (set from the pelvis above) — don't let
@@ -7398,7 +7597,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeCooldowns: {},
             runtimeDelays: {},
             runtimeActorEvents: {},
+            runtimeTimers: {},
             runtimeHidden: [],
+      runtimeDisabled: [],
   runtimeVehicleOccupants: {},
             runtimeInteractFocusId: null,
             runtimeEnemyCooldown: {},
@@ -7406,6 +7607,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeMovementMode: {},
             runtimeMontageRequests: {},
             runtimeCollisions: [],
+            runtimeCollisionsExit: [],
             runtimeTriggers: [],
             runtimeTriggersExit: [],
             runtimeDamageEvents: {},
@@ -7448,7 +7650,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCooldowns: nextCooldowns,
         runtimeDelays: nextDelays,
         runtimeActorEvents: nextActorEvents,
-        runtimeHidden: [...nextHidden],
+        runtimeTimers: nextTimers,
+        // Disabled objects are also hidden (no render) via the existing hidden path.
+        runtimeHidden: [...new Set([...nextHidden, ...nextDisabled])],
+        runtimeDisabled: [...nextDisabled],
         runtimeVehicleOccupants: nextOccupants,
         runtimeInteractFocusId: interactFocusId,
         runtimeHitMarker: hitMarker,
@@ -7458,6 +7663,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeMovementMode: movementModeNow,
         runtimeMontageRequests: {},
         runtimeCollisions: collisions,
+        runtimeCollisionsExit: collisionsExit,
         runtimeTriggers: triggers,
         runtimeTriggersExit: triggersExit,
         runtimeDamageEvents: damageThisFrame,
@@ -7679,7 +7885,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeCooldowns: {},
       runtimeDelays: {},
       runtimeActorEvents: {},
+      runtimeTimers: {},
       runtimeHidden: [],
+      runtimeDisabled: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
@@ -7689,6 +7897,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeMovementMode: {},
       runtimeMontageRequests: {},
         runtimeCollisions: [],
+        runtimeCollisionsExit: [],
         runtimeDamageEvents: {},
         runtimeSoundQueue: [],
         runtimeVehicleSound: null,
