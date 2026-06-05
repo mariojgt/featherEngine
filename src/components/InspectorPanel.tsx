@@ -845,6 +845,9 @@ function VehicleSection({
           {num('Turn Rate', 'turnRate', 0.05, 2)}
           {num('Grip', 'gripFactor', 0.05, 0.9)}
           {num('Handbrake Grip', 'handbrakeGrip', 0.02, 0.28)}
+          {num('Weight Transfer', 'weightTransfer', 0.05, 0.42)}
+          {num('Traction Control', 'tractionControl', 0.05, 0.35)}
+          {num('Downforce', 'downforce', 0.05, 0.18)}
 
           <h4 className="inspector-subhead">Suspension (feel)</h4>
           {num('Body Roll', 'bodyRoll', 0.01, 0.05)}
@@ -852,6 +855,7 @@ function VehicleSection({
           {num('Stiffness', 'suspensionStiffness', 0.02, 0.18)}
           {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
           <p className="field-hint">
+            Weight Transfer lowers grip under hard load; Traction Control trims throttle during wheelspin; Downforce plants fast cars.
             Body Roll = lean into turns; Body Pitch = squat/dive under accel/brake; Stiffness = how fast it settles.
             Wheel Radius sets how fast the wheels spin. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length} · tire marks: {v.tireMarkIds.length}.
           </p>
@@ -979,6 +983,40 @@ function CharacterSection({
               onChange={(event) => onChange({ modelYawOffset: event.target.checked ? Math.PI : 0 })}
             />
           </label>
+
+          <h4 className="inspector-subhead">Traversal</h4>
+          <label className="field-row">
+            <span>Turn In Place</span>
+            <input
+              type="checkbox"
+              checked={Boolean(cc.turnInPlace)}
+              onChange={(event) => onChange({ turnInPlace: event.target.checked })}
+            />
+          </label>
+          {cc.turnInPlace && (
+            <>
+              {num('Turn Threshold', 'turnInPlaceThreshold', 0.05, 0.45)}
+              {num('Turn In Place Speed', 'turnInPlaceSpeed', 0.5, cc.turnSpeed)}
+            </>
+          )}
+          <label className="field-row">
+            <span>Mantle / Vault</span>
+            <input
+              type="checkbox"
+              checked={Boolean(cc.mantleEnabled)}
+              onChange={(event) => onChange({ mantleEnabled: event.target.checked })}
+            />
+          </label>
+          {cc.mantleEnabled && (
+            <>
+              <KeyBinding label="Mantle Key" value={cc.keyMantle || cc.keyJump} onChange={(keyMantle) => onChange({ keyMantle })} />
+              {num('Mantle Range', 'mantleRange', 0.05, 1.35)}
+              {num('Mantle Max Height', 'mantleMaxHeight', 0.05, 1.45)}
+              {num('Vault Max Height', 'vaultMaxHeight', 0.05, 0.9)}
+              {num('Mantle Duration', 'mantleDuration', 0.02, 0.38)}
+              <p className="field-hint">Tag obstacles with vaultable or mantleable instance variables so the controller knows they are traversal targets.</p>
+            </>
+          )}
 
           <h4 className="inspector-subhead">Roll / Dodge</h4>
           {num('Roll Speed', 'rollSpeed')}

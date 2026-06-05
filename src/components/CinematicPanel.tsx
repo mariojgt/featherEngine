@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, FolderOpen, Magnet, Pause, Play, Plus, RotateCcw, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useProjectStore } from '../store/projectStore';
 import { editorCameraPose } from '../three/EditorCamera';
 import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicTransformKeyframe, MaterialOverrides, SceneObjectKind, Vector3Tuple } from '../types';
 import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
@@ -153,6 +154,39 @@ export function CinematicPanel() {
   // save dialog returns an absolute path); on web we set it to null since the browser controls
   // the download location.
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
+  const projectDir = useProjectStore((state) => state.projectDir);
+
+  /**
+   * Where do exports go? If we're on desktop with a saved project folder, drop the file into
+   * `<projectDir>/cinematics/` automatically (no dialog). Otherwise (web, or unsaved demo) we use
+   * the platform's Save-As dialog. Returns the absolute path of the written file, or null if the
+   * user cancelled the dialog.
+   */
+  const saveCinematicExport = async (
+    fileName: string,
+    bytes: Uint8Array,
+    mimeType: string,
+    extension: 'webm' | 'mp4',
+  ): Promise<string | null> => {
+    const platform = await getPlatform();
+    if (platform.isDesktop && platform.saveInProject && projectDir && projectDir !== 'web') {
+      return platform.saveInProject(projectDir, 'cinematics', fileName, bytes);
+    }
+    return platform.saveBinary(fileName, bytes, {
+      title: 'Save cinematic recording',
+      mimeType,
+      filters: [{ name: extension === 'mp4' ? 'MP4 video' : 'WebM video', extensions: [extension] }],
+    });
+  };
+
+  // Build a `<basename>-YYYYMMDD-HHMMSS.<ext>` filename so multiple takes don't overwrite each
+  // other when auto-saving into the project folder.
+  const buildExportFileName = (baseName: string, extension: 'webm' | 'mp4'): string => {
+    const now = new Date();
+    const pad = (n: number) => `${n}`.padStart(2, '0');
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    return `${baseName}-${stamp}.${extension}`;
+  };
 
   const cinematics = scene?.cinematics ?? [];
   const visibleCinematics = useMemo(() => {
@@ -341,21 +375,19 @@ export function CinematicPanel() {
     const blob = await captureCinematicWebM('Recording…');
     if (!blob) return;
     const baseName = active.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'cinematic';
-    const platform = await getPlatform();
-    const dest = await platform.saveBinary(`${baseName}.webm`, new Uint8Array(await blob.arrayBuffer()), {
-      title: 'Save cinematic recording',
-      mimeType: 'video/webm',
-      filters: [{ name: 'WebM video', extensions: ['webm'] }],
-    });
+    const fileName = buildExportFileName(baseName, 'webm');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const dest = await saveCinematicExport(fileName, bytes, 'video/webm', 'webm');
     if (!dest) {
       setMovieStatus('');
       return;
     }
     // Only desktop returns an absolute path we can reveal. On web the dialog returns a status
     // string like "downloaded as …" — keep the toast but don't surface a non-functional button.
+    const platform = await getPlatform();
     if (platform.isDesktop && platform.revealFile) setLastExportPath(dest);
     setMovieStatus(`Saved WebM → ${dest}`);
-    window.setTimeout(() => setMovieStatus(''), 3200);
+    window.setTimeout(() => setMovieStatus(''), 3600);
   };
 
   /**
@@ -397,19 +429,16 @@ export function CinematicPanel() {
       ]);
       const data = (await ffmpeg.readFile('output.mp4')) as Uint8Array;
       const baseName = active.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'cinematic';
-      const platform = await getPlatform();
-      const dest = await platform.saveBinary(`${baseName}.mp4`, data, {
-        title: 'Save MP4 export',
-        mimeType: 'video/mp4',
-        filters: [{ name: 'MP4 video', extensions: ['mp4'] }],
-      });
+      const fileName = buildExportFileName(baseName, 'mp4');
+      const dest = await saveCinematicExport(fileName, data, 'video/mp4', 'mp4');
       if (!dest) {
         setMovieStatus('');
         return;
       }
+      const platform = await getPlatform();
       if (platform.isDesktop && platform.revealFile) setLastExportPath(dest);
       setMovieStatus(`Saved MP4 → ${dest}`);
-      window.setTimeout(() => setMovieStatus(''), 3600);
+      window.setTimeout(() => setMovieStatus(''), 4200);
     } catch (err) {
       console.error('MP4 export failed', err);
       setMovieStatus('MP4 export failed');

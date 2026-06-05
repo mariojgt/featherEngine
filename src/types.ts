@@ -627,6 +627,8 @@ export type AnimatorParamSource =
   | 'crawling'
   | 'swimming'
   | 'climbing'
+  | 'mantling'
+  | 'turning'
   | 'moveX'
   | 'moveY'
   | 'variable';
@@ -751,6 +753,24 @@ export interface CharacterControllerComponent {
   airControl?: number;
   /** How fast (radians/sec) the mesh turns to face its movement direction. */
   turnSpeed: number;
+  /** Rotate the idle third-person body toward the mouse-look camera so starting/stopping feels authored. */
+  turnInPlace?: boolean;
+  /** Yaw difference (radians) before idle turn-in-place starts. Default 0.45. */
+  turnInPlaceThreshold?: number;
+  /** Turn-in-place rotation speed (radians/sec). Defaults to turnSpeed. */
+  turnInPlaceSpeed?: number;
+  /** Enable Space-to-vault/mantle against tagged obstacles (`vaultable` / `mantleable`). */
+  mantleEnabled?: boolean;
+  /** Optional dedicated mantle key. If omitted, jump starts a mantle/vault when a tagged obstacle is ahead. */
+  keyMantle?: string;
+  /** How far ahead the controller searches for a mantle/vault target. Default 1.35. */
+  mantleRange?: number;
+  /** Tallest obstacle top the controller can mantle onto. Default 1.45. */
+  mantleMaxHeight?: number;
+  /** Low obstacles at or below this height are treated as vaults. Default 0.9. */
+  vaultMaxHeight?: number;
+  /** Seconds for the authored mantle/vault arc. Default 0.38. */
+  mantleDuration?: number;
   /**
    * Extra yaw (radians) added when facing movement, to match the model's authored forward axis.
    * 0 for models whose forward is +Z (e.g. Quaternius); Math.PI for -Z-forward models.
@@ -1004,7 +1024,9 @@ export interface ViewModelComponent {
  * During Play the runtime's vehicle pass reads WASD (W throttle / S brake+reverse / A,D steer, Space
  * handbrake), integrates a signed forward speed, steers the yaw (scaled by speed), and drives the body's
  * horizontal motion; VERTICAL motion is left to the Rapier dynamic body so the car rides terrain, climbs
- * ramps and bumps props for free. Suspension "feel" is visual: the chassis squats/dives (bodyPitch) and
+ * ramps and bumps props for free. The handling model keeps forward speed, lateral slip, load transfer,
+ * traction control and optional aero downforce separate so cars slide/recover believably without needing a
+ * full soft-body vehicle solver. Suspension "feel" is visual: the chassis squats/dives (bodyPitch) and
  * leans into turns (bodyRoll), and the wheel child objects spin (∝ speed) + the front pair steers. A
  * follow camera (shared with the character follow camera) trails the car with mouse orbit.
  */
@@ -1032,6 +1054,12 @@ export interface VehicleComponent {
   gripFactor: number;
   /** Grip while the handbrake is held (lower = looser, for drift feel). */
   handbrakeGrip: number;
+  /** How much accel/brake/cornering load temporarily reduces tire grip (0 = flat arcade, 1 = weighty). */
+  weightTransfer: number;
+  /** How strongly throttle is cut when the tires are already slipping (0 = off, 1 = strong assist). */
+  tractionControl: number;
+  /** Speed-squared grip/downward force for planted high-speed handling. 0 = none. */
+  downforce: number;
   // --- Suspension / feel (visual) ---
   /** Wheel suspension travel (world units) — reserved for ride-height bob. */
   suspensionTravel: number;

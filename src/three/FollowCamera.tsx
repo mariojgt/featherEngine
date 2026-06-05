@@ -51,6 +51,16 @@ function belongsToObject(object3d: THREE.Object3D | null, objectId: string): boo
   return false;
 }
 
+function sceneObjectIdFor(object3d: THREE.Object3D | null): string | undefined {
+  let node: THREE.Object3D | null = object3d;
+  while (node) {
+    const id = node.userData?.nfObjectId;
+    if (typeof id === 'string') return id;
+    node = node.parent;
+  }
+  return undefined;
+}
+
 /** The first active-scene object whose character OR vehicle controller wants a follow camera. */
 export function useFollowTarget(): SceneObject | undefined {
   const objects = useEditorStore(selectActiveObjects);
@@ -192,6 +202,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   const scene = useThree((state) => state.scene);
   // Spring-arm collision raycaster + smoothed aim-down-sights blend (0 = hip, 1 = aiming).
   const springRay = useRef(new THREE.Raycaster());
+  const springArmDistance = useRef<number | undefined>(undefined);
   const adsBlend = useRef(0);
   // Camera-polish state: smoothed sprint-FOV boost, a velocity-derived look-ahead offset, and the
   // previous target position used to estimate that velocity frame-to-frame.
@@ -328,6 +339,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       smoothedTarget.current.copy(rawTarget.current);
       smoothedVelocity.current.set(0, 0, 0);
       smoothedTargetId.current = target.id;
+      springArmDistance.current = undefined;
     } else {
       const horizontalT = smooth(target.vehicle?.enabled ? 24 : 18);
       const verticalT = smooth(target.vehicle?.enabled ? 18 : 6);
@@ -416,6 +428,8 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       springRay.current.set(pivot, toCam);
       springRay.current.far = wanted;
       const hits = springRay.current.intersectObjects(scene.children, true);
+      const objectById = new Map(objects.map((object) => [object.id, object]));
+      const hiddenNow = new Set(useEditorStore.getState().runtimeHidden);
       // Ignore the followed character's own meshes — otherwise the spring arm collides with the very
       // body it's trailing and snaps the camera inside it, filling the screen (a black view) — AND ignore
       // the terrain/foliage (tagged userData.nfGround), so the camera never pulls in on the ground or grass.
@@ -423,10 +437,26 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
         for (let o = obj; o; o = o.parent) if (o.userData?.nfGround) return true;
         return false;
       };
-      const wall = hits.find((h) => h.distance > 0.6 && !belongsToObject(h.object, target.id) && !isGround(h.object));
-      if (wall) {
-        desired.current.copy(pivot).addScaledVector(toCam, Math.max(0.6, wall.distance - 0.3));
-      }
+      const isCameraBlocker = (hit: THREE.Intersection) => {
+        if (hit.distance <= 0.6 || belongsToObject(hit.object, target.id) || isGround(hit.object)) return false;
+        const id = sceneObjectIdFor(hit.object);
+        if (!id || hiddenNow.has(id)) return false;
+        const object = objectById.get(id);
+        if (!object) return false;
+        if (object.viewModel?.ownerObjectId === target.id) return false;
+        if (object.kind === 'camera' || object.kind === 'empty' || object.kind === 'light' || object.projectile || object.effect) return false;
+        if (object.renderer?.enabled === false || object.renderer?.hideInPlay || object.physics?.isTrigger) return false;
+        return Boolean(object.physics?.enabled || object.terrain?.enabled);
+      };
+      const wall = hits.find(isCameraBlocker);
+      const targetDistance = wall ? Math.max(0.6, wall.distance - 0.28) : wanted;
+      const currentDistance = springArmDistance.current ?? targetDistance;
+      springArmDistance.current = THREE.MathUtils.lerp(
+        currentDistance,
+        targetDistance,
+        smooth(targetDistance < currentDistance ? 24 : 9),
+      );
+      desired.current.copy(pivot).addScaledVector(toCam, springArmDistance.current);
     }
 
     // Framerate-independent follow lag (paired with the velocity feed-forward above, so it eases transients

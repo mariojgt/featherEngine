@@ -187,6 +187,14 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
     deceleration: 24,
     airControl: 0.45,
     turnSpeed: 8, // gentle - the body eases to face new headings instead of whipping around
+    turnInPlace: true,
+    turnInPlaceThreshold: 0.38,
+    turnInPlaceSpeed: 9,
+    mantleEnabled: true,
+    mantleRange: 1.45,
+    mantleMaxHeight: 1.55,
+    vaultMaxHeight: 0.95,
+    mantleDuration: 0.34,
     sprintMultiplier: 1.85,
     // Character-action style (face movement direction). Combined with cameraRelativeMovement: the player
     // presses W toward the camera, the body faces velocity, and the camera no longer needs to chase a
@@ -207,6 +215,11 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
   useEditorStore.getState().setObjectVariable(pawnId, 'maxHealth', 100);
   useEditorStore.getState().setObjectVariable(pawnId, 'ammo', 24);
   useEditorStore.getState().setObjectVariable(pawnId, 'ammoMax', 24);
+  useEditorStore.getState().setObjectVariable(pawnId, 'checkpointRoom', 1);
+  useEditorStore.getState().setObjectVariable(pawnId, 'roomsCompleted', 0);
+  useEditorStore.getState().setObjectVariable(pawnId, 'checkpointX', 0);
+  useEditorStore.getState().setObjectVariable(pawnId, 'checkpointY', 0.1);
+  useEditorStore.getState().setObjectVariable(pawnId, 'checkpointZ', TUTORIAL_ROOM_Z.movement - 5.0);
 
   // Soft ambient bed + background music (Play starts/stops them).
   const [ambient, music] = await Promise.all([importBundledAudio('ambient.mp3'), importBundledAudio('music.mp3')]);
@@ -355,6 +368,7 @@ function interactPedestal(name: string, position: Vector3Tuple, color: string): 
     roughness: 0.3,
     materialOverrides: { emissiveColor: color, emissiveIntensity: 2.2 },
   });
+  store.setObjectVariable(ped, 'interactPriority', 1);
   // A glowing ring on the ground around the base — purely visual, no collider, sits just above the
   // floor. Two interlocking cubes give a clean square ring without needing a torus primitive.
   const ringId = store.createObjectWithProps('cube', { name: `${name} Ring`, position: [position[0], 0.06, position[2]], color });
@@ -468,6 +482,20 @@ function tutorialPad(
   ex(show, titleNode);
   ex(titleNode, bodyNode);
   ex(bodyNode, statusNode);
+  const roomMatch = title.match(/^(\d+)/) ?? name.match(/^(\d+)/);
+  if (playerId && roomMatch) {
+    const roomIndex = Number(roomMatch[1]);
+    const setRoom = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointRoom', numberValue: roomIndex });
+    const setDone = add('Set Object Var', { targetObjectId: playerId, objectKey: 'roomsCompleted', numberValue: roomIndex });
+    const setX = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointX', numberValue: position[0] });
+    const setY = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointY', numberValue: position[1] });
+    const setZ = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointZ', numberValue: position[2] });
+    ex(statusNode, setRoom);
+    ex(setRoom, setDone);
+    ex(setDone, setX);
+    ex(setX, setY);
+    ex(setY, setZ);
+  }
   extra?.(blueprintId);
   return trigger;
 }
@@ -943,11 +971,11 @@ function buildMovementRoom(playerId: string, ui: TutorialUi): void {
     '#38bdf8',
     ui,
     '01 MOVEMENT ROOM',
-    'WASD moves relative to the camera. Hold Shift to sprint, Space to jump, and use the small course to feel acceleration and turning.',
-    'Lesson: movement, sprint, jump, spring-arm follow camera',
+    'WASD moves relative to the camera. Hold Shift to sprint, Space jumps, and Space near the low rail vaults over tagged traversal props.',
+    'Lesson: movement, sprint, jump, vault, spring-arm follow camera',
     playerId,
   );
-  createWorldLabel('Movement Course Label', [4.9, 2.2, z + 0.5], 'SPRINT + JUMP', 'Follow the blue lane, hop the low rail, then test the yellow launch pad.', '#38bdf8');
+  createWorldLabel('Movement Course Label', [4.9, 2.2, z + 0.5], 'SPRINT + VAULT', 'Follow the blue lane, vault the low rail, then test the yellow launch pad.', '#38bdf8');
   decoBlock('Movement Sprint Lane', [-2.4, 0.13, z - 0.2], [1.2, 0.045, 6.4], '#38bdf8', {
     roughness: 0.35,
     emissive: { color: '#38bdf8', intensity: 1.2 },
@@ -956,8 +984,11 @@ function buildMovementRoom(playerId: string, ui: TutorialUi): void {
     roughness: 0.35,
     emissive: { color: '#fde047', intensity: 1.2 },
   });
-  block('Movement Low Rail A', [-2.4, 0.34, z + 1.4], [2.8, 0.68, 0.22], '#536173', { roughness: 0.6 });
-  block('Movement Low Rail B', [3.6, 0.42, z - 1.2], [2.5, 0.84, 0.22], '#536173', { roughness: 0.6 });
+  const store = useEditorStore.getState();
+  const railA = block('Movement Low Rail A', [-2.4, 0.34, z + 1.4], [2.8, 0.68, 0.22], '#536173', { roughness: 0.6 });
+  const railB = block('Movement Low Rail B', [3.6, 0.42, z - 1.2], [2.5, 0.84, 0.22], '#536173', { roughness: 0.6 });
+  store.setObjectVariable(railA, 'vaultable', true);
+  store.setObjectVariable(railB, 'vaultable', true);
   const posts: Vector3Tuple[] = [[-3.2, 0.65, z - 2.3], [-1.2, 0.65, z - 0.9], [-3.1, 0.65, z + 0.7], [-1.1, 0.65, z + 2.2]];
   posts.forEach((pos, i) => {
     const post = useEditorStore.getState().createObjectWithProps('capsule', { name: `Movement Marker ${i + 1}`, position: pos, color: '#60a5fa' });

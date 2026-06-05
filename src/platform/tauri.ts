@@ -161,4 +161,12 @@ export const tauriPlatform: Platform = {
   async revealFile(path) {
     await invoke('reveal_in_explorer', { path });
   },
+
+  async saveInProject(projectDir, subfolder, fileName, bytes) {
+    const dir = await join(projectDir, subfolder);
+    await mkdir(dir, { recursive: true });
+    const target = await join(dir, fileName);
+    await writeFile(target, bytes);
+    return target;
+  },
 };

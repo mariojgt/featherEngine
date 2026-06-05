@@ -81,6 +81,7 @@ const fixedBox = (collider: PhysicsComponent['collider'] = 'box'): PhysicsCompon
 });
 
 const dynamicBox = (): PhysicsComponent => ({ ...fixedBox('box'), bodyType: 'dynamic', mass: 0.7, friction: 0.6, angularDamping: 0.4 });
+const triggerBox = (): PhysicsComponent => ({ ...fixedBox('box'), isTrigger: true });
 
 const toneByCategory: Record<GraphNodeCategory, NodeForgeNodeData['tone']> = {
   Events: 'event', Logic: 'logic', Math: 'math', Runtime: 'runtime', Physics: 'physics', Audio: 'audio',
@@ -818,7 +819,6 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     id: makeId('obj'), name: 'Finale Cinematic Orb', kind: 'sphere',
     transform: { position: [0, 1.6, 26.6], rotation: [0, 0, 0], scale: [0.7, 0.7, 0.7] },
     renderer: { ...defaultRenderer('sphere', '#15e8ff'), metalness: 0.45, roughness: 0.18, materialOverrides: { emissiveColor: '#15e8ff', emissiveIntensity: 2.2 } },
-    physics: fixedBox('sphere'),
   };
   props.push(finaleOrb);
   const finaleCinematic = createFpsShowcaseCinematic(finaleOrb.id);
@@ -900,7 +900,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     tutorialObjects.push({
       id: makeId('obj'), name: 'Sign Zone', kind: 'empty',
       transform: { position: [position[0], 1.5, position[2]], rotation: [0, 0, 0], scale: [range * 2, 3, range * 2] },
-      physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+      physics: triggerBox(),
       script: { blueprintId: zone.blueprintId, graphId: zone.graphId, enabled: true },
       variables: { tipUnseen: true },
     });
@@ -980,7 +980,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   tutorialObjects.push({
     id: makeId('obj'), name: 'Finale Cinematic Trigger', kind: 'empty',
     transform: { position: [0, 1.2, 24.0], rotation: [0, 0, 0], scale: [5.2, 2.4, 2.4] },
-    physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+    physics: triggerBox(),
     script: { blueprintId: finaleBp.blueprintId, graphId: finaleBp.graphId, enabled: true },
   });
 
@@ -1094,7 +1094,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     tutorialObjects.push({
       id: makeId('obj'), name: x < 0 ? 'Slider Bound L' : 'Slider Bound R', kind: 'empty',
       transform: { position: [x, 1.7, 28], rotation: [0, 0, 0], scale: [0.6, 2, 1.4] },
-      physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+      physics: triggerBox(),
       script: { blueprintId: bp.blueprintId, graphId: bp.graphId, enabled: true },
     }),
   );
@@ -1112,7 +1112,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   tutorialObjects.push({
     id: makeId('obj'), name: 'Bounce Pad Trigger', kind: 'empty',
     transform: { position: [-7, 0.7, 12], rotation: [0, 0, 0], scale: [2.2, 1.2, 2.2] },
-    physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+    physics: triggerBox(),
     script: { blueprintId: padBp.blueprintId, graphId: padBp.graphId, enabled: true },
   });
 
@@ -1347,8 +1347,8 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   const guardCount = guardSpots.length;
 
   // Trigger volumes (sensors): breach at the entrance, extraction at the LZ.
-  missionObjects.push({ id: makeId('obj'), name: 'Breach Zone', kind: 'empty', transform: { position: [0, 1.5, 10], rotation: [0, 0, 0], scale: [6, 3, 2] }, physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 }, script: { blueprintId: entryBp.blueprintId, graphId: entryBp.graphId, enabled: true } });
-  missionObjects.push({ id: makeId('obj'), name: 'Extraction Zone', kind: 'empty', transform: { position: [0, 1.2, 38], rotation: [0, 0, 0], scale: [4.4, 3, 4.4] }, physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 }, script: { blueprintId: exitBp.blueprintId, graphId: exitBp.graphId, enabled: true } });
+  missionObjects.push({ id: makeId('obj'), name: 'Breach Zone', kind: 'empty', transform: { position: [0, 1.5, 10], rotation: [0, 0, 0], scale: [6, 3, 2] }, physics: triggerBox(), script: { blueprintId: entryBp.blueprintId, graphId: entryBp.graphId, enabled: true } });
+  missionObjects.push({ id: makeId('obj'), name: 'Extraction Zone', kind: 'empty', transform: { position: [0, 1.2, 38], rotation: [0, 0, 0], scale: [4.4, 3, 4.4] }, physics: triggerBox(), script: { blueprintId: exitBp.blueprintId, graphId: exitBp.graphId, enabled: true } });
 
   // The mission re-uses the exact player pawn + arm rigs (same ids → the shared weapon graph drives them here too).
   missionObjects.push(structuredClone(pawn));
@@ -1356,7 +1356,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
 
   // --- TRAINING ROOM additions: the DEPLOY pad + trigger, a Base Director, and a sign. ---
   block('Deploy Pad', [9, 0.06, 6.5], [2.6, 0.12, 2.6], '#ff2bd6', { emissive: '#ff2bd6', intensity: 1.7, solid: false });
-  tutorialObjects.push({ id: makeId('obj'), name: 'Deploy Trigger', kind: 'empty', transform: { position: [9, 0.8, 6.5], rotation: [0, 0, 0], scale: [2.6, 1.6, 2.6] }, physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 }, script: { blueprintId: deployBp.blueprintId, graphId: deployBp.graphId, enabled: true } });
+  tutorialObjects.push({ id: makeId('obj'), name: 'Deploy Trigger', kind: 'empty', transform: { position: [9, 0.8, 6.5], rotation: [0, 0, 0], scale: [2.6, 1.6, 2.6] }, physics: triggerBox(), script: { blueprintId: deployBp.blueprintId, graphId: deployBp.graphId, enabled: true } });
   tutorialObjects.push({ id: makeId('obj'), name: 'Base Director', kind: 'empty', transform: { position: [0, 4, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, script: { blueprintId: baseDir.blueprintId, graphId: baseDir.graphId, enabled: true } });
   makeSign('Deploy', 'Step onto the MAGENTA pad (right) to deploy into the\nBREACH & CLEAR mission — clear every hostile, then extract.', [9, 0, 4.2], '#ff2bd6', 2);
 

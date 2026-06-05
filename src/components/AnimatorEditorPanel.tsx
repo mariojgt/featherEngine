@@ -43,6 +43,8 @@ const PARAM_SOURCES: Array<{ value: AnimatorParameter['source']; label: string }
   { value: 'crawling', label: 'Is crawling' },
   { value: 'swimming', label: 'Is swimming' },
   { value: 'climbing', label: 'Is climbing' },
+  { value: 'mantling', label: 'Is mantling/vaulting' },
+  { value: 'turning', label: 'Is turning in place' },
   { value: 'moveX', label: 'Move X (strafe −1…1)' },
   { value: 'moveY', label: 'Move Y (fwd/back −1…1)' },
   { value: 'weaponEquipped', label: 'Weapon equipped' },

@@ -343,6 +343,10 @@ interface EditorState {
   runtimeClimbing: string[];
   /** Remaining roll/dodge time (seconds) per object — drives the forward dash + "rolling" param. */
   runtimeRoll: Record<string, number>;
+  /** Active mantle/vault arcs per character. The controller owns the arc until time reaches duration. */
+  runtimeMantle: Record<string, { from: Vector3Tuple; to: Vector3Tuple; time: number; duration: number }>;
+  /** Idle turn-in-place intensity per character (0..1), auto-fed into animator params. */
+  runtimeTurnInPlace: Record<string, number>;
   /** Remaining coyote-time (seconds) per object — a jump still registers this long after leaving the ground. */
   runtimeCoyote: Record<string, number>;
   /** Remaining attack time (seconds) per object — drives the "attacking" param. */
@@ -940,6 +944,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeSwimming: [],
   runtimeClimbing: [],
   runtimeRoll: {},
+  runtimeMantle: {},
+  runtimeTurnInPlace: {},
   runtimeCoyote: {},
   runtimeAttack: {},
   runtimeReload: {},
@@ -2320,6 +2326,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       { id: crouchParamId, name: 'Crouching', type: 'bool', source: 'crouching', defaultValue: false },
       { id: groundedParamId, name: 'Grounded', type: 'bool', source: 'grounded', defaultValue: true },
       { id: rollParamId, name: 'Rolling', type: 'bool', source: 'rolling', defaultValue: false },
+      { id: makeId('param'), name: 'Mantling', type: 'bool', source: 'mantling', defaultValue: false },
+      { id: makeId('param'), name: 'Turning', type: 'bool', source: 'turning', defaultValue: false },
       { id: makeId('param'), name: 'Attacking', type: 'bool', source: 'attacking', defaultValue: false },
       { id: makeId('param'), name: 'WeaponEquipped', type: 'bool', source: 'weaponEquipped', defaultValue: false },
     ];
@@ -4459,6 +4467,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeSwimming: [],
           runtimeClimbing: [],
           runtimeRoll: {},
+          runtimeMantle: {},
+          runtimeTurnInPlace: {},
           runtimeCoyote: {},
           runtimeAttack: {},
       runtimeReload: {},
@@ -4554,6 +4564,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: [],
         runtimeClimbing: [],
         runtimeRoll: {},
+        runtimeMantle: {},
+        runtimeTurnInPlace: {},
         runtimeCoyote: {},
         runtimeAttack: {},
       runtimeReload: {},
@@ -4818,6 +4830,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let cameraShake = Math.max(0, state.runtimeCameraShake - delta * 2);
       // Roll/dodge + attack/reload/interact timers carried frame-to-frame (started on their key, counted down here).
       const nextRoll: Record<string, number> = {};
+      const nextMantle: EditorState['runtimeMantle'] = {};
+      const nextTurnInPlace: Record<string, number> = {};
       const nextCoyote: Record<string, number> = {};
       const nextAttack: Record<string, number> = {};
       const nextReload: Record<string, number> = {};
@@ -4860,32 +4874,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const hiddenNow = new Set(state.runtimeHidden);
         const interactables = activeObjects.filter((o) => {
           if (nextDisabled.has(o.id) || hiddenNow.has(o.id)) return false;
-          const vars = { ...(o.variables ?? {}), ...(state.runtimeObjectVariables[o.id] ?? {}) };
-          return Boolean(vars.interactable);
+          const vars = { ...(o.variables ?? {}), ...(nextObjectVariables[o.id] ?? {}) };
+          return toBoolean(vars.interactable ?? false);
         });
         if (interactables.length) {
           for (const char of activeObjects) {
-            const cc = char.character;
-            if (!cc?.enabled || isRagdoll(char.id)) continue;
-            const range = cc.interactRange ?? 3;
+            if (!char.character?.enabled || isRagdoll(char.id)) continue;
+            const cc = { ...defaultCharacter(), ...char.character };
+            const range = Math.max(0.25, cc.interactRange ?? 3);
             const cp = char.transform.position;
-            let best: { id: string; d: number } | null = null;
+            const yaw = cc.cameraFollow && cc.mouseLook ? mouseCameraYaw(cc.mouseSensitivity) : char.transform.rotation[1] - cc.modelYawOffset;
+            const fwdX = Math.sin(yaw);
+            const fwdZ = Math.cos(yaw);
+            let best: { id: string; score: number } | null = null;
             for (const it of interactables) {
               if (it.id === char.id) continue;
+              const vars = { ...(it.variables ?? {}), ...(nextObjectVariables[it.id] ?? {}) };
               const dx = it.transform.position[0] - cp[0];
+              const dy = it.transform.position[1] - cp[1];
               const dz = it.transform.position[2] - cp[2];
-              const d = Math.hypot(dx, dz);
-              if (d > range) continue;
-              // Third-person interaction should prefer reliability over a strict body-facing cone: camera orbit
-              // and soft character turning mean the player can clearly be beside a pedestal while the mesh still
-              // faces another way. Only NPC/non-follow characters keep a loose facing gate.
-              if (!cc.cameraFollow && d > Math.min(2.2, range * 0.5)) {
-                const facing = char.transform.rotation[1] - (cc.modelYawOffset ?? 0);
-                const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
-                const dot = (dx / d) * fwd[0] + (dz / d) * fwd[1];
-                if (dot < -0.1) continue;
-              }
-              if (!best || d < best.d) best = { id: it.id, d };
+              const horizontal = Math.hypot(dx, dz);
+              const verticalLimit = Math.max(1.8, range * 0.75);
+              if (Math.abs(dy) > verticalLimit) continue;
+              const weightedDistance = Math.hypot(horizontal, Math.abs(dy) * 0.55);
+              if (weightedDistance > range) continue;
+              const dot = horizontal > 0.001 ? (dx / horizontal) * fwdX + (dz / horizontal) * fwdZ : 1;
+              const nearOverride = horizontal <= Math.min(1.6, range * 0.42);
+              if (!nearOverride && dot < (cc.cameraFollow ? -0.55 : -0.15)) continue;
+              const priority = toNumber(vars.interactPriority ?? 0);
+              const score =
+                priority * 3 +
+                (1 - weightedDistance / range) * 2.4 +
+                Math.max(0, dot) * 1.25 +
+                (nearOverride ? 0.75 : 0) -
+                Math.abs(dy) * 0.12;
+              if (!best || score > best.score) best = { id: it.id, score };
             }
             if (best) {
               if (cc.cameraFollow) interactFocusId = best.id;
@@ -6349,6 +6372,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // resolved arrays, so this is valid for every pass below).
       const sampleTerrainHeight = createTerrainHeightSampler(mappedObjects);
       const groundAt = (x: number, z: number) => sampleTerrainHeight(x, z) ?? 0;
+      const angleDelta = (from: number, to: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+      const findMantleTarget = (
+        characterId: string,
+        position: Vector3Tuple,
+        dirX: number,
+        dirZ: number,
+        cc: CharacterControllerComponent,
+        floorLevel: number,
+      ): Vector3Tuple | undefined => {
+        const dirLen = Math.hypot(dirX, dirZ);
+        if (dirLen < 0.001) return undefined;
+        const fx = dirX / dirLen;
+        const fz = dirZ / dirLen;
+        const range = Math.max(0.2, cc.mantleRange ?? 1.35);
+        const maxHeight = Math.max(0.25, cc.mantleMaxHeight ?? 1.45);
+        const minHeight = 0.25;
+        let best: { to: Vector3Tuple; score: number } | undefined;
+        for (const candidate of mappedObjects) {
+          if (candidate.id === characterId || nextDisabled.has(candidate.id)) continue;
+          if (!candidate.physics?.enabled || candidate.physics.isTrigger || candidate.physics.bodyType === 'dynamic') continue;
+          const vars = { ...(candidate.variables ?? {}), ...(nextObjectVariables[candidate.id] ?? {}) };
+          if (!toBoolean(vars.vaultable ?? false) && !toBoolean(vars.mantleable ?? false)) continue;
+          const [cx, cy, cz] = candidate.transform.position;
+          const [sx, sy, sz] = candidate.transform.scale;
+          const relX = cx - position[0];
+          const relZ = cz - position[2];
+          const forward = relX * fx + relZ * fz;
+          const halfDepth = Math.max(0.05, Math.max(Math.abs(sx), Math.abs(sz)) * 0.5);
+          if (forward < 0.05 || forward > range + halfDepth) continue;
+          const side = Math.abs(relX * fz - relZ * fx);
+          const halfWidth = Math.max(0.5, Math.max(Math.abs(sx), Math.abs(sz)) * 0.55 + 0.45);
+          if (side > halfWidth) continue;
+          const topY = cy + Math.abs(sy) * 0.5;
+          const height = topY - floorLevel;
+          if (height < minHeight || height > maxHeight) continue;
+          const vault = height <= (cc.vaultMaxHeight ?? 0.9) || toBoolean(vars.vaultable ?? false);
+          const landingDistance = halfDepth + (vault ? 0.9 : 0.55);
+          const to: Vector3Tuple = [cx + fx * landingDistance, topY + 0.08, cz + fz * landingDistance];
+          const score = forward + side * 0.35 + height * 0.15;
+          if (!best || score < best.score) best = { to, score };
+        }
+        return best?.to;
+      };
       for (const object of mappedObjects) {
         if (!object.vehicle?.enabled) continue;
         const veh = { ...defaultVehicle(), ...object.vehicle };
@@ -6399,8 +6465,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const yaw: number = storedYaw !== undefined && Number.isFinite(storedYaw) ? storedYaw : Number(authoredYaw ?? 0);
         let crashTimer = Math.max(0, toNumber(vehicleVars.__vehicleCrashTimer ?? 0) - delta);
         const crashDamage = Math.max(0, toNumber(vehicleVars.__vehicleDamage ?? 0));
-        const tipped = Math.abs(object.transform.rotation[0]) > 0.72 || Math.abs(object.transform.rotation[2]) > 0.72;
-        const crashPhysicsActive = Boolean(veh.crashDamageEnabled) && (crashTimer > 0 || tipped);
+        const crashPhysicsActive = Boolean(veh.crashDamageEnabled) && crashTimer > 0;
         const prevVel = nextVelocities[object.id] ?? [0, 0, 0];
         const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
         const forwardX = Math.sin(yaw);
@@ -6476,20 +6541,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const visualSteer = prevSteer + (steerRaw * veh.steerAngle - prevSteer) * steerK;
         // Grip controls lateral velocity recovery. High grip kills sideways motion quickly; handbrake lowers it
         // so the car carries a slide and then settles instead of snapping straight.
-        const grip = clamp(handbrake ? veh.handbrakeGrip : veh.gripFactor, 0.02, 0.995);
+        const loadAccel = Math.abs(speed - prevSpeed) / Math.max(delta, 1e-4);
+        const weightTransfer = clamp(Number(veh.weightTransfer ?? 0.42), 0, 1);
+        const downforce = Math.max(0, Number(veh.downforce ?? 0.18));
+        const loadFactor = clamp((loadAccel / Math.max(1, veh.braking)) * 0.45 + Math.abs(steerRaw) * topFrac * 0.55, 0, 1);
+        const baseGrip = clamp(handbrake ? veh.handbrakeGrip : veh.gripFactor, 0.02, 0.995);
+        const transferGrip = baseGrip * (1 - weightTransfer * loadFactor * (handbrake ? 0.1 : 0.22));
+        const aeroGrip = transferGrip + downforce * topFrac * topFrac * 0.08;
+        const grip = clamp(aeroGrip, 0.02, 0.995);
         const lateralDamping = (handbrake ? 1.6 : 3.2) + grip * (handbrake ? 7 : 22);
         lateralSpeed *= Math.exp(-lateralDamping * Math.min(delta, 0.1));
         const effectiveSteer = visualSteer * (1 - (handbrake ? 0.15 : 0.5) * topFrac);
         const lzs = wheels.map((w) => wheelCenter(w)[2]);
         const wheelbase = wheels.length ? Math.max(0.8, Math.max(...lzs) - Math.min(...lzs)) : 2.4;
         const oversteer = 1 + (1 - grip) * (handbrake ? 1.9 : 0.45);
-        const yawRate = (speed / wheelbase) * Math.tan(effectiveSteer) * oversteer;
+        const lowSpeedAssist = 1.25 - 0.25 * topFrac;
+        const yawRate = (speed / wheelbase) * Math.tan(effectiveSteer) * oversteer * lowSpeedAssist * Math.max(0.2, veh.turnRate / 2);
         const cornerLoad = Math.abs(yawRate * speed) / Math.max(8, veh.maxSpeed * 0.9);
         const slip = clamp(
           Math.abs(lateralSpeed) / (5 + topFrac * 14) + Math.max(0, cornerLoad * (1 - grip) - 0.08) + (handbrake && Math.abs(speed) > 2 ? 0.25 + 0.45 * topFrac : 0),
           0,
           1,
         );
+        const tractionControl = clamp(Number(veh.tractionControl ?? 0.35), 0, 1);
+        if (tractionControl > 0 && throttleSig > 0.05 && !handbrake && slip > 0.32) {
+          const cut = ((slip - 0.32) / 0.68) * tractionControl;
+          speed = approach(speed, prevSpeed, veh.acceleration * cut * delta);
+        }
         const newYaw = yaw + yawRate * delta;
         vehicleVars.__vehicleYaw = newYaw;
         const cosY = Math.cos(newYaw);
@@ -6563,7 +6641,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Signed acceleration (squat/dive + the brake-squeal trigger), shared by both body modes.
         const accelSig = (speed - prevSpeed) / Math.max(delta, 1e-4);
         const TWO_PI = Math.PI * 2;
-        const physicsRollActive = Boolean(veh.crashDamageEnabled) && (crashTimer > 0 || tipped);
+        const physicsRollActive = Boolean(veh.crashDamageEnabled) && crashTimer > 0;
         vehicleVars.__vehicleCrashTimer = crashTimer;
         const currentDamage = Math.max(0, toNumber(vehicleVars.__vehicleDamage ?? 0));
         const baseScale = Array.isArray(vehicleVars.__vehicleBaseScale) ? vehicleVars.__vehicleBaseScale : object.transform.scale;
@@ -6575,6 +6653,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const brokenWheelCount = veh.crashDamageEnabled ? clamp(Math.floor((currentDamage - wheelBreakThreshold) / Math.max(0.25, wheelBreakThreshold * 0.45)) + 1, 0, wheels.length) : 0;
 
         if (dynamic) {
+          if (downforce > 0 && Math.abs(speed) > 2) {
+            const mass = Math.max(0.1, Number(object.physics?.mass ?? 1));
+            const impulse = downforce * topFrac * topFrac * mass * 9.8 * delta;
+            const accruedImpulse = physicsImpulses[object.id] ?? [0, 0, 0];
+            physicsImpulses[object.id] = [accruedImpulse[0], accruedImpulse[1] - impulse, accruedImpulse[2]];
+          }
           // DYNAMIC body: Rapier owns Y and contact resolution. We command X/Z from the tire model only;
           // leaving Y unchanged means gravity/resting contact remain fully solver-owned.
           position[1] = object.transform.position[1];
@@ -6582,8 +6666,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
           // Normal driving uses cosmetic squat/dive + turn lean. During a hard crash/rollover, Rapier's
           // rotation is preserved so the car can actually tumble instead of snapping upright.
-          const targetPitch = Math.max(-0.08, Math.min(0.08, -accelSig * veh.bodyPitch * 0.04));
-          const turnLean = (-yawRate * Math.abs(speed) - lateralSpeed * 0.12) * veh.bodyRoll * (1 + slip * 1.5);
+          const targetPitch = Math.max(-0.08, Math.min(0.08, -accelSig * veh.bodyPitch * 0.04 * (1 + weightTransfer * 0.7)));
+          const turnLean = (-yawRate * Math.abs(speed) - lateralSpeed * 0.12) * veh.bodyRoll * (1 + slip * 1.5 + weightTransfer * 0.35);
           const targetRoll = clamp(turnLean, -0.16, 0.16);
           const tiltK = 1 - Math.exp(-12 * Math.min(delta, 0.1));
           const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * tiltK;
@@ -6648,9 +6732,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const avg = (a: number[], fallback: number) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : fallback);
           const terrainPitch = Math.atan2(avg(rearG, avgGround) - avg(frontG, avgGround), wheelbase);
           const terrainRoll = Math.atan2(avg(leftG, avgGround) - avg(rightG, avgGround), 1.7);
-          const targetPitch = clamp(terrainPitch + -accelSig * veh.bodyPitch * 0.04, -0.18, 0.18);
+          const targetPitch = clamp(terrainPitch + -accelSig * veh.bodyPitch * 0.04 * (1 + weightTransfer * 0.7), -0.18, 0.18);
           // Lean into the turn, plus an extra drift lean while the tires slip (reads as a slide).
-          const turnLean = (-yawRate * Math.abs(speed) - lateralSpeed * 0.12) * veh.bodyRoll * (1 + slip * 1.5);
+          const turnLean = (-yawRate * Math.abs(speed) - lateralSpeed * 0.12) * veh.bodyRoll * (1 + slip * 1.5 + weightTransfer * 0.35);
           const targetRoll = clamp(terrainRoll + turnLean, -0.3, 0.3);
           const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * settle;
           const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * settle;
@@ -6850,6 +6934,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // groundLevel where there's no terrain — never max() the two, or a sub-zero hill floats the pawn at 0.
         const floorLevel = terrainFloor !== undefined ? terrainFloor : cc.groundLevel;
         const grounded = runtimeGroundedSet.has(object.id) || position[1] <= floorLevel + 0.001;
+        const overrideMode = movementModeNow[object.id];
+        const swimming = overrideMode === 'swimming' || (!overrideMode && runtimeSwimmingSet.has(object.id));
+        const climbing = overrideMode === 'climbing' || (!overrideMode && runtimeClimbingSet.has(object.id));
+        const flying = overrideMode === 'flying';
+
+        const activeMantle = state.runtimeMantle[object.id];
+        if (activeMantle) {
+          const duration = Math.max(0.08, activeMantle.duration);
+          const time = activeMantle.time + delta;
+          const t = Math.min(1, time / duration);
+          const eased = t * t * (3 - 2 * t);
+          const arc = Math.sin(Math.PI * t) * 0.28;
+          position[0] = activeMantle.from[0] + (activeMantle.to[0] - activeMantle.from[0]) * eased;
+          position[1] = activeMantle.from[1] + (activeMantle.to[1] - activeMantle.from[1]) * eased + arc;
+          position[2] = activeMantle.from[2] + (activeMantle.to[2] - activeMantle.from[2]) * eased;
+          const dx = activeMantle.to[0] - activeMantle.from[0];
+          const dz = activeMantle.to[2] - activeMantle.from[2];
+          if (Math.hypot(dx, dz) > 0.001) rotation[1] = lerpAngle(rotation[1], Math.atan2(dx, dz) + cc.modelYawOffset, 1 - Math.exp(-18 * Math.min(delta, 0.1)));
+          if (t < 1) nextMantle[object.id] = { ...activeMantle, time };
+          nextVelocities[object.id] = [0, 0, 0];
+          return { ...object, transform: { ...object.transform, position, rotation } };
+        }
 
         // Roll/dodge: started on the roll key while grounded, dashes forward for rollDuration.
         let rollRemaining = state.runtimeRoll[object.id] ?? 0;
@@ -6879,6 +6985,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Target velocity from the (camera-relative) input direction; 0 when no key is held (→ decelerate to stop).
           let targetX = 0;
           let targetZ = 0;
+          let moveDirX = Math.sin(rotation[1] - cc.modelYawOffset);
+          let moveDirZ = Math.cos(rotation[1] - cc.modelYawOffset);
           if (length > 0) {
             let dirX = inputX / length;
             let dirZ = inputZ / length;
@@ -6889,8 +6997,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const sin = Math.sin(yaw);
               [dirX, dirZ] = [dirX * cos + dirZ * sin, -dirX * sin + dirZ * cos];
             }
+            moveDirX = dirX;
+            moveDirZ = dirZ;
             targetX = dirX * speed;
             targetZ = dirZ * speed;
+          }
+          const mantleKey = cc.keyMantle || cc.keyJump;
+          const wantsMantle =
+            Boolean(cc.mantleEnabled) &&
+            grounded &&
+            !swimming &&
+            !climbing &&
+            !flying &&
+            (keyPressedThisTick(cc.keyJump) || Boolean(mantleKey && keyPressedThisTick(mantleKey)));
+          if (wantsMantle) {
+            const mantleTarget = findMantleTarget(object.id, position, moveDirX, moveDirZ, cc, floorLevel);
+            if (mantleTarget) {
+              const duration = Math.max(0.08, cc.mantleDuration ?? 0.38);
+              nextMantle[object.id] = { from: [...position] as Vector3Tuple, to: mantleTarget, time: 0, duration };
+              nextVelocities[object.id] = [0, 0, 0];
+              rotation[1] = lerpAngle(
+                rotation[1],
+                Math.atan2(mantleTarget[0] - position[0], mantleTarget[2] - position[2]) + cc.modelYawOffset,
+                1,
+              );
+              return { ...object, transform: { ...object.transform, position, rotation } };
+            }
           }
           // Ramp velocity toward the target: accelerate when there's input, decelerate when not. Airborne motion
           // is dampened (airControl) so you mostly keep your jump momentum instead of turning on a dime mid-air.
@@ -6906,6 +7038,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // Framerate-independent easing (was turnSpeed*delta, which turns faster at low FPS and can
             // overshoot >1 on a hitch); exp gives the same ~0.18 feel at 60fps but a smooth turn at any rate.
             rotation[1] = lerpAngle(rotation[1], Math.atan2(hVelX, hVelZ) + cc.modelYawOffset, 1 - Math.exp(-cc.turnSpeed * Math.min(delta, 0.1)));
+          } else if (
+            Boolean(cc.turnInPlace) &&
+            grounded &&
+            !swimming &&
+            !climbing &&
+            !flying &&
+            cc.mouseLook &&
+            cc.cameraRelativeMovement
+          ) {
+            const targetYaw = mouseCameraYaw(cc.mouseSensitivity) + cc.modelYawOffset;
+            const diff = Math.abs(angleDelta(rotation[1], targetYaw));
+            if (diff > (cc.turnInPlaceThreshold ?? 0.45)) {
+              rotation[1] = lerpAngle(rotation[1], targetYaw, 1 - Math.exp(-(cc.turnInPlaceSpeed ?? cc.turnSpeed) * Math.min(delta, 0.1)));
+              nextTurnInPlace[object.id] = Math.min(1, diff / Math.PI);
+            }
           }
           // Strafe: always face the camera yaw so the character can move in all 8 directions (2D blend).
           if (cc.strafe && cc.mouseLook) {
@@ -6953,10 +7100,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         // Movement mode: a "Set Movement Mode" node OVERRIDES the volume-tag swim/climb detection (so swim/
         // climb can be fully blueprint-driven). Falls back to the volume sets when no override is set.
-        const overrideMode = movementModeNow[object.id];
-        const swimming = overrideMode === 'swimming' || (!overrideMode && runtimeSwimmingSet.has(object.id));
-        const climbing = overrideMode === 'climbing' || (!overrideMode && runtimeClimbingSet.has(object.id));
-        const flying = overrideMode === 'flying';
         if (climbing) {
           // Lock horizontal to the wall (undo this frame's script/auto XZ move) and climb up/down with fwd/back keys.
           const start = prevTransforms.get(object.id)?.position;
@@ -7105,8 +7248,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (object.vehicle?.enabled) {
             const vars = nextObjectVariables[object.id] ?? object.variables;
             const crashTimer = Math.max(0, toNumber(vars?.__vehicleCrashTimer ?? 0));
-            const tipped = Math.abs(next.rotation[0]) > 0.72 || Math.abs(next.rotation[2]) > 0.72;
-            const usePhysicsRotation = Boolean(object.vehicle.crashDamageEnabled) && object.physics?.bodyType === 'dynamic' && (crashTimer > 0 || tipped);
+            const usePhysicsRotation = Boolean(object.vehicle.crashDamageEnabled) && object.physics?.bodyType === 'dynamic' && crashTimer > 0;
             if (usePhysicsRotation) {
               const mutable = mutableObjectVars(object.id, object.variables);
               mutable.__vehicleYaw = next.rotation[1];
@@ -7684,6 +7826,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           else if (param.source === 'grounded') params[param.id] = groundedIdSet.has(sourceId);
           else if (param.source === 'swimming') params[param.id] = swimmingIdSet.has(sourceId);
           else if (param.source === 'climbing') params[param.id] = climbingIdSet.has(sourceId);
+          else if (param.source === 'mantling') params[param.id] = Boolean(nextMantle[sourceId]);
+          else if (param.source === 'turning') params[param.id] = (nextTurnInPlace[sourceId] ?? 0) > 0.05;
           else if (param.source === 'rolling') params[param.id] = (nextRoll[sourceId] ?? 0) > 0;
           else if (param.source === 'attacking') params[param.id] = (nextAttack[sourceId] ?? 0) > 0;
           else if (param.source === 'aiming') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyAim]);
@@ -7809,6 +7953,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeSwimming: [],
             runtimeClimbing: [],
             runtimeRoll: {},
+            runtimeMantle: {},
+            runtimeTurnInPlace: {},
             runtimeCoyote: {},
             runtimeAttack: {},
             runtimeReload: {},
@@ -7863,6 +8009,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: swimmingIds,
         runtimeClimbing: climbingIds,
         runtimeRoll: nextRoll,
+        runtimeMantle: nextMantle,
+        runtimeTurnInPlace: nextTurnInPlace,
         runtimeCoyote: nextCoyote,
         runtimeAttack: nextAttack,
         runtimeReload: nextReload,
@@ -8101,6 +8249,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: [],
         runtimeClimbing: [],
         runtimeRoll: {},
+        runtimeMantle: {},
+        runtimeTurnInPlace: {},
         runtimeCoyote: {},
         runtimeAttack: {},
       runtimeReload: {},
