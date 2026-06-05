@@ -4,17 +4,26 @@ import {
   Ampersand,
   ArrowLeftRight,
   Axis3d,
+  Ban,
   Box,
+  CircleDot,
   Crosshair,
   Database,
   Dices,
+  Divide,
   Equal,
+  Eye,
   Gauge,
   GitBranch,
   GitMerge,
   Hash,
   Image,
   Keyboard,
+  Minus,
+  Move3d,
+  Percent,
+  Ruler,
+  Scaling,
   ShieldAlert,
   Swords,
   Layers,
@@ -34,6 +43,7 @@ import {
   Sparkles,
   SlidersHorizontal,
   Terminal,
+  Timer,
   ToggleLeft,
   Trash2,
   Type as TextIcon,
@@ -41,6 +51,7 @@ import {
   Volume2,
   Waypoints,
   Wind,
+  X,
   Zap,
 } from 'lucide-react';
 import type { GraphNodeKind, GraphNodeTone, GraphValueType, NodeForgeNode } from '../types';
@@ -60,8 +71,13 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'value.number': 'number',
   'value.random': 'number',
   'math.add': 'number',
+  'math.subtract': 'number',
+  'math.multiply': 'number',
+  'math.divide': 'number',
+  'math.modulo': 'number',
   'math.clamp': 'number',
   'math.lerp': 'number',
+  'math.distance': 'number',
   'animator.getParam': 'number',
   'query.vehicleSpeed': 'number',
   'event.receiveDamage': 'number',
@@ -71,11 +87,20 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'logic.compare': 'boolean',
   'logic.and': 'boolean',
   'logic.or': 'boolean',
+  'logic.not': 'boolean',
   'query.grounded': 'boolean',
   'value.vector3': 'vector3',
   'ai.playerLocation': 'vector3',
   'input.move': 'vector3',
   'input.driveInput': 'vector3',
+  'math.vectorAdd': 'vector3',
+  'math.vectorSubtract': 'vector3',
+  'math.vectorScale': 'vector3',
+  'math.normalize': 'vector3',
+  'math.makeVector': 'vector3',
+  'action.getPosition': 'vector3',
+  'action.getRotation': 'vector3',
+  'action.getScale': 'vector3',
 };
 
 const valueTypeLabels: Record<GraphValueType | 'any', string> = {
@@ -127,9 +152,29 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'logic.and': Ampersand,
   'logic.or': GitMerge,
   'logic.forLoop': Repeat,
+  'logic.not': Ban,
+  'logic.doOnce': CircleDot,
+  'logic.delay': Timer,
   'math.add': Plus,
+  'math.subtract': Minus,
+  'math.multiply': X,
+  'math.divide': Divide,
+  'math.modulo': Percent,
   'math.clamp': ArrowLeftRight,
   'math.lerp': Spline,
+  'math.distance': Ruler,
+  'math.vectorAdd': Plus,
+  'math.vectorSubtract': Minus,
+  'math.vectorScale': Scaling,
+  'math.normalize': Move3d,
+  'math.makeVector': Axis3d,
+  'action.getPosition': Crosshair,
+  'action.getRotation': RotateCw,
+  'action.getScale': Scaling,
+  'action.setPosition': Move,
+  'action.setRotation': RotateCw,
+  'action.setScale': Scaling,
+  'action.lookAt': Eye,
   'value.number': Hash,
   'value.random': Dices,
   'value.string': TextIcon,
@@ -196,9 +241,23 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'logic.compare',
   'logic.and',
   'logic.or',
+  'logic.not',
   'math.add',
+  'math.subtract',
+  'math.multiply',
+  'math.divide',
+  'math.modulo',
   'math.clamp',
   'math.lerp',
+  'math.distance',
+  'math.vectorAdd',
+  'math.vectorSubtract',
+  'math.vectorScale',
+  'math.normalize',
+  'math.makeVector',
+  'action.getPosition',
+  'action.getRotation',
+  'action.getScale',
   'value.number',
   'value.random',
   'value.string',
@@ -233,10 +292,41 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
     case 'logic.and':
     case 'logic.or':
     case 'math.add':
+    case 'math.subtract':
+    case 'math.multiply':
+    case 'math.divide':
+    case 'math.modulo':
+    case 'math.distance':
+    case 'math.vectorAdd':
+    case 'math.vectorSubtract':
       return [
         { id: 'a', label: 'A' },
         { id: 'b', label: 'B' },
       ];
+    case 'logic.not':
+    case 'math.normalize':
+      return [{ id: 'value', label: 'Value' }];
+    case 'logic.delay':
+      return [{ id: 'seconds', label: 'Seconds' }];
+    case 'math.vectorScale':
+      return [
+        { id: 'vector', label: 'Vector' },
+        { id: 'scale', label: 'Scale' },
+      ];
+    case 'math.makeVector':
+      return [
+        { id: 'x', label: 'X' },
+        { id: 'y', label: 'Y' },
+        { id: 'z', label: 'Z' },
+      ];
+    case 'action.setPosition':
+      return [{ id: 'position', label: 'Position' }];
+    case 'action.setRotation':
+      return [{ id: 'rotation', label: 'Rotation' }];
+    case 'action.setScale':
+      return [{ id: 'scale', label: 'Scale' }];
+    case 'action.lookAt':
+      return [{ id: 'target', label: 'Target' }];
     case 'math.clamp':
       return [
         { id: 'value', label: 'Value' },
@@ -257,6 +347,9 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'target', label: 'Target' },
       ];
     case 'variable.getObject':
+    case 'action.getPosition':
+    case 'action.getRotation':
+    case 'action.getScale':
       return [{ id: 'target', label: 'Target' }];
     case 'logic.cast':
       return [{ id: 'object', label: 'Object' }];

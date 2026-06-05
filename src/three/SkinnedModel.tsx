@@ -8,6 +8,7 @@ import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
 import { useFootIK } from './footIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
 import { RagdollRig } from './RagdollRig';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 import type { SceneObject } from '../types';
 
 /**
@@ -47,7 +48,7 @@ export function SkinnedModel({
    *  drives the runtime hit-flash / interact-focus glow. Cleared values restore the model's baked look. */
   tint?: { color?: string; emissiveColor?: string; emissiveIntensity?: number };
 }) {
-  const { scene } = useGLTF(meshUrl);
+  const { scene } = useGLTF(meshUrl, DRACO_DECODER_PATH, true, extendGLTFLoader);
   // Load every clip source. A stable, de-duped list keeps the loader from re-suspending each frame.
   const sources = useMemo(() => {
     const set = new Set(clipSourceUrls.filter(Boolean));
@@ -55,7 +56,7 @@ export function SkinnedModel({
     return [...set].sort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clipSourceUrls.join('|'), meshUrl]);
-  const gltfs = useGLTF(sources);
+  const gltfs = useGLTF(sources, DRACO_DECODER_PATH, true, extendGLTFLoader);
   const animations = useMemo(() => gltfs.flatMap((gltf) => gltf.animations), [gltfs]);
 
   // Independent skinned clone per instance. Memoized on the cached source scene.

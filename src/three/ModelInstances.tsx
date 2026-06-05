@@ -5,6 +5,7 @@ import type { SceneObject } from '../types';
 import { useEditorStore } from '../store/editorStore';
 import { useAssetUrl, extractInstanceSubmeshes, type InstanceSubmesh } from './ModelAsset';
 import { qualityProfile } from './quality';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 
 /**
  * Renders the instanced batches computed by {@link computeInstanceBatches}: one InstancedMesh per
@@ -30,7 +31,7 @@ function ModelBatch({ modelAssetId, objects }: { modelAssetId: string; objects: 
 }
 
 function ModelBatchInner({ url, objects }: { url: string; objects: SceneObject[] }) {
-  const { scene } = useGLTF(url);
+  const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
   const anisotropy = qualityProfile(useEditorStore.getState().renderSettings?.quality).maxAnisotropy;
   // Submeshes share geometry + materials from the loaded glTF (one upload), with the same scale
   // normalization ModelAsset applies — so an instance is sized identically to its non-instanced twin.

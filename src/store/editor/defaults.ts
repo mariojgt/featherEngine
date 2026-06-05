@@ -52,6 +52,7 @@ export const defaultRenderSettings = (): RenderSettings => ({
   bloomRadius: 0.6,
   vignetteEnabled: true,
   quality: 'High',
+  compressTextures: true,
 });
 
 /** Default light tuning for a `kind: 'light'` object (point light — the most generally useful). */

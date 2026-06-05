@@ -159,9 +159,22 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   OR: 'logic.or',
   Cast: 'logic.cast',
   'For Loop': 'logic.forLoop',
+  NOT: 'logic.not',
+  'Do Once': 'logic.doOnce',
+  Delay: 'logic.delay',
   Add: 'math.add',
+  Subtract: 'math.subtract',
+  Multiply: 'math.multiply',
+  Divide: 'math.divide',
+  Modulo: 'math.modulo',
   Clamp: 'math.clamp',
   Lerp: 'math.lerp',
+  Distance: 'math.distance',
+  'Add Vectors': 'math.vectorAdd',
+  'Subtract Vectors': 'math.vectorSubtract',
+  'Scale Vector': 'math.vectorScale',
+  Normalize: 'math.normalize',
+  'Make Vector3': 'math.makeVector',
   Number: 'value.number',
   Random: 'value.random',
   String: 'value.string',
@@ -214,11 +227,18 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   Scalar: 'material.scalar',
   Texture: 'material.texture',
   Mix: 'material.mix',
-  Multiply: 'material.multiply',
+  'Multiply (Material)': 'material.multiply',
   'Add (Material)': 'material.add',
   'Clamp (Material)': 'material.clamp',
   'Get Material Color': 'action.getMaterialColor',
   'Get Material Property': 'action.getMaterialProperty',
+  'Get Position': 'action.getPosition',
+  'Get Rotation': 'action.getRotation',
+  'Get Scale': 'action.getScale',
+  'Set Position': 'action.setPosition',
+  'Set Rotation': 'action.setRotation',
+  'Set Scale': 'action.setScale',
+  'Look At': 'action.lookAt',
   'Save Game': 'save.write',
   'Load Game': 'save.load',
   'Clear Save': 'save.clear',
@@ -482,6 +502,46 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return { label: 'Face Player', description: 'Turns this object to face the player (so Spawn Projectile fires at them).' };
     case 'logic.cooldown':
       return { label: `Cooldown: ${Number(data.numberValue ?? 1)}s`, description: 'Gate: lets execution through at most once every N seconds. Use for fire rate / spawn rate.' };
+    case 'logic.not':
+      return { label: 'NOT', description: 'Inverts a boolean — true becomes false and false becomes true. Wire a bool into Value.' };
+    case 'logic.doOnce':
+      return { label: 'Do Once', description: 'Gate: lets execution through ONLY the first time it is reached this Play session, then blocks forever. Use to fire one-shot setup from an event that can repeat (a trigger, a key).' };
+    case 'logic.delay':
+      return { label: `Delay: ${Number(data.numberValue ?? 1)}s`, description: 'Waits N seconds, then fires its output (Unreal-style latent Delay). Re-triggers are ignored while it is counting. Wire a number into Seconds to set the wait, or set the value on the node.' };
+    case 'math.subtract':
+      return { label: 'Subtract', description: 'Outputs A − B (numbers).' };
+    case 'math.multiply':
+      return { label: 'Multiply', description: 'Outputs A × B (numbers).' };
+    case 'math.divide':
+      return { label: 'Divide', description: 'Outputs A ÷ B (numbers). Division by zero yields 0.' };
+    case 'math.modulo':
+      return { label: 'Modulo', description: 'Outputs the remainder of A ÷ B. Modulo by zero yields 0. Use for wrapping/looping counters.' };
+    case 'math.distance':
+      return { label: 'Distance', description: 'Outputs the straight-line distance between two Vector3 positions A and B.' };
+    case 'math.vectorAdd':
+      return { label: 'Add Vectors', description: 'Adds two Vector3s component-wise (A + B). Offset a position by a direction.' };
+    case 'math.vectorSubtract':
+      return { label: 'Subtract Vectors', description: 'Subtracts Vector3 B from A — the vector pointing from B to A (e.g. a direction between two points).' };
+    case 'math.vectorScale':
+      return { label: 'Scale Vector', description: 'Multiplies a Vector3 by a scalar number — lengthen/shorten a direction (e.g. step size).' };
+    case 'math.normalize':
+      return { label: 'Normalize', description: 'Returns a Vector3 pointing the same way but with length 1 — turn a difference into a pure direction.' };
+    case 'math.makeVector':
+      return { label: 'Make Vector3', description: 'Builds a Vector3 from separate X, Y, Z numbers.' };
+    case 'action.getPosition':
+      return { label: 'Get Position', description: "Outputs an actor's world position [x,y,z] (Unreal GetActorLocation). Defaults to this object; pick a Target ($player/$trigger/$cast/an object) or wire a reference into Target." };
+    case 'action.getRotation':
+      return { label: 'Get Rotation', description: "Outputs an actor's rotation as Euler degrees [x,y,z] (Unreal GetActorRotation). Defaults to this object; pick a Target or wire a reference into Target." };
+    case 'action.getScale':
+      return { label: 'Get Scale', description: "Outputs an actor's scale [x,y,z] (Unreal GetActorScale3D). Defaults to this object; pick a Target or wire a reference into Target." };
+    case 'action.setPosition':
+      return { label: 'Set Position', description: "Teleports this object to a world position (wire a Vector3 into Position). Snap/place the owner." };
+    case 'action.setRotation':
+      return { label: 'Set Rotation', description: "Sets this object's rotation from Euler degrees [x,y,z] (wire a Vector3 into Rotation)." };
+    case 'action.setScale':
+      return { label: 'Set Scale', description: "Sets this object's scale (wire a Vector3 into Scale) — grow/shrink/pulse the owner." };
+    case 'action.lookAt':
+      return { label: 'Look At', description: 'Turns this object to face a world position on the ground plane (wire a Vector3 — e.g. Player Location — into Target).' };
     case 'action.playAnimation':
       return {
         label: 'Play Animation',
@@ -629,6 +689,10 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.loopCount = 4;
   }
 
+  if (nodeKind === 'logic.delay' && typeof normalized.numberValue !== 'number') {
+    normalized.numberValue = 1;
+  }
+
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
   }
@@ -681,6 +745,10 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     nodeKind === 'logic.compare' ||
     nodeKind === 'logic.and' ||
     nodeKind === 'logic.or' ||
+    nodeKind === 'logic.not' ||
+    nodeKind === 'action.getPosition' ||
+    nodeKind === 'action.getRotation' ||
+    nodeKind === 'action.getScale' ||
     nodeKind === 'ai.distanceToPlayer' ||
     nodeKind === 'ai.directionToPlayer' ||
     nodeKind === 'ai.hasLineOfSight' ||

@@ -3,6 +3,7 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { defaultCharacter, defaultLight, defaultVehicle, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useAssetUrl } from '../three/ModelAsset';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
 import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent } from '../types';
@@ -280,7 +281,7 @@ function RendererSection({
 
 /** Lists the animation clips baked into a model GLB. Suspends while the GLB loads. */
 function ClipOptions({ url }: { url: string }) {
-  const { animations } = useGLTF(url);
+  const { animations } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
   return (
     <>
       {animations.map((clip) => (

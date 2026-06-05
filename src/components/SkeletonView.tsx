@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { SkeletonUtils } from 'three-stdlib';
 import * as THREE from 'three';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import type { RagdollBodyDef } from '../types';
 
 /** Clickable spheres tracking each bone's world position (drawn over the mesh so they're always visible). */
@@ -119,7 +120,7 @@ export function SkeletonBones({
   /** When provided, overlays the ragdoll collision shapes for these per-bone bodies. */
   bodies?: RagdollBodyDef[];
 }) {
-  const { scene } = useGLTF(url);
+  const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
   const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const bones = useMemo(() => {
     const found: THREE.Object3D[] = [];

@@ -32,6 +32,8 @@ import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
 import { PostFx } from '../three/PostFx';
 import { ShadowLOD } from '../three/ShadowLOD';
+import { MeshLOD } from '../three/MeshLOD';
+import { CompressedTextureSupport } from '../three/CompressedTextureSupport';
 import { ModelInstances } from '../three/ModelInstances';
 import {
   useInstancingEnabled,
@@ -1473,9 +1475,11 @@ export function ViewportPanel() {
               camera={{ position: [6, 4.2, 7], fov: 46 }}
             >
               <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+              <CompressedTextureSupport />
               <RenderStatsProbe />
               <LightBudget />
               <ShadowLOD />
+              <MeshLOD />
               <SceneContent
                 transformMode={transformMode}
                 transformSpace={transformSpace}

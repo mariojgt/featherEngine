@@ -5,6 +5,7 @@ import { useEditorStore } from '../store/editorStore';
 import { registerModelGeometry } from '../runtime/meshGeometryCache';
 import { qualityProfile } from './quality';
 import { applyAnisotropy } from './textureQuality';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 
 /** Anisotropy for the current quality preset, read non-reactively (textures persist across changes). */
 const currentAnisotropy = (): number =>
@@ -118,7 +119,7 @@ type OriginalMaterial = {
  * by every other instance of the same model. Suspends while loading — render inside a <Suspense>.
  */
 export function ModelAsset({ url, material, geometryKey }: { url: string; material?: ModelMaterial; geometryKey?: string }) {
-  const { scene } = useGLTF(url);
+  const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
   const baseTexture = useAssetTexture(material?.baseColorUrl, false);
   const normalTexture = useAssetTexture(material?.normalUrl, false);
 

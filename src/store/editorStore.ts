@@ -316,6 +316,8 @@ interface EditorState {
   runtimeFootstep: Record<string, number>;
   /** Per (object:node) remaining seconds for Cooldown gate nodes — drives AI fire rate / spawn rate. */
   runtimeCooldowns: Record<string, number>;
+  /** Per (object:node) remaining seconds for latent Delay nodes — when one hits 0 the node's output fires. */
+  runtimeDelays: Record<string, number>;
   /** Object ids hidden at runtime by action.setVisible (e.g. holstered weapons). */
   runtimeHidden: string[];
   /** GTA-style vehicle possession: vehicleObjectId → the player pawn id currently driving it (set by the
@@ -894,6 +896,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeInteract: {},
   runtimeFootstep: {},
   runtimeCooldowns: {},
+  runtimeDelays: {},
   runtimeHidden: [],
   runtimeVehicleOccupants: {},
   runtimeInteractFocusId: null,
@@ -4406,6 +4409,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeInteract: {},
       runtimeFootstep: {},
       runtimeCooldowns: {},
+      runtimeDelays: {},
       runtimeHidden: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
@@ -4494,6 +4498,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeInteract: {},
       runtimeFootstep: {},
       runtimeCooldowns: {},
+      runtimeDelays: {},
       runtimeHidden: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
@@ -4708,6 +4713,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const left = remaining - (delta || 1 / 60);
         if (left > 0) nextCooldowns[key] = left;
       }
+      // Latent Delay timers (key = `${objId}:${nodeId}`): decrement each frame; a timer that reaches 0
+      // this frame fires its node's exec output via the resume pass below (and is dropped from the map).
+      const nextDelays: Record<string, number> = {};
+      const elapsedDelaysByObject = new Map<string, string[]>();
+      for (const [key, remaining] of Object.entries(state.runtimeDelays)) {
+        const left = remaining - (delta || 1 / 60);
+        if (left > 0) {
+          nextDelays[key] = left;
+        } else {
+          const sep = key.indexOf(':');
+          const objId = key.slice(0, sep);
+          const nodeId = key.slice(sep + 1);
+          const list = elapsedDelaysByObject.get(objId);
+          if (list) list.push(nodeId);
+          else elapsedDelaysByObject.set(objId, [nodeId]);
+        }
+      }
       // "The player" for AI nodes (Distance/Direction/Face To Player) = the active follow-camera character.
       const aiPlayer = playerId ? activeObjectById.get(playerId) : undefined;
 
@@ -4803,7 +4825,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // collision/trigger/interact/key, none firing this frame): if no event-root fires, the
           // dispatch below would run nothing and `changed` would stay false, so returning the object
           // unchanged is identical behavior — but skips the transform-tuple clones + roots array.
-          if (!graphRuntime.eventRoots.some((node) => eventRootFires(node, object.id))) return object;
+          if (!elapsedDelaysByObject.has(object.id) && !graphRuntime.eventRoots.some((node) => eventRootFires(node, object.id))) return object;
           // Only scripted objects clone their transform tuples — a script may mutate these in place.
           const position = [...object.transform.position] as Vector3Tuple;
           const rotation = [...object.transform.rotation] as Vector3Tuple;
@@ -4817,6 +4839,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // a fresh `new Set` per edge. Cleared and re-seeded with the consumer node at each top-level
           // call, so each traversal still starts clean — identical semantics, far less GC churn.
           const valueVisited = new Set<string>();
+          // Coerce any graph value into a [x,y,z] tuple — used by the vector-math nodes (a non-vector
+          // input degrades to the origin rather than throwing).
+          const asVec3 = (value: GraphValue | undefined): Vector3Tuple =>
+            Array.isArray(value)
+              ? [Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0]
+              : [0, 0, 0];
           function valueInput(node: NodeForgeNode, handle: string, fallback?: GraphValue): GraphValue | undefined {
             const edge = runtime.incomingValueByHandle.get(node.id)?.get(handle);
             if (!edge) return fallback;
@@ -5029,6 +5057,92 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return a + (b - a) * t;
             }
 
+            if (node.data.nodeKind === 'math.subtract') {
+              return toNumber(valueInput(node, 'a', 0)) - toNumber(valueInput(node, 'b', 0));
+            }
+
+            if (node.data.nodeKind === 'math.multiply') {
+              return toNumber(valueInput(node, 'a', 0)) * toNumber(valueInput(node, 'b', 0));
+            }
+
+            if (node.data.nodeKind === 'math.divide') {
+              const b = toNumber(valueInput(node, 'b', 0));
+              return b === 0 ? 0 : toNumber(valueInput(node, 'a', 0)) / b;
+            }
+
+            if (node.data.nodeKind === 'math.modulo') {
+              const b = toNumber(valueInput(node, 'b', 0));
+              return b === 0 ? 0 : toNumber(valueInput(node, 'a', 0)) % b;
+            }
+
+            // --- Vector math (read inputs as [x,y,z] tuples) ---
+            if (node.data.nodeKind === 'math.distance') {
+              const a = asVec3(valueInput(node, 'a'));
+              const b = asVec3(valueInput(node, 'b'));
+              return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+            }
+
+            if (node.data.nodeKind === 'math.vectorAdd') {
+              const a = asVec3(valueInput(node, 'a'));
+              const b = asVec3(valueInput(node, 'b'));
+              return [a[0] + b[0], a[1] + b[1], a[2] + b[2]] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'math.vectorSubtract') {
+              const a = asVec3(valueInput(node, 'a'));
+              const b = asVec3(valueInput(node, 'b'));
+              return [a[0] - b[0], a[1] - b[1], a[2] - b[2]] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'math.vectorScale') {
+              const v = asVec3(valueInput(node, 'vector'));
+              const s = toNumber(valueInput(node, 'scale', 1));
+              return [v[0] * s, v[1] * s, v[2] * s] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'math.normalize') {
+              const v = asVec3(valueInput(node, 'value'));
+              const len = Math.hypot(v[0], v[1], v[2]) || 1;
+              return [v[0] / len, v[1] / len, v[2] / len] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'math.makeVector') {
+              return [
+                toNumber(valueInput(node, 'x', 0)),
+                toNumber(valueInput(node, 'y', 0)),
+                toNumber(valueInput(node, 'z', 0)),
+              ] as Vector3Tuple;
+            }
+
+            if (node.data.nodeKind === 'logic.not') {
+              return !toBoolean(valueInput(node, 'value', false));
+            }
+
+            // Read an actor's transform (Unreal GetActorLocation/Rotation/Scale). Target resolves via the wired
+            // "target" reference or the targetObjectId sentinel ($self/$player/$trigger/$cast), default self. For
+            // self we read the LIVE arrays (reflecting this-frame mutations); other actors read their transform.
+            if (
+              node.data.nodeKind === 'action.getPosition' ||
+              node.data.nodeKind === 'action.getRotation' ||
+              node.data.nodeKind === 'action.getScale'
+            ) {
+              const targetId = objectVarTarget(node);
+              const self = targetId === object.id;
+              const tf = self ? undefined : activeObjectById.get(targetId)?.transform;
+              if (node.data.nodeKind === 'action.getPosition') {
+                const p = self ? position : tf?.position;
+                return (p ? [p[0], p[1], p[2]] : [0, 0, 0]) as Vector3Tuple;
+              }
+              if (node.data.nodeKind === 'action.getScale') {
+                const s = self ? scale : tf?.scale;
+                return (s ? [s[0], s[1], s[2]] : [1, 1, 1]) as Vector3Tuple;
+              }
+              // getRotation → Euler DEGREES
+              const r = self ? rotation : tf?.rotation;
+              const d = 180 / Math.PI;
+              return (r ? [r[0] * d, r[1] * d, r[2] * d] : [0, 0, 0]) as Vector3Tuple;
+            }
+
             if (node.data.nodeKind === 'logic.compare') {
               return compareValues(valueInput(node, 'a', 0), valueInput(node, 'b', Number(node.data.numberValue ?? 0)), node.data.compareOp ?? '==');
             }
@@ -5132,6 +5246,73 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if ((nextCooldowns[key] ?? 0) > 0) return false;
               nextCooldowns[key] = Math.max(0.05, toNumber(valueInput(node, 'seconds', Number(node.data.numberValue ?? 1))));
               return true;
+            }
+
+            // Do Once gate: passes the FIRST time it's reached this Play session, then blocks forever. Reuses
+            // the cooldown timer map armed to a huge value so it never re-opens (cleared when Play stops).
+            if (node.data.nodeKind === 'logic.doOnce') {
+              const key = `doOnce:${object.id}:${node.id}`;
+              if ((nextCooldowns[key] ?? 0) > 0) return false;
+              nextCooldowns[key] = Number.MAX_SAFE_INTEGER;
+              return true;
+            }
+
+            // Delay (latent): the first time it's reached, arm a timer and STOP the chain here; when the timer
+            // elapses (decremented each tick) the resume pass fires this node's exec-out. Re-triggers while
+            // counting are ignored. Continuation never happens inline, so this always returns false.
+            if (node.data.nodeKind === 'logic.delay') {
+              const key = `${object.id}:${node.id}`;
+              if (nextDelays[key] === undefined) {
+                nextDelays[key] = Math.max(0.01, toNumber(valueInput(node, 'seconds', Number(node.data.numberValue ?? 1))));
+              }
+              return false;
+            }
+
+            // Teleport the owner to a world position (wire a Vector3 into "position").
+            if (node.data.nodeKind === 'action.setPosition') {
+              const p = valueInput(node, 'position');
+              if (Array.isArray(p)) {
+                position[0] = Number(p[0]) || 0;
+                position[1] = Number(p[1]) || 0;
+                position[2] = Number(p[2]) || 0;
+                changed = true;
+              }
+            }
+
+            // Set the owner's rotation from Euler DEGREES (wire a Vector3 into "rotation").
+            if (node.data.nodeKind === 'action.setRotation') {
+              const r = valueInput(node, 'rotation');
+              if (Array.isArray(r)) {
+                const d = Math.PI / 180;
+                rotation[0] = (Number(r[0]) || 0) * d;
+                rotation[1] = (Number(r[1]) || 0) * d;
+                rotation[2] = (Number(r[2]) || 0) * d;
+                changed = true;
+              }
+            }
+
+            // Set the owner's scale (wire a Vector3 into "scale").
+            if (node.data.nodeKind === 'action.setScale') {
+              const s = valueInput(node, 'scale');
+              if (Array.isArray(s)) {
+                scale[0] = Number(s[0]) || 0;
+                scale[1] = Number(s[1]) || 0;
+                scale[2] = Number(s[2]) || 0;
+                changed = true;
+              }
+            }
+
+            // Yaw the owner to face a world position on the ground plane (wire a Vector3 into "target").
+            if (node.data.nodeKind === 'action.lookAt') {
+              const t = valueInput(node, 'target');
+              if (Array.isArray(t)) {
+                const dx = (Number(t[0]) || 0) - position[0];
+                const dz = (Number(t[2]) || 0) - position[2];
+                if (dx !== 0 || dz !== 0) {
+                  rotation[1] = Math.atan2(dx, dz) + (object.character?.modelYawOffset ?? 0);
+                  changed = true;
+                }
+              }
             }
 
             // Turn this object to face the player on the ground plane (so Spawn Projectile fires at them).
@@ -5691,6 +5872,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtime.eventRoots
             .filter((node) => eventRootFires(node, object.id))
             .forEach((node) => executeFrom(node.id, new Set()));
+
+          // Resume latent Delay nodes whose timer elapsed this frame: fire each delay node's exec-out
+          // (the continuation that was held back when the Delay was first reached).
+          const elapsedHere = elapsedDelaysByObject.get(object.id);
+          if (elapsedHere) {
+            for (const delayNodeId of elapsedHere) {
+              (runtime.outgoing.get(delayNodeId) ?? []).forEach((targetId) => executeFrom(targetId, new Set()));
+            }
+          }
 
           return changed
             ? {
@@ -7060,6 +7250,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeInteract: {},
             runtimeFootstep: {},
             runtimeCooldowns: {},
+            runtimeDelays: {},
             runtimeHidden: [],
   runtimeVehicleOccupants: {},
             runtimeInteractFocusId: null,
@@ -7108,6 +7299,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeInteract: nextInteract,
         runtimeFootstep: nextFootstep,
         runtimeCooldowns: nextCooldowns,
+        runtimeDelays: nextDelays,
         runtimeHidden: [...nextHidden],
         runtimeVehicleOccupants: nextOccupants,
         runtimeInteractFocusId: interactFocusId,
@@ -7337,6 +7529,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeInteract: {},
       runtimeFootstep: {},
       runtimeCooldowns: {},
+      runtimeDelays: {},
       runtimeHidden: [],
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,

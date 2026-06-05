@@ -293,6 +293,26 @@ const NODE_LABELS = [
   'Set UI Text',
   'Get Object Var',
   'Set Object Var',
+  'NOT',
+  'Do Once',
+  'Delay',
+  'Subtract',
+  'Multiply',
+  'Divide',
+  'Modulo',
+  'Distance',
+  'Add Vectors',
+  'Subtract Vectors',
+  'Scale Vector',
+  'Normalize',
+  'Make Vector3',
+  'Get Position',
+  'Get Rotation',
+  'Get Scale',
+  'Set Position',
+  'Set Rotation',
+  'Set Scale',
+  'Look At',
 ] as const;
 
 const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
@@ -374,6 +394,26 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Set UI Text': 'UI',
   'Get Object Var': 'Variables',
   'Set Object Var': 'Variables',
+  NOT: 'Logic',
+  'Do Once': 'Logic',
+  Delay: 'Logic',
+  Subtract: 'Math',
+  Multiply: 'Math',
+  Divide: 'Math',
+  Modulo: 'Math',
+  Distance: 'Math',
+  'Add Vectors': 'Math',
+  'Subtract Vectors': 'Math',
+  'Scale Vector': 'Math',
+  Normalize: 'Math',
+  'Make Vector3': 'Math',
+  'Get Position': 'Runtime',
+  'Get Rotation': 'Runtime',
+  'Get Scale': 'Runtime',
+  'Set Position': 'Runtime',
+  'Set Rotation': 'Runtime',
+  'Set Scale': 'Runtime',
+  'Look At': 'Runtime',
 };
 
 const KEY_CODES = [
@@ -2541,9 +2581,15 @@ export const engineTools = {
       minimapEnabled: z.boolean().optional().describe('Show the GTA-style radar minimap overlay.'),
       minimapRotate: z.boolean().optional().describe('Rotate the radar with the player heading (true, GTA-style) or keep north-up (false).'),
       minimapRange: z.number().optional().describe('World-units half-extent the radar shows around the player (~40–100).'),
+      compressTextures: z
+        .boolean()
+        .optional()
+        .describe(
+          'Texture compression for FUTURE model imports. On (default) transcodes imported model textures to GPU-compressed KTX2 — cuts GPU memory ~6–8x and shrinks the exported game (the biggest browser perf/size lever). Off keeps textures lossless. Affects models imported AFTER this is set, not ones already in the project.',
+        ),
     }),
-    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange }) => {
-      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange });
+    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, compressTextures }) => {
+      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, compressTextures });
       return 'Updated render/post-processing settings.';
     },
   }),
@@ -2635,7 +2681,8 @@ export const engineTools = {
         if (asset.type !== 'image') return `Asset ${assetId} is a ${asset.type}, not an image.`;
       }
       // Material operators reuse names that collide with blueprint math nodes — map to their material labels.
-      const label = type === 'Add' ? 'Add (Material)' : type === 'Clamp' ? 'Clamp (Material)' : type;
+      const label =
+        type === 'Add' ? 'Add (Material)' : type === 'Clamp' ? 'Clamp (Material)' : type === 'Multiply' ? 'Multiply (Material)' : type;
       store().ensureMaterialGraph(materialId);
       store().setActiveMaterial(materialId);
       const nodeId = store().addMaterialNode(label, 'Material', { materialColor, numberValue, assetId });

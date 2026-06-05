@@ -25,6 +25,10 @@ import type { QualityLevel } from '../types';
  *  - `shadowDistance`   distance-LOD for shadow CASTING: meshes farther than this from the camera stop
  *                       rendering into shadow maps (their shadow is imperceptible at range). Shrinks the
  *                       shadow pass in big scenes without ever hiding the object itself. 0 = no culling.
+ *  - `lodDistance`      distance-LOD for mesh GEOMETRY: a mesh past this distance swaps to an
+ *                       auto-simplified lower-triangle copy (and to an even cheaper one past ~2.5×),
+ *                       cutting vertex/triangle throughput for distant detail. Shares the original's
+ *                       vertex buffers (only the index shrinks). 0 = off (Epic keeps full detail).
  */
 export interface QualityProfile {
   dpr: number;
@@ -39,16 +43,17 @@ export interface QualityProfile {
   envResolution: number;
   ssr: boolean;
   shadowDistance: number;
+  lodDistance: number;
 }
 
 /** Ordered Low → Epic, for building selector UIs. */
 export const QUALITY_LEVELS: QualityLevel[] = ['Low', 'Medium', 'High', 'Epic'];
 
 export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
-  Low: { dpr: 0.75, shadows: false, shadowMapSize: 512, maxShadowCasters: 0, msaa: 0, bloomMipmap: false, maxAnisotropy: 1, ssao: false, smaa: false, envResolution: 128, ssr: false, shadowDistance: 0 },
-  Medium: { dpr: 1, shadows: true, shadowMapSize: 1024, maxShadowCasters: 3, msaa: 0, bloomMipmap: false, maxAnisotropy: 4, ssao: false, smaa: true, envResolution: 256, ssr: false, shadowDistance: 45 },
-  High: { dpr: 1.5, shadows: true, shadowMapSize: 2048, maxShadowCasters: 8, msaa: 2, bloomMipmap: true, maxAnisotropy: 8, ssao: true, smaa: true, envResolution: 512, ssr: false, shadowDistance: 90 },
-  Epic: { dpr: 2, shadows: true, shadowMapSize: 4096, maxShadowCasters: 16, msaa: 4, bloomMipmap: true, maxAnisotropy: 16, ssao: true, smaa: true, envResolution: 512, ssr: true, shadowDistance: 160 },
+  Low: { dpr: 0.75, shadows: false, shadowMapSize: 512, maxShadowCasters: 0, msaa: 0, bloomMipmap: false, maxAnisotropy: 1, ssao: false, smaa: false, envResolution: 128, ssr: false, shadowDistance: 0, lodDistance: 28 },
+  Medium: { dpr: 1, shadows: true, shadowMapSize: 1024, maxShadowCasters: 3, msaa: 0, bloomMipmap: false, maxAnisotropy: 4, ssao: false, smaa: true, envResolution: 256, ssr: false, shadowDistance: 45, lodDistance: 55 },
+  High: { dpr: 1.5, shadows: true, shadowMapSize: 2048, maxShadowCasters: 8, msaa: 2, bloomMipmap: true, maxAnisotropy: 8, ssao: true, smaa: true, envResolution: 512, ssr: false, shadowDistance: 90, lodDistance: 110 },
+  Epic: { dpr: 2, shadows: true, shadowMapSize: 4096, maxShadowCasters: 16, msaa: 4, bloomMipmap: true, maxAnisotropy: 16, ssao: true, smaa: true, envResolution: 512, ssr: true, shadowDistance: 160, lodDistance: 0 },
 };
 
 export const DEFAULT_QUALITY: QualityLevel = 'High';

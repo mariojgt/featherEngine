@@ -63,9 +63,22 @@ export type GraphNodeKind =
   | 'logic.or'
   | 'logic.cast'
   | 'logic.forLoop'
+  | 'logic.not'
+  | 'logic.doOnce'
+  | 'logic.delay'
   | 'math.add'
+  | 'math.subtract'
+  | 'math.multiply'
+  | 'math.divide'
+  | 'math.modulo'
   | 'math.clamp'
   | 'math.lerp'
+  | 'math.distance'
+  | 'math.vectorAdd'
+  | 'math.vectorSubtract'
+  | 'math.vectorScale'
+  | 'math.normalize'
+  | 'math.makeVector'
   | 'value.number'
   | 'value.random'
   | 'value.string'
@@ -86,6 +99,13 @@ export type GraphNodeKind =
   | 'action.setMaterialProperty'
   | 'action.getMaterialColor'
   | 'action.getMaterialProperty'
+  | 'action.getPosition'
+  | 'action.getRotation'
+  | 'action.getScale'
+  | 'action.setPosition'
+  | 'action.setRotation'
+  | 'action.setScale'
+  | 'action.lookAt'
   | 'animator.setFloat'
   | 'animator.setBool'
   | 'animator.setTrigger'
@@ -853,6 +873,10 @@ export interface RenderSettings {
    *  count + map size, post-FX MSAA, and bloom mip blur via the profiles in `src/three/quality.ts`.
    *  Changeable on the viewport, by the AI, and from the "Set Quality" Blueprint node. */
   quality?: QualityLevel;
+  /** When on (default), imported model textures are transcoded to GPU-compressed KTX2 on import —
+   *  cuts VRAM ~6–8× and shrinks the exported game. Turn off to keep textures byte-for-byte
+   *  (lossless) at the cost of more GPU memory. See `src/three/compressTextures.ts`. */
+  compressTextures?: boolean;
 }
 
 /** Game quality / scalability preset, Low → Epic (the project-wide rendering budget). */

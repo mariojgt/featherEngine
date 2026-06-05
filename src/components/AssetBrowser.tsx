@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   List,
+  FileArchive,
   Music,
   PanelLeft,
   Palette,
@@ -28,6 +29,7 @@ import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { getPlatform } from '../platform';
 import { fbxToGlb } from '../three/convertModel';
+import { compressGlbTextures } from '../three/compressTextures';
 import { inspectModel, type ModelInspection } from '../three/inspectModel';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
 import { SkeletonEditorModal } from './SkeletonEditorModal';
@@ -109,6 +111,8 @@ export function AssetBrowser() {
   const registerImportedModel = useEditorStore((state) => state.registerImportedModel);
   const removeAsset = useEditorStore((state) => state.removeAsset);
   const renameAsset = useEditorStore((state) => state.renameAsset);
+  const compressTextures = useEditorStore((state) => state.renderSettings?.compressTextures !== false);
+  const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
   const createFolder = useEditorStore((state) => state.createFolder);
   const renameFolder = useEditorStore((state) => state.renameFolder);
   const deleteFolder = useEditorStore((state) => state.deleteFolder);
@@ -221,6 +225,10 @@ export function AssetBrowser() {
     const rigImports: { assetId: string; assetName: string; inspection: ModelInspection }[] = [];
     let strippedTextures = false;
     let riggedCount = 0;
+    // Transcode imported model textures to GPU-compressed KTX2 (on by default; see RenderSettings).
+    const compressEnabled = useEditorStore.getState().renderSettings?.compressTextures !== false;
+    let compressedCount = 0;
+    let savedBytes = 0;
     // Drag-and-drop bypasses the picker's `accept`, so filter to supported types here.
     for (const original of all.filter((file) => isAccepted(file.name))) {
       try {
@@ -231,6 +239,21 @@ export function AssetBrowser() {
           const converted = await fbxToGlb(original, all);
           file = converted.file;
           if (converted.droppedTextures > 0) strippedTextures = true;
+        }
+        // GPU-compress embedded textures to KTX2 (cuts VRAM ~6–8× and shrinks the exported game).
+        // On ANY failure we keep the original bytes, so a bad encode never blocks the import.
+        if (compressEnabled && /\.glb$/i.test(file.name)) {
+          try {
+            useProjectStore.setState({ toast: { kind: 'success', message: `Compressing textures in "${file.name}"…` } });
+            const result = await compressGlbTextures(await file.arrayBuffer());
+            if (result.compressed) {
+              file = new File([result.data], file.name, { type: 'model/gltf-binary' });
+              savedBytes += Math.max(0, result.beforeBytes - result.afterBytes);
+              compressedCount += 1;
+            }
+          } catch (compressError) {
+            console.warn(`Texture compression failed for "${file.name}", importing uncompressed:`, compressError);
+          }
         }
         const { path, url } = await platform.importAsset(dir, file);
         const assetId = `asset-${crypto.randomUUID()}`;
@@ -287,6 +310,15 @@ export function AssetBrowser() {
         toast: {
           kind: 'success',
           message: 'Model imported without some textures. Re-import the .fbx together with its texture images (select them all at once) to keep them.',
+        },
+      });
+    }
+    if (compressedCount > 0) {
+      const savedMb = (savedBytes / (1024 * 1024)).toFixed(1);
+      useProjectStore.setState({
+        toast: {
+          kind: 'success',
+          message: `Compressed textures in ${compressedCount} model${compressedCount > 1 ? 's' : ''} to KTX2 (saved ${savedMb} MB).`,
         },
       });
     }
@@ -1085,6 +1117,17 @@ export function AssetBrowser() {
         </button>
         <button className="icon-button compact" title="Import assets" onClick={() => triggerImport(selectedFolderId)}>
           <Upload size={15} aria-hidden />
+        </button>
+        <button
+          className={clsx('icon-button compact', compressTextures && 'active')}
+          title={
+            compressTextures
+              ? 'Texture compression ON — imported model textures become GPU-compressed KTX2 (smaller VRAM + download). Click to keep textures lossless.'
+              : 'Texture compression OFF — imported textures stay lossless. Click to compress to KTX2 on import.'
+          }
+          onClick={() => updateRenderSettings({ compressTextures: !compressTextures })}
+        >
+          <FileArchive size={15} aria-hidden />
         </button>
         <button className="icon-button compact" title="Import package (.nfpack)" onClick={importPackage}>
           <PackagePlus size={15} aria-hidden />

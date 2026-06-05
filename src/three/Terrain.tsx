@@ -4,6 +4,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'reac
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
 import { useAssetUrl } from './ModelAsset';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 import type { SceneObject, TerrainComponent, Vector3Tuple } from '../types';
 import {
   sampleTerrainLocalHeight,
@@ -343,7 +344,7 @@ function LoadedFoliageModel({
   matrices: THREE.Matrix4[];
   limit: number;
 }) {
-  const { scene } = useGLTF(url);
+  const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
   // Flatten the model into (geometry, material, in-model transform) parts to instance.
   const parts = useMemo(() => {
     const collected: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; matrix: THREE.Matrix4 }[] = [];

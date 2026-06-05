@@ -199,7 +199,9 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'set_light':
       return `Configured ${String(input.type ?? '')} light`.replace('  ', ' ');
     case 'set_render_settings':
-      return 'Updated post-processing';
+      return input.compressTextures !== undefined
+        ? `Texture compression ${input.compressTextures ? 'on' : 'off'}`
+        : 'Updated post-processing';
     case 'rename_object':
       return `Renamed to "${String(input.name ?? '')}"`;
     case 'select_object':

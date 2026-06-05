@@ -24,12 +24,26 @@ export const nodeGroups: Array<{
   {
     title: 'Logic',
     icon: GitBranch,
-    nodes: ['Branch', 'Compare', 'AND', 'OR', 'Cast', 'Cooldown', 'For Loop'],
+    nodes: ['Branch', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop'],
   },
   {
     title: 'Math',
     icon: Sigma,
-    nodes: ['Add', 'Clamp', 'Lerp'],
+    nodes: [
+      'Add',
+      'Subtract',
+      'Multiply',
+      'Divide',
+      'Modulo',
+      'Clamp',
+      'Lerp',
+      'Distance',
+      'Add Vectors',
+      'Subtract Vectors',
+      'Scale Vector',
+      'Normalize',
+      'Make Vector3',
+    ],
   },
   {
     title: 'Values',
@@ -49,7 +63,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -526,6 +540,12 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const ctxBlueprint = blueprints.find((b) => b.id === ctxBlueprintId);
   const ctxVars = ctxBlueprint?.variables ?? [];
   const updatesOtherObject = node.data.nodeKind === 'event.collisionEnter' || node.data.nodeKind === 'event.triggerEnter';
+  // The transform getters (Get Position/Rotation/Scale) read an actor via the full sentinel set, like
+  // Get Object Var — so they get their own richer Target dropdown ($player/$trigger/$cast resolve at runtime).
+  const readsTransformTarget =
+    node.data.nodeKind === 'action.getPosition' ||
+    node.data.nodeKind === 'action.getRotation' ||
+    node.data.nodeKind === 'action.getScale';
   const updatesTargetObject =
     node.data.nodeKind === 'action.destroyObject' ||
     node.data.nodeKind === 'action.setRagdoll' ||
@@ -1015,6 +1035,32 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               placeholder="Text to print"
               onChange={(event) => updateGraphNodeData(node.id, { message: event.target.value })}
             />
+          </label>
+        )}
+
+        {readsTransformTarget && (
+          <label className="node-field">
+            <span>Target</span>
+            <select
+              value={node.data.targetObjectId ?? ''}
+              disabled={isTargetWired}
+              onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}
+            >
+              <option value="">Self (this object)</option>
+              <option value="$player">Player</option>
+              <option value="$trigger">Trigger toucher ($trigger)</option>
+              <option value="$cast">Cast result ($cast)</option>
+              {sceneObjects.map((object) => (
+                <option key={object.id} value={object.id}>
+                  {object.name}
+                </option>
+              ))}
+            </select>
+            <small className="node-hint">
+              {isTargetWired
+                ? 'Driven by the wired Target pin — this dropdown is ignored while connected.'
+                : 'Which actor to read — self, the player, the trigger toucher, a Cast result, or a specific object. Or wire a reference into the Target input.'}
+            </small>
           </label>
         )}
 

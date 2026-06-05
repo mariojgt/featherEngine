@@ -37,7 +37,7 @@ const paletteGroups: Array<{ title: string; icon: typeof Palette; nodes: Array<{
     icon: SlidersHorizontal,
     nodes: [
       { label: 'Mix', key: 'Mix' },
-      { label: 'Multiply', key: 'Multiply' },
+      { label: 'Multiply', key: 'Multiply (Material)' },
       { label: 'Add', key: 'Add (Material)' },
       { label: 'Clamp', key: 'Clamp (Material)' },
     ],
@@ -49,7 +49,7 @@ const nodeChoices: NodeChoice[] = [
   { label: 'Scalar', category: 'Material' },
   { label: 'Texture', category: 'Material' },
   { label: 'Mix', category: 'Material' },
-  { label: 'Multiply', category: 'Material' },
+  { label: 'Multiply', category: 'Material', nodeLabel: 'Multiply (Material)' },
   { label: 'Add', category: 'Material', nodeLabel: 'Add (Material)' },
   { label: 'Clamp', category: 'Material', nodeLabel: 'Clamp (Material)' },
 ];
