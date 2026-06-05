@@ -278,7 +278,7 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
     };
 
     // Decide how many to emit this frame.
-    const active = playing ? cfg.enabled && emitting.current : cfg.enabled;
+    const active = playing ? emitting.current : cfg.enabled;
     if (active && cfg.looping && cfg.rate > 0) {
       emitAccum.current += cfg.rate * delta;
     }

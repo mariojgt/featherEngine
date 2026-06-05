@@ -94,6 +94,7 @@ export type GraphNodeKind =
   | 'action.rotate'
   | 'action.applyForce'
   | 'action.applyImpulse'
+  | 'action.applyTorque'
   | 'action.setVelocity'
   | 'query.velocity'
   | 'action.fireEvent'
@@ -169,7 +170,8 @@ export type GraphNodeKind =
   | 'action.applyDamage'
   | 'action.enterVehicle'
   | 'action.exitVehicle'
-  | 'action.setQuality';
+  | 'action.setQuality'
+  | 'action.setEnvironment';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
   label: string;
@@ -180,6 +182,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   eventName?: string;
   keyCode?: string;
   axis?: 'x' | 'y' | 'z';
+  /** action.applyImpulse: whether axis/vector values are interpreted in world axes or the target actor's local axes. */
+  space?: 'world' | 'local';
   amount?: number;
   valueType?: GraphValueType;
   numberValue?: number;
@@ -258,6 +262,23 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   /** action.cameraShake: trauma to add (0..1). The runtime decays it; the follow camera turns it into a
    *  positional + rotational jitter. The player firing/being hurt and explosions also add trauma. */
   shakeAmount?: number;
+  /** action.setEnvironment: a partial patch over the active scene's environment. Any field present here
+   *  overwrites the same field on the live scene (sky colors, fog, sun, environmentIntensity) — undefined
+   *  fields are left alone. Use it to crossfade atmospheres on a trigger (day → toxic green → dawn). */
+  envPatch?: Partial<{
+    skyTopColor: string;
+    skyHorizonColor: string;
+    skyGroundColor: string;
+    fogEnabled: boolean;
+    fogColor: string;
+    fogNear: number;
+    fogFar: number;
+    sunColor: string;
+    sunIntensity: number;
+    sunAzimuth: number;
+    sunElevation: number;
+    environmentIntensity: number;
+  }>;
   /** action.setVisible: whether the target object is shown (false hides it during Play). */
   visible?: boolean;
   /** action.spawnAttached: weapon model asset to spawn + which bone/socket on the owner to attach it to,
@@ -315,6 +336,8 @@ export interface MeshRendererComponent {
   /** Surface opacity 0–1 (1 = fully opaque, the default). Below 1 renders the mesh translucent — used for
    *  water/glass volumes. Applies to built-in meshes; models honor it when `overrideMaterial` is on. */
   opacity?: number;
+  /** Hide this object's renderer while Play/runtime is running. Editor view still shows it for authoring. */
+  hideInPlay?: boolean;
   /** When set, render this imported glTF/GLB model asset instead of the built-in `mesh`. */
   modelAssetId?: string;
   /** Image asset used as the base-color (albedo) map — applies to built-in meshes and models. */
@@ -1018,6 +1041,21 @@ export interface VehicleComponent {
   bodyRoll: number;
   /** Chassis squat/dive under accel/brake (radians per unit of longitudinal load). */
   bodyPitch: number;
+  // --- Crash / damage feel ---
+  /** When true, hard impacts add damage, angular impulses, wheel damage, and let physics roll the car. */
+  crashDamageEnabled?: boolean;
+  /** Impact speed below this is treated as a normal bump. */
+  crashDamageThreshold?: number;
+  /** Impact speed that starts a rollover/tumble response. */
+  crashRolloverThreshold?: number;
+  /** Angular impulse multiplier applied on hard impacts. */
+  crashRolloverStrength?: number;
+  /** Runtime visual crush amount 0..1 driven by accumulated crash damage. */
+  crashDeformation?: number;
+  /** Accumulated damage at which individual wheels start hanging crooked. */
+  crashWheelBreakThreshold?: number;
+  /** Spawn small dynamic debris chunks on heavy impacts. */
+  crashDebris?: boolean;
   /** Wheel radius (world units) — sets how fast wheels spin for a given speed. */
   wheelRadius: number;
   /** Distance from the car body's origin down to the wheel-contact (ground) plane. The kinematic body's
@@ -1030,6 +1068,8 @@ export interface VehicleComponent {
   wheelObjectIds: string[];
   /** Which of the wheels steer (the front pair). */
   steeredWheelIds: string[];
+  /** Optional world-space particle emitters enabled by tire slip / handbrake for dust or fading tire marks. */
+  tireMarkIds: string[];
   /** Headlight child objects (kind 'light') — informational; lit via the light component. */
   headlightIds: string[];
   /** Brake-light child objects — their emissive intensity is raised while braking/reversing. */

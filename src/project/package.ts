@@ -429,6 +429,7 @@ export function remapPackageForImport(
       const v = o.vehicle;
       v.wheelObjectIds = v.wheelObjectIds.map((id) => remap(maps.object, id)!);
       v.steeredWheelIds = v.steeredWheelIds.map((id) => remap(maps.object, id)!);
+      v.tireMarkIds = (v.tireMarkIds ?? []).map((id) => remap(maps.object, id)!);
       v.headlightIds = v.headlightIds.map((id) => remap(maps.object, id)!);
       v.brakeLightIds = v.brakeLightIds.map((id) => remap(maps.object, id)!);
       v.engineSoundId = remap(maps.asset, v.engineSoundId);

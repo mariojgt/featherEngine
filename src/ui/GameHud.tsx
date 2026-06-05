@@ -84,9 +84,10 @@ export function GameHud() {
   const rangedParam = controller?.parameters.find((param) => param.name === 'RangedMode');
   const rangedLive = player && rangedParam ? runtimeAnimators[player.id]?.params[rangedParam.id] : undefined;
   const showThirdPersonReticle = Boolean(!driving && thirdPerson && (activeSlot?.ranged || rangedLive === true));
+  const focusVars = focus ? { ...(focus.variables ?? {}), ...(objVars[focus.id] ?? {}) } : {};
   const prompt = focus
-    ? typeof focus.variables?.interactPrompt === 'string' && focus.variables.interactPrompt
-      ? focus.variables.interactPrompt
+    ? typeof focusVars.interactPrompt === 'string' && focusVars.interactPrompt
+      ? focusVars.interactPrompt
       : `Use ${focus.name}`
     : null;
 

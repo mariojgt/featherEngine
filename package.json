@@ -20,6 +20,8 @@
     "@ai-sdk/google": "^3.0.80",
     "@ai-sdk/openai": "^3.0.67",
     "@dimforge/rapier3d-compat": "^0.14.0",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/extensions": "^4.3.0",
     "@react-three/drei": "^9.122.0",

@@ -4,7 +4,7 @@ import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2,
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { NodeForgeGraphNode, outputTypeOf, VALUE_TYPE_COLORS, EXEC_WIRE_COLOR } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
-import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, QualityLevel, UIElement, Vector3Tuple } from '../types';
+import type { GraphNodeCategory, GraphValue, GraphValueType, NodeForgeNode, NodeForgeNodeData, QualityLevel, UIElement, Vector3Tuple } from '../types';
 import { QUALITY_LEVELS } from '../three/quality';
 
 const nodeTypes: NodeTypes = {
@@ -63,12 +63,12 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Set Environment', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
     icon: Boxes,
-    nodes: ['Apply Force', 'Apply Impulse', 'Set Velocity', 'Get Velocity', 'Fracture'],
+    nodes: ['Apply Force', 'Apply Impulse', 'Apply Torque', 'Set Velocity', 'Get Velocity', 'Fracture'],
   },
   {
     title: 'Persistence',
@@ -107,6 +107,21 @@ const spawnKinds: Array<['cube' | 'sphere' | 'capsule' | 'plane', string]> = [
 
 const valueTypes: GraphValueType[] = ['number', 'string', 'boolean', 'vector3'];
 const compareOps = ['==', '!=', '>', '>=', '<', '<='] as const;
+type EnvPatchKey = keyof NonNullable<NodeForgeNodeData['envPatch']>;
+const environmentFields: Array<{ key: EnvPatchKey; label: string; type: 'color' | 'number' | 'boolean'; step?: number; min?: number }> = [
+  { key: 'skyTopColor', label: 'Sky Top', type: 'color' },
+  { key: 'skyHorizonColor', label: 'Sky Horizon', type: 'color' },
+  { key: 'skyGroundColor', label: 'Sky Ground', type: 'color' },
+  { key: 'fogEnabled', label: 'Fog', type: 'boolean' },
+  { key: 'fogColor', label: 'Fog Color', type: 'color' },
+  { key: 'fogNear', label: 'Fog Near', type: 'number', step: 1, min: 0 },
+  { key: 'fogFar', label: 'Fog Far', type: 'number', step: 1, min: 1 },
+  { key: 'sunColor', label: 'Sun Color', type: 'color' },
+  { key: 'sunIntensity', label: 'Sun Intensity', type: 'number', step: 0.05, min: 0 },
+  { key: 'sunAzimuth', label: 'Sun Azimuth', type: 'number', step: 1 },
+  { key: 'sunElevation', label: 'Sun Elevation', type: 'number', step: 1 },
+  { key: 'environmentIntensity', label: 'Environment Intensity', type: 'number', step: 0.05, min: 0 },
+];
 
 const emptyValue = (type: GraphValueType): GraphValue => {
   if (type === 'number') return 0;
@@ -464,7 +479,9 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesAxis =
     node.data.nodeKind === 'action.translate' ||
     node.data.nodeKind === 'action.rotate' ||
-    node.data.nodeKind === 'action.applyForce';
+    node.data.nodeKind === 'action.applyForce' ||
+    node.data.nodeKind === 'action.applyImpulse';
+  const updatesImpulseSpace = node.data.nodeKind === 'action.applyImpulse';
   const updatesSound = node.data.nodeKind === 'action.playSound';
   const updatesCinematic = node.data.nodeKind === 'action.playCinematic';
   const updatesParticleSystem = node.data.nodeKind === 'action.spawnParticleSystem';
@@ -513,6 +530,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesLoadScene = node.data.nodeKind === 'action.loadScene';
   const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
   const updatesQuality = node.data.nodeKind === 'action.setQuality';
+  const updatesEnvironment = node.data.nodeKind === 'action.setEnvironment';
   const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
   const appliesDamage = node.data.nodeKind === 'action.applyDamage';
   const updatesCast = node.data.nodeKind === 'logic.cast';
@@ -580,6 +598,14 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const selectedTable = dataAssets.find((table) => table.id === node.data.tableId);
   const selectedColumn =
     selectedTable?.columns.find((column) => column.id === node.data.columnId) ?? selectedTable?.columns[0];
+  const updateEnvPatchField = (key: EnvPatchKey, value: string | number | boolean) => {
+    updateGraphNodeData(node.id, { envPatch: { ...(node.data.envPatch ?? {}), [key]: value } });
+  };
+  const clearEnvPatchField = (key: EnvPatchKey) => {
+    const next = { ...(node.data.envPatch ?? {}) };
+    delete next[key];
+    updateGraphNodeData(node.id, { envPatch: Object.keys(next).length ? next : undefined });
+  };
 
   return (
     <aside className="graph-inspector">
@@ -793,6 +819,44 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
             </select>
             <small className="node-hint">Sets the game quality preset at runtime (resolution, shadows, post-FX). Lower = faster.</small>
           </label>
+        )}
+
+        {updatesEnvironment && (
+          <>
+            <small className="node-hint">Only fields set in this patch change at runtime. Clear a row to leave that environment value alone.</small>
+            {environmentFields.map((field) => {
+              const value = node.data.envPatch?.[field.key];
+              const sceneValue = activeScene?.environment?.[field.key];
+              const isSet = value !== undefined;
+              return (
+                <label key={field.key} className="node-field">
+                  <span>{field.label}{isSet ? '' : ' (unchanged)'}</span>
+                  <div className="library-row">
+                    {field.type === 'boolean' ? (
+                      <select
+                        value={String(typeof value === 'boolean' ? value : Boolean(sceneValue))}
+                        onChange={(event) => updateEnvPatchField(field.key, event.target.value === 'true')}
+                      >
+                        <option value="true">True</option>
+                        <option value="false">False</option>
+                      </select>
+                    ) : (
+                      <input
+                        type={field.type}
+                        step={field.step}
+                        min={field.min}
+                        value={field.type === 'number' ? Number(value ?? sceneValue ?? 0) : String(value ?? sceneValue ?? '#ffffff')}
+                        onChange={(event) => updateEnvPatchField(field.key, field.type === 'number' ? Number(event.target.value) : event.target.value)}
+                      />
+                    )}
+                    <button title={`Clear ${field.label}`} disabled={!isSet} onClick={() => clearEnvPatchField(field.key)}>
+                      <Trash2 size={12} aria-hidden />
+                    </button>
+                  </div>
+                </label>
+              );
+            })}
+          </>
         )}
 
         {updatesLoadScene && (
@@ -1040,16 +1104,32 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                   ? 'Degrees / sec'
                   : node.data.nodeKind === 'action.applyForce'
                     ? 'Force'
+                    : node.data.nodeKind === 'action.applyImpulse'
+                      ? 'Impulse'
                     : 'Units / sec'}
               </span>
               <input
                 type="number"
                 step="0.1"
-                value={node.data.amount ?? (node.data.nodeKind === 'action.rotate' ? 90 : node.data.nodeKind === 'action.applyForce' ? 8 : -3.6)}
+                value={node.data.amount ?? (node.data.nodeKind === 'action.rotate' ? 90 : node.data.nodeKind === 'action.applyForce' || node.data.nodeKind === 'action.applyImpulse' ? 8 : -3.6)}
                 onChange={(event) => updateGraphNodeData(node.id, { amount: Number(event.target.value) })}
               />
             </label>
           </>
+        )}
+
+        {updatesImpulseSpace && (
+          <label className="node-field">
+            <span>Space</span>
+            <select
+              value={node.data.space ?? 'world'}
+              onChange={(event) => updateGraphNodeData(node.id, { space: event.target.value as 'world' | 'local' })}
+            >
+              <option value="world">World axes</option>
+              <option value="local">Target local axes</option>
+            </select>
+            <small className="node-hint">Local +Z follows the target's forward direction, useful for car nitro, dashes, and knockback from an actor's facing.</small>
+          </label>
         )}
 
         {updatesMessage && (

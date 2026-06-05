@@ -146,4 +146,19 @@ export const tauriPlatform: Platform = {
     if (typeof target !== 'string') return null;
     return JSON.parse(await readTextFile(target));
   },
+
+  async saveBinary(defaultName, bytes, options) {
+    const target = await save({
+      title: options?.title ?? 'Save file',
+      defaultPath: defaultName,
+      filters: options?.filters,
+    });
+    if (typeof target !== 'string') return null;
+    await writeFile(target, bytes);
+    return target;
+  },
+
+  async revealFile(path) {
+    await invoke('reveal_in_explorer', { path });
+  },
 };

@@ -56,4 +56,27 @@ export interface Platform {
   exportPackage(name: string, pkg: unknown): Promise<string | null>;
   /** Open a `.nfpack` package file and return its parsed JSON, or null if cancelled. */
   openPackage(): Promise<unknown | null>;
+  /**
+   * Write arbitrary binary data (e.g. an exported MP4/WebM recording). On desktop, prompts for a
+   * save location via a native "Save As" dialog and writes the bytes. On web, downloads via a blob
+   * URL (the browser decides the folder). Returns a short destination label, or null if cancelled.
+   */
+  saveBinary(
+    defaultName: string,
+    bytes: Uint8Array,
+    options?: { title?: string; mimeType?: string; filters?: { name: string; extensions: string[] }[] },
+  ): Promise<string | null>;
+  /**
+   * Desktop only: write `bytes` into `<projectDir>/<subfolder>/<fileName>`, creating the subfolder
+   * if missing. Used for "automation" outputs (cinematic recordings, screenshots, etc.) that should
+   * live alongside the project on disk instead of forcing a Save-As prompt. Returns the absolute
+   * path of the written file. Undefined on web (no project folder on disk).
+   */
+  saveInProject?(projectDir: string, subfolder: string, fileName: string, bytes: Uint8Array): Promise<string>;
+  /**
+   * Desktop only: open the OS file manager with the given file highlighted (Explorer on Windows,
+   * Finder on macOS). No-op / unsupported on web — callers should fall back to telling the user to
+   * check their browser's Downloads folder.
+   */
+  revealFile?(path: string): Promise<void>;
 }

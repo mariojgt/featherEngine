@@ -220,6 +220,42 @@ function literalValueForType(data: NodeForgeNodeData, type: GraphValueType): Gra
   if (type === 'boolean') return Boolean(data.booleanValue);
   return data.vectorValue ?? [0, 0, 0];
 }
+
+const rotateLocalVector = (vector: Vector3Tuple, rotation: Vector3Tuple): Vector3Tuple => {
+  let [x, y, z] = vector;
+  const [rx, ry, rz] = rotation;
+  let cos = Math.cos(rx);
+  let sin = Math.sin(rx);
+  [y, z] = [y * cos - z * sin, y * sin + z * cos];
+  cos = Math.cos(ry);
+  sin = Math.sin(ry);
+  [x, z] = [x * cos + z * sin, -x * sin + z * cos];
+  cos = Math.cos(rz);
+  sin = Math.sin(rz);
+  [x, y] = [x * cos - y * sin, x * sin + y * cos];
+  return [x, y, z];
+};
+
+const crashDebrisObject = (position: Vector3Tuple, impulse: Vector3Tuple, index: number): SceneObject => {
+  const debris = makeSpawnedObject('cube', position);
+  return {
+    ...debris,
+    name: `Crash Debris ${index + 1}`,
+    transform: {
+      ...debris.transform,
+      rotation: [Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI],
+      scale: [0.18 + Math.random() * 0.22, 0.08 + Math.random() * 0.12, 0.18 + Math.random() * 0.28],
+    },
+    renderer: {
+      ...(debris.renderer ?? defaultRenderer('cube', '#2b2b2b')),
+      color: index % 2 ? '#171717' : '#34302c',
+      metalness: 0.55,
+      roughness: 0.6,
+    },
+    physics: debris.physics ? { ...debris.physics, mass: 0.18, friction: 0.7, angularDamping: 0.15 } : debris.physics,
+    variables: { ...(debris.variables ?? {}), __impulse: impulse },
+  };
+};
 export {
   defaultCharacter,
   defaultLight,
@@ -287,6 +323,9 @@ interface EditorState {
   runtimeVelocities: Record<string, Vector3Tuple>;
   runtimeKeys: Record<string, boolean>;
   runtimePreviousKeys: Record<string, boolean>;
+  /** Per-key press counters. Unlike runtimeKeys, this preserves a physical keydown until the next tick consumes it. */
+  runtimeKeyPresses: Record<string, number>;
+  runtimePreviousKeyPresses: Record<string, number>;
   runtimeEventQueue: string[];
   runtimeVariableValues: Record<string, GraphValue>;
   /** Per-object animator state machine runtime: active state + live parameter values. Play-only. */
@@ -890,6 +929,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVelocities: {},
   runtimeKeys: {},
   runtimePreviousKeys: {},
+  runtimeKeyPresses: {},
+  runtimePreviousKeyPresses: {},
   runtimeEventQueue: [],
   runtimeVariableValues: {},
   runtimeAnimators: {},
@@ -4407,6 +4448,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeVelocities: makeRuntimeVelocityMap(objects),
           runtimeKeys: {},
           runtimePreviousKeys: {},
+          runtimeKeyPresses: {},
+          runtimePreviousKeyPresses: {},
           runtimeEventQueue: [],
           runtimeVariableValues: makeRuntimeVariableMap(state.variables),
           runtimeAnimators: {},
@@ -4500,6 +4543,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVelocities: {},
         runtimeKeys: {},
         runtimePreviousKeys: {},
+        runtimeKeyPresses: {},
+        runtimePreviousKeyPresses: {},
         runtimeEventQueue: [],
         runtimeVariableValues: {},
         runtimeAnimators: {},
@@ -4559,8 +4604,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
   setRuntimeKey: (code, pressed) =>
     set((state) => {
-      if (state.runtimeKeys[code] === pressed) return state;
-      return { runtimeKeys: { ...state.runtimeKeys, [code]: pressed } };
+      const keysChanged = state.runtimeKeys[code] !== pressed;
+      if (!pressed) return keysChanged ? { runtimeKeys: { ...state.runtimeKeys, [code]: false } } : state;
+      return {
+        ...(keysChanged ? { runtimeKeys: { ...state.runtimeKeys, [code]: true } } : {}),
+        runtimeKeyPresses: { ...state.runtimeKeyPresses, [code]: (state.runtimeKeyPresses[code] ?? 0) + 1 },
+      };
     }),
   clearRuntimeSounds: () =>
     set((state) => (state.runtimeSoundQueue.length ? { runtimeSoundQueue: [] } : state)),
@@ -4659,6 +4708,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
       const currentKeys = state.runtimeKeys;
       const previousKeys = state.runtimePreviousKeys;
+      const currentKeyPresses = state.runtimeKeyPresses;
+      const previousKeyPresses = state.runtimePreviousKeyPresses;
+      const keyPressedThisTick = (code: string) => (currentKeyPresses[code] ?? 0) > (previousKeyPresses[code] ?? 0);
       // Transforms at the start of the tick — the diff after scripts run is the motion a
       // script applied, which the physics world turns into body inputs (velocity/teleport).
       const prevTransforms = new Map(
@@ -4669,6 +4721,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       );
       // Impulses requested by action.applyForce/applyImpulse this frame, applied to bodies post-step.
       const physicsImpulses: Record<string, Vector3Tuple> = {};
+      // Angular impulses (torque kicks) requested by action.applyTorque — applied in physics.frame for
+      // physics-driven steering / tip-over forces on a dynamic body.
+      const physicsAngularImpulses: Record<string, Vector3Tuple> = {};
       // Hard velocity sets requested by action.setVelocity this frame (dynamic bodies), applied in physics.frame.
       const setVelocities: Record<string, Vector3Tuple> = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
@@ -4690,6 +4745,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let pendingSceneId: string | undefined;
       // A Set Quality node fired this frame → apply the new scalability preset at the end of the tick.
       let pendingQuality: QualityLevel | undefined;
+      // action.setEnvironment patches accumulated this frame — sky/fog/sun overrides applied to the active
+      // scene's environment at the end of the tick. Each successive node overlays on top.
+      let pendingEnvironment: Record<string, string | number | boolean> | undefined;
       // Combat feedback counters (bumped on hits / when the local player is hurt) + per-enemy attack cooldowns.
       let hitMarker = state.runtimeHitMarker;
       let hurt = state.runtimeHurt;
@@ -4799,15 +4857,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const interactedThisFrame = new Set<string>();
       let interactFocusId: string | null = null;
       {
-        const interactables = activeObjects.filter((o) => o.variables?.interactable);
+        const hiddenNow = new Set(state.runtimeHidden);
+        const interactables = activeObjects.filter((o) => {
+          if (nextDisabled.has(o.id) || hiddenNow.has(o.id)) return false;
+          const vars = { ...(o.variables ?? {}), ...(state.runtimeObjectVariables[o.id] ?? {}) };
+          return Boolean(vars.interactable);
+        });
         if (interactables.length) {
           for (const char of activeObjects) {
             const cc = char.character;
             if (!cc?.enabled || isRagdoll(char.id)) continue;
             const range = cc.interactRange ?? 3;
             const cp = char.transform.position;
-            const facing = char.transform.rotation[1] - (cc.modelYawOffset ?? 0);
-            const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
             let best: { id: string; d: number } | null = null;
             for (const it of interactables) {
               if (it.id === char.id) continue;
@@ -4815,17 +4876,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const dz = it.transform.position[2] - cp[2];
               const d = Math.hypot(dx, dz);
               if (d > range) continue;
-              // Must be in front (wide cone) — unless we're basically on top of it.
-              if (d > 0.6) {
+              // Third-person interaction should prefer reliability over a strict body-facing cone: camera orbit
+              // and soft character turning mean the player can clearly be beside a pedestal while the mesh still
+              // faces another way. Only NPC/non-follow characters keep a loose facing gate.
+              if (!cc.cameraFollow && d > Math.min(2.2, range * 0.5)) {
+                const facing = char.transform.rotation[1] - (cc.modelYawOffset ?? 0);
+                const fwd: [number, number] = [Math.sin(facing), Math.cos(facing)];
                 const dot = (dx / d) * fwd[0] + (dz / d) * fwd[1];
-                if (dot < 0.25) continue;
+                if (dot < -0.1) continue;
               }
               if (!best || d < best.d) best = { id: it.id, d };
             }
             if (best) {
               if (cc.cameraFollow) interactFocusId = best.id;
               const k = cc.keyInteract;
-              if (k && currentKeys[k] && !previousKeys[k]) interactedThisFrame.add(best.id);
+              const interactReady = (state.runtimeInteract[char.id] ?? 0) <= 0;
+              if (k && (keyPressedThisTick(k) || (currentKeys[k] && interactReady))) interactedThisFrame.add(best.id);
             }
           }
         }
@@ -5643,12 +5709,39 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 : ([0, 0, 0].map((value, index) => (index === axisIndex(node.data.axis) ? amount : value)) as Vector3Tuple);
               const impTargetId = resolveTarget(node.data.targetObjectId) || object.id;
               const impTarget = activeObjectById.get(impTargetId);
+              const impulse = node.data.space === 'local' && impTarget ? rotateLocalVector(imp, impTarget.transform.rotation) : imp;
               if (impTarget?.character?.enabled) {
                 const prevLaunch = characterLaunch[impTargetId] ?? [0, 0, 0];
-                characterLaunch[impTargetId] = [prevLaunch[0] + imp[0], Math.max(prevLaunch[1], imp[1]), prevLaunch[2] + imp[2]];
+                characterLaunch[impTargetId] = [prevLaunch[0] + impulse[0], Math.max(prevLaunch[1], impulse[1]), prevLaunch[2] + impulse[2]];
               } else if (impTarget?.physics?.enabled && impTarget.physics.bodyType === 'dynamic') {
                 const accrued = physicsImpulses[impTargetId] ?? [0, 0, 0];
-                physicsImpulses[impTargetId] = [accrued[0] + imp[0], accrued[1] + imp[1], accrued[2] + imp[2]];
+                physicsImpulses[impTargetId] = [accrued[0] + impulse[0], accrued[1] + impulse[1], accrued[2] + impulse[2]];
+              }
+            }
+
+            // Apply Torque: an angular impulse (kicks the body's spin). Used for physics-driven steering —
+            // wire a number into Amount to spin the car around Y, sign = left/right. Same target handling
+            // as Apply Force / Apply Impulse: a wired ref or $sentinel picks another actor, else self.
+            if (node.data.nodeKind === 'action.applyTorque') {
+              const torqVector = valueInput(node, 'vector');
+              const amount = toNumber(valueInput(node, 'amount', Number(node.data.amount ?? 4)));
+              const torq = Array.isArray(torqVector)
+                ? (torqVector as Vector3Tuple)
+                : ([0, 0, 0].map((value, index) => (index === axisIndex(node.data.axis ?? 'y') ? amount : value)) as Vector3Tuple);
+              const torqTargetId = resolveTarget(node.data.targetObjectId) || object.id;
+              const torqTarget = activeObjectById.get(torqTargetId);
+              if (torqTarget?.physics?.enabled && torqTarget.physics.bodyType === 'dynamic') {
+                const accrued = physicsAngularImpulses[torqTargetId] ?? [0, 0, 0];
+                physicsAngularImpulses[torqTargetId] = [accrued[0] + torq[0], accrued[1] + torq[1], accrued[2] + torq[2]];
+              }
+            }
+
+            // Set Environment: overlay sky/fog/sun fields onto the active scene's environment at the end of
+            // the tick. Each successive call merges on top — so two triggers can each set a different subset.
+            if (node.data.nodeKind === 'action.setEnvironment') {
+              const patch = node.data.envPatch;
+              if (patch && typeof patch === 'object') {
+                pendingEnvironment = { ...(pendingEnvironment ?? {}), ...(patch as Record<string, string | number | boolean>) };
               }
             }
 
@@ -6219,15 +6312,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
 
       // ---- Vehicle pass (pre-compute) ----------------------------------------------------------
-      // Arcade car driving. The car is a KINEMATIC body the runtime fully positions (so Rapier never fights
-      // it — no jitter, no "flying"): we integrate a signed forward speed from WASD, steer the yaw (scaled by
-      // speed), advance X/Z along the heading, and snap the chassis Y onto the terrain. SUSPENSION is real and
-      // computed: the chassis bobs/tilts to follow the terrain under its four wheels (a smoothed spring), plus
-      // a squat/dive on accel/brake and a lean into turns; each wheel also visually compresses toward its own
-      // ground contact, spins ∝ speed, and the front pair steers. Everything is computed into lookup maps and
-      // applied inside the movedObjects map below (wheels/lights are separate child objects). Driving is gated
-      // on a `Driving` project var (0 until a car is chosen in the start menu); no such var = always active.
-      const vehicleBody = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+      // Vehicle driving prepass. A kinematic car is fully positioned by this pass and follows terrain height;
+      // a dynamic car leaves vertical motion and contact resolution to Rapier, while this pass commands only a
+      // plausible horizontal tire velocity. The handling model keeps longitudinal speed and lateral slip
+      // separate, so cars arc, drift and recover instead of instantly snapping to the heading every frame.
+      const vehicleBody = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple; scale?: Vector3Tuple }>();
+      const vehicleSteer = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
       const vehicleWheel = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
       const vehicleBrake = new Map<string, number>();
       // Live audio state for the driven car (engine pitch + skid volume), set below and published after the loop.
@@ -6286,8 +6376,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
           // NITRO / boost (also opt-in via a project var): a boost pad's graph sets "Nitro" to 1; while it's
           // above 0 the runtime lifts top speed + launch (a NFS-style surge), then DRAINS it back to 0 over ~2s.
-          // Done here (not via Apply Force) because the vehicle pass force-sets the car's velocity each frame, so
-          // a Rapier impulse would be overwritten — feeding the speed integrator is what actually accelerates it.
+          // Done here (not via Apply Force) because sustained boost should raise the car's handling envelope;
+          // one-shot impulses still layer on top, but Nitro is smoother for a multi-frame surge.
           const nitroVar = variableByName.get('Nitro');
           if (nitroVar) {
             const nitro = Math.max(0, Math.min(1, toNumber(nextVariableValues[nitroVar.id] ?? nitroVar.defaultValue)));
@@ -6298,28 +6388,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
         }
-        // A DYNAMIC car lets the Rapier solver own its vertical motion + collision response (so fixed scenery —
-        // buildings, the roundabout — physically STOPS it); a KINEMATIC car has the runtime own the whole
-        // transform (terrain-following Y + suspension) and is never stopped by the solver (it drives through).
+        // A DYNAMIC car lets the Rapier solver own its vertical motion + collision response (so fixed scenery
+        // physically stops it); a KINEMATIC car has the runtime own the whole transform (terrain-following Y +
+        // suspension) and is never stopped by the solver.
         const dynamic = object.physics?.bodyType === 'dynamic';
-        const yaw = object.transform.rotation[1];
+        const vehicleVars = mutableObjectVars(object.id, object.variables);
+        if (!Array.isArray(vehicleVars.__vehicleBaseScale)) vehicleVars.__vehicleBaseScale = object.transform.scale;
+        const authoredYaw = object.transform.rotation[1];
+        const storedYaw = typeof vehicleVars.__vehicleYaw === 'number' ? vehicleVars.__vehicleYaw : undefined;
+        const yaw: number = storedYaw !== undefined && Number.isFinite(storedYaw) ? storedYaw : Number(authoredYaw ?? 0);
+        let crashTimer = Math.max(0, toNumber(vehicleVars.__vehicleCrashTimer ?? 0) - delta);
+        const crashDamage = Math.max(0, toNumber(vehicleVars.__vehicleDamage ?? 0));
+        const tipped = Math.abs(object.transform.rotation[0]) > 0.72 || Math.abs(object.transform.rotation[2]) > 0.72;
+        const crashPhysicsActive = Boolean(veh.crashDamageEnabled) && (crashTimer > 0 || tipped);
         const prevVel = nextVelocities[object.id] ?? [0, 0, 0];
-        // Signed forward speed recovered from the stored velocity projected onto the current heading.
-        const prevSpeed = prevVel[0] * Math.sin(yaw) + prevVel[2] * Math.cos(yaw);
+        const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+        const forwardX = Math.sin(yaw);
+        const forwardZ = Math.cos(yaw);
+        const rightX = Math.cos(yaw);
+        const rightZ = -Math.sin(yaw);
+        const prevVx = prevVel[0] ?? 0;
+        const prevVz = prevVel[2] ?? 0;
+        const prevSpeed = prevVx * forwardX + prevVz * forwardZ;
+        let lateralSpeed = prevVx * rightX + prevVz * rightZ;
         // Input: a SCRIPTED car (has a blueprint) is driven by its "Drive" node (vehicleScriptInputs) — fully
         // editable in the graph. An AUTO car (no blueprint) reads its keys directly, gated by the Driving var.
         const scripted = Boolean(object.script?.enabled);
         const di = vehicleScriptInputs[object.id];
-        const throttleSig = scripted
+        const crashControl = crashPhysicsActive ? 0.22 : 1;
+        const throttleSig = (scripted
           ? (di ? di.throttle : 0)
           : drivingActive
             ? (currentKeys[veh.keyThrottle] ? 1 : 0) - (currentKeys[veh.keyReverse] ? 1 : 0)
-            : 0;
-        const steerRaw = scripted
+            : 0) * crashControl;
+        const steerRaw = (scripted
           ? (di ? di.steer : 0)
           : drivingActive
             ? (currentKeys[veh.keyLeft] ? 1 : 0) - (currentKeys[veh.keyRight] ? 1 : 0)
-            : 0;
+            : 0) * crashControl;
         // Handbrake: scripted cars read it from the Drive node, auto cars from the key. It loosens rear grip
         // (oversteer / drift) and bleeds a little speed.
         const handbrake = scripted
@@ -6328,113 +6434,192 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ? Boolean(currentKeys[veh.keyHandbrake])
             : false;
         const braking = throttleSig < -0.05;
-        // Integrate speed (weighty): throttle accelerates with the accel TAPERING toward top speed (so it
-        // eases up to maxSpeed instead of snapping); reverse brakes a forward roll then accelerates back;
-        // neither = coast to a stop via drag.
+        // Integrate longitudinal speed. Throttle tapers near the limiter, reverse first brakes a forward roll,
+        // and coasting keeps real momentum while drag gradually bleeds it off.
         let speed = prevSpeed;
         if (throttleSig > 0.05) {
-          const accel = veh.acceleration * throttleSig * (0.35 + 0.65 * Math.max(0, 1 - Math.max(0, speed) / veh.maxSpeed));
+          const accel = veh.acceleration * throttleSig * (0.28 + 0.72 * Math.max(0, 1 - Math.max(0, speed) / Math.max(0.001, veh.maxSpeed)));
           speed = speed < -0.01 ? approach(speed, 0, veh.braking * delta) : Math.min(veh.maxSpeed, speed + accel * delta);
         } else if (throttleSig < -0.05) {
           speed = speed > 0.01 ? approach(speed, 0, veh.braking * delta) : Math.max(-veh.maxReverseSpeed, speed - veh.acceleration * 0.6 * -throttleSig * delta);
         } else {
           speed = approach(speed, 0, veh.drag * delta);
         }
-        // Handbrake scrubs a little speed (locked rears) so a drift bleeds momentum like a real one.
-        if (handbrake) speed = approach(speed, 0, veh.drag * 1.4 * delta);
+        // Handbrake locks the rears: it drops lateral grip and also scrubs a little forward speed.
+        if (handbrake) speed = approach(speed, 0, veh.drag * 1.8 * delta);
         if (Math.abs(speed) < 0.02) speed = 0;
 
         // Find the wheels (needed for steering wheelbase + suspension).
         const wheels = veh.wheelObjectIds
           .map((wid) => mappedObjectById.get(wid))
           .filter((w): w is SceneObject => Boolean(w));
+        const wheelAnchor = (wheel: SceneObject): SceneObject | undefined => {
+          const parent = wheel.parentId ? mappedObjectById.get(wheel.parentId) : undefined;
+          return parent?.parentId === object.id ? parent : undefined;
+        };
+        const wheelCenter = (wheel: SceneObject): Vector3Tuple => wheelAnchor(wheel)?.transform.position ?? wheel.transform.position;
 
         // STEERING — a kinematic "bicycle model" so it feels like a car, not a spinning top:
         //  • the steer angle is SMOOTHED toward the input and SPEED-SENSITIVE (less lock at speed) — no twitch;
         //  • yaw rate = (speed / wheelbase) · tan(steer), so the car ARCS with a radius set by speed and steer,
         //    and CANNOT spin in place (zero speed → zero turn). Reversing flips the turn direction naturally.
         const steeredWheels = wheels.filter((w) => veh.steeredWheelIds.includes(w.id));
+        const steeredAnchors = veh.steeredWheelIds
+          .map((id) => mappedObjectById.get(id))
+          .filter((w): w is SceneObject => Boolean(w));
         // VISUAL steer cranks the front wheels to the FULL steer angle (clearly visible that the WHEELS turn,
         // not just the frame), smoothed for weight. The car's actual yaw uses a gentler, speed-reduced steer so
         // it arcs instead of spinning — decoupling the two keeps the wheels expressive without twitchy handling.
-        const prevSteer = steeredWheels[0]?.transform.rotation[1] ?? 0;
-        const topFrac = Math.min(1, Math.abs(prevSpeed) / Math.max(0.001, veh.maxSpeed));
+        const prevSteer = (steeredAnchors[0] ?? steeredWheels[0])?.transform.rotation[1] ?? 0;
+        const topFrac = Math.min(1, Math.abs(speed) / Math.max(0.001, veh.maxSpeed));
         const steerK = 1 - Math.exp(-9 * Math.min(delta, 0.1));
         const visualSteer = prevSteer + (steerRaw * veh.steerAngle - prevSteer) * steerK;
-        // Grip is loose while the handbrake is held (drift): the rear steps out, so the car keeps more steer
-        // lock at speed and rotates FASTER than the wheels point (oversteer). gripFactor/handbrakeGrip are 0..1.
-        const grip = handbrake ? veh.handbrakeGrip : veh.gripFactor;
+        // Grip controls lateral velocity recovery. High grip kills sideways motion quickly; handbrake lowers it
+        // so the car carries a slide and then settles instead of snapping straight.
+        const grip = clamp(handbrake ? veh.handbrakeGrip : veh.gripFactor, 0.02, 0.995);
+        const lateralDamping = (handbrake ? 1.6 : 3.2) + grip * (handbrake ? 7 : 22);
+        lateralSpeed *= Math.exp(-lateralDamping * Math.min(delta, 0.1));
         const effectiveSteer = visualSteer * (1 - (handbrake ? 0.15 : 0.5) * topFrac);
-        const lzs = wheels.map((w) => w.transform.position[2]);
+        const lzs = wheels.map((w) => wheelCenter(w)[2]);
         const wheelbase = wheels.length ? Math.max(0.8, Math.max(...lzs) - Math.min(...lzs)) : 2.4;
-        const oversteer = 1 + (1 - grip) * (handbrake ? 1.6 : 0.4);
+        const oversteer = 1 + (1 - grip) * (handbrake ? 1.9 : 0.45);
         const yawRate = (speed / wheelbase) * Math.tan(effectiveSteer) * oversteer;
-        // Tire slip 0..1 — drives the skid sound + extra body lean. High when the handbrake is held at speed,
-        // or in a hard fast corner where the chassis is loaded beyond its grip.
-        const slip = Math.min(
+        const cornerLoad = Math.abs(yawRate * speed) / Math.max(8, veh.maxSpeed * 0.9);
+        const slip = clamp(
+          Math.abs(lateralSpeed) / (5 + topFrac * 14) + Math.max(0, cornerLoad * (1 - grip) - 0.08) + (handbrake && Math.abs(speed) > 2 ? 0.25 + 0.45 * topFrac : 0),
+          0,
           1,
-          Math.max(
-            handbrake && Math.abs(speed) > 2 ? 0.55 + 0.45 * topFrac : 0,
-            Math.max(0, Math.abs(yawRate * speed) * (1 - veh.gripFactor) * 1.1 - 0.2),
-          ),
         );
         const newYaw = yaw + yawRate * delta;
+        vehicleVars.__vehicleYaw = newYaw;
         const cosY = Math.cos(newYaw);
         const sinY = Math.sin(newYaw);
         const position = [...object.transform.position] as Vector3Tuple;
-        position[0] += sinY * speed * delta;
-        position[2] += cosY * speed * delta;
+
+        // Crash-stop against fixed scenery from last frame's contact index. Dynamic props still get pushed.
+        if (dynamic) {
+          const wallContacts = contactOthers(priorCollisionIndex, object.id);
+          if (wallContacts) {
+            let hardImpact = false;
+            for (const otherId of wallContacts) {
+              const other = mappedObjectById.get(otherId);
+              if (other && other.kind !== 'terrain' && other.physics?.bodyType !== 'dynamic') {
+                hardImpact = true;
+                speed = approach(speed, 0, veh.braking * 2.8 * delta);
+                lateralSpeed = approach(lateralSpeed, 0, veh.braking * 2.2 * delta);
+                break;
+              }
+            }
+            if (hardImpact && veh.crashDamageEnabled) {
+              const impactSpeed = Math.hypot(prevVx, prevVel[1] ?? 0, prevVz);
+              const damageThreshold = Math.max(0.1, Number(veh.crashDamageThreshold ?? 9));
+              const rolloverThreshold = Math.max(damageThreshold, Number(veh.crashRolloverThreshold ?? 16));
+              const severity = Math.max(0, (impactSpeed - damageThreshold) / Math.max(1, rolloverThreshold - damageThreshold));
+              if (severity > 0) {
+                const nextDamage = Math.min(10, crashDamage + severity * 0.55);
+                vehicleVars.__vehicleDamage = nextDamage;
+                crashTimer = Math.max(crashTimer, impactSpeed >= rolloverThreshold ? 1.3 + Math.min(1.4, severity * 0.5) : 0.35);
+                vehicleVars.__vehicleCrashTimer = crashTimer;
+                const strength = Number(veh.crashRolloverStrength ?? 0.42);
+                const lateralSign = Math.sign(lateralSpeed || steerRaw || prevVx * cosY - prevVz * sinY || 1);
+                const forwardSign = Math.sign(prevSpeed || speed || 1);
+                const torque: Vector3Tuple = [
+                  -forwardSign * severity * strength * 8,
+                  lateralSign * severity * strength * 1.5,
+                  -lateralSign * severity * strength * 10,
+                ];
+                const accruedTorque = physicsAngularImpulses[object.id] ?? [0, 0, 0];
+                physicsAngularImpulses[object.id] = [accruedTorque[0] + torque[0], accruedTorque[1] + torque[1], accruedTorque[2] + torque[2]];
+                const recoil: Vector3Tuple = [-sinY * severity * 2.2, Math.min(2.5, severity * 1.2), -cosY * severity * 2.2];
+                const accruedImpulse = physicsImpulses[object.id] ?? [0, 0, 0];
+                physicsImpulses[object.id] = [accruedImpulse[0] + recoil[0], accruedImpulse[1] + recoil[1], accruedImpulse[2] + recoil[2]];
+                const debrisCooldown = Math.max(0, toNumber(vehicleVars.__vehicleCrashDebrisCooldown ?? 0) - delta);
+                if (veh.crashDebris && severity > 0.75 && debrisCooldown <= 0) {
+                  vehicleVars.__vehicleCrashDebrisCooldown = 0.8;
+                  const count = Math.min(5, 2 + Math.floor(severity));
+                  for (let i = 0; i < count; i += 1) {
+                    const scatter = (i - (count - 1) / 2) * 0.45;
+                    spawned.push(
+                      crashDebrisObject(
+                        [position[0] + cosY * scatter, position[1] + 0.5 + Math.random() * 0.35, position[2] - sinY * scatter],
+                        [recoil[0] * (1 + Math.random()), 1.5 + Math.random() * 2, recoil[2] * (1 + Math.random())],
+                        i,
+                      ),
+                    );
+                  }
+                } else {
+                  vehicleVars.__vehicleCrashDebrisCooldown = debrisCooldown;
+                }
+              }
+            }
+          }
+        }
+
+        const velocityX = sinY * speed + cosY * lateralSpeed;
+        const velocityZ = cosY * speed - sinY * lateralSpeed;
+        position[0] += velocityX * delta;
+        position[2] += velocityZ * delta;
 
         // Signed acceleration (squat/dive + the brake-squeal trigger), shared by both body modes.
         const accelSig = (speed - prevSpeed) / Math.max(delta, 1e-4);
         const TWO_PI = Math.PI * 2;
+        const physicsRollActive = Boolean(veh.crashDamageEnabled) && (crashTimer > 0 || tipped);
+        vehicleVars.__vehicleCrashTimer = crashTimer;
+        const currentDamage = Math.max(0, toNumber(vehicleVars.__vehicleDamage ?? 0));
+        const baseScale = Array.isArray(vehicleVars.__vehicleBaseScale) ? vehicleVars.__vehicleBaseScale : object.transform.scale;
+        const crush = Boolean(veh.crashDamageEnabled) ? clamp((currentDamage / 10) * Number(veh.crashDeformation ?? 0.45), 0, 0.22) : 0;
+        const damageScale: Vector3Tuple | undefined = crush > 0.001
+          ? [Number(baseScale[0]) * (1 + crush * 0.18), Number(baseScale[1]) * (1 - crush * 0.4), Number(baseScale[2]) * (1 - crush * 0.16)]
+          : undefined;
+        const wheelBreakThreshold = Math.max(0.1, Number(veh.crashWheelBreakThreshold ?? 1.6));
+        const brokenWheelCount = veh.crashDamageEnabled ? clamp(Math.floor((currentDamage - wheelBreakThreshold) / Math.max(0.25, wheelBreakThreshold * 0.45)) + 1, 0, wheels.length) : 0;
 
         if (dynamic) {
-          // DYNAMIC body: the Rapier solver owns Y (gravity + resting on the terrain) and resolves contacts, so
-          // fixed scenery stops the car. We only command the horizontal velocity along the heading + the yaw;
-          // leaving the written Y equal to the current Y means the physics post-pass keeps GRAVITY on that axis
-          // (it isn't velocity-overridden) so the car rests on its convex hull instead of fighting a terrain snap.
+          // DYNAMIC body: Rapier owns Y and contact resolution. We command X/Z from the tire model only;
+          // leaving Y unchanged means gravity/resting contact remain fully solver-owned.
           position[1] = object.transform.position[1];
-          // Crash-stop: a contact with solid, non-knockable geometry (a wall/curb — not a cone, not the ground)
-          // scrubs speed so you stop on impact instead of grinding into the wall at full throttle.
-          let hitWall = false;
-          const wallContacts = contactOthers(priorCollisionIndex, object.id);
-          if (wallContacts) {
-            for (const otherId of wallContacts) {
-              const other = mappedObjectById.get(otherId);
-              if (other && other.kind !== 'terrain' && other.physics?.bodyType !== 'dynamic') {
-                hitWall = true;
-                break;
-              }
-            }
-          }
-          if (hitWall) speed = approach(speed, 0, veh.braking * 2.2 * delta);
-          nextVelocities[object.id] = [sinY * speed, 0, cosY * speed];
+          nextVelocities[object.id] = [velocityX, 0, velocityZ];
 
-          // Cosmetic squat/dive + turn lean only (flat city streets, no terrain follow), kept small so the
-          // hard-set rotation keeps the convex collider close to upright while it rests on the ground.
+          // Normal driving uses cosmetic squat/dive + turn lean. During a hard crash/rollover, Rapier's
+          // rotation is preserved so the car can actually tumble instead of snapping upright.
           const targetPitch = Math.max(-0.08, Math.min(0.08, -accelSig * veh.bodyPitch * 0.04));
-          const turnLean = -yawRate * speed * veh.bodyRoll * (1 + slip * 1.5);
-          const targetRoll = Math.max(-0.14, Math.min(0.14, turnLean));
+          const turnLean = (-yawRate * Math.abs(speed) - lateralSpeed * 0.12) * veh.bodyRoll * (1 + slip * 1.5);
+          const targetRoll = clamp(turnLean, -0.16, 0.16);
           const tiltK = 1 - Math.exp(-12 * Math.min(delta, 0.1));
           const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * tiltK;
           const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * tiltK;
-          vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow] });
+          vehicleBody.set(object.id, { position, rotation: physicsRollActive ? object.transform.rotation : [pitchNow, newYaw, rollNow], scale: damageScale });
 
-          // Wheels spin ∝ distance travelled and the front pair steers; no per-wheel terrain bob on flat streets.
+          // Wheels spin from forward travel and steer visibly; dynamic cars keep the wheel centers authored so
+          // the chassis collision hull remains stable while the solver handles ground contact.
           wheels.forEach((w) => {
             const base = w.transform.rotation;
             const spin = (base[0] + (speed / Math.max(0.05, veh.wheelRadius)) * delta) % TWO_PI;
-            const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
-            vehicleWheel.set(w.id, { position: w.transform.position, rotation: [spin, steerY, base[2]] });
+            const wheelIndex = wheels.findIndex((wheel) => wheel.id === w.id);
+            const broken = wheelIndex >= 0 && wheelIndex >= wheels.length - brokenWheelCount;
+            const brokenDrop = broken ? Math.min(0.65, 0.18 + currentDamage * 0.06) : 0;
+            const brokenToe = broken ? (wheelIndex % 2 ? -1 : 1) * Math.min(1.0, 0.32 + currentDamage * 0.05) : 0;
+            const anchor = wheelAnchor(w);
+            if (anchor) {
+              const steerY = veh.steeredWheelIds.includes(anchor.id) ? visualSteer : anchor.transform.rotation[1];
+              vehicleSteer.set(anchor.id, {
+                position: [anchor.transform.position[0], anchor.transform.position[1] - brokenDrop, anchor.transform.position[2]],
+                rotation: [anchor.transform.rotation[0] + (broken ? 0.35 : 0), steerY + brokenToe, anchor.transform.rotation[2] + brokenToe * 0.45],
+              });
+              vehicleWheel.set(w.id, { position: w.transform.position, rotation: [spin, broken ? brokenToe * 0.5 : 0, base[2] + (broken ? 0.45 : 0)] });
+            } else {
+              const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
+              vehicleWheel.set(w.id, { position: [w.transform.position[0], w.transform.position[1] - brokenDrop, w.transform.position[2]], rotation: [spin, steerY + brokenToe, base[2] + (broken ? 0.45 : 0)] });
+            }
           });
         } else {
           // KINEMATIC body: the runtime fully owns the transform (terrain-following Y + suspension), so the car
           // can never be launched by the solver — but fixed scenery does NOT stop it (it drives through).
           // Sample the terrain under each wheel (world space) for the suspension.
           const wheelGround = wheels.map((w) => {
-            const lx = w.transform.position[0];
-            const lz = w.transform.position[2];
+            const center = wheelCenter(w);
+            const lx = center[0];
+            const lz = center[2];
             return groundAt(position[0] + lx * cosY + lz * sinY, position[2] - lx * sinY + lz * cosY);
           });
           const avgGround = wheelGround.length
@@ -6446,6 +6631,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const targetY = avgGround + veh.rideHeight;
           position[1] = object.transform.position[1] + (targetY - object.transform.position[1]) * settle;
           const velocity: Vector3Tuple = [sinY * speed, (position[1] - object.transform.position[1]) / Math.max(delta, 1e-4), cosY * speed];
+          velocity[0] = velocityX;
+          velocity[2] = velocityZ;
           nextVelocities[object.id] = velocity;
 
           // Terrain tilt (pitch from front↔rear ground, roll from left↔right) + accel squat + turn lean.
@@ -6454,33 +6641,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const leftG: number[] = [];
           const rightG: number[] = [];
           wheels.forEach((w, i) => {
-            (w.transform.position[2] >= 0 ? frontG : rearG).push(wheelGround[i]);
-            (w.transform.position[0] <= 0 ? leftG : rightG).push(wheelGround[i]);
+            const center = wheelCenter(w);
+            (center[2] >= 0 ? frontG : rearG).push(wheelGround[i]);
+            (center[0] <= 0 ? leftG : rightG).push(wheelGround[i]);
           });
           const avg = (a: number[], fallback: number) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : fallback);
           const terrainPitch = Math.atan2(avg(rearG, avgGround) - avg(frontG, avgGround), wheelbase);
           const terrainRoll = Math.atan2(avg(leftG, avgGround) - avg(rightG, avgGround), 1.7);
-          const targetPitch = Math.max(-0.18, Math.min(0.18, terrainPitch + -accelSig * veh.bodyPitch * 0.04));
+          const targetPitch = clamp(terrainPitch + -accelSig * veh.bodyPitch * 0.04, -0.18, 0.18);
           // Lean into the turn, plus an extra drift lean while the tires slip (reads as a slide).
-          const turnLean = -yawRate * speed * veh.bodyRoll * (1 + slip * 1.5);
-          const targetRoll = Math.max(-0.3, Math.min(0.3, terrainRoll + turnLean));
+          const turnLean = (-yawRate * Math.abs(speed) - lateralSpeed * 0.12) * veh.bodyRoll * (1 + slip * 1.5);
+          const targetRoll = clamp(terrainRoll + turnLean, -0.3, 0.3);
           const pitchNow = object.transform.rotation[0] + (targetPitch - object.transform.rotation[0]) * settle;
           const rollNow = object.transform.rotation[2] + (targetRoll - object.transform.rotation[2]) * settle;
-          vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow] });
+          vehicleBody.set(object.id, { position, rotation: [pitchNow, newYaw, rollNow], scale: damageScale });
 
           // Wheels: spin around local X (∝ distance travelled), the front pair shows the smoothed steer angle
           // around local Y, and each wheel bobs toward its own ground contact (visible per-wheel suspension).
           wheels.forEach((w, i) => {
             const base = w.transform.rotation;
             const spin = (base[0] + (speed / Math.max(0.05, veh.wheelRadius)) * delta) % TWO_PI;
-            const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
+            const anchor = wheelAnchor(w);
             // Per-wheel suspension: target compression from this wheel's own ground contact, SMOOTHED toward
             // the previous wheel Y so it glides over terrain noise instead of jittering (the straight-line wobble).
             const comp = Math.max(-veh.suspensionTravel, Math.min(veh.suspensionTravel, wheelGround[i] - avgGround));
-            const wheelY = w.transform.position[1] + (veh.wheelRestY + comp - w.transform.position[1]) * settle;
-            vehicleWheel.set(w.id, { position: [w.transform.position[0], wheelY, w.transform.position[2]], rotation: [spin, steerY, base[2]] });
+            const center = wheelCenter(w);
+            const wheelY = center[1] + (veh.wheelRestY + comp - center[1]) * settle;
+            if (anchor) {
+              const steerY = veh.steeredWheelIds.includes(anchor.id) ? visualSteer : anchor.transform.rotation[1];
+              vehicleSteer.set(anchor.id, { position: [center[0], wheelY, center[2]], rotation: [anchor.transform.rotation[0], steerY, anchor.transform.rotation[2]] });
+              vehicleWheel.set(w.id, { position: w.transform.position, rotation: [spin, 0, base[2]] });
+            } else {
+              const steerY = veh.steeredWheelIds.includes(w.id) ? visualSteer : base[1];
+              vehicleWheel.set(w.id, { position: [w.transform.position[0], wheelY, w.transform.position[2]], rotation: [spin, steerY, base[2]] });
+            }
           });
         }
+        const tireMarksOn = Math.abs(speed) > 2 && (handbrake || slip > 0.06 || (Math.abs(steerRaw) > 0.2 && Math.abs(speed) > 4));
+        for (const id of veh.tireMarkIds) sendParticleCommand(id, { type: 'emit', on: tireMarksOn });
         // Brake lights glow while braking / reversing / handbraking.
         for (const lid of veh.brakeLightIds) vehicleBrake.set(lid, braking || handbrake ? 4 : 0.15);
 
@@ -6566,12 +6764,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
         if ((enterCars.has(object.id) || exitCars.has(object.id)) && object.vehicle) {
           const vb2 = vehicleBody.get(object.id);
-          const base = vb2 ? { ...object, transform: { ...object.transform, position: vb2.position, rotation: vb2.rotation } } : object;
+          const base = vb2 ? { ...object, transform: { ...object.transform, position: vb2.position, rotation: vb2.rotation, ...(vb2.scale ? { scale: vb2.scale } : {}) } } : object;
           return { ...base, vehicle: { ...base.vehicle!, enabled: true, cameraFollow: enterCars.has(object.id) } };
         }
         // Vehicle body / wheel / brake-light updates computed in the vehicle pass above.
         const vb = vehicleBody.get(object.id);
-        if (vb) return { ...object, transform: { ...object.transform, position: vb.position, rotation: vb.rotation } };
+        if (vb) return { ...object, transform: { ...object.transform, position: vb.position, rotation: vb.rotation, ...(vb.scale ? { scale: vb.scale } : {}) } };
+        const vs = vehicleSteer.get(object.id);
+        if (vs) return { ...object, transform: { ...object.transform, position: vs.position, rotation: vs.rotation } };
         const vw = vehicleWheel.get(object.id);
         if (vw) return { ...object, transform: { ...object.transform, position: vw.position, rotation: vw.rotation } };
         const vbrake = vehicleBrake.get(object.id);
@@ -6864,7 +7064,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Deactivated objects are excluded from the physics objects list, so syncBodies removes their
         // bodies (no collision) until re-enabled.
         const physicsObjects = nextDisabled.size ? movedObjects.filter((o) => !nextDisabled.has(o.id)) : movedObjects;
-        const result = physics.frame(physicsObjects, prevTransforms, physicsImpulses, delta, setVelocities);
+        const result = physics.frame(physicsObjects, prevTransforms, physicsImpulses, delta, setVelocities, physicsAngularImpulses);
         collisions = result.collisions;
         triggers = result.triggers;
         triggersExit = result.triggersExit;
@@ -6901,6 +7101,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 groundedSet.add(object.id);
               }
             }
+          }
+          if (object.vehicle?.enabled) {
+            const vars = nextObjectVariables[object.id] ?? object.variables;
+            const crashTimer = Math.max(0, toNumber(vars?.__vehicleCrashTimer ?? 0));
+            const tipped = Math.abs(next.rotation[0]) > 0.72 || Math.abs(next.rotation[2]) > 0.72;
+            const usePhysicsRotation = Boolean(object.vehicle.crashDamageEnabled) && object.physics?.bodyType === 'dynamic' && (crashTimer > 0 || tipped);
+            if (usePhysicsRotation) {
+              const mutable = mutableObjectVars(object.id, object.variables);
+              mutable.__vehicleYaw = next.rotation[1];
+            }
+            return {
+              ...object,
+              transform: { position, rotation: usePhysicsRotation ? next.rotation : object.transform.rotation, scale: object.transform.scale },
+            };
           }
           return {
             ...object,
@@ -7395,9 +7609,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const groundedIdSet = new Set(groundedIds);
       const swimmingIdSet = new Set(swimmingIds);
       const climbingIdSet = new Set(climbingIds);
-      const nextScenes = state.scenes.map((scene) =>
-        scene.id !== state.activeSceneId ? scene : { ...scene, objects: allObjects },
-      );
+      const nextScenes = state.scenes.map((scene) => {
+        if (scene.id !== state.activeSceneId) return scene;
+        // action.setEnvironment patches accumulated this tick → merge them onto the live scene's
+        // environment so a cinematic trigger can crossfade sky/fog/sun in one frame.
+        const env = pendingEnvironment && scene.environment
+          ? { ...scene.environment, ...pendingEnvironment } as SceneEnvironmentSettings
+          : scene.environment;
+        return { ...scene, objects: allObjects, ...(env !== scene.environment ? { environment: env } : {}) };
+      });
       // Publish this frame's final transforms to the mutable render buffer. SceneObjectView reads
       // them imperatively in useFrame, so moving objects don't reconcile their React subtree each
       // frame (see transformBuffer.ts). The store copy above still drives Inspector/gizmo/save.
@@ -7612,6 +7832,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeTriggersExit: [],
             runtimeDamageEvents: {},
             runtimePreviousKeys: {},
+            runtimePreviousKeyPresses: { ...currentKeyPresses },
             runtimeEventQueue: [],
             runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
             runtimeVehicleSound: null,
@@ -7668,6 +7889,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeTriggersExit: triggersExit,
         runtimeDamageEvents: damageThisFrame,
         runtimePreviousKeys: { ...currentKeys },
+        runtimePreviousKeyPresses: { ...currentKeyPresses },
         runtimeEventQueue: cinematicEvents,
         runtimeStarted: true,
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
@@ -7868,6 +8090,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVelocities: {},
         runtimeKeys: {},
         runtimePreviousKeys: {},
+        runtimeKeyPresses: {},
+        runtimePreviousKeyPresses: {},
         runtimeEventQueue: [],
         runtimeVariableValues: {},
         runtimeAnimators: {},

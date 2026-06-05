@@ -10,6 +10,7 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  --font-scale: 1;
   --background: #0f1117;
   --panel: rgba(23, 26, 35, 0.92);
   --panel-light: #1d2230;
@@ -18,11 +19,138 @@
   --border-strong: rgba(255, 255, 255, 0.16);
   --text: #f3f4f6;
   --muted: #9ca3af;
-  --primary: #5b8cff;
+  --accent: #5b8cff;
+  --primary: var(--accent);
   --success: #3ddc97;
   --warning: #f7b955;
   --danger: #ff6b6b;
   --shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+/* Midnight: same vibe as the default dark but deeper blacks for OLED + focus. */
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  background: #05070b;
+  --background: #05070b;
+  --panel: rgba(10, 13, 19, 0.94);
+  --panel-light: #0d1119;
+  --panel-soft: rgba(14, 18, 26, 0.78);
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.13);
+  --shadow: 0 20px 48px rgba(0, 0, 0, 0.55);
+}
+
+/* Light: full repaint of the palette. The toolbar gradient and panel backgrounds
+   read these variables, so most of the editor flips with this single block. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  background: #f4f5f8;
+  color: #1a1f2c;
+  --background: #f4f5f8;
+  --panel: rgba(255, 255, 255, 0.94);
+  --panel-light: #ffffff;
+  --panel-soft: rgba(243, 245, 250, 0.86);
+  --border: rgba(15, 17, 23, 0.1);
+  --border-strong: rgba(15, 17, 23, 0.2);
+  --text: #1a1f2c;
+  --muted: #5b6477;
+  --shadow: 0 14px 36px rgba(15, 23, 42, 0.12);
+}
+
+/* Cross-cutting tweaks for the light theme: a few hard-coded dark backgrounds
+   in components don't follow the palette vars — soften them here. */
+:root[data-theme="light"] body {
+  background: var(--background);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .toolbar {
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 0 rgba(15, 17, 23, 0.05) inset;
+}
+
+:root[data-theme="light"] .editor-shell {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 36%),
+    linear-gradient(225deg, rgba(61, 220, 151, 0.08), transparent 34%),
+    var(--background);
+}
+
+:root[data-theme="light"] .icon-button,
+:root[data-theme="light"] .run-button,
+:root[data-theme="light"] .export-button,
+:root[data-theme="light"] .full-button,
+:root[data-theme="light"] .segmented button,
+:root[data-theme="light"] .node-palette button {
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 17, 23, 0.04) inset;
+}
+
+:root[data-theme="light"] .icon-button:hover,
+:root[data-theme="light"] .run-button:hover,
+:root[data-theme="light"] .export-button:hover,
+:root[data-theme="light"] .full-button:hover,
+:root[data-theme="light"] .segmented button:hover,
+:root[data-theme="light"] .node-palette button:hover {
+  background: #f4f6fb;
+}
+
+:root[data-theme="light"] .panel-header,
+:root[data-theme="light"] .viewport-topbar {
+  background: rgba(255, 255, 255, 0.65);
+}
+
+:root[data-theme="light"] .viewport-panel {
+  background: #e9ecf3;
+}
+
+/* Density: compact tightens the chrome around the toolbar + panel headers + popovers.
+   Doesn't touch the viewport or content panels themselves. */
+:root[data-density="compact"] .editor-shell {
+  grid-template-rows: 48px minmax(0, 1fr);
+}
+
+:root[data-density="compact"] .toolbar {
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+:root[data-density="compact"] .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+:root[data-density="compact"] .icon-button.compact {
+  width: 26px;
+  height: 26px;
+}
+
+:root[data-density="compact"] .run-button,
+:root[data-density="compact"] .export-button,
+:root[data-density="compact"] .full-button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+:root[data-density="compact"] .file-menu-trigger {
+  padding: 5px 10px;
+}
+
+:root[data-density="compact"] .panel-header,
+:root[data-density="compact"] .viewport-topbar {
+  min-height: 36px;
+  padding: 6px 10px;
+}
+
+:root[data-density="compact"] .panel-header h2,
+:root[data-density="compact"] .viewport-title span {
+  font-size: 13px;
+}
+
+/* Font scale: bumps the baseline body size; explicit-px sizes don't scale, but
+   anything using `font: inherit` (buttons, inputs, popover items) follows along. */
+body {
+  font-size: calc(14px * var(--font-scale, 1));
 }
 
 * {
@@ -4974,3 +5102,376 @@ button {
 .cinematic-clip.sound,
 .cinematic-clip.event { background: rgba(61, 208, 220, 0.72); }
 .cinematic-clip.fade { background: rgba(235, 87, 87, 0.72); }
+
+/* ------------------------------------------------------------------------- */
+/* Preferences modal + View-menu sections                                    */
+/* ------------------------------------------------------------------------- */
+
+.file-menu-section {
+  padding: 6px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.prefs-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(5, 7, 12, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+.prefs-card {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: min(640px, 100vh - 48px);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.prefs-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(15, 17, 23, 0.4);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .prefs-header {
+  background: rgba(244, 246, 251, 0.7);
+}
+
+.prefs-header strong {
+  font-size: 14px;
+}
+
+.prefs-spacer {
+  flex: 1 1 auto;
+}
+
+.prefs-close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.prefs-close:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.prefs-body {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.prefs-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border);
+  background: rgba(15, 17, 23, 0.35);
+}
+
+:root[data-theme="light"] .prefs-tabs {
+  background: rgba(243, 245, 250, 0.65);
+}
+
+.prefs-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.prefs-tab:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+
+.prefs-tab.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.prefs-panel {
+  min-height: 0;
+  padding: 18px 20px;
+  overflow-y: auto;
+}
+
+.prefs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.prefs-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.prefs-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.prefs-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 2px;
+}
+
+.prefs-row-label strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.prefs-row-label span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.prefs-row-control {
+  min-width: 0;
+}
+
+.prefs-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prefs-chip {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-light);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.prefs-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.prefs-chip.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.prefs-accent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.prefs-swatch {
+  width: 26px;
+  height: 26px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+}
+
+.prefs-swatch:hover {
+  transform: scale(1.06);
+}
+
+.prefs-swatch.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.prefs-color-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.prefs-color-input input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.prefs-footer {
+  padding-top: 4px;
+}
+
+.prefs-link-button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.prefs-link-button:hover {
+  color: var(--text);
+}
+
+.prefs-layout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.prefs-layout-card {
+  padding: 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-light);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.prefs-layout-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-light));
+}
+
+.prefs-save-row {
+  display: flex;
+  gap: 8px;
+}
+
+.prefs-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-light);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.prefs-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-strong));
+}
+
+.prefs-primary-button {
+  padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.prefs-primary-button:hover {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.prefs-primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.prefs-saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.prefs-saved-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.prefs-saved-list li:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="light"] .prefs-saved-list li:hover {
+  background: rgba(15, 17, 23, 0.04);
+}
+
+.prefs-saved-apply {
+  flex: 1 1 auto;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.prefs-saved-delete {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.prefs-saved-delete:hover {
+  border-color: rgba(255, 107, 107, 0.45);
+  color: var(--danger);
+}

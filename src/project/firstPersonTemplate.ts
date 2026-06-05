@@ -10,6 +10,8 @@ import type {
   AnimatorParameter,
   AnimatorState,
   AssetItem,
+  CinematicAction,
+  CinematicSequence,
   GraphNodeCategory,
   MeshRendererComponent,
   NodeForgeNode,
@@ -112,6 +114,68 @@ const uiElement = (kind: UIElement['kind'], name: string, style: UIElement['styl
 const boundElement = (kind: UIElement['kind'], name: string, style: UIElement['style'], bindings: UIElement['bindings'], text?: string): UIElement => ({
   ...uiElement(kind, name, style, text), bindings,
 });
+
+const cinematicAction = (type: CinematicAction['type'], data: Omit<CinematicAction, 'id' | 'type'>): CinematicAction => ({
+  id: makeId('caction'),
+  type,
+  ...data,
+});
+
+function createFpsShowcaseCinematic(heroOrbId: string): CinematicSequence {
+  return {
+    id: makeId('cinematic'),
+    name: 'FPS Showcase Finale',
+    duration: 6.4,
+    frameRate: 24,
+    autoplay: false,
+    skippable: true,
+    folder: 'FPS Showcase',
+    look: { letterbox: 2.39, grade: 'teal-orange', gradeIntensity: 0.75, exposure: 0.04, contrast: 0.18, saturation: 0.12, grain: 0.04, vignette: 0.34 },
+    markers: [
+      { id: makeId('cmark'), time: 0, label: 'HUD handoff', color: '#15e8ff' },
+      { id: makeId('cmark'), time: 2.2, label: 'Systems orbit', color: '#ff2bd6' },
+      { id: makeId('cmark'), time: 5.6, label: 'Mission ready', color: '#39ff9e' },
+    ],
+    actions: [
+      cinematicAction('fade', { time: 0, duration: 0.65, label: 'Neon fade in', fadeFrom: 1, fadeTo: 0, fadeColor: '#05030c' }),
+      cinematicAction('camera', {
+        time: 0,
+        duration: 6.4,
+        label: 'Showcase room flythrough',
+        interpolation: 'smooth',
+        keyframes: [
+          { time: 0, position: [-5.4, 2.0, 20.8], lookAt: [0, 1.5, 25.2], fov: 56, aperture: 2.6, focusDistance: 8 },
+          { time: 1.8, position: [5.8, 2.5, 23.4], lookAt: [0, 1.7, 26.0], fov: 48, aperture: 2.2, focusDistance: 6.5 },
+          { time: 3.7, position: [0, 4.0, 20.2], lookAt: [0, 1.6, 29.4], fov: 52, aperture: 1.4, focusDistance: 10 },
+          { time: 6.4, position: [0, 2.6, 18.2], lookAt: [9, 0.8, 6.5], fov: 58, aperture: 0.4, focusDistance: 16 },
+        ],
+      }),
+      cinematicAction('transform', {
+        time: 0,
+        duration: 6.1,
+        objectId: heroOrbId,
+        ease: 'smooth',
+        fromPosition: [0, 1.6, 26.6],
+        toPosition: [0, 2.7, 26.6],
+        fromRotation: [0, 0, 0],
+        toRotation: [0, Math.PI * 2, 0],
+        fromScale: [0.7, 0.7, 0.7],
+        toScale: [1.25, 1.25, 1.25],
+      }),
+      cinematicAction('material', {
+        time: 0.4,
+        duration: 5.2,
+        objectId: heroOrbId,
+        fromMaterial: { emissiveColor: '#15e8ff', emissiveIntensity: 1.2, roughness: 0.18, metalness: 0.35 },
+        toMaterial: { emissiveColor: '#ff2bd6', emissiveIntensity: 4.8, roughness: 0.08, metalness: 0.75 },
+      }),
+      cinematicAction('timeDilation', { time: 2.2, duration: 1.4, label: 'Slow showcase beat', fromTimeScale: 0.75, toTimeScale: 1.0 }),
+      cinematicAction('fade', { time: 5.8, duration: 0.45, label: 'Handoff flash', fadeFrom: 0, fadeTo: 0.32, fadeColor: '#15e8ff' }),
+      cinematicAction('fade', { time: 6.2, duration: 0.2, label: 'Clear flash', fadeFrom: 0.32, fadeTo: 0, fadeColor: '#15e8ff' }),
+    ],
+    createdAt: Date.now(),
+  };
+}
 
 /** Cyberpunk neon HUD: a bottom-right weapon + ammo readout (glowing cyan name, big tabular count beside a
  *  dim "/ MAG") on a dark glass chip with a cyan edge-glow, and a key-cap controls strip that auto-fades a
@@ -376,11 +440,11 @@ function buildWeaponController(name: string, skeletonId: string, clips: Animatio
 }
 
 /**
- * Build a clean, bright "first-person learning sandbox" — Unreal-FP-template style. A calm, well-lit
- * room that teaches the basics one station at a time: move + mouse-look, hold-to-fire at knock-over
- * target cubes, swap between the 5 bundled weapons, reload, and climb a short staircase onto a platform.
- * No enemies, no win/lose, no fog — just a friendly playground with floating tip prompts. Reuses the
- * bundled FPS arm rigs (each with its own idle/walk/run/jump/fire/aim/reload set) + auto-driven animators.
+ * Build a room-based first-person engine showcase. Room 1 teaches movement and mouse-look, Room 2 shows
+ * crawl/slow movement plus a real [E] interaction console, Room 3 showcases physics and shooting against
+ * dynamic boxes/breakable targets, and Room 4 demonstrates bound UI + a trigger-driven Film Mode cinematic.
+ * A deploy pad then loads a second Breach & Clear mission scene. Reuses the bundled FPS arm rigs (each with
+ * its own idle/walk/run/jump/fire/aim/reload set) + auto-driven animators.
  * Returns the player object id. Requires a project to be open.
  */
 export async function createFirstPersonTemplate(): Promise<string | undefined> {
@@ -602,6 +666,9 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
       keyAttack: 'Mouse0',
       keyAim: 'Mouse1',
       keyReload: 'KeyR',
+      keyCrouch: 'KeyC',
+      keyCrawl: 'KeyZ',
+      crawlMultiplier: 0.32,
       footstepSoundId: footstepSound?.id,
       rollSpeed: 0,
       rollDuration: 0.1,
@@ -691,10 +758,34 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     }),
   );
 
+  // ROOM ROUTE — four connected showcase rooms with wide center doorways. The route is intentionally made
+  // from simple primitives so users can inspect, move, duplicate, or rebuild each piece in the editor.
+  const divider = (name: string, z: number, color: string) => {
+    block(`${name} Left Wall`, [-10.5, 1.7, z], [8.6, 3.4, 0.45], WALL, { roughness: 0.62, metalness: 0.25 });
+    block(`${name} Right Wall`, [10.5, 1.7, z], [8.6, 3.4, 0.45], WALL, { roughness: 0.62, metalness: 0.25 });
+    block(`${name} Header`, [0, 3.35, z], [6.4, 0.28, 0.5], color, { emissive: color, intensity: 1.7, solid: false });
+  };
+  divider('Gate 01 Movement To Crawl', 6.4, CYAN);
+  divider('Gate 02 Crawl To Physics', 13.2, MAGENTA);
+  divider('Gate 03 Physics To Finale', 21.2, '#39ff9e');
+  block('Room 1 Movement Floor Strip', [0, 0.02, 1.2], [9, 0.04, 0.18], CYAN, { emissive: CYAN, intensity: 1.25, solid: false });
+  block('Room 2 Crawl Floor Strip', [0, 0.02, 9.9], [9, 0.04, 0.18], MAGENTA, { emissive: MAGENTA, intensity: 1.25, solid: false });
+  block('Room 3 Physics Floor Strip', [0, 0.02, 16.8], [9, 0.04, 0.18], '#ff8a3d', { emissive: '#ff8a3d', intensity: 1.25, solid: false });
+  block('Room 4 UI Cinematic Floor Strip', [0, 0.02, 24.8], [9, 0.04, 0.18], '#39ff9e', { emissive: '#39ff9e', intensity: 1.25, solid: false });
+
   // STATION 1 — loose cubes right by the spawn: walk into them to feel the physics immediately.
   ([[-1.7, 0.3, 4.4], [-0.9, 0.3, 5.0], [-0.1, 0.3, 4.5], [1.3, 0.3, 4.4], [2.0, 0.3, 5.0]] as Vector3Tuple[]).forEach((p, i) =>
     target(`Loose Cube ${i + 1}`, p, i % 2 ? '#bfe3ff' : '#f2f5f8', i % 2 ? '#2b7fff' : undefined),
   );
+
+  // ROOM 2 — crawl/interaction showcase. The low scanner tunnel is decorative (non-solid) so it demonstrates
+  // the crawl input and crawling animator source without trapping a first-person capsule under a ceiling.
+  block('Crawl Tunnel Left Rail', [-5.2, 0.45, 9.8], [0.24, 0.9, 4.2], '#231735', { emissive: MAGENTA, intensity: 0.35, solid: false });
+  block('Crawl Tunnel Right Rail', [-1.8, 0.45, 9.8], [0.24, 0.9, 4.2], '#231735', { emissive: MAGENTA, intensity: 0.35, solid: false });
+  block('Crawl Tunnel Low Scanner', [-3.5, 1.05, 9.8], [3.7, 0.18, 4.2], MAGENTA, { emissive: MAGENTA, intensity: 1.8, solid: false });
+  block('Crawl Tunnel Entry Glow', [-3.5, 0.08, 7.7], [3.7, 0.1, 0.18], MAGENTA, { emissive: MAGENTA, intensity: 1.5, solid: false });
+  const crawlConsole = block('Interaction Console Pedestal', [5.8, 0.45, 9.7], [0.9, 0.9, 0.9], '#1b1530', { roughness: 0.55, metalness: 0.35 });
+  block('Interaction Console Screen', [5.8, 1.08, 9.25], [1.0, 0.42, 0.08], CYAN, { emissive: CYAN, intensity: 1.6, solid: false });
 
   // STATION 2 — two knock-over pyramids flanking the path: shoot them and they topple (light, low-friction).
   const pyramid = (bx: number, bz: number) => {
@@ -720,6 +811,23 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   target('Platform Target', [-1.4, 1.7, 25], '#bfe3ff', '#2b7fff');
   target('Platform Target', [0, 1.7, 24.4], '#ffd27f', '#ff8a3d');
   target('Platform Target', [1.4, 1.7, 25], '#bfe3ff', '#2b7fff');
+
+  // ROOM 4 — UI + cinematic showcase. The orb is animated by a real CinematicSequence and can be played
+  // either by walking through the trigger or by interacting with the console in this room.
+  const finaleOrb: SceneObject = {
+    id: makeId('obj'), name: 'Finale Cinematic Orb', kind: 'sphere',
+    transform: { position: [0, 1.6, 26.6], rotation: [0, 0, 0], scale: [0.7, 0.7, 0.7] },
+    renderer: { ...defaultRenderer('sphere', '#15e8ff'), metalness: 0.45, roughness: 0.18, materialOverrides: { emissiveColor: '#15e8ff', emissiveIntensity: 2.2 } },
+    physics: fixedBox('sphere'),
+  };
+  props.push(finaleOrb);
+  const finaleCinematic = createFpsShowcaseCinematic(finaleOrb.id);
+  const finaleConsole = block('Finale Console Pedestal', [-5.8, 0.45, 25.8], [0.9, 0.9, 0.9], '#1b1530', { roughness: 0.55, metalness: 0.35 });
+  block('Finale Console Screen', [-5.8, 1.08, 25.35], [1.0, 0.42, 0.08], '#39ff9e', { emissive: '#39ff9e', intensity: 1.7, solid: false });
+  block('UI Showcase Frame Top', [0, 3.05, 29.2], [9.2, 0.12, 0.12], '#39ff9e', { emissive: '#39ff9e', intensity: 1.8, solid: false });
+  block('UI Showcase Frame Bottom', [0, 0.65, 29.2], [9.2, 0.12, 0.12], '#39ff9e', { emissive: '#39ff9e', intensity: 1.4, solid: false });
+  block('UI Showcase Frame Left', [-4.6, 1.85, 29.2], [0.12, 2.4, 0.12], '#39ff9e', { emissive: '#39ff9e', intensity: 1.4, solid: false });
+  block('UI Showcase Frame Right', [4.6, 1.85, 29.2], [0.12, 2.4, 0.12], '#39ff9e', { emissive: '#39ff9e', intensity: 1.4, solid: false });
 
   // ============================================================================================
   // TIP PROMPTS — a glowing floor pad + a trigger zone at each station. Walking in shows a sleek HUD card
@@ -804,10 +912,77 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     });
   };
 
-  makeSign('Move & Look', 'WASD to move   ·   Move the mouse to look\nSHIFT to sprint   ·   SPACE to jump', [0, 0, 3], '#15e8ff', 2);
-  makeSign('Shoot', 'Hold LEFT MOUSE to fire.\nKnock the cubes flying — or topple the tower on the right!', [0, 0, 8], '#ff8a3d', 2);
-  makeSign('Weapons', 'Press 1–5 to swap weapons (5 = grenade)   ·   R to reload\nHold RIGHT MOUSE to aim. Try the bounce pad on the left!', [0, 0, 14], '#15e8ff', 2);
-  makeSign('The Range', 'Up the steps, then SHOOT THE RED TARGETS to clear the range.\nLob a grenade (5) into them for a chain blast!', [0, 0, 19], '#ff2bd6', 2);
+  makeSign('Room 1: Movement', 'WASD to move   ·   Move the mouse to look\nSHIFT to sprint   ·   SPACE to jump', [0, 0, 3], '#15e8ff', 2);
+  makeSign('Room 2: Crawl + Interact', 'Hold Z to crawl/slow-walk through the scanner lane.\nLook at the console and press E to fire an interaction Blueprint.', [0, 0, 8], '#ff2bd6', 2);
+  makeSign('Room 3: Physics + Shooting', 'Hold LEFT MOUSE to fire. Shoot the loose boxes, tower, and red targets.\nPress 1–5 to swap weapons, R to reload, RMB to aim.', [0, 0, 14], '#ff8a3d', 2);
+  makeSign('Room 4: UI + Cinematic', 'Walk through the green trigger or press E at the console.\nA screen UI panel appears and a real Film Mode cinematic plays.', [0, 0, 22.2], '#39ff9e', 2);
+
+  const createToastDoc = (name: string, title: string, body: string, color: string): string => {
+    const docId = makeId('ui');
+    const root = uiElement('panel', `${name} Root`, { width: '100%', height: '100%', position: 'relative', padding: '0' });
+    const box = uiElement('panel', name, {
+      position: 'absolute', left: '50%', display: 'flex', flexDirection: 'column',
+      custom: { top: '18%', transform: 'translateX(-50%)', alignItems: 'center', gap: '8px', pointerEvents: 'none', background: 'rgba(8,6,18,0.84)', padding: '18px 30px', borderRadius: '12px', border: `1px solid ${color}77`, boxShadow: `0 0 34px ${color}44, inset 0 0 18px ${color}14`, animation: 'nf-showcase-toast 0.25s ease-out' },
+    });
+    const head = uiElement('text', `${name} Header`, { color, fontSize: '13px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '3px', textTransform: 'uppercase', textShadow: `0 0 14px ${color}aa` } }, title);
+    const line = uiElement('text', `${name} Body`, { color: 'rgba(226,238,255,0.92)', fontSize: '15px', fontWeight: '600', textAlign: 'center', custom: { whiteSpace: 'pre-line', lineHeight: '1.45' } }, body);
+    box.children = [head, line];
+    root.children = [box];
+    extraUIDocs.push({ id: docId, name, surface: 'screen', root, css: '@keyframes nf-showcase-toast { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }', visibleOnStart: false, createdAt: Date.now() });
+    return docId;
+  };
+
+  const crawlConsoleDocId = createToastDoc('Crawl Console UI', 'Interaction Fired', 'This panel was shown by an Interact event on the console.\nOpen the "Crawl Console" Blueprint to edit the E-key logic.', '#15e8ff');
+  const finaleDocId = createToastDoc('Finale UI', 'Engine Showcase Complete', 'Movement, crawl, physics, shooting, UI bindings, triggers, interaction, and cinematics are all live.\nUse the magenta DEPLOY pad to enter the mission scene.', '#39ff9e');
+
+  const crawlConsoleBp = miniBlueprint('Crawl Console', '#15e8ff', (n, e) => {
+    const interact = makeId('node');
+    const show = makeId('node');
+    const wait = makeId('node');
+    const hide = makeId('node');
+    n.push(graphNode(interact, 'Interact', 'Events', 40, 40, { nodeKind: 'event.interact', hasInput: false, description: 'Player pressed E on the console.' }));
+    n.push(graphNode(show, 'Show UI', 'UI', 300, 40, { nodeKind: 'ui.show', documentId: crawlConsoleDocId, description: 'Show a console response.' }));
+    n.push(graphNode(wait, 'Delay', 'Logic', 540, 40, { nodeKind: 'logic.delay', numberValue: 3, description: 'Leave it readable briefly.' }));
+    n.push(graphNode(hide, 'Hide UI', 'UI', 780, 40, { nodeKind: 'ui.hide', documentId: crawlConsoleDocId }));
+    e.push(execEdge(interact, show), execEdge(show, wait), execEdge(wait, hide));
+  });
+  crawlConsole.script = { blueprintId: crawlConsoleBp.blueprintId, graphId: crawlConsoleBp.graphId, enabled: true };
+  crawlConsole.variables = { interactable: true, interactPrompt: 'Run crawl console' };
+
+  const finaleBp = miniBlueprint('Finale Trigger', '#39ff9e', (n, e) => {
+    const trig = makeId('node');
+    const show = makeId('node');
+    const play = makeId('node');
+    const wait = makeId('node');
+    const hide = makeId('node');
+    n.push(graphNode(trig, 'Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: pawnId, hasInput: false, description: 'Player enters the finale room trigger.' }));
+    n.push(graphNode(show, 'Show UI', 'UI', 300, 40, { nodeKind: 'ui.show', documentId: finaleDocId, description: 'Show the showcase summary panel.' }));
+    n.push(graphNode(play, 'Play Cinematic', 'Runtime', 540, 40, { nodeKind: 'action.playCinematic', cinematicId: finaleCinematic.id, description: 'Play the editable finale cinematic.' }));
+    n.push(graphNode(wait, 'Delay', 'Logic', 780, 40, { nodeKind: 'logic.delay', numberValue: 6.5 }));
+    n.push(graphNode(hide, 'Hide UI', 'UI', 1020, 40, { nodeKind: 'ui.hide', documentId: finaleDocId }));
+    e.push(execEdge(trig, show), execEdge(show, play), execEdge(play, wait), execEdge(wait, hide));
+  });
+  const finaleInteractBp = miniBlueprint('Finale Console', '#39ff9e', (n, e) => {
+    const interact = makeId('node');
+    const show = makeId('node');
+    const play = makeId('node');
+    const wait = makeId('node');
+    const hide = makeId('node');
+    n.push(graphNode(interact, 'Interact', 'Events', 40, 40, { nodeKind: 'event.interact', hasInput: false, description: 'Player pressed E on the finale console.' }));
+    n.push(graphNode(show, 'Show UI', 'UI', 300, 40, { nodeKind: 'ui.show', documentId: finaleDocId }));
+    n.push(graphNode(play, 'Play Cinematic', 'Runtime', 540, 40, { nodeKind: 'action.playCinematic', cinematicId: finaleCinematic.id }));
+    n.push(graphNode(wait, 'Delay', 'Logic', 780, 40, { nodeKind: 'logic.delay', numberValue: 6.5 }));
+    n.push(graphNode(hide, 'Hide UI', 'UI', 1020, 40, { nodeKind: 'ui.hide', documentId: finaleDocId }));
+    e.push(execEdge(interact, show), execEdge(show, play), execEdge(play, wait), execEdge(wait, hide));
+  });
+  finaleConsole.script = { blueprintId: finaleInteractBp.blueprintId, graphId: finaleInteractBp.graphId, enabled: true };
+  finaleConsole.variables = { interactable: true, interactPrompt: 'Play finale cinematic' };
+  tutorialObjects.push({
+    id: makeId('obj'), name: 'Finale Cinematic Trigger', kind: 'empty',
+    transform: { position: [0, 1.2, 24.0], rotation: [0, 0, 0], scale: [5.2, 2.4, 2.4] },
+    physics: { ...fixedBox('box'), bodyType: 'dynamic', isTrigger: true, gravityScale: 0 },
+    script: { blueprintId: finaleBp.blueprintId, graphId: finaleBp.graphId, enabled: true },
+  });
 
   // ============================================================================================
   // EXTRAS — a scoring shooting range (breakable red targets + a HUD counter), a sliding moving target, a
@@ -1269,7 +1444,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     activeUIDocumentId: hud.id,
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId
-        ? { ...scene, objects: [...scene.objects, ground, ...props, ...tutorialObjects, ...arms, pawn] }
+        ? { ...scene, objects: [...scene.objects, ground, ...props, ...tutorialObjects, ...arms, pawn], cinematics: [...(scene.cinematics ?? []), finaleCinematic] }
         : scene.id === missionSceneId
           ? { ...scene, objects: [...scene.objects, ...missionObjects] }
           : scene,

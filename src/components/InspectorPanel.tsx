@@ -150,6 +150,7 @@ function LayerMaskField({
 
 function RendererSection({
   renderer,
+  defaultHideInPlay,
   modelAssets,
   imageAssets,
   materials,
@@ -159,6 +160,7 @@ function RendererSection({
   onEditMaterial,
 }: {
   renderer: MeshRendererComponent;
+  defaultHideInPlay?: boolean;
   modelAssets: AssetItem[];
   imageAssets: AssetItem[];
   materials: MaterialDefinition[];
@@ -184,6 +186,17 @@ function RendererSection({
   return (
     <section className="inspector-section">
       <h3>Renderer</h3>
+      <label className="field-row">
+        <span>Hide in Play</span>
+        <input
+          type="checkbox"
+          checked={renderer.hideInPlay ?? Boolean(defaultHideInPlay)}
+          onChange={(event) => onChange({ hideInPlay: event.target.checked })}
+        />
+      </label>
+      {defaultHideInPlay && renderer.hideInPlay === undefined && (
+        <p className="field-hint">Trigger volumes are hidden during Play by default. Turn this off to debug the sensor visually.</p>
+      )}
       <label className="field-row">
         <span>Model</span>
         <select value={renderer.modelAssetId ?? ''} onChange={(event) => onModelChange(event.target.value || undefined)}>
@@ -840,8 +853,24 @@ function VehicleSection({
           {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
           <p className="field-hint">
             Body Roll = lean into turns; Body Pitch = squat/dive under accel/brake; Stiffness = how fast it settles.
-            Wheel Radius sets how fast the wheels spin. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length}.
+            Wheel Radius sets how fast the wheels spin. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length} · tire marks: {v.tireMarkIds.length}.
           </p>
+
+          <h4 className="inspector-subhead">Crash Physics</h4>
+          <label className="field-row">
+            <span>Damage</span>
+            <input type="checkbox" checked={v.crashDamageEnabled ?? true} onChange={(event) => onChange({ crashDamageEnabled: event.target.checked })} />
+          </label>
+          {num('Damage Speed', 'crashDamageThreshold', 0.5, 9)}
+          {num('Rollover Speed', 'crashRolloverThreshold', 0.5, 16)}
+          {num('Rollover Force', 'crashRolloverStrength', 0.05, 0.42)}
+          {num('Visual Crush', 'crashDeformation', 0.05, 0.45)}
+          {num('Wheel Break', 'crashWheelBreakThreshold', 0.1, 1.6)}
+          <label className="field-row">
+            <span>Debris</span>
+            <input type="checkbox" checked={v.crashDebris ?? true} onChange={(event) => onChange({ crashDebris: event.target.checked })} />
+          </label>
+          <p className="field-hint">Hard fixed-object impacts add damage, kick the body with torque, allow real rollovers, bend wheels out of alignment, and can throw small debris.</p>
 
           <h4 className="inspector-subhead">Camera</h4>
           <label className="field-row">
@@ -1747,6 +1776,7 @@ export function InspectorPanel() {
           {object.renderer && (
             <RendererSection
               renderer={object.renderer}
+              defaultHideInPlay={object.physics?.isTrigger}
               modelAssets={modelAssets}
               imageAssets={imageAssets}
               materials={materials}

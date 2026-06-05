@@ -118,6 +118,8 @@ const SHARED_GEO = {
 /** Stable empty batch map reused when instancing is off — avoids allocating a Map every render. */
 const EMPTY_BATCHES: Map<string, SceneObject[]> = new Map();
 
+const hideInRuntime = (object: SceneObject) => object.renderer?.hideInPlay ?? Boolean(object.physics?.isTrigger);
+
 function Primitive({ object, selected }: { object: SceneObject; selected: boolean }) {
   // Floating combat damage number.
   if (object.effect?.kind === 'damage') return <DamageNumber effect={object.effect} />;
@@ -709,6 +711,7 @@ function SceneContent({
   const sceneObjects = allSceneObjects.filter(
     (object) =>
       !object.viewModel &&
+      !(isPlaying && hideInRuntime(object)) &&
       !((isPlaying ? runtimeHidden : cinematicPreviewHidden).includes(object.id)),
   );
   // GPU instancing for repeated static decoration models (Play-only, toggle in the F8 overlay). Batches

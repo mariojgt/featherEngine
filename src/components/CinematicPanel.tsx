@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, Magnet, Pause, Play, Plus, RotateCcw, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
+import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, FolderOpen, Magnet, Pause, Play, Plus, RotateCcw, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { editorCameraPose } from '../three/EditorCamera';
 import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicTransformKeyframe, MaterialOverrides, SceneObjectKind, Vector3Tuple } from '../types';
 import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
 import { createStoryboardCinematic, type StoryboardPreset } from '../project/cinematicStoryboard';
+import { getPlatform } from '../platform';
 
 const easeOptions: { value: CinematicEase; label: string }[] = [
   { value: 'smooth', label: 'Smooth (ease in-out)' },
@@ -147,6 +148,11 @@ export function CinematicPanel() {
   const [cinematicSearch, setCinematicSearch] = useState('');
   const [snapTimeline, setSnapTimeline] = useState(true);
   const [movieStatus, setMovieStatus] = useState('');
+  // After a successful WebM/MP4 export, remember where it was saved so we can offer a "Show in
+  // folder" button. Cleared at the start of the next export. Only populated on desktop (Tauri's
+  // save dialog returns an absolute path); on web we set it to null since the browser controls
+  // the download location.
+  const [lastExportPath, setLastExportPath] = useState<string | null>(null);
 
   const cinematics = scene?.cinematics ?? [];
   const visibleCinematics = useMemo(() => {
@@ -291,39 +297,124 @@ export function CinematicPanel() {
     addCinematicMarker(active.id, { time: beatTime, label: `Marker ${(active.markers?.length ?? 0) + 1}`, color: '#FFD166' });
   };
 
-  const recordCinematicMovie = () => {
+  /**
+   * Capture the viewport canvas to a WebM video while the cinematic plays. Returns the recorded
+   * WebM blob via the promise so callers (e.g. MP4 export) can post-process it. Resolves with
+   * `undefined` and surfaces an inline status if MediaRecorder isn't available.
+   */
+  const captureCinematicWebM = (statusPrefix: string): Promise<Blob | undefined> =>
+    new Promise((resolve) => {
+      if (!active) return resolve(undefined);
+      // r3f's <Canvas className="scene-canvas"> applies the class to its wrapper <div>, not the
+      // inner <canvas>, so we have to descend into it. The player's <canvas className="game-canvas">
+      // is a raw canvas element so the direct selector works.
+      const canvas =
+        document.querySelector<HTMLCanvasElement>('.scene-canvas canvas') ??
+        document.querySelector<HTMLCanvasElement>('canvas.game-canvas');
+      if (!canvas?.captureStream || typeof MediaRecorder === 'undefined') {
+        setMovieStatus('Recording is not supported in this browser.');
+        window.setTimeout(() => setMovieStatus(''), 2800);
+        return resolve(undefined);
+      }
+      const stream = canvas.captureStream(Math.max(1, active.frameRate ?? 24));
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        resolve(new Blob(chunks, { type: 'video/webm' }));
+      };
+      setMovieStatus(statusPrefix);
+      playCinematic(active.id);
+      recorder.start();
+      window.setTimeout(() => {
+        if (recorder.state !== 'inactive') recorder.stop();
+      }, Math.max(1, active.duration) * 1000 + 350);
+    });
+
+  const recordCinematicMovie = async () => {
     if (!active || movieStatus) return;
-    const canvas = document.querySelector<HTMLCanvasElement>('canvas.scene-canvas, canvas.game-canvas');
-    if (!canvas?.captureStream || typeof MediaRecorder === 'undefined') {
-      setMovieStatus('Recording is not supported in this browser.');
-      window.setTimeout(() => setMovieStatus(''), 2800);
+    setLastExportPath(null);
+    const blob = await captureCinematicWebM('Recording…');
+    if (!blob) return;
+    const baseName = active.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'cinematic';
+    const platform = await getPlatform();
+    const dest = await platform.saveBinary(`${baseName}.webm`, new Uint8Array(await blob.arrayBuffer()), {
+      title: 'Save cinematic recording',
+      mimeType: 'video/webm',
+      filters: [{ name: 'WebM video', extensions: ['webm'] }],
+    });
+    if (!dest) {
+      setMovieStatus('');
       return;
     }
-    const stream = canvas.captureStream(Math.max(1, active.frameRate ?? 24));
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks: BlobPart[] = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size) chunks.push(event.data);
-    };
-    recorder.onstop = () => {
-      stream.getTracks().forEach((track) => track.stop());
-      const blob = new Blob(chunks, { type: 'video/webm' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${active.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'cinematic'}.webm`;
-      link.click();
-      URL.revokeObjectURL(url);
-      setMovieStatus('Saved WebM');
-      window.setTimeout(() => setMovieStatus(''), 1800);
-    };
-    setMovieStatus('Recording...');
-    playCinematic(active.id);
-    recorder.start();
-    window.setTimeout(() => {
-      if (recorder.state !== 'inactive') recorder.stop();
-    }, Math.max(1, active.duration) * 1000 + 350);
+    // Only desktop returns an absolute path we can reveal. On web the dialog returns a status
+    // string like "downloaded as …" — keep the toast but don't surface a non-functional button.
+    if (platform.isDesktop && platform.revealFile) setLastExportPath(dest);
+    setMovieStatus(`Saved WebM → ${dest}`);
+    window.setTimeout(() => setMovieStatus(''), 3200);
+  };
+
+  /**
+   * Record the cinematic to WebM, then transcode it to MP4 (H.264 + AAC) entirely in the browser
+   * via lazy-loaded ffmpeg.wasm. The ffmpeg core (~30MB) is fetched from the unpkg CDN on first
+   * use and cached by the browser; subsequent runs are instant. Requires an internet connection
+   * the first time it runs.
+   */
+  const exportCinematicMp4 = async () => {
+    if (!active || movieStatus) return;
+    setLastExportPath(null);
+    const webmBlob = await captureCinematicWebM('Recording…');
+    if (!webmBlob) return;
+    try {
+      setMovieStatus('Loading ffmpeg…');
+      const [{ FFmpeg }, { fetchFile, toBlobURL }] = await Promise.all([
+        import('@ffmpeg/ffmpeg'),
+        import('@ffmpeg/util'),
+      ]);
+      const ffmpeg = new FFmpeg();
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+      setMovieStatus('Converting…');
+      await ffmpeg.writeFile('input.webm', await fetchFile(webmBlob));
+      // H.264 high-quality preset, AAC audio, yuv420p for QuickTime/Safari compatibility.
+      await ffmpeg.exec([
+        '-i', 'input.webm',
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '20',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+        'output.mp4',
+      ]);
+      const data = (await ffmpeg.readFile('output.mp4')) as Uint8Array;
+      const baseName = active.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase() || 'cinematic';
+      const platform = await getPlatform();
+      const dest = await platform.saveBinary(`${baseName}.mp4`, data, {
+        title: 'Save MP4 export',
+        mimeType: 'video/mp4',
+        filters: [{ name: 'MP4 video', extensions: ['mp4'] }],
+      });
+      if (!dest) {
+        setMovieStatus('');
+        return;
+      }
+      if (platform.isDesktop && platform.revealFile) setLastExportPath(dest);
+      setMovieStatus(`Saved MP4 → ${dest}`);
+      window.setTimeout(() => setMovieStatus(''), 3600);
+    } catch (err) {
+      console.error('MP4 export failed', err);
+      setMovieStatus('MP4 export failed');
+      window.setTimeout(() => setMovieStatus(''), 3200);
+    }
   };
 
   // Write a keyframe list back onto a camera beat, snapping the clip to span the keyframes so the
@@ -1270,8 +1361,29 @@ export function CinematicPanel() {
                   </button>
                   <button className="full-button" disabled={Boolean(movieStatus)} title="Record the current viewport canvas to a WebM while this sequence plays" onClick={recordCinematicMovie}>
                     <Download size={14} aria-hidden />
-                    {movieStatus || 'Export WebM'}
+                    {movieStatus && !movieStatus.toLowerCase().includes('mp4') && !movieStatus.toLowerCase().includes('ffmpeg') && !movieStatus.toLowerCase().includes('converting') ? movieStatus : 'Export WebM'}
                   </button>
+                  <button className="full-button" disabled={Boolean(movieStatus)} title="Record the viewport, then transcode WebM → MP4 (H.264/AAC) in-browser via ffmpeg.wasm. First run downloads ~30MB of ffmpeg core from unpkg." onClick={exportCinematicMp4}>
+                    <Download size={14} aria-hidden />
+                    {movieStatus && (movieStatus.toLowerCase().includes('mp4') || movieStatus.toLowerCase().includes('ffmpeg') || movieStatus.toLowerCase().includes('converting')) ? movieStatus : 'Export MP4'}
+                  </button>
+                  {lastExportPath && (
+                    <button
+                      className="full-button"
+                      title={`Reveal in file manager:\n${lastExportPath}`}
+                      onClick={async () => {
+                        const platform = await getPlatform();
+                        try {
+                          await platform.revealFile?.(lastExportPath);
+                        } catch (err) {
+                          console.error('Reveal failed', err);
+                        }
+                      }}
+                    >
+                      <FolderOpen size={14} aria-hidden />
+                      Show in folder
+                    </button>
+                  )}
                 </div>
                 {(active.markers ?? []).length > 0 && (
                   <div className="cinematic-marker-list">

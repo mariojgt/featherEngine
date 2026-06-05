@@ -1,13 +1,16 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   DockviewReact,
   themeAbyss,
+  themeDark,
+  themeLight,
   type DockviewApi,
   type DockviewReadyEvent,
   type IDockviewHeaderActionsProps,
 } from 'dockview-react';
 import 'dockview-react/dist/styles/dockview.css';
 import { ExternalLink, PictureInPicture2 } from 'lucide-react';
+import { useEditorPrefs } from '../store/editorPrefsStore';
 import { HierarchyPanel } from './HierarchyPanel';
 import { ViewportPanel } from './Viewport';
 import { InspectorPanel } from './InspectorPanel';
@@ -137,10 +140,91 @@ function buildDefaultLayout(api: DockviewApi) {
   api.addPanel({ id: 'cinematic', component: 'cinematic', title: 'Film Mode', position: { referencePanel: 'scripting', direction: 'within' } });
 }
 
+/** Modeling-first layout: big viewport with Hierarchy/Inspector hugging the sides. No Scripting at the bottom. */
+function buildModelingLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
+  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'viewport', direction: 'left' } });
+  api.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'hierarchy', direction: 'below' } });
+  api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
+  api.addPanel({ id: 'scene', component: 'scene', title: 'Scene', position: { referencePanel: 'inspector', direction: 'within' } });
+  api.addPanel({ id: 'materials', component: 'materials', title: 'Material', position: { referencePanel: 'inspector', direction: 'below' } });
+  api.addPanel({ id: 'terrain', component: 'terrain', title: 'Terrain', position: { referencePanel: 'materials', direction: 'within' } });
+  api.addPanel({ id: 'particles', component: 'particles', title: 'Particle System', position: { referencePanel: 'materials', direction: 'within' } });
+}
+
+/** Scripting-first: graph dominates the bottom half. */
+function buildScriptingLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
+  api.addPanel({ id: 'scripting', component: 'scripting', title: 'Scripting', position: { referencePanel: 'viewport', direction: 'right' } });
+  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'viewport', direction: 'left' } });
+  api.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'hierarchy', direction: 'below' } });
+  api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'scripting', direction: 'right' } });
+  api.addPanel({ id: 'scene', component: 'scene', title: 'Scene', position: { referencePanel: 'inspector', direction: 'within' } });
+}
+
+/** Animation-first: Animator front-and-centre, Inspector + Hierarchy nearby. */
+function buildAnimationLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
+  api.addPanel({ id: 'animator', component: 'animator', title: 'Animator', position: { referencePanel: 'viewport', direction: 'below' } });
+  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'viewport', direction: 'left' } });
+  api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
+  api.addPanel({ id: 'scene', component: 'scene', title: 'Scene', position: { referencePanel: 'inspector', direction: 'within' } });
+  api.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'hierarchy', direction: 'below' } });
+}
+
+/** Cinematic-first: Film Mode owns the bottom; everything else collapses around the viewport. */
+function buildCinematicLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
+  api.addPanel({ id: 'cinematic', component: 'cinematic', title: 'Film Mode', position: { referencePanel: 'viewport', direction: 'below' } });
+  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'viewport', direction: 'left' } });
+  api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
+  api.addPanel({ id: 'scene', component: 'scene', title: 'Scene', position: { referencePanel: 'inspector', direction: 'within' } });
+}
+
+export type WorkspaceLayoutId = 'default' | 'modeling' | 'scripting' | 'animation' | 'cinematic';
+
+export const WORKSPACE_LAYOUTS: Array<{ id: WorkspaceLayoutId; label: string; build: (api: DockviewApi) => void }> = [
+  { id: 'default', label: 'Default', build: buildDefaultLayout },
+  { id: 'modeling', label: 'Modeling', build: buildModelingLayout },
+  { id: 'scripting', label: 'Scripting', build: buildScriptingLayout },
+  { id: 'animation', label: 'Animation', build: buildAnimationLayout },
+  { id: 'cinematic', label: 'Cinematic', build: buildCinematicLayout },
+];
+
 /** Rebuild the default layout (wired to the toolbar's View → Reset Layout). */
 export function resetWorkspaceLayout() {
   const api = getWorkspaceApi();
   if (api) buildDefaultLayout(api);
+}
+
+/** Apply a built-in workspace layout by id. */
+export function applyWorkspaceLayout(id: WorkspaceLayoutId) {
+  const api = getWorkspaceApi();
+  if (!api) return;
+  const preset = WORKSPACE_LAYOUTS.find((l) => l.id === id);
+  if (preset) preset.build(api);
+}
+
+/** Apply a previously-saved custom layout (Dockview JSON). Returns true on success. */
+export function applyCustomLayout(json: unknown): boolean {
+  const api = getWorkspaceApi();
+  if (!api || !json) return false;
+  try {
+    api.fromJSON(json as Parameters<typeof api.fromJSON>[0]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Snapshot the current Dockview layout as JSON (for saving as a custom preset). */
+export function snapshotWorkspaceLayout(): unknown | null {
+  const api = getWorkspaceApi();
+  return api ? api.toJSON() : null;
 }
 
 export function Workspace() {
@@ -177,10 +261,17 @@ export function Workspace() {
     [],
   );
 
+  const themeMode = useEditorPrefs((s) => s.themeMode);
+  const dockTheme = useMemo(() => {
+    if (themeMode === 'light') return themeLight;
+    if (themeMode === 'midnight') return themeDark;
+    return themeAbyss;
+  }, [themeMode]);
+
   return (
     <div className="nf-dockview-host">
       <DockviewReact
-        theme={themeAbyss}
+        theme={dockTheme}
         components={components}
         rightHeaderActionsComponent={HeaderActions}
         onReady={onReady}

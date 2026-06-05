@@ -99,12 +99,53 @@ async fn run_production_build(
   .map_err(|e| e.to_string())?
 }
 
+/// Open the OS file manager with the given file highlighted (Explorer on Windows, Finder on macOS,
+/// the parent directory on Linux as a best-effort fallback since there's no portable "reveal"). The
+/// path is validated as an existing file before we hand it to the shell so we never spawn a process
+/// with attacker-controlled arguments. Returns a short error string on failure rather than panicking.
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+  let p = std::path::PathBuf::from(&path);
+  if !p.exists() {
+    return Err(format!("File no longer exists: {path}"));
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    Command::new("explorer")
+      .arg(format!("/select,{}", p.display()))
+      .spawn()
+      .map_err(|e| e.to_string())?;
+    return Ok(());
+  }
+
+  #[cfg(target_os = "macos")]
+  {
+    Command::new("open")
+      .arg("-R")
+      .arg(&p)
+      .spawn()
+      .map_err(|e| e.to_string())?;
+    return Ok(());
+  }
+
+  #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+  {
+    let dir = p.parent().unwrap_or(&p);
+    Command::new("xdg-open")
+      .arg(dir)
+      .spawn()
+      .map_err(|e| e.to_string())?;
+    Ok(())
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
-    .invoke_handler(tauri::generate_handler![run_production_build])
+    .invoke_handler(tauri::generate_handler![run_production_build, reveal_in_explorer])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

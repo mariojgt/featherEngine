@@ -85,6 +85,17 @@ export const webPlatform: Platform = {
     if (!file) return null;
     return JSON.parse(await file.text());
   },
+
+  async saveBinary(defaultName, bytes, options) {
+    const blob = new Blob([bytes], { type: options?.mimeType ?? 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = defaultName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    return `downloaded as ${defaultName}`;
+  },
 };
 
 function pickPackageFile(): Promise<File | null> {

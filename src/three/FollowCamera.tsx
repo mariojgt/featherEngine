@@ -183,6 +183,11 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   const overrides = useEditorStore((state) => state.runtimeCameraOverrides);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const desired = useRef(new THREE.Vector3());
+  const rawTarget = useRef(new THREE.Vector3());
+  const smoothedTarget = useRef(new THREE.Vector3());
+  const smoothedTargetId = useRef<string | undefined>(undefined);
+  const smoothedVelocity = useRef(new THREE.Vector3());
+  const lookTarget = useRef(new THREE.Vector3());
   const gl = useThree((state) => state.gl);
   const scene = useThree((state) => state.scene);
   // Spring-arm collision raycaster + smoothed aim-down-sights blend (0 = hip, 1 = aiming).
@@ -267,7 +272,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const ccResolved = resolveCameraConfig(target);
     if (!camera || !target || !ccResolved) return;
     const cc = ccResolved;
-    const [x, y, z] = target.transform.position;
+    const [rawX, rawY, rawZ] = target.transform.position;
     // Framerate-independent smoothing factor for a given responsiveness `k` (higher = snappier).
     const smooth = (k: number) => 1 - Math.exp(-k * Math.min(delta, 0.1));
 
@@ -298,7 +303,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
       const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
       desired.current
-        .set(x, y + cc.cameraOffset[1], z)
+        .set(rawX, rawY + cc.cameraOffset[1], rawZ)
         .addScaledVector(right, cc.cameraOffset[0])
         .addScaledVector(forward, cc.cameraOffset[2]);
 
@@ -318,6 +323,22 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       return;
     }
 
+    rawTarget.current.set(rawX, rawY, rawZ);
+    if (smoothedTargetId.current !== target.id || preview) {
+      smoothedTarget.current.copy(rawTarget.current);
+      smoothedVelocity.current.set(0, 0, 0);
+      smoothedTargetId.current = target.id;
+    } else {
+      const horizontalT = smooth(target.vehicle?.enabled ? 24 : 18);
+      const verticalT = smooth(target.vehicle?.enabled ? 18 : 6);
+      smoothedTarget.current.x = THREE.MathUtils.lerp(smoothedTarget.current.x, rawTarget.current.x, horizontalT);
+      smoothedTarget.current.y = THREE.MathUtils.lerp(smoothedTarget.current.y, rawTarget.current.y, verticalT);
+      smoothedTarget.current.z = THREE.MathUtils.lerp(smoothedTarget.current.z, rawTarget.current.z, horizontalT);
+    }
+    const x = smoothedTarget.current.x;
+    const y = smoothedTarget.current.y;
+    const z = smoothedTarget.current.z;
+
     // Sprint speed-feel: while sprinting, smoothly widen the FOV (sense of speed). Read keys via getState so
     // the frame loop doesn't re-subscribe per keypress; preview (editor) never sprints.
     const keys = preview ? {} : useEditorStore.getState().runtimeKeys;
@@ -331,9 +352,12 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // reverse direction, which read as a camera "snap". The smoothed velocity never spikes, so the lead glides.
     const rv = preview ? undefined : useEditorStore.getState().runtimeVelocities[target.id];
     if (rv) {
-      const lead = new THREE.Vector3(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier).multiplyScalar(0.14);
+      rawTarget.current.set(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier);
+      smoothedVelocity.current.lerp(rawTarget.current, smooth(target.vehicle?.enabled ? 10 : 8));
+      const lead = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(target.vehicle?.enabled ? 0.14 : 0.08);
       lookAhead.current.lerp(lead, smooth(4));
     } else {
+      smoothedVelocity.current.lerp(ZERO, smooth(8));
       lookAhead.current.lerp(ZERO, smooth(4));
     }
 
@@ -344,12 +368,12 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     lastMouseDx.current = mouseLook.dx;
     lastMouseDy.current = mouseLook.dy;
     mouseIdle.current = mouseMoved ? 0 : mouseIdle.current + delta;
-    const speed = rv ? Math.hypot(rv[0], rv[2]) : 0;
+    const speed = Math.hypot(smoothedVelocity.current.x, smoothedVelocity.current.z);
     if (cc.mouseLook && useMouse && !aiming && speed > 0.6 && mouseIdle.current > 0.35) {
-      const heading = Math.atan2(rv![0], rv![2]);
+      const heading = Math.atan2(smoothedVelocity.current.x, smoothedVelocity.current.z);
       const curYaw = -mouseLook.dx * cc.mouseSensitivity;
       const diff = Math.atan2(Math.sin(heading - curYaw), Math.cos(heading - curYaw));
-      const newYaw = curYaw + diff * smooth(2.2); // gentle so it trails, never whips
+      const newYaw = curYaw + diff * smooth(1.4); // gentle so it trails, never whips
       mouseLook.dx = -newYaw / cc.mouseSensitivity;
     }
 
@@ -369,9 +393,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // lands ON the moving character and keeps its resting framing while walking/sprinting. (followK also
     // sets the follow stiffness below — raised from 12 so the catch-up is a touch snappier, not rubber-bandy.)
     const followK = 16;
-    const feedFwd = rv
-      ? new THREE.Vector3(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier).multiplyScalar(1 / followK)
-      : ZERO;
+    const feedFwd = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(target.vehicle?.enabled ? 1 / followK : 0);
 
     // Horizontal radius + base azimuth from the offset, then add mouse yaw; pitch raises/pulls in.
     const radius = Math.hypot(side, back) || 0.001;
@@ -410,7 +432,8 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // Framerate-independent follow lag (paired with the velocity feed-forward above, so it eases transients
     // — turns, stops, wall pull-ins — without leaving a steady trail while moving at constant speed).
     camera.position.lerp(desired.current, smooth(followK));
-    camera.lookAt(x + lookAhead.current.x, y + up * 0.4, z + lookAhead.current.z);
+    lookTarget.current.set(x + lookAhead.current.x, y + up * 0.42, z + lookAhead.current.z);
+    camera.lookAt(lookTarget.current);
     // Vehicle speed-feel: ramp the FOV out toward +10° as the car approaches its top speed (cc.moveSpeed is
     // the vehicle's maxSpeed). Characters never trip this (speedFovTarget stays 0), so their FOV is unchanged.
     const speedFovTarget = target.vehicle?.enabled ? Math.min(1, speed / Math.max(0.001, cc.moveSpeed)) : 0;

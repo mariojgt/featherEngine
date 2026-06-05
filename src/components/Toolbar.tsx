@@ -18,6 +18,7 @@ import {
   Plus,
   Rocket,
   Save,
+  Settings,
   Square,
   Trash2,
   X,
@@ -26,7 +27,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { PREFAB_EDIT_SCENE_ID } from '../types';
 import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
-import { resetWorkspaceLayout } from './Workspace';
+import { useEditorPrefs } from '../store/editorPrefsStore';
+import { applyCustomLayout, applyWorkspaceLayout, resetWorkspaceLayout, WORKSPACE_LAYOUTS } from './Workspace';
+import { PreferencesModal } from './PreferencesModal';
 import type { SceneObjectKind } from '../types';
 
 const creationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
@@ -81,9 +84,14 @@ function FileMenu() {
   );
 }
 
-function ViewMenu() {
+function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const customLayouts = useEditorPrefs((s) => s.customLayouts);
+  const customList = useMemo(
+    () => Object.values(customLayouts).sort((a, b) => b.savedAt - a.savedAt),
+    [customLayouts],
+  );
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
@@ -93,6 +101,11 @@ function ViewMenu() {
     return () => window.removeEventListener('mousedown', onClick);
   }, []);
 
+  const run = (fn: () => void) => () => {
+    setOpen(false);
+    fn();
+  };
+
   return (
     <div className="file-menu" ref={ref}>
       <button className="file-menu-trigger" onClick={() => setOpen((value) => !value)}>
@@ -100,14 +113,30 @@ function ViewMenu() {
       </button>
       {open && (
         <div className="file-menu-popover">
-          <button
-            onClick={() => {
-              setOpen(false);
-              resetWorkspaceLayout();
-            }}
-          >
-            Reset layout
-          </button>
+          <div className="file-menu-section">Layout</div>
+          {WORKSPACE_LAYOUTS.map((layout) => (
+            <button key={layout.id} onClick={run(() => applyWorkspaceLayout(layout.id))}>
+              {layout.label}
+            </button>
+          ))}
+          {customList.length > 0 && (
+            <>
+              <hr />
+              <div className="file-menu-section">Your layouts</div>
+              {customList.map((layout) => (
+                <button
+                  key={layout.name}
+                  onClick={run(() => applyCustomLayout(layout.json))}
+                  title={`Apply "${layout.name}"`}
+                >
+                  {layout.name}
+                </button>
+              ))}
+            </>
+          )}
+          <hr />
+          <button onClick={run(resetWorkspaceLayout)}>Reset layout</button>
+          <button onClick={run(onOpenPrefs)}>Preferences…</button>
         </div>
       )}
     </div>
@@ -255,6 +284,7 @@ export function Toolbar() {
   const exportGame = useProjectStore((state) => state.exportGame);
   const exportProduction = useProjectStore((state) => state.exportProduction);
   const busy = useProjectStore((state) => state.busy);
+  const [prefsOpen, setPrefsOpen] = useState(false);
 
   // ⌘S / Ctrl+S to save.
   useEffect(() => {
@@ -279,7 +309,7 @@ export function Toolbar() {
       </div>
 
       <FileMenu />
-      <ViewMenu />
+      <ViewMenu onOpenPrefs={() => setPrefsOpen(true)} />
       <SceneSwitcher />
 
       <div className="tool-group" aria-label="Create scene object">
@@ -342,6 +372,14 @@ export function Toolbar() {
         )}
       </AnimatePresence>
 
+      <button
+        className="icon-button"
+        title="Preferences (theme, layout, density)"
+        onClick={() => setPrefsOpen(true)}
+      >
+        <Settings size={17} aria-hidden />
+      </button>
+
       <div className="tool-group" aria-label="Runtime controls">
         <button
           className={isPlaying ? 'run-button active' : 'run-button'}
@@ -375,6 +413,8 @@ export function Toolbar() {
           <span>Production</span>
         </button>
       </div>
+
+      <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
     </header>
   );
 }

@@ -101,6 +101,20 @@ const environmentPatchSchema = z.object({
   fogNear: z.number().min(0).optional(),
   fogFar: z.number().min(1).optional(),
 });
+const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
+  skyTopColor: true,
+  skyHorizonColor: true,
+  skyGroundColor: true,
+  environmentIntensity: true,
+  sunColor: true,
+  sunIntensity: true,
+  sunAzimuth: true,
+  sunElevation: true,
+  fogEnabled: true,
+  fogColor: true,
+  fogNear: true,
+  fogFar: true,
+});
 const cinematicActionSchema = z.object({
   type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence']),
   time: z.number().min(0).describe('Seconds from cinematic start.'),
@@ -624,6 +638,7 @@ export const engineTools = {
           enabled: z.boolean().optional(),
           bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
           collider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional(),
+          isTrigger: z.boolean().optional(),
         })
         .optional(),
     }),
@@ -799,13 +814,14 @@ export const engineTools = {
 
   update_renderer: tool({
     description:
-      "Update an object's inline material/render settings. For imported models, color/metalness/roughness need overrideMaterial:true; textureAssetId applies an image texture.",
+      "Update an object's inline material/render settings. For imported models, color/metalness/roughness need overrideMaterial:true; textureAssetId applies an image texture. Set hideInPlay:true for editor-visible trigger/debug meshes that should disappear during Play/runtime.",
     inputSchema: z.object({
       id: z.string(),
       color: z.string().optional(),
       metalness: z.number().min(0).max(1).optional(),
       roughness: z.number().min(0).max(1).optional(),
       opacity: z.number().min(0).max(1).optional().describe('Surface opacity 0–1 (1 = opaque). Below 1 renders translucent — use ~0.5 for water/glass.'),
+      hideInPlay: z.boolean().optional().describe('Hide this renderer during Play/runtime while keeping it visible in the editor. Trigger volumes default to hidden at runtime unless explicitly false.'),
       textureAssetId: z
         .string()
         .optional()
@@ -815,7 +831,7 @@ export const engineTools = {
         .optional()
         .describe("For model objects: when true, color/metalness/roughness override the model's baked materials."),
     }),
-    execute: async ({ id, color, metalness, roughness, opacity, textureAssetId, overrideMaterial }) => {
+    execute: async ({ id, color, metalness, roughness, opacity, hideInPlay, textureAssetId, overrideMaterial }) => {
       const object = findObject(id);
       if (!object) return `No object with id ${id}.`;
       if (!object.renderer) return `Object ${id} (${object.kind}) has no mesh renderer.`;
@@ -829,6 +845,7 @@ export const engineTools = {
       if (metalness !== undefined) patch.metalness = metalness;
       if (roughness !== undefined) patch.roughness = roughness;
       if (opacity !== undefined) patch.opacity = opacity;
+      if (hideInPlay !== undefined) patch.hideInPlay = hideInPlay;
       if (textureAssetId !== undefined) patch.textureAssetId = textureAssetId || undefined;
       if (overrideMaterial !== undefined) patch.overrideMaterial = overrideMaterial;
       store().updateRenderer(id, patch);
@@ -1579,69 +1596,77 @@ export const engineTools = {
 
   create_third_person_template: tool({
     description:
-      'Build a complete GTA-style URBAN third-person starter from bundled assets: a dusk neon city block (road grid + sidewalks + neon-trimmed towers + lampposts), a player pawn with a Fist/Bat/Pistol inventory + a hold-Tab weapon wheel + a GTA radar minimap HUD (health/armor arcs + cash), a parked DRIVABLE car you enter with E and exit with F (camera + HUD hand off to the car), wandering PEDESTRIANS (two you can talk to), CASH pickups, and ARMOR/HEALTH shops you spend cash at — all with contextual [E] prompts. Returns pawn objectId.',
+      "Build a complete Unreal-style THIRD-PERSON SHOWCASE — a grey-checker arena gym built from primitive geometry plus a station for every major engine system: stairs + raised NORTH platform with cover walls, EAST ramp + double platform, WEST jump pad launching the player onto three floating puzzle platforms, SOUTH cover walls + a LIGHT THEATRE (statue lit by 3 coloured lights, each on an [E] toggle pedestal), an SW SWIM POOL (water-volume trigger flips the controller into swim mode), a NE CLIMB WALL (climb-volume trigger flips it into climb mode, leading to an outlook platform), an [E] DAY/NIGHT pedestal near spawn that swaps a warm day directional for a cool moon + 4 corner streetlamps via Set Active, four corner PILLARS, perimeter walls, and a UI SHOWCASE (screen-space stats panel with header + health bar bound to the player + status label, plus a world-space billboard above spawn that always faces the camera). Spawns the bundled player rig with the Fist/Bat/Pistol inventory and an AAA-tuned controller (centred behind-the-character cam, smooth accel/decel, soft turn, strafe off). Returns pawn objectId.",
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createThirdPersonTemplate();
-      return id ? `Created GTA-style urban third-person starter — pawn objectId ${id}. Press Play: WASD move (Shift sprint), mouse look, LMB attack / RMB aim, Tab weapon wheel. Walk the city, grab cash, buy armor/health at the shops, talk to citizens (E), and walk up to the red car → E to drive (WASD) → F to get out.` : `Couldn't build the template.`;
+      return id ? `Built the third-person showcase arena - pawn objectId ${id}. Press Play: WASD move (Shift sprint), Space jump, mouse look, LMB attack / RMB aim, Tab weapon wheel, E interact. Stations: stairs+cover N, ramp+platforms E, jump pad+puzzle platforms W, light theatre + cover walls S, swim pool SW, climb wall NE, [E] day/night pedestal + UI billboard at spawn.` : `Couldn't build the template.`;
     },
   }),
 
   create_first_person_template: tool({
     description:
-      'Build a complete cyberpunk-neon FPS starter from bundled assets across TWO scenes. Scene 1 = a training playground: invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles (each gun a distinct fire rate/damage/knockback/sound, grenade lobs an explosive orb), neon HUD (crosshair/weapon/ammo), knock-over cubes, a scoring shooting range, a moving target, a bounce pad, a physics tower, and proximity tutorial signs. Scene 2 = a Call-of-Duty-style "Breach & Clear" MISSION reached from a DEPLOY pad: a neon facility where you breach, eliminate line-of-sight enemy guards across 3 rooms, then reach the extraction zone — with an objective banner, an INTEGRITY (health) bar, MISSION FAILED/COMPLETE overlays, and ENTER to redeploy/return. Night environment + bloom + vignette + ambient bed. Returns pawn objectId.',
+      'Build a complete cyberpunk-neon FPS engine showcase from bundled assets across TWO scenes. Scene 1 = a room-based first-person template: Room 1 movement/mouse-look/sprint/jump, Room 2 crawl/slow movement plus a real [E] interaction console, Room 3 physics + shooting with dynamic boxes, breakable range targets, moving target, bounce pad, and physics tower, Room 4 bound screen UI plus a trigger/interaction-driven Film Mode cinematic finale. Includes an invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles (each gun a distinct fire rate/damage/knockback/sound, grenade lobs an explosive orb), neon HUD (crosshair/weapon/ammo), proximity tutorial signs, night environment, bloom, vignette, and ambient bed. Scene 2 = a Call-of-Duty-style "Breach & Clear" MISSION reached from a DEPLOY pad: a neon facility where you breach, eliminate line-of-sight enemy guards across 3 rooms, then reach the extraction zone — with an objective banner, an INTEGRITY (health) bar, MISSION FAILED/COMPLETE overlays, and ENTER to redeploy/return. Returns pawn objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createFirstPersonTemplate();
       return id
-        ? `Created FPS starter (two scenes) — pawn objectId ${id}. Press Play in the training room: WASD move, mouse look, hold LMB to fire, RMB aim, R reload, 1-5 swap weapons. Step on the magenta DEPLOY pad to enter the Breach & Clear mission: clear every neon guard, then reach the green extraction zone. Your INTEGRITY bar drops under fire — at 0 it's MISSION FAILED (Enter to redeploy); reaching extraction is MISSION COMPLETE (Enter to return to base).`
+        ? `Created the room-based FPS showcase (two scenes) — pawn objectId ${id}. Press Play: Room 1 teaches WASD/mouse/sprint/jump; Room 2 shows Z crawl plus an E interaction console; Room 3 shows physics boxes, range targets, moving target, bounce pad, tower, and 1-5 weapons; Room 4 plays a UI + Film Mode cinematic finale from a trigger or E console. Step on the magenta DEPLOY pad to enter Breach & Clear: eliminate every neon guard, then reach extraction. INTEGRITY at 0 = MISSION FAILED (Enter redeploy); extraction = MISSION COMPLETE (Enter return).`
         : `Couldn't build the FPS template.`;
     },
   }),
 
   create_film_mode_template: tool({
     description:
-      'Build the Film Mode cinematic template: a self-running CYBERPUNK CITY flythrough. Lays a neon street canyon from the bundled city kit (road + raised sidewalk tiles down a long avenue, building blocks + skyscrapers lining both sides, holo-billboards, neon curb rails, a rooftop satellite dish), sets a rainy-night neon environment with strong bloom + vignette, and authors an ~18s autoplay cinematic: a smooth 5-keyframe camera flythrough down the avenue that pulls up to reveal the skyline, with 2.39 letterbox, a teal/orange grade, fade bookends, a slowly sweeping dish, and a cinematic_finished event. Returns cinematicId.',
+      'Build the Film Mode cinematic template: a self-running MONOLITH AWAKENING showcase that doubles as a tour of every cinematic action type, with full pro audio and a floating 3D FEATHER ENGINE wordmark. Builds a twilight plaza from plain primitives — wide reflective floor, a polished black hero monolith with a hidden inscription, a stroke-based pixel-font 3D wordmark above the slab (FEATHER on top, ENGINE below, ~53 emissive cubes parented under a Logo empty), two translucent volumetric halo bars + two vertical light shafts behind the wordmark, an 8-stone glyph ring, a 12-bar inner ground rune circle, broken capsule pillars, floating emissive motes, three orbital wisps, four corner spot lights + volumetric column shafts, low directional moonlight, plus magic-wisp and dust-haze particle emitters — under a procedural twilight sky with thick haze fog and bloom tuned for emissives. Imports two audio assets from public/templates/monolith/ (awakening_music.wav 24s music bed + awakening_impact.mp3 6s impact swell) and wires them as `sound` cinematic beats (music at t=0, impact at t=13.6). The 24s autoplay cinematic is 5 timeline-marked acts: ACT I — Approach (DoF rack pull), ACT II — Glyph chime (blended cut + sequenced material pulses), ACT III — Drone bank (5-key Catmull-Rom arc), ACT IV — Awakening (timeDilation slow-mo + searchlight visibility flicker + WHITE-FLASH fade + reveal of inscription/beam/flare/shafts/wordmark/halos + emissive ramps + flare pulse-and-breathe + beam scale-up + 8-glyph group ignition + awakening SFX `sound` beat + monolith_awakened event), ACT V — Pullback (4-key crane). Continuous tracks span the full duration. Cool grade, 2.39 letterbox, grain + vignette. Final fade-out + cinematic_finished event. Returns cinematicId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createFilmModeTemplate();
-      return id ? `Created the Cyberpunk City cinematic with cinematicId ${id}. Press Play to watch the neon flythrough.` : `Couldn't build the Film Mode template.`;
+      return id ? `Created the Monolith Awakening cinematic with cinematicId ${id}. Press Play to watch the 5-act showcase with synced music + awakening SFX. Open the Cinematic panel to scrub the act markers, and use Export WebM or Export MP4 (lazy ffmpeg.wasm transcode) to render the sequence to disk.` : `Couldn't build the Film Mode template.`;
     },
   }),
 
   create_driving_template: tool({
     description:
-      'Build a complete arcade DRIVING starter from the bundled car kit: a "choose your car" start menu (5 cars), then a drivable CITY on a single flat ground slab (no streamed terrain — a city is flat, so it skips procedural chunk/heightfield streaming for steady FPS) — a square street grid (asphalt + raised sidewalk/lot blocks leaving road gaps) with a varied building skyline, dashed lane centerlines, glowing directional arrow chevrons that guide a 4-checkpoint loop through the streets, and practice zones (a roundabout to circle, a cone slalom to weave, parking bays, a pocket park). WASD + mouse-orbit driving with suspension feel (chassis squat/dive/lean + spinning, steering wheels), a real handbrake drift, headlights, brake lights, a full car sound set (looping engine + skid, brake/horn/collision one-shots), and a HUD with a speedometer + lap counter / current & best lap time. The runtime times laps automatically as the car passes the "Checkpoint N" markers in order. Cars are DYNAMIC rigid bodies (convex hull from the car model), so the buildings + roundabout are SOLID and physically stop the car (it bumps/crash-stops), while the loose cones knock flying; sidewalks/markings/arrows are flat and non-colliding. Returns the default car objectId.',
+      'Build a PHYSICS-FIRST apocalyptic driving sandbox showcasing real Rapier forces, an editable Film Mode car intro, atmospheric trigger cinematics, and visible visual-scripting logic. ONE survivor car (dynamic convex-hull body, mass 9) on a flat ashen wasteland under a dusk ember sky + thick haze fog + bloom — wrecks, broken pillars, burning oil drums, knockable barrels. WASD drives via the auto vehicle pass (tire grip/slip, stable wheel anchors, fading tire marks, wheels/audio/lights/camera/suspension); on top, FOUR cooperating chains in the Survivor Controller blueprint: (1) Update → Drive (base motion), (2) SHIFT → action.applyImpulse Local +Z 60 (real Rapier nitro in car-forward space), (3) H → playSound + action.applyTorque Y 8 (donut spin demo via the Apply Torque node), (4) Collision Enter → cameraShake + action.applyImpulse +Y 9 (mass-scaled recoil hop). The Game Start blueprint plays the editable Survivor Car Intro cinematic (letterbox/grade/fade + low orbit into gameplay handoff). THREE cinematic trigger zones (CRASH SITE / RADIATION ZONE / FINAL BEACON) — each a glowing trigger pad + a tall accent beacon — fire a per-zone blueprint that uses action.setEnvironment to crossfade sky/fog/sun into the zone palette, applies a vertical Rapier impulse to $trigger (the toucher) for a shockwave hop, shows a styled banner, ticks Objective, dwells via logic.delay, then restores the env keys from BASE_ENV. HUD: bottom speedometer + WEIGHT chip, top-left objective checklist (ternary on Objective), top-right waypoint chip. Returns the car objectId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createDrivingTemplate();
       return id
-        ? `Created racing starter — default car objectId ${id}. Press Play: pick a car, then W accelerate, S brake/reverse, A/D steer, Space handbrake (drift), H horn, mouse to look. Follow the cone-lined oval through the checkpoints; laps are timed on the HUD. Tune handling/audio with set_vehicle.`
+        ? `Created the physics-first apocalyptic driving sandbox — car objectId ${id}. Press Play: the editable Survivor Car Intro plays first, WASD drives, SHIFT fires action.applyImpulse Local +Z (real Rapier nitro in car-forward space), H + action.applyTorque Y spins the body, hitting wrecks adds a physics recoil hop. Drive into the three glowing beacons — each fires a cinematic that crossfades the sky/fog/sun via action.setEnvironment and hops the car via action.applyImpulse on $trigger. Edit the Survivor Controller blueprint to rewire the physics chains.`
         : `Couldn't build the driving template.`;
     },
   }),
 
   set_vehicle: tool({
     description:
-      'Add/configure the built-in arcade VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn), the body is a dynamic Rapier body (vertical owned by physics so it rides terrain/ramps), suspension is visual (chassis squat/dive/lean + spinning, steering wheels). The handbrake loosens rear grip (handbrakeGrip) for oversteer; while the tires slip the car leans harder and the skid sound fades in. Wire wheelObjectIds/steeredWheelIds/headlightIds/brakeLightIds to child objects and the engine/skid/brake/horn/collision audio asset ids. Pass enabled:false to remove control. All fields optional.',
+      'Add/configure the built-in VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn), the body should be a dynamic Rapier convex body (vertical/contact owned by physics), and handling keeps forward speed separate from lateral tire slip. gripFactor makes cornering more planted; handbrakeGrip lowers lateral grip for drifting. Dynamic cars can use crashDamageEnabled with crashDamageThreshold/crashRolloverThreshold/crashRolloverStrength/crashWheelBreakThreshold/crashDeformation/crashDebris so hard impacts accumulate damage, kick the body into real rollovers, bend wheels, squash the body, and throw small debris. For stable wheel visuals, use wheelObjectIds for spinning tire meshes and steeredWheelIds for front wheel anchor empties. tireMarkIds are world-space particle emitters toggled only while the tires slip/handbrake. Wire headlightIds/brakeLightIds to child objects and the engine/skid/brake/horn/collision audio asset ids. Pass enabled:false to remove control. All fields optional.',
     inputSchema: z.object({
       objectId: z.string(),
       enabled: z.boolean().optional(),
-      maxSpeed: z.number().optional().describe('Top forward speed (u/s). Default 26.'),
-      maxReverseSpeed: z.number().optional().describe('Top reverse speed (u/s). Default 9.'),
-      acceleration: z.number().optional().describe('Throttle accel (u/s²). Default 16.'),
-      braking: z.number().optional().describe('Brake decel (u/s²). Default 34.'),
-      drag: z.number().optional().describe('Coast decel (u/s²). Default 9.'),
+      maxSpeed: z.number().optional().describe('Top forward speed (u/s). Default 30.'),
+      maxReverseSpeed: z.number().optional().describe('Top reverse speed (u/s). Default 10.'),
+      acceleration: z.number().optional().describe('Throttle accel (u/s²). Default 19.'),
+      braking: z.number().optional().describe('Brake decel (u/s²). Default 32.'),
+      drag: z.number().optional().describe('Coast decel (u/s²). Default 7.'),
       steerAngle: z.number().optional().describe('Max front-wheel steer (radians). Default 0.55.'),
       turnRate: z.number().optional().describe('Yaw turn rate (rad/s) at full lock + speed. Default 2.0.'),
-      gripFactor: z.number().optional().describe('Lateral grip 0..1 (drives lean + slip). Default 0.9.'),
-      handbrakeGrip: z.number().optional().describe('Rear grip 0..1 while handbrake held — lower = looser drift. Default 0.28.'),
+      gripFactor: z.number().optional().describe('Lateral grip 0..1; higher damps sideways tire slip faster. Default 0.92.'),
+      handbrakeGrip: z.number().optional().describe('Lateral grip 0..1 while handbrake held — lower = looser drift. Default 0.22.'),
       bodyRoll: z.number().optional().describe('Chassis lean into turns. Default 0.05.'),
       bodyPitch: z.number().optional().describe('Chassis squat/dive under accel/brake. Default 0.04.'),
       suspensionStiffness: z.number().optional().describe('How quickly lean/squat settles, 0..1. Default 0.18.'),
+      crashDamageEnabled: z.boolean().optional().describe('Enable impact damage, rollovers, wheel breakage, body crush, and debris on dynamic cars. Default true.'),
+      crashDamageThreshold: z.number().optional().describe('Impact speed below this is a normal bump. Default 9.'),
+      crashRolloverThreshold: z.number().optional().describe('Impact speed where hard crashes start tumbling/rolling the car. Default 16.'),
+      crashRolloverStrength: z.number().optional().describe('Angular impulse multiplier on hard crashes. Higher flips/tumbles more. Default 0.42.'),
+      crashDeformation: z.number().optional().describe('Visual crush amount 0..1 from accumulated damage. Default 0.45.'),
+      crashWheelBreakThreshold: z.number().optional().describe('Accumulated damage at which wheels start hanging crooked. Default 1.6.'),
+      crashDebris: z.boolean().optional().describe('Throw small dynamic debris chunks on heavy impacts. Default true.'),
       wheelRadius: z.number().optional().describe('Wheel radius (u) — sets spin rate. Default 0.4.'),
-      wheelObjectIds: z.array(z.string()).optional().describe('The 4 wheel child object ids [FL,FR,RL,RR].'),
-      steeredWheelIds: z.array(z.string()).optional().describe('Which wheels steer (the front pair).'),
+      wheelObjectIds: z.array(z.string()).optional().describe('The 4 spinning tire mesh ids [FL,FR,RL,RR]. If using anchors, these are child meshes at [0,0,0].'),
+      steeredWheelIds: z.array(z.string()).optional().describe('Front steering ids. Prefer wheel-anchor empty ids; direct wheel ids still work as a fallback.'),
+      tireMarkIds: z.array(z.string()).optional().describe('Particle emitter object ids near tire contact patches; runtime emits only while slipping/handbraking.'),
       headlightIds: z.array(z.string()).optional(),
       brakeLightIds: z.array(z.string()).optional(),
       keyThrottle: z.string().optional(),
@@ -3078,6 +3103,7 @@ export const engineTools = {
       type: z.enum(NODE_LABELS),
       keyCode: z.enum(KEY_CODES).optional(),
       axis: z.enum(['x', 'y', 'z']).optional(),
+      space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
       amount: z.number().optional(),
       numberValue: z.number().optional(),
       stringValue: z.string().optional(),
@@ -3129,12 +3155,14 @@ export const engineTools = {
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1 to add to the player camera (fades automatically).'),
       qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
       damageAmount: z.number().optional().describe('Apply Damage: HP to subtract from the target\'s health variable. Default 10. Use targetObjectId ($self/$player/$trigger/$cast or an id) to pick who takes it.'),
+      envPatch: runtimeEnvironmentPatchSchema.optional().describe('Set Environment: runtime patch over sky/fog/sun fields. Include only fields to change.'),
     }),
     execute: async ({
       blueprintId,
       type,
       keyCode,
       axis,
+      space,
       amount,
       numberValue,
       stringValue,
@@ -3183,6 +3211,7 @@ export const engineTools = {
       shakeAmount,
       qualityLevel,
       damageAmount,
+      envPatch,
     }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
@@ -3196,6 +3225,7 @@ export const engineTools = {
       const nodeId = store().addGraphNodeToBlueprint(blueprintId, type, NODE_CATEGORY[type], {
         keyCode,
         axis,
+        space,
         amount,
         numberValue,
         stringValue,
@@ -3243,6 +3273,7 @@ export const engineTools = {
         shakeAmount,
         qualityLevel,
         damageAmount,
+        envPatch,
       });
       return `Added "${type}" node with id ${nodeId} to blueprint ${blueprintId}.`;
     },
@@ -3274,6 +3305,7 @@ export const engineTools = {
       nodeId: z.string(),
       keyCode: z.enum(KEY_CODES).optional(),
       axis: z.enum(['x', 'y', 'z']).optional(),
+      space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
       amount: z.number().optional(),
       numberValue: z.number().optional(),
       stringValue: z.string().optional(),
@@ -3321,6 +3353,7 @@ export const engineTools = {
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1.'),
       qualityLevel: z.enum(['Low', 'Medium', 'High', 'Epic']).optional().describe('Set Quality: scalability preset to apply at runtime.'),
       damageAmount: z.number().optional().describe('Apply Damage: HP to subtract from the target\'s health variable.'),
+      envPatch: runtimeEnvironmentPatchSchema.optional().describe('Set Environment: runtime patch over sky/fog/sun fields. Include only fields to change.'),
     }),
     execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;

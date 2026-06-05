@@ -8,9 +8,32 @@ import { RuntimeConsole } from './components/RuntimeConsole';
 import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
 import { CinematicOverlay } from './components/CinematicOverlay';
 import { useEditorStore } from './store/editorStore';
+import { useEditorPrefs } from './store/editorPrefsStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 import { recordFrame } from './runtime/perfStats';
 import { PerfOverlay } from './components/PerfOverlay';
+
+/**
+ * Mirror the user's appearance preferences onto <html> so the global CSS variables
+ * (defined in styles.css under [data-theme="..."] / [data-density="..."]) can react
+ * without touching individual components.
+ */
+function AppearanceSync() {
+  const themeMode = useEditorPrefs((s) => s.themeMode);
+  const accent = useEditorPrefs((s) => s.accent);
+  const density = useEditorPrefs((s) => s.density);
+  const fontScale = useEditorPrefs((s) => s.fontScale);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = themeMode;
+    root.dataset.density = density;
+    root.style.setProperty('--accent', accent);
+    root.style.setProperty('--font-scale', String(fontScale));
+  }, [themeMode, accent, density, fontScale]);
+
+  return null;
+}
 
 function RuntimePreviewLoop() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
@@ -69,11 +92,17 @@ export default function App() {
   const hasProject = useProjectStore((state) => state.hasProject);
 
   if (!hasProject) {
-    return <Launcher />;
+    return (
+      <>
+        <AppearanceSync />
+        <Launcher />
+      </>
+    );
   }
 
   return (
     <div className="editor-shell">
+      <AppearanceSync />
       <RuntimePreviewLoop />
       <Toolbar />
       <Workspace />

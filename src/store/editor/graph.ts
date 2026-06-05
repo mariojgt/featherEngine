@@ -268,6 +268,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Enter Vehicle': 'action.enterVehicle',
   'Exit Vehicle': 'action.exitVehicle',
   'Set Quality': 'action.setQuality',
+  'Apply Torque': 'action.applyTorque',
+  'Set Environment': 'action.setEnvironment',
 };
 
 export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
@@ -283,6 +285,7 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
   if (
     nodeKind === 'action.applyForce' ||
     nodeKind === 'action.applyImpulse' ||
+    nodeKind === 'action.applyTorque' ||
     nodeKind === 'action.setVelocity' ||
     nodeKind === 'query.velocity' ||
     nodeKind === 'action.fractureObject'
@@ -586,15 +589,27 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       };
     case 'action.applyImpulse':
       return {
-        label: 'Apply Impulse',
+        label: `Apply Impulse${data.space === 'local' ? ' · Local' : ''}`,
         description:
-          'Gives a target an INSTANT velocity kick (a one-shot impulse) — jumps, explosions, knockback, launches. Wire a Vector3 into Force (or set an axis + amount). Unlike Apply Force (a push applied over the frame), this is immediate. On a DYNAMIC body it adds to its momentum; on a CHARACTER it becomes a one-shot launch velocity. Target defaults to self.',
+          'Gives a target an INSTANT velocity kick (a one-shot impulse) — jumps, explosions, knockback, launches. Wire a Vector3 into Force (or set an axis + amount). Space=world uses global axes; Space=local rotates the vector by the target actor so Local +Z follows a car/actor forward. Unlike Apply Force, this is immediate. On a DYNAMIC body it adds to its momentum; on a CHARACTER it becomes a one-shot launch velocity. Target defaults to self.',
       };
     case 'action.setVelocity':
       return {
         label: 'Set Velocity',
         description:
           "Hard-sets a DYNAMIC physics body's linear velocity (units/sec) — wire a Vector3 into Velocity. Overrides momentum/gravity for that body this frame (it keeps coasting at that velocity after). Use for conveyor belts, projectiles, dashes, precise launches. No effect on character/kinematic/fixed bodies. Target defaults to self.",
+      };
+    case 'action.applyTorque':
+      return {
+        label: `Apply Torque ${Number(data.amount ?? 4)} · ${(data.axis || 'y').toUpperCase()}`,
+        description:
+          "Kicks a DYNAMIC body's spin (an angular impulse) — physics-driven steering, tip-over forces, spinners. Wire a Vector3 into Torque (or set Axis + Amount, signed = direction). The body's mass-derived inertia resists the kick, so a heavier car steers slower for free. No effect on character/kinematic/fixed bodies. Target defaults to self.",
+      };
+    case 'action.setEnvironment':
+      return {
+        label: 'Set Environment',
+        description:
+          "Patches the active scene's environment (sky colors, fog, sun, environment intensity) at runtime. Set only the envPatch fields you want to change — undefined fields are left alone. Use it for cinematic atmosphere shifts on a trigger (clear → toxic green → dawn), day/night crossfades, or storm rolls in.",
       };
     case 'query.velocity':
       return {
@@ -790,6 +805,11 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
+  }
+
+  if (nodeKind === 'action.applyTorque') {
+    if (typeof normalized.amount !== 'number') normalized.amount = 4;
+    if (!normalized.axis) normalized.axis = 'y';
   }
 
   if (nodeKind === 'action.applyDamage' && typeof normalized.damageAmount !== 'number') {

@@ -501,6 +501,7 @@ class PhysicsRuntime {
     impulses: Record<string, Vector3Tuple>,
     delta: number,
     setVelocities: Record<string, Vector3Tuple> = {},
+    angularImpulses: Record<string, Vector3Tuple> = {},
   ): PhysicsFrameResult {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     this.world.timestep = dt;
@@ -567,6 +568,10 @@ class PhysicsRuntime {
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
         const impulse = impulses[object.id];
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
+        // Apply Torque node: an angular impulse (kicks the body's spin). Used for physics-driven steering /
+        // tip-over forces — pair it with applyImpulse for thrust to drive a car purely from physics.
+        const torque = angularImpulses[object.id];
+        if (torque) body.applyTorqueImpulse({ x: torque[0], y: torque[1], z: torque[2] }, true);
         // Set Velocity node: hard-set the body's linear velocity (overrides the transform-derived velocity).
         const sv = setVelocities[object.id];
         if (sv) body.setLinvel({ x: sv[0], y: sv[1], z: sv[2] }, true);

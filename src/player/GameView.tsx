@@ -39,6 +39,8 @@ import { Terrain } from '../three/Terrain';
 import { FragmentMesh } from '../three/FragmentMesh';
 import type { SceneObject, Vector3Tuple } from '../types';
 
+const hideInRuntime = (object: SceneObject) => object.renderer?.hideInPlay ?? Boolean(object.physics?.isTrigger);
+
 /** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
 function GameMesh({ object, focused = false }: { object: SceneObject; focused?: boolean }) {
   // Floating combat damage number.
@@ -251,7 +253,7 @@ function GameScene() {
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
   const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
   // Objects holstered/hidden at runtime (action.setVisible) aren't rendered.
-  const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id));
+  const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id) && !hideInRuntime(object));
 
   // GPU instancing for repeated static decoration (same path as the editor). The player is always
   // runtime, so it's gated only on the toggle. Batches are kept structurally stable (the object array

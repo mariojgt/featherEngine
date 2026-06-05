@@ -198,7 +198,9 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.rotate': RotateCw,
   'action.applyForce': Wind,
   'action.applyImpulse': Zap,
+  'action.applyTorque': RotateCw,
   'action.setVelocity': Gauge,
+  'action.setEnvironment': Palette,
   'query.velocity': Gauge,
   'action.fireEvent': Send,
   'action.spawnObject': Sparkles,
@@ -456,6 +458,12 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       ];
     case 'action.cameraShake':
       return [{ id: 'amount', label: 'Amount' }];
+    case 'action.applyTorque':
+      return [
+        { id: 'target', label: 'Target' },
+        { id: 'vector', label: 'Torque' },
+        { id: 'amount', label: 'Amount' },
+      ];
     case 'action.applyDamage':
       return [
         { id: 'target', label: 'Target' },
