@@ -220,9 +220,9 @@ export function AssetBrowser() {
     const platform = await getPlatform();
     const dir = projectDir ?? 'web';
     const items: AssetItem[] = [];
-    // Rigged model imports, parsed once here so we can split them into skeleton/mesh/animation
-    // assets after the asset items are registered (registerImportedModel needs the asset id).
-    const rigImports: { assetId: string; assetName: string; inspection: ModelInspection }[] = [];
+    // Model imports are parsed once here so we can split them into visible Project Browser assets:
+    // imported materials for every model, plus skeleton/mesh/animation assets for rigged models.
+    const modelImports: { assetId: string; assetName: string; inspection: ModelInspection }[] = [];
     let strippedTextures = false;
     let riggedCount = 0;
     // Transcode imported model textures to GPU-compressed KTX2 (on by default; see RenderSettings).
@@ -271,8 +271,8 @@ export function AssetBrowser() {
         if (detectType(file.name) === 'model') {
           try {
             const inspection = await inspectModel(file);
+            modelImports.push({ assetId, assetName: file.name, inspection });
             if (inspection.skeleton) {
-              rigImports.push({ assetId, assetName: file.name, inspection });
               riggedCount += 1;
             }
           } catch (inspectError) {
@@ -289,19 +289,29 @@ export function AssetBrowser() {
       }
     }
     if (items.length) addAssetItems(items);
-    // Split rigged models into reusable Skeleton/Skeletal Mesh/Animation assets (skeletons are
-    // deduped by signature, so same-rig characters share one skeleton and all its animations).
+    // Split imported models into reusable Material/Skeleton/Skeletal Mesh/Animation assets.
     let newClips = 0;
-    for (const rig of rigImports) {
-      const before = useEditorStore.getState().animations.length;
-      registerImportedModel({ assetId: rig.assetId, assetName: rig.assetName, folderId, inspection: rig.inspection });
-      newClips += useEditorStore.getState().animations.length - before;
+    let newMaterials = 0;
+    let staticClipModels = 0;
+    for (const model of modelImports) {
+      const result = registerImportedModel({ assetId: model.assetId, assetName: model.assetName, folderId, inspection: model.inspection });
+      newClips += result.animationsAdded;
+      newMaterials += result.materialsAdded;
+      if (!model.inspection.skeleton && model.inspection.clips.length > 0) staticClipModels += 1;
     }
-    if (riggedCount > 0) {
+    if (riggedCount > 0 || newMaterials > 0) {
       useProjectStore.setState({
         toast: {
           kind: 'success',
-          message: `Imported ${riggedCount} rigged model${riggedCount > 1 ? 's' : ''}${newClips ? ` with ${newClips} new animation${newClips > 1 ? 's' : ''}` : ' (animations already available)'}.`,
+          message: `Imported model content${newMaterials ? `: ${newMaterials} material${newMaterials > 1 ? 's' : ''}` : ''}${newClips ? `${newMaterials ? ', ' : ': '}${newClips} animation${newClips > 1 ? 's' : ''}` : ''}${riggedCount ? `${newMaterials || newClips ? ', ' : ': '}${riggedCount} rigged mesh${riggedCount > 1 ? 'es' : ''}` : ''}.`,
+        },
+      });
+    }
+    if (staticClipModels > 0) {
+      useProjectStore.setState({
+        toast: {
+          kind: 'success',
+          message: 'Some imported clips are static/node animations. They are available on the object Animation clip dropdown after assigning the model; reusable animation assets require a skeleton.',
         },
       });
     }
@@ -309,7 +319,7 @@ export function AssetBrowser() {
       useProjectStore.setState({
         toast: {
           kind: 'success',
-          message: 'Model imported without some textures. Re-import the .fbx together with its texture images (select them all at once) to keep them.',
+          message: 'FBX imported, but some material textures were missing. Re-import the .fbx together with its texture images (select them all at once) to keep the full material look.',
         },
       });
     }
@@ -506,6 +516,8 @@ export function AssetBrowser() {
       selected.has(key) && selected.size > 1 ? [...selected].map(parseItemKey) : [{ kind, id }];
     if (!(selected.has(key) && selected.size > 1)) setSelected(new Set([key]));
     dragRef.current = { items };
+    assetDrag.id = null;
+    prefabDrag.id = null;
     // Viewport drop still expects a single asset id via the shared holder + dataTransfer.
     const assetItems = items.filter((item) => item.kind === 'asset');
     if (assetItems.length === 1) {
@@ -526,7 +538,20 @@ export function AssetBrowser() {
         /* some webviews block setData during dragstart — the shared holder covers it */
       }
     }
-    event.dataTransfer.effectAllowed = 'move';
+    // Particle systems also drop into the viewport. Reuse the asset holder because the viewport
+    // resolves particle systems before imported assets, and both are project-level items.
+    const particleItems = items.filter((item) => item.kind === 'particleSystem');
+    if (particleItems.length === 1) {
+      assetDrag.id = particleItems[0].id;
+      try {
+        event.dataTransfer.setData(ASSET_DRAG_TYPE, particleItems[0].id);
+      } catch {
+        /* some webviews block setData during dragstart — the shared holder covers it */
+      }
+    }
+    const viewportPlaceable =
+      items.length === 1 && ['asset', 'prefab', 'particleSystem'].includes(items[0].kind);
+    event.dataTransfer.effectAllowed = viewportPlaceable ? 'copyMove' : 'move';
     // A small labelled chip as the drag image.
     const chip = document.createElement('div');
     chip.className = 'drag-chip';

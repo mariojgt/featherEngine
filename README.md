@@ -154,6 +154,20 @@ In the desktop app, **New Project** scaffolds a folder with `project.json`, a `s
 and an `assets/` directory; imported assets are copied into `assets/` and loaded via Tauri's
 `asset://` protocol. The web build still exports a portable `.nforge` file.
 
+### Ship a playable game
+
+Use the **Production** button in the desktop editor for the easiest path. It stages the current
+game, builds a portable web player, and can wrap it as a native Tauri app for your current OS.
+
+```bash
+npm run ship          # portable web folder + zip
+npm run ship:native   # portable web folder + zip + native app for this OS
+npm run ship:fast     # faster rebuild while iterating
+npm run ship:reuse    # fastest content-only re-export; reuses dist-player/
+```
+
+See [Production Export](docs/PRODUCTION_EXPORT.md) for the full build flow and troubleshooting notes.
+
 ### Build (web)
 
 ```bash

@@ -228,6 +228,29 @@ function normalizeCinematicAction(input: z.infer<typeof cinematicActionSchema>):
   };
 }
 
+function normalizeCinematicActionPatch(input: Partial<z.infer<typeof cinematicActionSchema>>): Partial<Omit<CinematicAction, 'id'>> {
+  return {
+    ...input,
+    type: input.type as CinematicActionType | undefined,
+    fromPosition: input.fromPosition ? asVec3(input.fromPosition) : undefined,
+    toPosition: input.toPosition ? asVec3(input.toPosition) : undefined,
+    fromRotation: input.fromRotation ? asVec3(input.fromRotation) : undefined,
+    toRotation: input.toRotation ? asVec3(input.toRotation) : undefined,
+    fromScale: input.fromScale ? asVec3(input.fromScale) : undefined,
+    toScale: input.toScale ? asVec3(input.toScale) : undefined,
+    position: input.position ? asVec3(input.position) : undefined,
+    rotation: input.rotation ? asVec3(input.rotation) : undefined,
+    scale: input.scale ? asVec3(input.scale) : undefined,
+    lookAt: input.lookAt ? asVec3(input.lookAt) : undefined,
+    keyframes: input.keyframes
+      ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov, focusDistance: frame.focusDistance, aperture: frame.aperture }))
+      : undefined,
+    transformKeyframes: input.transformKeyframes
+      ? input.transformKeyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), rotation: asVec3(frame.rotation), scale: asVec3(frame.scale) }))
+      : undefined,
+  };
+}
+
 const NODE_LABELS = [
   'Start',
   'Update',
@@ -1800,18 +1823,35 @@ export const engineTools = {
     },
   }),
 
+  update_cinematic_action: tool({
+    description:
+      'Update an existing Film Mode timeline action/shot. Use this to retime camera cuts, switch hard cuts to blends (blend:0 = hard cut, blend > 0 = smooth blend), change zoom/FOV, adjust focus/aperture, rename shots, or edit keyframes. Get action ids from the snapshot cameraShots list or list_scene.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      actionId: z.string(),
+      patch: cinematicActionSchema.partial(),
+    }),
+    execute: async ({ cinematicId, actionId, patch }) => {
+      const cinematic = store().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+      if (!cinematic) return `No cinematic with id ${cinematicId}.`;
+      if (!cinematic.actions.some((action) => action.id === actionId)) return `No cinematic action with id ${actionId}.`;
+      store().updateCinematicAction(cinematicId, actionId, normalizeCinematicActionPatch(patch));
+      return `Updated cinematic action ${actionId}.`;
+    },
+  }),
+
   add_cinematic_shot: tool({
     description:
-      'Add one static camera shot (a single framing) to a Film Mode cinematic — the "shot list" primitive. Each call is a cut to a new framing; chain several to edit a sequence (e.g. wide → push-in → reveal). Set blend>0 to dolly from the previous shot instead of a hard cut. Add focusDistance+aperture for depth-of-field; differing focusDistance across a blended shot pair produces a rack-focus pull.',
+      'Add one static camera shot (a single framing) to a Film Mode cinematic. Each call adds a cut in the shot list; chain several for wide, close-up, reveal, and reaction shots. Shots are hard cuts by default. Set blend > 0 only when the user wants a smooth camera move between shots. FOV is zoom: lower values are tighter/telephoto, higher values are wider. Add focusDistance + aperture for depth-of-field and rack-focus pulls.',
     inputSchema: z.object({
       cinematicId: z.string(),
       time: z.number().min(0).describe('Seconds from cinematic start when this shot cuts in.'),
       position: vec3.describe('Camera world position.'),
       lookAt: vec3.describe('World point the camera frames.'),
-      fov: z.number().min(10).max(140).optional().describe('Field of view in degrees (default 50; lower = tighter/more telephoto).'),
-      blend: z.number().min(0).max(10).optional().describe('Seconds to dolly from the previous shot. 0 = hard cut (default for the first shot); ~1–2 for a smooth move.'),
+      fov: z.number().min(10).max(140).optional().describe('Field of view in degrees. Default 50. Lower = zoomed-in close/telephoto; higher = wide. Useful presets: 28 close, 50 normal, 78 wide.'),
+      blend: z.number().min(0).max(10).optional().describe('Seconds to blend from the previous shot. 0 or omitted = hard cut; 1-2 = deliberate smooth camera move.'),
       focusDistance: z.number().min(0).optional().describe('Depth-of-field focus distance in world units ahead of the camera.'),
-      aperture: z.number().min(0).max(12).optional().describe('Depth-of-field blur strength (bokeh). 0 = sharp, 3–6 = shallow cinematic focus.'),
+      aperture: z.number().min(0).max(12).optional().describe('Depth-of-field blur strength (bokeh). 0 = sharp, 3-6 = shallow cinematic focus.'),
       duration: z.number().min(0).optional(),
       label: z.string().optional(),
     }),

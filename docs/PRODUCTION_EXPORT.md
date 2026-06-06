@@ -1,65 +1,69 @@
-# Production export — shipping a playable game
+# Production Export
 
-The engine ships finished games two ways, both driven from one staged bundle:
+Feather Engine can ship a finished game as:
 
-- **Portable web folder** — a copy of the player runtime with the game baked in.
-  Runs by opening `index.html` in any browser; host it on any static server.
-- **Native app (current OS)** — the same folder wrapped in the Tauri "player"
-  target, producing a real `.app`/`.dmg` (macOS), `.msi`/`.exe` (Windows), or
-  `.AppImage`/`.deb` (Linux) for the OS you build on.
+- **Portable web build**: a folder and optional zip that runs by opening `index.html` or by hosting it on any static web server.
+- **Native app for the current OS**: the same game wrapped with the Tauri player target, producing installers for the machine you build on.
 
-## How it fits together
+## Recommended Flow
 
-1. **Editor → "Production" button** ([Toolbar.tsx](../src/components/Toolbar.tsx)) calls
-   `exportProduction()` ([projectStore.ts](../src/store/projectStore.ts)). It builds a
-   self-contained bundle (assets inlined as data URLs via
-   [exportGame.ts](../src/project/exportGame.ts)), then:
-   - **Desktop:** prompts for a destination folder (`platform.pickDirectory`), then runs the
-     full build immediately. `platform.buildProduction` invokes the Rust command
-     `run_production_build` ([lib.rs](../src-tauri/src/lib.rs)), which stages the bundle, runs
-     `npm run export:production -- --out <dir>` from the engine root, and streams each output
-     line back as a `production-build-progress` event — shown in the build-progress overlay.
-     The portable web folder (`<slug>-web/`) and copied native installers (`<slug>-native/`)
-     both land in the chosen folder.
-     Requires running from source (the Rust command finds the engine folder by walking up to
-     `package.json`) with `npm` on PATH; a packaged editor that isn't beside the source tree
-     falls back to the error toast.
-   - **Web:** stages `game.json` (download) and the toast shows the CLI command to finish.
-2. **`scripts/export-production.mjs`** takes that `game.json` and:
-   - runs `npm run build:player` → `dist-player/`,
-   - writes `game-bundle.js` (`window.__NODEFORGE_GAME__ = {...}`) and patches
-     `index.html` so the player boots from the global with no `fetch` (works from
-     `file://`),
-   - assembles the portable web folder under `exports/<slug>-web/`,
-   - with `--native`, bakes the bundle into `dist-player/` and runs
-     `tauri build --config src-tauri/tauri.player.conf.json`.
-3. **Player boot order** ([Player.tsx](../src/player/Player.tsx)):
-   `window.__NODEFORGE_GAME__` → `fetch('./game.json')` → manual file picker.
+1. Open the project in the desktop editor.
+2. Click **Production** in the toolbar.
+3. Pick an output folder.
+4. Wait for the build overlay to finish.
+5. Share the generated `<game>-web` folder or `<game>-web.zip`, or install from `<game>-native`.
 
-## Commands
+The desktop editor runs the native + web build automatically when it is launched from the source tree and `npm`, Rust, and platform build tools are available on PATH.
+
+## CLI Commands
+
+These commands read `exports/staging/game.json` by default. The editor writes that staged bundle when you use the Production flow.
 
 ```bash
-npm run export:web          # portable browser folder only
-npm run export:production    # portable folder + native app for the current OS
-node scripts/export-production.mjs --bundle "<path>" --name "My Game" --zip
+npm run ship          # web folder + zip, then open the output folder
+npm run ship:native   # web folder + zip + native Tauri app for this OS
+npm run ship:fast     # rebuild player without TypeScript checking, then zip
+npm run ship:reuse    # reuse existing dist-player, fastest for content-only re-exports
 ```
 
-Native installers land in `src-tauri/target/release/bundle/`.
+Lower-level commands are still available:
 
-## Cross-platform reach
+```bash
+npm run export:web
+npm run export:production
+node scripts/export-production.mjs --bundle "path/to/game.json" --name "My Game" --zip --open
+```
 
-A given machine only builds a native app for **its own** OS (Tauri can't easily
-cross-compile). To produce Windows + macOS + Linux from one push, run
-`export-production.mjs --native` on a GitHub Actions matrix (macos/windows/ubuntu
-runners) — a clear follow-up. The portable web folder, by contrast, already runs
-everywhere.
+## Speed Guide
 
-## Packaged-editor caveat
+- Use `npm run ship:native` for the final build you give players.
+- Use `npm run ship:fast` while iterating on packaging. It still rebuilds the player, but skips the TypeScript project check.
+- Use `npm run ship:reuse` when only the exported game data changed and the player code did not. This reuses `dist-player/` and is the fastest path.
+- Use `npm run build:player` after changing player/runtime code so `ship:reuse` has a fresh player to copy.
 
-The one-click desktop build shells out to `npm`/`cargo` from the Rust command, so it
-needs the engine source tree (it walks up to `package.json`) and a working toolchain on
-PATH — true when running via `npm run tauri:dev` or `tauri:build` from the repo. A
-standalone editor installed elsewhere has no source tree to build from; there the button
-surfaces a clear error and the web/CLI path (`npm run export:production`) is the fallback.
-A fully self-contained packaged build would embed the player template + toolchain as
-resources — a larger follow-up.
+## How It Works
+
+1. The editor creates a self-contained `game.json` bundle with embedded resources.
+2. `scripts/export-production.mjs` checks the bundle inventory and warns about missing resources.
+3. The script builds or reuses `dist-player/`.
+4. It copies the player into `<out>/<game>-web`, writes `game-bundle.js`, and injects it into `index.html`.
+5. With `--native`, it temporarily bakes the bundle into `dist-player/`, runs `tauri build --config src-tauri/tauri.player.conf.json`, copies installers into `<out>/<game>-native`, then restores `dist-player/`.
+
+The restore step keeps repeated native exports from leaving game-specific generated files in the reusable player build.
+
+## Output
+
+- Portable web build: `exports/<game>-web/` unless `--out <dir>` is passed.
+- Zip, when requested: `exports/<game>-web.zip`.
+- Native installers copied for sharing: `exports/<game>-native/`.
+- Raw Tauri bundle output: `src-tauri/target/release/bundle/`.
+
+## Cross-Platform Native Builds
+
+Tauri builds native apps for the current operating system. Build on Windows for Windows installers, macOS for macOS apps, and Linux for Linux packages. To produce all three from one project, run the same export command on a CI matrix with Windows, macOS, and Linux runners.
+
+The portable web build runs everywhere.
+
+## Packaged Editor Caveat
+
+The one-click desktop build shells out to the local source tree, so it expects this repository, `node_modules`, `npm`, Rust, and platform build tools to be available. A standalone installed editor that is not beside the source tree should export `game.json` and use the CLI flow from the source folder.

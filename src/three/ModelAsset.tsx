@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
+import { useProjectStore } from '../store/projectStore';
+import { isDesktop } from '../platform';
+import type { AssetItem } from '../types';
 import { registerModelGeometry } from '../runtime/meshGeometryCache';
 import { qualityProfile } from './quality';
 import { applyAnisotropy } from './textureQuality';
@@ -14,12 +18,27 @@ const currentAnisotropy = (): number =>
 /** Resolve any asset id to its runtime URL (blob:/asset:// in the editor, data: in an export). */
 export function useAssetUrl(assetId?: string): string | undefined {
   const assets = useEditorStore((state) => state.assets);
+  const projectDir = useProjectStore((state) => state.projectDir);
   if (!assetId) return undefined;
-  return assets.find((item) => item.id === assetId)?.url;
+  return resolveAssetItemUrl(assets.find((item) => item.id === assetId), projectDir);
 }
 
 /** Back-compat alias for the model-specific resolver. */
 export const useModelUrl = useAssetUrl;
+
+/** Resolve an asset's live URL, rebuilding desktop URLs from persisted project paths when needed. */
+export function resolveAssetItemUrl(asset: AssetItem | undefined, projectDir: string | null): string | undefined {
+  if (!asset) return undefined;
+  if (asset.url) return asset.url;
+  if (asset.data) return asset.data;
+  if (!asset.path || !projectDir || projectDir === 'web' || !isDesktop) return undefined;
+
+  const cleanDir = projectDir.replace(/[\\/]+$/, '');
+  const cleanPath = asset.path.replace(/^[\\/]+/, '');
+  const separator = cleanDir.includes('\\') || /^[A-Za-z]:/.test(cleanDir) ? '\\' : '/';
+  const absolutePath = `${cleanDir}${separator}${cleanPath.replace(/[\\/]+/g, separator)}`;
+  return convertFileSrc(absolutePath);
+}
 
 /**
  * Refcounted, (url+flipY)-keyed texture cache. Without it, every object that references the same
@@ -31,6 +50,7 @@ export const useModelUrl = useAssetUrl;
 interface TextureCacheEntry {
   texture: THREE.Texture;
   refs: number;
+  objectUrl?: string;
 }
 const textureCache = new Map<string, TextureCacheEntry>();
 
@@ -42,11 +62,34 @@ function acquireTexture(url: string, flipY: boolean): THREE.Texture {
     return existing.texture;
   }
   const anisotropy = currentAnisotropy();
-  const texture = new THREE.TextureLoader().load(url, (loaded) => {
+  const applyTextureSettings = (loaded: THREE.Texture) => {
     loaded.colorSpace = THREE.SRGBColorSpace;
     loaded.flipY = flipY;
     loaded.anisotropy = anisotropy;
     loaded.needsUpdate = true;
+  };
+  const loader = new THREE.TextureLoader();
+  const texture = loader.load(url, applyTextureSettings, undefined, async (error) => {
+    // Tauri's asset protocol can occasionally fail as an <img> source even though fetch can read it.
+    // Re-load through a blob URL so desktop project paths with spaces/parentheses still work.
+    if (!isDesktop || url.startsWith('blob:') || url.startsWith('data:')) {
+      console.warn('Texture load failed:', url, error);
+      return;
+    }
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const objectUrl = URL.createObjectURL(await response.blob());
+      loader.load(objectUrl, (loaded) => {
+        texture.image = loaded.image;
+        applyTextureSettings(texture);
+        loaded.dispose();
+        const entry = textureCache.get(key);
+        if (entry) entry.objectUrl = objectUrl;
+      });
+    } catch (fallbackError) {
+      console.warn('Texture load fallback failed:', url, fallbackError);
+    }
   });
   // Set the UV/color/filtering conventions up front too, so the first GPU upload uses them.
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -63,6 +106,7 @@ function releaseTexture(url: string, flipY: boolean) {
   entry.refs -= 1;
   if (entry.refs <= 0) {
     entry.texture.dispose();
+    if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
     textureCache.delete(key);
   }
 }

@@ -206,7 +206,17 @@ function MaterialNodeInspector({
               label="Base Texture"
               value={material.textureAssetId}
               imageAssets={imageAssets}
-              onChange={(textureAssetId) => updateMaterial(material.id, { textureAssetId })}
+              onChange={(textureAssetId) =>
+                updateMaterial(material.id, {
+                  textureAssetId,
+                  // A base-color map is multiplied by the flat Base Color. New/imported materials
+                  // commonly start with a neutral editor tint, which makes PNGs look "wrong".
+                  // When the user first assigns a texture to an untuned material, clear that tint.
+                  ...(textureAssetId && ['#B4BCCC', '#5B8CFF'].includes(material.color.toUpperCase())
+                    ? { color: '#ffffff' }
+                    : {}),
+                })
+              }
             />
             <ImageSelect
               label="Normal Map"

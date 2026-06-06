@@ -1413,6 +1413,8 @@ export function ViewportPanel() {
       const name = asset.name.replace(/\.[^./\\]+$/, '');
       const id = store.createObjectWithProps('cube', { name, position });
       store.setObjectModel(id, assetId);
+      store.selectObject(id);
+      useProjectStore.setState({ toast: { kind: 'success', message: `Placed "${name}" in the scene.` } });
     },
     [cursorGroundPosition],
   );

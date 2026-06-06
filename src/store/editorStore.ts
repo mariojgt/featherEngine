@@ -537,7 +537,7 @@ interface EditorState {
     assetName: string;
     folderId?: string;
     inspection: ModelInspection;
-  }) => string | undefined;
+  }) => { skeletalMeshId?: string; materialsAdded: number; animationsAdded: number };
   // --- Animator Controller (state machine) authoring. All AI-friendly: explicit params, return ids. ---
   createAnimatorController: (name?: string, skeletonId?: string, folderId?: string) => string;
   updateAnimatorController: (id: string, patch: Partial<Pick<AnimatorController, 'name' | 'defaultStateId' | 'skeletonId'>>) => void;
@@ -1805,12 +1805,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     setRagdoll(objectId, on);
   },
   registerImportedModel: ({ assetId, assetName, folderId, inspection }) => {
-    if (!inspection.skeleton) return undefined; // static model — nothing to split
+    let materialsAdded = 0;
+    let animationsAdded = 0;
     const baseName = assetName.replace(/\.(glb|gltf|fbx)$/i, '');
     const now = Date.now();
     let skeletalMeshId: string | undefined;
 
     set((state) => {
+      const importedMaterials: MaterialDefinition[] = inspection.materials.map((material, index) => ({
+        id: makeId('material'),
+        name: material.name ? `${baseName} / ${material.name}` : `${baseName} Material ${index + 1}`,
+        description: [
+          `Imported from ${assetName}.`,
+          material.hasBaseColorMap || material.hasNormalMap
+            ? 'The model keeps its embedded texture maps; this editable asset mirrors the material values available to the engine.'
+            : 'Editable material values derived from the imported model.',
+        ].join(' '),
+        color: material.color,
+        metalness: material.metalness,
+        roughness: material.roughness,
+        emissiveColor: material.emissiveColor,
+        emissiveIntensity: material.emissiveIntensity,
+        graphId: makeId('graph'),
+        folderId,
+        createdAt: now,
+      }));
+      materialsAdded = importedMaterials.length;
+      const materialGraphs = importedMaterials.map((material) => makeMaterialGraph(material.graphId!, material.name));
+
+      if (!inspection.skeleton) {
+        return {
+          materials: [...state.materials, ...importedMaterials],
+          graphs: [...state.graphs, ...materialGraphs],
+          activeMaterialId: importedMaterials.at(-1)?.id ?? state.activeMaterialId,
+          isDirty: state.isDirty || importedMaterials.length > 0,
+        };
+      }
+
       // Reuse a skeleton with the same signature, else create one. This is what lets a second
       // character on the same rig share all of the first's animations.
       let skeleton = state.skeletons.find((item) => item.signature === inspection.skeleton!.signature);
@@ -1856,16 +1887,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           folderId,
           createdAt: now,
         }));
+      animationsAdded = newAnimations.length;
 
       return {
+        materials: [...state.materials, ...importedMaterials],
+        graphs: [...state.graphs, ...materialGraphs],
         skeletons,
         skeletalMeshes: [...state.skeletalMeshes, skeletalMesh],
         animations: [...state.animations, ...newAnimations],
+        activeMaterialId: importedMaterials.at(-1)?.id ?? state.activeMaterialId,
         isDirty: true,
       };
     });
 
-    return skeletalMeshId;
+    return { skeletalMeshId, materialsAdded, animationsAdded };
   },
   createAnimatorController: (name, skeletonId, folderId) => {
     const id = makeId('animctl');
@@ -3132,8 +3167,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       position: [...shot.position],
       lookAt: [...shot.lookAt],
       fov: shot.fov ?? 50,
-      // First shot is the opening framing (hard cut); later shots default to a soft dolly unless told to cut.
-      blend: shot.blend ?? (shotCount > 0 ? 1.2 : 0),
+      // Shot-list editing defaults to hard cuts. Set blend > 0 for a deliberate smooth camera blend.
+      blend: shot.blend ?? 0,
       focusDistance: shot.focusDistance,
       aperture: shot.aperture,
     });
@@ -4177,7 +4212,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             position: position ?? { x: 80 + (offset % 320), y: 80 + Math.floor(offset / 320) * 112 },
             data: makeNodeData(label, category, data),
           };
-          return { ...graph, nodes: [...graph.nodes, node] };
+          const edges = [...graph.edges];
+          if (
+            node.data.nodeKind === 'material.texture' &&
+            !edges.some((edge) => edge.targetHandle === 'baseColor')
+          ) {
+            const output = graph.nodes.find((item) => item.data.nodeKind === 'material.output');
+            if (output) {
+              edges.push({
+                id: makeId('edge'),
+                source: nodeId,
+                target: output.id,
+                sourceHandle: 'value-out',
+                targetHandle: 'baseColor',
+                animated: false,
+                type: 'smoothstep',
+                style: { stroke: '#3DD0DC', strokeWidth: 2 },
+              });
+            }
+          }
+          return { ...graph, nodes: [...graph.nodes, node], edges };
         }),
         selectedGraphNodeId: nodeId,
         isDirty: true,
@@ -4365,16 +4419,39 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateGraphNodeData: (id, patch) =>
     set((state) => ({
       // Find the node in whichever graph holds it (blueprint OR material graph).
-      graphs: state.graphs.map((graph) =>
-        graph.nodes.some((node) => node.id === id)
-          ? {
-              ...graph,
-              nodes: graph.nodes.map((node) =>
-                node.id === id ? { ...node, data: normalizeNodeData({ ...node.data, ...patch }) } : node,
-              ),
-            }
-          : graph,
-      ),
+      graphs: state.graphs.map((graph) => {
+        const existing = graph.nodes.find((node) => node.id === id);
+        if (!existing) return graph;
+        const nextNodes = graph.nodes.map((node) =>
+          node.id === id ? { ...node, data: normalizeNodeData({ ...node.data, ...patch }) } : node,
+        );
+        let nextEdges = graph.edges;
+        const becameTextured =
+          existing.data.nodeKind === 'material.texture' &&
+          typeof patch.assetId !== 'undefined' &&
+          patch.assetId &&
+          !graph.edges.some((edge) => edge.source === id) &&
+          !graph.edges.some((edge) => edge.targetHandle === 'baseColor');
+        if (becameTextured) {
+          const output = graph.nodes.find((node) => node.data.nodeKind === 'material.output');
+          if (output) {
+            nextEdges = [
+              ...graph.edges,
+              {
+                id: makeId('edge'),
+                source: id,
+                target: output.id,
+                sourceHandle: 'value-out',
+                targetHandle: 'baseColor',
+                animated: false,
+                type: 'smoothstep',
+                style: { stroke: '#3DD0DC', strokeWidth: 2 },
+              },
+            ];
+          }
+        }
+        return { ...graph, nodes: nextNodes, edges: nextEdges };
+      }),
       isDirty: true,
     })),
   fireCustomEvent: (eventName) =>

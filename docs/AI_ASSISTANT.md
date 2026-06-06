@@ -74,6 +74,16 @@ Nodes touch a few extra places. When you add a node kind:
 5. **AI:** add the label to `NODE_LABELS` + `NODE_CATEGORY` in `tools.ts`, and list it under the
    node types in `ENGINE_GUIDE` (`systemPrompt.ts`) with what params it takes.
 
+## Special case: Cinematic timeline features
+
+Film Mode is edited by both the UI and the assistant, so timeline features must stay mirrored:
+
+- Add or reuse store actions for shot creation/editing (`addCinematicShot`, `updateCinematicAction`).
+- Expose assistant tools for both creation and edits (`add_cinematic_shot`, `update_cinematic_action`).
+- Add a chip label in `describeToolCall()` so users see what the assistant changed.
+- Teach `COMPACT_ENGINE_GUIDE` the expected workflow: Cameras & Cuts is a shot list, shots are hard cuts by default, `blend > 0` means a smooth transition, and FOV is camera zoom.
+- Include compact shot state in `buildSceneSnapshot()` (`cameraShots`) so the assistant can retime, rename, zoom, and blend existing shots by id.
+
 ## Principles
 
 - **Mirror, don't fork.** Tools should call the *same* store actions the UI calls, so the AI and

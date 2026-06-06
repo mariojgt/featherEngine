@@ -50,6 +50,7 @@ async fn run_production_build(
       "--".into(),
       "--bundle".into(),
       bundle_path.to_string_lossy().into_owned(),
+      "--zip".into(),
     ];
     if let Some(out) = out_dir.as_deref() {
       args.push("--out".into());

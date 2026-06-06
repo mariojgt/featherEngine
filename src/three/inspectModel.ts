@@ -1,4 +1,4 @@
-import type { Object3D, SkinnedMesh, AnimationClip } from 'three';
+import { Color, type AnimationClip, type Material, type Mesh, type Object3D, type SkinnedMesh } from 'three';
 import { GLTFLoader } from 'three-stdlib';
 
 /** What we learn about a model GLB at import time, used to derive Skeleton/Mesh/Animation assets. */
@@ -11,6 +11,16 @@ export interface ModelInspection {
     signature: string;
   };
   clips: { name: string; duration: number }[];
+  materials: {
+    name: string;
+    color: string;
+    metalness: number;
+    roughness: number;
+    emissiveColor: string;
+    emissiveIntensity: number;
+    hasBaseColorMap: boolean;
+    hasNormalMap: boolean;
+  }[];
 }
 
 /** FNV-1a over the joined bone names — small, stable, order-sensitive compatibility key. */
@@ -22,6 +32,30 @@ function signatureOf(boneNames: string[]): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+const colorToHex = (color: Color | undefined, fallback: string) => `#${(color ?? new Color(fallback)).getHexString()}`;
+
+function materialInspection(material: Material, index: number): ModelInspection['materials'][number] {
+  const mat = material as Material & {
+    color?: Color;
+    metalness?: number;
+    roughness?: number;
+    emissive?: Color;
+    emissiveIntensity?: number;
+    map?: unknown;
+    normalMap?: unknown;
+  };
+  return {
+    name: material.name || `Imported Material ${index + 1}`,
+    color: colorToHex(mat.color, '#ffffff'),
+    metalness: typeof mat.metalness === 'number' ? mat.metalness : 0,
+    roughness: typeof mat.roughness === 'number' ? mat.roughness : 0.65,
+    emissiveColor: colorToHex(mat.emissive, '#000000'),
+    emissiveIntensity: typeof mat.emissiveIntensity === 'number' ? mat.emissiveIntensity : 0,
+    hasBaseColorMap: Boolean(mat.map),
+    hasNormalMap: Boolean(mat.normalMap),
+  };
 }
 
 /**
@@ -38,14 +72,26 @@ export async function inspectModel(file: File): Promise<ModelInspection> {
   });
 
   let skeleton: ModelInspection['skeleton'];
+  const seenMaterials = new Set<string>();
+  const materials: ModelInspection['materials'] = [];
   gltf.scene.traverse((node) => {
     const skinned = node as SkinnedMesh;
-    if (skeleton || !skinned.isSkinnedMesh || !skinned.skeleton) return;
-    const boneNames = skinned.skeleton.bones.map((bone) => bone.name);
-    if (!boneNames.length) return;
-    skeleton = { boneNames, rootBone: boneNames[0], signature: signatureOf(boneNames) };
+    if (!skeleton && skinned.isSkinnedMesh && skinned.skeleton) {
+      const boneNames = skinned.skeleton.bones.map((bone) => bone.name);
+      if (boneNames.length) skeleton = { boneNames, rootBone: boneNames[0], signature: signatureOf(boneNames) };
+    }
+
+    const mesh = node as Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const meshMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of meshMaterials) {
+      const key = material.uuid;
+      if (seenMaterials.has(key)) continue;
+      seenMaterials.add(key);
+      materials.push(materialInspection(material, materials.length));
+    }
   });
 
   const clips = (gltf.animations ?? []).map((clip) => ({ name: clip.name, duration: clip.duration }));
-  return { skeleton, clips };
+  return { skeleton, clips, materials };
 }

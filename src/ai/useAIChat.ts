@@ -150,6 +150,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'add_cinematic_action':
       return 'Added cinematic action';
+    case 'update_cinematic_action':
+      return 'Updated cinematic action';
     case 'add_cinematic_shot':
       return 'Added camera shot';
     case 'set_cinematic_look':

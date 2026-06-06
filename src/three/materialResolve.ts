@@ -33,6 +33,7 @@ export interface MaterialGraphOutput {
 }
 
 const clampUnit = (n: number) => Math.min(Math.max(n, 0), 1);
+const EDITOR_TINT_COLORS = new Set(['#b4bccc', '#5b8cff']);
 
 const parseHex = (hex: string): [number, number, number] => {
   const h = hex.replace('#', '');
@@ -249,6 +250,12 @@ export function resolveMaterial(
         normalAssetId: out.normalAssetId ?? base.normalAssetId,
       };
     }
+  }
+
+  // Base-color maps are multiplied by the flat color. Our default material colors are editor tints,
+  // not authored albedo tints, so clear them when a texture is driving the actual surface color.
+  if (base.baseColorAssetId && EDITOR_TINT_COLORS.has(base.color.toLowerCase())) {
+    base = { ...base, color: '#ffffff' };
   }
 
   const overrides = renderer.materialOverrides;

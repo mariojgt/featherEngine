@@ -4993,6 +4993,157 @@ button {
   background: color-mix(in srgb, var(--accent, #5b8cff) 16%, transparent);
 }
 
+.cinematic-camera-workflow {
+  display: grid;
+  gap: 8px;
+}
+
+.cinematic-camera-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cinematic-camera-buttons .full-button {
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.cinematic-camera-list,
+.cinematic-shot-strip {
+  display: grid;
+  gap: 5px;
+}
+
+.cinematic-camera-list button,
+.cinematic-shot-strip button {
+  display: grid;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cinematic-camera-list button {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.cinematic-camera-list button:hover,
+.cinematic-camera-list button.active,
+.cinematic-shot-strip button:hover,
+.cinematic-shot-strip button.active {
+  border-color: rgba(91, 140, 255, 0.55);
+  background: rgba(91, 140, 255, 0.13);
+}
+
+.cinematic-camera-list span,
+.cinematic-shot-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cinematic-camera-list small,
+.cinematic-shot-strip em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.cinematic-shot-strip button {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  text-align: left;
+}
+
+.cinematic-shot-strip button > span {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(91, 140, 255, 0.2);
+  color: var(--accent, #5b8cff);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cinematic-cut-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cinematic-cut-controls button,
+.cinematic-zoom-presets button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cinematic-cut-controls button.active,
+.cinematic-cut-controls button:hover,
+.cinematic-zoom-presets button:hover {
+  border-color: rgba(247, 185, 85, 0.58);
+  background: rgba(247, 185, 85, 0.12);
+}
+
+.cinematic-zoom-field {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cinematic-zoom-head,
+.cinematic-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cinematic-zoom-head {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cinematic-zoom-head output {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cinematic-zoom-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent, #5b8cff);
+}
+
+.cinematic-zoom-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
 .cinematic-template-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -5047,6 +5198,14 @@ button {
   gap: 4px;
   padding: 2px 4px;
   border-radius: 6px;
+}
+
+.cinematic-keyframe-row.camera {
+  grid-template-columns: 18px minmax(0, 1fr) auto auto 52px auto;
+}
+
+.cinematic-keyframe-fov {
+  text-align: center;
 }
 .cinematic-keyframe-row.active {
   background: color-mix(in srgb, var(--accent, #5b8cff) 18%, transparent);

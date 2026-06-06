@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, FolderOpen, Magnet, Pause, Play, Plus, RotateCcw, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video } from 'lucide-react';
+import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, FolderOpen, Magnet, Pause, Play, Plus, RotateCcw, Scissors, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video, ZoomIn, ZoomOut } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { editorCameraPose } from '../three/EditorCamera';
@@ -77,6 +77,52 @@ function vectorValue(value: Vector3Tuple | undefined, fallback: Vector3Tuple): V
   return value ?? fallback;
 }
 
+function rotationFromLookAt(position: Vector3Tuple, lookAt: Vector3Tuple): Vector3Tuple {
+  const dx = lookAt[0] - position[0];
+  const dy = lookAt[1] - position[1];
+  const dz = lookAt[2] - position[2];
+  const length = Math.max(0.0001, Math.hypot(dx, dy, dz));
+  return [Math.asin(dy / length), Math.atan2(dx, dz), 0];
+}
+
+function ZoomEditor({
+  label = 'Zoom',
+  value,
+  onChange,
+}: {
+  label?: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const fov = Math.min(110, Math.max(18, Math.round(value)));
+  return (
+    <div className="cinematic-zoom-field">
+      <div className="cinematic-zoom-head">
+        <span>{label}</span>
+        <output>{fov} FOV</output>
+      </div>
+      <div className="cinematic-zoom-row">
+        <ZoomIn size={14} aria-hidden />
+        <input
+          type="range"
+          min={18}
+          max={110}
+          step={1}
+          value={fov}
+          title="Lower FOV zooms in. Higher FOV zooms out."
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <ZoomOut size={14} aria-hidden />
+      </div>
+      <div className="cinematic-zoom-presets">
+        <button type="button" onClick={() => onChange(28)}>Close</button>
+        <button type="button" onClick={() => onChange(50)}>Normal</button>
+        <button type="button" onClick={() => onChange(78)}>Wide</button>
+      </div>
+    </div>
+  );
+}
+
 function VectorEditor({
   label,
   value,
@@ -131,6 +177,8 @@ export function CinematicPanel() {
   const deleteCinematic = useEditorStore((state) => state.deleteCinematic);
   const duplicateCinematicTake = useEditorStore((state) => state.duplicateCinematicTake);
   const setActiveCinematic = useEditorStore((state) => state.setActiveCinematic);
+  const createObjectWithProps = useEditorStore((state) => state.createObjectWithProps);
+  const updateTransform = useEditorStore((state) => state.updateTransform);
   const addCinematicMarker = useEditorStore((state) => state.addCinematicMarker);
   const removeCinematicMarker = useEditorStore((state) => state.removeCinematicMarker);
   const addCinematicAction = useEditorStore((state) => state.addCinematicAction);
@@ -200,6 +248,7 @@ export function CinematicPanel() {
   const audioAssets = useMemo(() => assets.filter((asset) => asset.type === 'audio'), [assets]);
   const active = cinematics.find((cinematic) => cinematic.id === activeCinematicId) ?? cinematics[0];
   const selected = objects.find((object) => object.id === selectedObjectId);
+  const cameraObjects = useMemo(() => objects.filter((object) => object.kind === 'camera'), [objects]);
   const selectedCamera = selected?.kind === 'camera' ? selected : objects.find((object) => object.kind === 'camera');
   const running = Boolean(runtimeCinematic && active && runtimeCinematic.sequenceId === active.id);
   const previewing = Boolean(editorPreview && active && editorPreview.sequenceId === active.id);
@@ -261,6 +310,10 @@ export function CinematicPanel() {
   };
 
   const cameraShotCount = active?.actions.filter((action) => action.type === 'camera').length ?? 0;
+  const sortedCameraShots = useMemo(
+    () => [...(active?.actions ?? [])].filter((action) => action.type === 'camera').sort((a, b) => a.time - b.time),
+    [active?.actions],
+  );
 
   const createStoryboard = (preset: StoryboardPreset) => {
     const result = createStoryboardCinematic({
@@ -286,8 +339,8 @@ export function CinematicPanel() {
     });
   };
 
-  // One-click "frame it, click, done": add a camera shot at the playhead from the live viewport.
-  // The first shot is a hard cut; every shot after it glides in from the previous framing.
+  // One-click "frame it, click, done": add a hard camera cut at the playhead from the live viewport.
+  // Smooth blends are opt-in on the selected shot.
   const addViewportShot = () => {
     if (!active || !editorCameraPose.valid) return;
     addBeat({
@@ -298,9 +351,61 @@ export function CinematicPanel() {
       position: [...editorCameraPose.position],
       lookAt: [...editorCameraPose.lookAt],
       fov: Math.round(editorCameraPose.fov),
-      blend: cameraShotCount > 0 ? 1.2 : 0,
+      blend: 0,
       ease: 'smooth',
     });
+  };
+
+  const createCameraFromViewport = (addShot = true) => {
+    if (!active || !editorCameraPose.valid) return;
+    const position = [...editorCameraPose.position] as Vector3Tuple;
+    const lookAt = [...editorCameraPose.lookAt] as Vector3Tuple;
+    const id = createObjectWithProps('camera', {
+      name: `Cinematic Camera ${cameraObjects.length + 1}`,
+      position,
+    });
+    updateTransform(id, 'rotation', rotationFromLookAt(position, lookAt));
+    if (addShot) {
+      const shotId = addCinematicAction(active.id, {
+        type: 'camera',
+        time: beatTime,
+        duration: Math.max(1.5, active.duration - beatTime),
+        label: `Shot ${cameraShotCount + 1}`,
+        objectId: id,
+        position,
+        lookAt,
+        fov: Math.round(editorCameraPose.fov),
+        blend: 0,
+        ease: 'smooth',
+      });
+      if (shotId) {
+        setSelectedActionId(shotId);
+        previewCinematic(active.id, beatTime);
+      }
+    }
+  };
+
+  const addShotFromCamera = (cameraId: string, hardCut = true) => {
+    if (!active) return;
+    const camera = objects.find((object) => object.id === cameraId);
+    if (!camera) return;
+    addBeat({
+      type: 'camera',
+      time: beatTime,
+      duration: Math.max(0.5, active.duration - beatTime),
+      label: camera.name,
+      objectId: camera.id,
+      position: camera.transform.position,
+      rotation: camera.transform.rotation,
+      fov: selectedAction?.type === 'camera' ? selectedAction.fov ?? 50 : 50,
+      blend: hardCut ? 0 : 1.2,
+      ease: 'smooth',
+    });
+  };
+
+  const setSelectedShotCut = (blend: number) => {
+    if (!selectedAction || selectedAction.type !== 'camera') return;
+    updateSelectedAction({ blend });
   };
 
   const addFadeBookends = () => {
@@ -824,7 +929,7 @@ export function CinematicPanel() {
         ) : (
           <div className="cinematic-keyframe-list">
             {frames.map((frame, index) => (
-              <div className={`cinematic-keyframe-row${Math.abs(frame.time - beatTime) < 0.05 ? ' active' : ''}`} key={`${action.id}-kf-${index}`}>
+              <div className={`cinematic-keyframe-row camera${Math.abs(frame.time - beatTime) < 0.05 ? ' active' : ''}`} key={`${action.id}-kf-${index}`}>
                 <span className="cinematic-keyframe-index">{index + 1}</span>
                 <input
                   type="number"
@@ -840,6 +945,21 @@ export function CinematicPanel() {
                 <button className="icon-button" title="Recapture this keyframe from the current viewport" disabled={!editorCameraPose.valid || running || previewing} onClick={() => recaptureKeyframe(action, index)}>
                   <Camera size={13} aria-hidden />
                 </button>
+                <input
+                  className="cinematic-keyframe-fov"
+                  type="number"
+                  min={18}
+                  max={110}
+                  step={1}
+                  value={Math.round(frame.fov)}
+                  title="Keyframe zoom / FOV"
+                  onChange={(event) => {
+                    const frames = (action.keyframes ?? []).map((keyframe, i) =>
+                      i === index ? { ...keyframe, fov: Number(event.target.value) } : keyframe,
+                    );
+                    applyKeyframes(action.id, frames);
+                  }}
+                />
                 <button className="icon-button" title="Delete keyframe" onClick={() => removeKeyframe(action, index)}>
                   <Trash2 size={13} aria-hidden />
                 </button>
@@ -913,9 +1033,38 @@ export function CinematicPanel() {
       const isTrack = Boolean(selectedAction.keyframes?.length);
       return (
         <>
+          <div className="cinematic-cut-controls">
+            <button
+              className={(selectedAction.blend ?? 0) <= 0 ? 'active' : undefined}
+              type="button"
+              title="Instant cut from the previous camera"
+              onClick={() => setSelectedShotCut(0)}
+            >
+              <Scissors size={14} aria-hidden />
+              Hard cut
+            </button>
+            <button
+              className={(selectedAction.blend ?? 0) > 0 ? 'active' : undefined}
+              type="button"
+              title="Smoothly blend from the previous camera"
+              onClick={() => setSelectedShotCut(1.2)}
+            >
+              <Video size={14} aria-hidden />
+              Blend
+            </button>
+          </div>
           {isTrack ? (
             <>
               {renderKeyframeTrack(selectedAction)}
+              <ZoomEditor
+                label="Track zoom"
+                value={selectedAction.keyframes?.[selectedAction.keyframes.length - 1]?.fov ?? selectedAction.fov ?? 50}
+                onChange={(fov) => {
+                  const frames = selectedAction.keyframes ?? [];
+                  if (!frames.length) return;
+                  applyKeyframes(selectedAction.id, frames.map((frame, index) => (index === frames.length - 1 ? { ...frame, fov } : frame)));
+                }}
+              />
               <label className="field-row">
                 <span>Interpolation</span>
                 <select value={selectedAction.interpolation ?? 'smooth'} onChange={(event) => updateSelectedAction({ interpolation: event.target.value as CinematicInterpolation })}>
@@ -975,10 +1124,7 @@ export function CinematicPanel() {
               </button>
               <VectorEditor label="Position" value={selectedAction.position} fallback={selectedCamera?.transform.position ?? [4, 2.4, 4]} onChange={(value) => updateSelectedVector('position', value)} />
               <VectorEditor label="Look at" value={selectedAction.lookAt} fallback={[0, 1, 0]} onChange={(value) => updateSelectedVector('lookAt', value)} />
-              <label className="field-row">
-                <span>FOV</span>
-                <input type="number" min={10} max={140} step={1} value={selectedAction.fov ?? 50} onChange={(event) => updateSelectedAction({ fov: Number(event.target.value) })} />
-              </label>
+              <ZoomEditor value={selectedAction.fov ?? 50} onChange={(fov) => updateSelectedAction({ fov })} />
               <label className="field-row">
                 <span>Blend in</span>
                 <input type="number" min={0} max={10} step={0.1} value={selectedAction.blend ?? 0} title="Seconds to glide from the previous shot (0 = hard cut)" onChange={(event) => updateSelectedAction({ blend: Number(event.target.value) })} />
@@ -1427,6 +1573,66 @@ export function CinematicPanel() {
                   </div>
                 )}
               </section>
+              <section className="inspector-section cinematic-camera-workflow">
+                <h3>Cameras &amp; Cuts</h3>
+                <div className="cinematic-camera-buttons">
+                  <button
+                    className="full-button primary"
+                    disabled={running || !editorCameraPose.valid}
+                    title="Create a scene camera at the current viewport and add it as a hard cut at the playhead"
+                    onClick={() => createCameraFromViewport(true)}
+                  >
+                    <Camera size={14} aria-hidden />
+                    New camera + cut
+                  </button>
+                  <button
+                    className="full-button"
+                    disabled={running || !editorCameraPose.valid}
+                    title="Add a hard cut using the current editor viewport without creating a scene camera"
+                    onClick={addViewportShot}
+                  >
+                    <Scissors size={14} aria-hidden />
+                    Cut from viewport
+                  </button>
+                </div>
+                {cameraObjects.length > 0 && (
+                  <div className="cinematic-camera-list">
+                    {cameraObjects.map((camera) => (
+                      <button
+                        key={camera.id}
+                        type="button"
+                        className={camera.id === selectedObjectId ? 'active' : undefined}
+                        title={`Add ${camera.name} as a hard cut at ${beatTime.toFixed(2)}s`}
+                        onClick={() => addShotFromCamera(camera.id, true)}
+                      >
+                        <Camera size={13} aria-hidden />
+                        <span>{camera.name}</span>
+                        <small>Cut</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {sortedCameraShots.length > 0 && (
+                  <div className="cinematic-shot-strip">
+                    {sortedCameraShots.map((shot, index) => (
+                      <button
+                        key={shot.id}
+                        type="button"
+                        className={shot.id === selectedActionId ? 'active' : undefined}
+                        title={`${shot.label ?? `Shot ${index + 1}`} at ${shot.time.toFixed(2)}s`}
+                        onClick={() => {
+                          setSelectedActionId(shot.id);
+                          setPreviewTime(shot.time);
+                        }}
+                      >
+                        <span>{index + 1}</span>
+                        <strong>{shot.label ?? `Shot ${index + 1}`}</strong>
+                        <em>{(shot.blend ?? 0) > 0 ? `${shot.blend!.toFixed(1)}s blend` : 'cut'}</em>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
               <section className="inspector-section cinematic-shot-templates">
                 <h3>Shot templates</h3>
                 <div className="cinematic-template-grid">
@@ -1743,23 +1949,11 @@ export function CinematicPanel() {
                     disabled={!selectedCamera}
                     onClick={() => {
                       if (!selectedCamera) return;
-                      addBeat({
-                        type: 'camera',
-                        time: beatTime,
-                        duration: Math.max(0.5, active.duration - beatTime),
-                        label: selectedCamera.name,
-                        objectId: selectedCamera.id,
-                        position: selectedCamera.transform.position,
-                        rotation: selectedCamera.transform.rotation,
-                        lookAt: [0, 1, 0],
-                        fov: 50,
-                        blend: cameraShotCount > 0 ? 1.2 : 0,
-                        ease: 'smooth',
-                      });
+                      addShotFromCamera(selectedCamera.id, true);
                     }}
                   >
                     <Eye size={14} aria-hidden />
-                    Shot from camera
+                    Cut from selected camera
                   </button>
                   <button
                     className="full-button"
@@ -1894,6 +2088,11 @@ export function CinematicPanel() {
                         <span>FOV</span>
                         <input type="number" min={10} max={140} value={selectedKeyframeInfo.camera.fov} onChange={(event) => updateSelectedKeyframe({ fov: Number(event.target.value) })} />
                       </label>
+                      <ZoomEditor
+                        label="Key zoom"
+                        value={selectedKeyframeInfo.camera.fov}
+                        onChange={(fov) => updateSelectedKeyframe({ fov })}
+                      />
                     </>
                   ) : selectedKeyframeInfo.object ? (
                     <>
