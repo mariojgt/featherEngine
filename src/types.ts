@@ -944,6 +944,8 @@ export interface RenderSettings {
    *  cuts VRAM ~6–8× and shrinks the exported game. Turn off to keep textures byte-for-byte
    *  (lossless) at the cost of more GPU memory. See `src/three/compressTextures.ts`. */
   compressTextures?: boolean;
+  /** Optional project-wide color grade applied in the normal game/editor render, separate from cinematic looks. */
+  colorGrade?: CinematicLook;
 }
 
 /** Game quality / scalability preset, Low → Epic (the project-wide rendering budget). */

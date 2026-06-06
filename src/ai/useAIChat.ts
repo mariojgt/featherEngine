@@ -96,6 +96,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Set scene audio';
     case 'set_scene_environment':
       return 'Set scene environment';
+    case 'apply_lighting_preset':
+      return `Applied ${String(input.preset ?? 'lighting')} look`;
     case 'set_inventory':
       return 'Set inventory';
     case 'equip_slot':
@@ -172,6 +174,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.socketName ? 'Attached to socket' : 'Detached';
     case 'create_material':
       return `Created material${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'apply_material_preset':
+      return `Applied ${String(input.preset ?? 'material')} preset`;
     case 'update_material':
       return 'Updated material';
     case 'set_object_material':

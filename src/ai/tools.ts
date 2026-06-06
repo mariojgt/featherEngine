@@ -26,6 +26,7 @@ import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
+import { findLightingPreset, findMaterialPreset, lightingPresetIds, materialPresetIds } from '../three/presets';
 
 const store = () => useEditorStore.getState();
 const projectStore = () => useProjectStore.getState();
@@ -914,6 +915,21 @@ export const engineTools = {
       };
       store().updateSceneEnvironment(store().activeSceneId, environmentPatch);
       return `Updated scene environment (${Object.keys(environmentPatch).join(', ') || 'defaults'}).`;
+    },
+  }),
+
+  apply_lighting_preset: tool({
+    description:
+      'Apply a complete one-click scene lighting/look preset. It updates sky, fog, sun, environment intensity, bloom/vignette, quality/shadow/AO budget, and project color grade together.',
+    inputSchema: z.object({
+      preset: z.enum(lightingPresetIds).describe('sunny, overcast, night, cyberpunk, indoor, or cinematic.'),
+    }),
+    execute: async ({ preset }) => {
+      const selected = findLightingPreset(preset);
+      if (!selected) return `Unknown lighting preset ${preset}.`;
+      store().updateSceneEnvironment(store().activeSceneId, selected.environment);
+      store().updateRenderSettings({ ...selected.renderSettings, colorGrade: selected.colorGrade });
+      return `Applied "${selected.name}" lighting preset.`;
     },
   }),
 
@@ -2125,6 +2141,39 @@ export const engineTools = {
     execute: async ({ name, folderId }) => {
       const id = store().createMaterial(name, undefined, folderId);
       return `Created material "${findMaterial(id)?.name}" with materialId ${id}.`;
+    },
+  }),
+
+  apply_material_preset: tool({
+    description:
+      'Apply a named material preset (plastic, metal, wet floor, glass, neon, rock, grass, skin, rubber). If materialId is omitted, creates a reusable material. If objectId is provided, assigns the material to that object.',
+    inputSchema: z.object({
+      preset: z.enum(materialPresetIds),
+      materialId: z.string().optional().describe('Existing material to update. Omit to create a new reusable material from the preset.'),
+      objectId: z.string().optional().describe('Optional scene object to assign the material to after applying/creating it.'),
+      name: z.string().optional().describe('Optional name for a newly created material.'),
+      folderId: z.string().optional(),
+    }),
+    execute: async ({ preset, materialId, objectId, name, folderId }) => {
+      const selected = findMaterialPreset(preset);
+      if (!selected) return `Unknown material preset ${preset}.`;
+      if (objectId && !findObject(objectId)) return `No object with id ${objectId}.`;
+      let id = materialId;
+      const creating = !id;
+      if (id) {
+        if (!findMaterial(id)) return `No material with id ${id}.`;
+      } else {
+        id = store().createMaterial(name ?? selected.name, selected.description, folderId);
+      }
+      store().updateMaterial(id, {
+        ...selected.patch,
+        description: selected.description,
+        ...(creating || name ? { name: name ?? selected.name } : {}),
+      });
+      if (objectId) store().setObjectMaterial(objectId, id);
+      return objectId
+        ? `Applied "${selected.name}" material preset to ${objectId} using materialId ${id}.`
+        : `Applied "${selected.name}" material preset to materialId ${id}.`;
     },
   }),
 

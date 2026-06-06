@@ -5075,6 +5075,90 @@ button {
   font-weight: 700;
 }
 
+.preset-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.preset-library-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preset-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.preset-chip-grid button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(8, 10, 15, 0.34);
+  cursor: pointer;
+}
+
+.preset-chip-grid button:hover {
+  border-color: rgba(61, 220, 151, 0.42);
+  background: rgba(61, 220, 151, 0.09);
+}
+
+.preset-chip-grid button span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-swatch,
+.lighting-dot {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.lighting-dot-sunny {
+  background: #ffd166;
+}
+
+.lighting-dot-overcast {
+  background: #aeb7c2;
+}
+
+.lighting-dot-night {
+  background: #18345f;
+}
+
+.lighting-dot-cyberpunk {
+  background: linear-gradient(135deg, #ff2bd6, #31f7ff);
+}
+
+.lighting-dot-indoor {
+  background: #ffe3b5;
+}
+
+.lighting-dot-cinematic {
+  background: #ff9f4a;
+}
+
 .cinematic-cut-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

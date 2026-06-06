@@ -14,7 +14,7 @@ import { qualityProfile } from './quality';
 export function PostFx() {
   const rs = useEditorStore((state) => state.renderSettings);
   const pose = useEditorStore((state) => state.runtimeCinematicCamera ?? state.editorCinematicPreviewCamera);
-  const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook);
+  const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook ?? state.renderSettings.colorGrade);
   const profile = qualityProfile(rs?.quality);
   const children = [];
   // Ambient occlusion FIRST so the contact-shadow darkening it adds in crevices/corners is in the

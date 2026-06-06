@@ -10,7 +10,7 @@ import {
   useReactFlow,
   type NodeTypes,
 } from '@xyflow/react';
-import { Hash, Image as ImageIcon, LayoutGrid, Palette, Plus, SlidersHorizontal } from 'lucide-react';
+import { Hash, LayoutGrid, Palette, Plus, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { useAssetTexture, useAssetUrl } from '../three/ModelAsset';
 import { useResolvedMaterial } from '../three/resolveMaterial';
@@ -18,6 +18,7 @@ import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
 import { RangeField } from './InspectorPanel';
 import type { AssetItem, GraphNodeCategory, MaterialDefinition, MeshRendererComponent, NodeForgeNode } from '../types';
+import { MATERIAL_PRESETS } from '../three/presets';
 
 const nodeTypes: NodeTypes = { nodeforge: NodeForgeGraphNode };
 
@@ -349,6 +350,7 @@ export function MaterialEditorPanel() {
   const activeMaterialId = useEditorStore((state) => state.activeMaterialId);
   const setActiveMaterial = useEditorStore((state) => state.setActiveMaterial);
   const createMaterial = useEditorStore((state) => state.createMaterial);
+  const updateMaterial = useEditorStore((state) => state.updateMaterial);
   const ensureMaterialGraph = useEditorStore((state) => state.ensureMaterialGraph);
 
   const material = materials.find((item) => item.id === activeMaterialId) ?? materials[0];
@@ -408,6 +410,37 @@ export function MaterialEditorPanel() {
               <OrbitControls enablePan={false} enableZoom={false} enableDamping dampingFactor={0.08} />
             </Canvas>
           </div>
+          <section className="material-preset-library" aria-label="Material presets">
+            <div className="preset-library-head">
+              <span>
+                <Sparkles size={13} aria-hidden />
+                Presets
+              </span>
+              <button
+                className="text-button"
+                onClick={() => {
+                  for (const preset of MATERIAL_PRESETS) {
+                    const id = createMaterial(preset.name, preset.description);
+                    updateMaterial(id, { ...preset.patch, description: preset.description });
+                  }
+                }}
+              >
+                Create all
+              </button>
+            </div>
+            <div className="preset-chip-grid">
+              {MATERIAL_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  title={preset.description}
+                  onClick={() => updateMaterial(material.id, { ...preset.patch, description: preset.description })}
+                >
+                  <span className="preset-swatch" style={{ background: preset.patch.emissiveIntensity > 0 ? preset.patch.emissiveColor : preset.patch.color }} />
+                  <span>{preset.name}</span>
+                </button>
+              ))}
+            </div>
+          </section>
           {/* Own ReactFlowProvider so this graph's viewport/store stays isolated from the Scripting panel. */}
           <ReactFlowProvider>
             <MaterialFlow material={material} />

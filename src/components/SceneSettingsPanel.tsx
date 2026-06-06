@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { CloudFog, CloudSun, Image as ImageIcon, Music2, Sun, Volume2 } from 'lucide-react';
+import { CloudFog, CloudSun, Image as ImageIcon, Music2, Sparkles, Sun, Volume2 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import type { SceneEnvironmentSettings } from '../types';
+import { LIGHTING_PRESETS } from '../three/presets';
 
 function audioName(id: string | undefined, assets: Array<{ id: string; name: string }>) {
   if (!id) return 'None';
@@ -22,6 +23,7 @@ export function SceneSettingsPanel() {
   const renameScene = useEditorStore((state) => state.renameScene);
   const setSceneAudio = useEditorStore((state) => state.setSceneAudio);
   const updateSceneEnvironment = useEditorStore((state) => state.updateSceneEnvironment);
+  const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const audioAssets = useMemo(() => assets.filter((asset) => asset.type === 'audio'), [assets]);
   const imageAssets = useMemo(() => assets.filter((asset) => asset.type === 'image'), [assets]);
@@ -120,6 +122,29 @@ export function SceneSettingsPanel() {
         <h3>Environment</h3>
         <div className="scene-sky-preview" style={{ background: skyPreview }}>
           <span>{environment.skyMode === 'image' ? 'Panorama' : environment.skyMode === 'procedural' ? 'Procedural' : 'Color'}</span>
+        </div>
+        <div className="lighting-preset-library" aria-label="Lighting presets">
+          <div className="preset-library-head">
+            <span>
+              <Sparkles size={13} aria-hidden />
+              Presets
+            </span>
+          </div>
+          <div className="preset-chip-grid">
+            {LIGHTING_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                title={preset.description}
+                onClick={() => {
+                  updateSceneEnvironment(scene.id, preset.environment);
+                  updateRenderSettings({ ...preset.renderSettings, colorGrade: preset.colorGrade });
+                }}
+              >
+                <span className={`lighting-dot lighting-dot-${preset.id}`} />
+                <span>{preset.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <label className="field-row">
