@@ -3099,7 +3099,7 @@ export const engineTools = {
   }),
 
   add_node: tool({
-    description: 'Add a node to a blueprint graph. Returns its nodeId. For variables set variableId; for Data Asset Lookup set dataAssetId/rowKey/columnId; for constants set numberValue/stringValue/booleanValue/vectorValue; for Save/Load/Clear set saveSlot.',
+    description: 'Add a node to a blueprint graph. Returns its nodeId. For variables set variableId; for Data Asset Lookup set dataAssetId/rowKey/columnId; for constants set numberValue/stringValue/booleanValue/vectorValue; for Update set numberValue > 0 to throttle its interval in seconds; for Save/Load/Clear set saveSlot.',
     inputSchema: z.object({
       blueprintId: z.string(),
       type: z.enum(NODE_LABELS),
@@ -3107,7 +3107,7 @@ export const engineTools = {
       axis: z.enum(['x', 'y', 'z']).optional(),
       space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
       amount: z.number().optional(),
-      numberValue: z.number().optional(),
+      numberValue: z.number().optional().describe('Numeric value. For Update nodes, >0 throttles the tick interval in seconds; 0/undefined = every frame.'),
       stringValue: z.string().optional(),
       booleanValue: z.boolean().optional(),
       vectorValue: vec3.optional(),
@@ -3336,7 +3336,7 @@ export const engineTools = {
       axis: z.enum(['x', 'y', 'z']).optional(),
       space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
       amount: z.number().optional(),
-      numberValue: z.number().optional(),
+      numberValue: z.number().optional().describe('Numeric value. For Update nodes, >0 throttles the tick interval in seconds; 0/undefined = every frame.'),
       stringValue: z.string().optional(),
       booleanValue: z.boolean().optional(),
       vectorValue: vec3.optional(),

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { defaultCharacter, useEditorStore } from '../store/editorStore';
-import { useFollowTarget } from '../three/FollowCamera';
+import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useFollowTargetId } from '../three/FollowCamera';
 
 /**
  * A dynamic first-person crosshair (Call-of-Duty style): four ticks that SPREAD apart while the player
@@ -10,9 +10,10 @@ import { useFollowTarget } from '../three/FollowCamera';
  */
 export function DynamicCrosshair() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
-  const target = useFollowTarget();
+  const targetId = useFollowTargetId();
   const keys = useEditorStore((state) => state.runtimeKeys);
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
+  const target = targetId ? selectActiveObjects(useEditorStore.getState()).find((object) => object.id === targetId) : undefined;
 
   // Show only for a first-person player during Play.
   const cc = { ...defaultCharacter(), ...(target?.character ?? {}) };

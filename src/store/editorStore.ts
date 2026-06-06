@@ -6377,7 +6377,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                       if (hit.objectId === playerId) hurt += 1;
                     } else {
                       const knockMul = setup.knockback ?? 1;
-                      if (knockMul > 0 && target.physics?.bodyType === 'dynamic') {
+                      if (phys && knockMul > 0 && target.physics?.bodyType === 'dynamic') {
                         const k = Math.min(4, Math.max(1.5, sp * 0.045)) * knockMul;
                         phys.applyImpulse(hit.objectId, [dirNorm[0] * k, dirNorm[1] * k + 0.5 * knockMul, dirNorm[2] * k]);
                       }
@@ -7380,6 +7380,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         groundedIds = [...groundedSet];
       }
       recordRuntimeSection('physics', performance.now() - physicsStart);
+      const combatStart = performance.now();
       const resolvedObjectById = new Map(resolvedObjects.map((object) => [object.id, object]));
       // Auto-fracture: a destructible object shatters when it (or the thing it hit) is moving fast enough on
       // contact. No contact-force readout exists, so approximate the impact with this-frame speed.
@@ -7738,6 +7739,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (bestVar) nextVariableValues[bestVar.id] = Math.round(best * 10) / 10;
         }
       }
+      recordRuntimeSection('combat', performance.now() - combatStart);
 
       let allObjects = [...resolvedObjects, ...spawned];
       for (const id of destroyedIds) allObjects = deleteWithChildren(allObjects, id);
@@ -7882,6 +7884,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // --- Animator pass: feed object state into parameters, then run the state machine. ---
       // Runs after physics so "speed"/"verticalSpeed" reflect the object's final motion this frame.
+      const animatorStart = performance.now();
       const nextAnimators: Record<string, RuntimeAnimator> = {};
       for (const object of remainingResolvedObjects) {
         const controllerId = object.animator?.enabled ? object.animator.controllerId : undefined;
@@ -8016,6 +8019,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const nextStateName = statesById.get(nextStateId)?.name ?? '';
         if (/death|dead|\bdie\b/i.test(nextStateName)) setRagdoll(object.id, true);
       }
+      recordRuntimeSection('animator', performance.now() - animatorStart);
 
       // Taking damage this frame jolts the camera (the player's hurt counter rose since last frame).
       if (hurt > state.runtimeHurt) cameraShake = Math.min(1, cameraShake + 0.45);

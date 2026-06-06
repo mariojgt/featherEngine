@@ -1,9 +1,10 @@
 import { PerspectiveCamera } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLook } from '../runtime/mouseLook';
+import { readTransform } from '../runtime/transformBuffer';
 import { SkinnedModel, useResolvedAnimator } from './SkinnedModel';
 import type { CharacterControllerComponent, SceneObject } from '../types';
 
@@ -71,6 +72,17 @@ export function useFollowTarget(): SceneObject | undefined {
   );
 }
 
+export function useFollowTargetId(): string | undefined {
+  return useEditorStore(
+    (state) =>
+      selectActiveObjects(state).find(
+        (object) =>
+          (object.character?.enabled && object.character.cameraFollow) ||
+          (object.vehicle?.enabled && object.vehicle.cameraFollow),
+      )?.id,
+  );
+}
+
 export interface CameraPose {
   position: THREE.Vector3;
   lookAt: THREE.Vector3;
@@ -135,6 +147,7 @@ function CameraViewModel({ object }: { object: SceneObject }) {
 
 function CameraViewModelMount({ object, owner }: { object: SceneObject; owner: SceneObject }) {
   const groupRef = useRef<THREE.Group>(null);
+  const bobTarget = useRef(new THREE.Vector3());
   const runtimeKeys = useEditorStore((state) => state.runtimeKeys);
 
   useFrame(({ clock }) => {
@@ -154,14 +167,15 @@ function CameraViewModelMount({ object, owner }: { object: SceneObject; owner: S
     const sprinting = moving && Boolean(runtimeKeys[cc.keySprint]);
     const time = clock.elapsedTime;
     const bob = moving ? (sprinting ? 0.04 : 0.028) : 0.006;
-    const targetX = object.transform.position[0] + Math.sin(time * (sprinting ? 11 : 8)) * bob * 0.45;
-    const targetY = object.transform.position[1] + Math.cos(time * (sprinting ? 22 : 16)) * bob * 0.32;
-    const targetZ = object.transform.position[2] + (moving ? Math.sin(time * (sprinting ? 11 : 8)) * bob * 0.18 : 0);
-    group.position.lerp(new THREE.Vector3(targetX, targetY, targetZ), 0.22);
-    group.rotation.x = THREE.MathUtils.lerp(group.rotation.x, object.transform.rotation[0] + Math.cos(time * 8) * bob * 0.4, 0.18);
-    group.rotation.y = THREE.MathUtils.lerp(group.rotation.y, object.transform.rotation[1], 0.18);
-    group.rotation.z = THREE.MathUtils.lerp(group.rotation.z, object.transform.rotation[2] + Math.sin(time * 8) * bob * 0.35, 0.18);
-    group.scale.set(object.transform.scale[0], object.transform.scale[1], object.transform.scale[2]);
+    const transform = readTransform(object.id) ?? object.transform;
+    const targetX = transform.position[0] + Math.sin(time * (sprinting ? 11 : 8)) * bob * 0.45;
+    const targetY = transform.position[1] + Math.cos(time * (sprinting ? 22 : 16)) * bob * 0.32;
+    const targetZ = transform.position[2] + (moving ? Math.sin(time * (sprinting ? 11 : 8)) * bob * 0.18 : 0);
+    group.position.lerp(bobTarget.current.set(targetX, targetY, targetZ), 0.22);
+    group.rotation.x = THREE.MathUtils.lerp(group.rotation.x, transform.rotation[0] + Math.cos(time * 8) * bob * 0.4, 0.18);
+    group.rotation.y = THREE.MathUtils.lerp(group.rotation.y, transform.rotation[1], 0.18);
+    group.rotation.z = THREE.MathUtils.lerp(group.rotation.z, transform.rotation[2] + Math.sin(time * 8) * bob * 0.35, 0.18);
+    group.scale.set(transform.scale[0], transform.scale[1], transform.scale[2]);
   });
 
   return (
@@ -183,13 +197,30 @@ function CameraViewModelMount({ object, owner }: { object: SceneObject; owner: S
  * Otherwise it simply sits behind the character's facing. Renders nothing without a follow target.
  */
 export function FollowCamera({ preview = false }: { preview?: boolean }) {
-  const target = useFollowTarget();
-  const objects = useEditorStore(selectActiveObjects);
-  const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
-  const allViewModels = target ? objects.filter((object) => object.viewModel?.ownerObjectId === target.id) : [];
+  const targetId = useFollowTargetId();
+  const previewTarget = useEditorStore((state) =>
+    preview && targetId ? selectActiveObjects(state).find((object) => object.id === targetId) : undefined,
+  );
+  const target = preview ? previewTarget : targetId ? selectActiveObjects(useEditorStore.getState()).find((object) => object.id === targetId) : undefined;
+  const viewModelSignature = useEditorStore((state) => {
+    if (!targetId) return '';
+    const hidden = new Set(state.runtimeHidden);
+    return selectActiveObjects(state)
+      .filter((object) => object.viewModel?.ownerObjectId === targetId)
+      .filter((object, index) => (preview ? index === 0 : !hidden.has(object.id)))
+      .map((object) => object.id)
+      .join('|');
+  });
+  const allViewModels = useMemo(() => {
+    if (!targetId) return [];
+    const hidden = new Set(useEditorStore.getState().runtimeHidden);
+    return selectActiveObjects(useEditorStore.getState())
+      .filter((object) => object.viewModel?.ownerObjectId === targetId)
+      .filter((object, index) => (preview ? index === 0 : !hidden.has(object.id)));
+  }, [targetId, preview, viewModelSignature]);
   // During Play, respect Set Visible so a weapon picker that holsters the others shows only the equipped
   // one. In the editor preview the picker hasn't run (nothing hidden yet), so just show the first weapon.
-  const viewModels = preview ? allViewModels.slice(0, 1) : allViewModels.filter((object) => !runtimeHidden.includes(object.id));
+  const viewModels = allViewModels;
   const overrides = useEditorStore((state) => state.runtimeCameraOverrides);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const desired = useRef(new THREE.Vector3());
@@ -204,6 +235,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   const springRay = useRef(new THREE.Raycaster());
   const springArmDistance = useRef<number | undefined>(undefined);
   const adsBlend = useRef(0);
+  const objectMapCache = useRef<{ objects: SceneObject[]; map: Map<string, SceneObject> }>();
   // Camera-polish state: smoothed sprint-FOV boost, a velocity-derived look-ahead offset, and the
   // previous target position used to estimate that velocity frame-to-frame.
   const sprintBlend = useRef(0);
@@ -276,21 +308,24 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       window.removeEventListener('mousemove', onMove);
       if (locked()) document.exitPointerLock?.();
     };
-  }, [wantsMouseLook, gl, target?.id]);
+  }, [wantsMouseLook, gl, targetId]);
 
   useFrame((_, delta) => {
+    const state = useEditorStore.getState();
+    const liveTarget = targetId ? selectActiveObjects(state).find((object) => object.id === targetId) : undefined;
     const camera = cameraRef.current;
-    const ccResolved = resolveCameraConfig(target);
-    if (!camera || !target || !ccResolved) return;
+    const ccResolved = resolveCameraConfig(liveTarget);
+    if (!camera || !liveTarget || !ccResolved) return;
+    const liveTransform = readTransform(liveTarget.id) ?? liveTarget.transform;
     const cc = ccResolved;
-    const [rawX, rawY, rawZ] = target.transform.position;
+    const [rawX, rawY, rawZ] = liveTransform.position;
     // Framerate-independent smoothing factor for a given responsiveness `k` (higher = snappier).
     const smooth = (k: number) => 1 - Math.exp(-k * Math.min(delta, 0.1));
 
     // Camera shake: the runtime owns a decaying trauma scalar (fire/hurt/explosions/Camera Shake node).
     // Turn it into a positional jitter + a roll/pitch kick, applied AFTER the camera is positioned each
     // frame (call applyShake() at every exit). Eased by t² so small trauma is subtle, big trauma snaps.
-    const shakeT = preview ? 0 : useEditorStore.getState().runtimeCameraShake;
+    const shakeT = preview ? 0 : state.runtimeCameraShake;
     const applyShake = () => {
       if (shakeT <= 0.0001) return;
       const t = shakeT * shakeT;
@@ -304,12 +339,12 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
 
     // Aim-down-sights: hold the aim key (keyAim) → smoothly zoom in + tuck the camera closer. Read keys
     // via getState so the camera frame loop doesn't re-subscribe on every keypress.
-    const aiming = !preview && Boolean(useEditorStore.getState().runtimeKeys[cc.keyAim]);
+    const aiming = !preview && Boolean(state.runtimeKeys[cc.keyAim]);
     adsBlend.current = THREE.MathUtils.lerp(adsBlend.current, aiming ? 1 : 0, smooth(14));
     const ads = adsBlend.current;
 
     if (cc.cameraMode === 'firstPerson') {
-      const yaw = cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : target.transform.rotation[1] - cc.modelYawOffset;
+      const yaw = cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : liveTransform.rotation[1] - cc.modelYawOffset;
       const pitch = cc.mouseLook && useMouse ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
       const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
       const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -335,14 +370,14 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     }
 
     rawTarget.current.set(rawX, rawY, rawZ);
-    if (smoothedTargetId.current !== target.id || preview) {
+    if (smoothedTargetId.current !== liveTarget.id || preview) {
       smoothedTarget.current.copy(rawTarget.current);
       smoothedVelocity.current.set(0, 0, 0);
-      smoothedTargetId.current = target.id;
+      smoothedTargetId.current = liveTarget.id;
       springArmDistance.current = undefined;
     } else {
-      const horizontalT = smooth(target.vehicle?.enabled ? 24 : 18);
-      const verticalT = smooth(target.vehicle?.enabled ? 18 : 6);
+      const horizontalT = smooth(liveTarget.vehicle?.enabled ? 24 : 18);
+      const verticalT = smooth(liveTarget.vehicle?.enabled ? 18 : 6);
       smoothedTarget.current.x = THREE.MathUtils.lerp(smoothedTarget.current.x, rawTarget.current.x, horizontalT);
       smoothedTarget.current.y = THREE.MathUtils.lerp(smoothedTarget.current.y, rawTarget.current.y, verticalT);
       smoothedTarget.current.z = THREE.MathUtils.lerp(smoothedTarget.current.z, rawTarget.current.z, horizontalT);
@@ -353,7 +388,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
 
     // Sprint speed-feel: while sprinting, smoothly widen the FOV (sense of speed). Read keys via getState so
     // the frame loop doesn't re-subscribe per keypress; preview (editor) never sprints.
-    const keys = preview ? {} : useEditorStore.getState().runtimeKeys;
+    const keys = preview ? {} : state.runtimeKeys;
     const moving = Boolean(keys[cc.keyForward] || keys[cc.keyBackward] || keys[cc.keyLeft] || keys[cc.keyRight]);
     const sprinting = moving && Boolean(keys[cc.keySprint]);
     sprintBlend.current = THREE.MathUtils.lerp(sprintBlend.current, sprinting ? 1 : 0, smooth(6));
@@ -362,11 +397,11 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // runtime's ALREADY-SMOOTHED horizontal velocity (accel/decel ramped) rather than a raw frame-to-frame
     // position delta — the delta spikes for a frame when the physics body depenetrates from geometry or you
     // reverse direction, which read as a camera "snap". The smoothed velocity never spikes, so the lead glides.
-    const rv = preview ? undefined : useEditorStore.getState().runtimeVelocities[target.id];
+    const rv = preview ? undefined : state.runtimeVelocities[liveTarget.id];
     if (rv) {
       rawTarget.current.set(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier);
-      smoothedVelocity.current.lerp(rawTarget.current, smooth(target.vehicle?.enabled ? 10 : 8));
-      const lead = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(target.vehicle?.enabled ? 0.14 : 0.08);
+      smoothedVelocity.current.lerp(rawTarget.current, smooth(liveTarget.vehicle?.enabled ? 10 : 8));
+      const lead = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(liveTarget.vehicle?.enabled ? 0.14 : 0.08);
       lookAhead.current.lerp(lead, smooth(4));
     } else {
       smoothedVelocity.current.lerp(ZERO, smooth(8));
@@ -392,7 +427,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // Resting offset [side, up, back]. The Set Camera node can override distance/height at runtime; the mouse
     // wheel scales the distance (zoom), smoothed so a scroll glides in/out instead of jumping.
     zoom.current = THREE.MathUtils.lerp(zoom.current, zoomTarget.current, smooth(12));
-    const override = overrides[target.id];
+    const override = overrides[liveTarget.id];
     const baseSide = cc.cameraOffset[0] * zoom.current;
     const up = override?.height ?? cc.cameraOffset[1];
     const baseBack = (override ? -Math.abs(override.distance) : cc.cameraOffset[2]) * zoom.current;
@@ -405,7 +440,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // lands ON the moving character and keeps its resting framing while walking/sprinting. (followK also
     // sets the follow stiffness below — raised from 12 so the catch-up is a touch snappier, not rubber-bandy.)
     const followK = 16;
-    const feedFwd = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(target.vehicle?.enabled ? 1 / followK : 0);
+    const feedFwd = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(liveTarget.vehicle?.enabled ? 1 / followK : 0);
 
     // Horizontal radius + base azimuth from the offset, then add mouse yaw; pitch raises/pulls in.
     const radius = Math.hypot(side, back) || 0.001;
@@ -428,8 +463,12 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       springRay.current.set(pivot, toCam);
       springRay.current.far = wanted;
       const hits = springRay.current.intersectObjects(scene.children, true);
-      const objectById = new Map(objects.map((object) => [object.id, object]));
-      const hiddenNow = new Set(useEditorStore.getState().runtimeHidden);
+      const objects = selectActiveObjects(state);
+      if (objectMapCache.current?.objects !== objects) {
+        objectMapCache.current = { objects, map: new Map(objects.map((object) => [object.id, object])) };
+      }
+      const objectById = objectMapCache.current.map;
+      const hiddenNow = new Set(state.runtimeHidden);
       // Ignore the followed character's own meshes — otherwise the spring arm collides with the very
       // body it's trailing and snaps the camera inside it, filling the screen (a black view) — AND ignore
       // the terrain/foliage (tagged userData.nfGround), so the camera never pulls in on the ground or grass.
@@ -438,12 +477,12 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
         return false;
       };
       const isCameraBlocker = (hit: THREE.Intersection) => {
-        if (hit.distance <= 0.6 || belongsToObject(hit.object, target.id) || isGround(hit.object)) return false;
+        if (hit.distance <= 0.6 || belongsToObject(hit.object, liveTarget.id) || isGround(hit.object)) return false;
         const id = sceneObjectIdFor(hit.object);
         if (!id || hiddenNow.has(id)) return false;
         const object = objectById.get(id);
         if (!object) return false;
-        if (object.viewModel?.ownerObjectId === target.id) return false;
+        if (object.viewModel?.ownerObjectId === liveTarget.id) return false;
         if (object.kind === 'camera' || object.kind === 'empty' || object.kind === 'light' || object.projectile || object.effect) return false;
         if (object.renderer?.enabled === false || object.renderer?.hideInPlay || object.physics?.isTrigger) return false;
         return Boolean(object.physics?.enabled || object.terrain?.enabled);
@@ -466,7 +505,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     camera.lookAt(lookTarget.current);
     // Vehicle speed-feel: ramp the FOV out toward +10° as the car approaches its top speed (cc.moveSpeed is
     // the vehicle's maxSpeed). Characters never trip this (speedFovTarget stays 0), so their FOV is unchanged.
-    const speedFovTarget = target.vehicle?.enabled ? Math.min(1, speed / Math.max(0.001, cc.moveSpeed)) : 0;
+    const speedFovTarget = liveTarget.vehicle?.enabled ? Math.min(1, speed / Math.max(0.001, cc.moveSpeed)) : 0;
     speedFovBlend.current = THREE.MathUtils.lerp(speedFovBlend.current, speedFovTarget, smooth(3));
     const tpFov = THREE.MathUtils.lerp(50, 40, ads) + sprintBlend.current * 7 + speedFovBlend.current * 10;
     if (Math.abs(camera.fov - tpFov) > 0.05) {

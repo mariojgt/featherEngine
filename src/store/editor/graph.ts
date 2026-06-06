@@ -298,7 +298,7 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
     case 'event.start':
       return { label: 'Start', description: 'Runs once when the Blueprint starts.' };
     case 'event.update':
-      return { label: 'Update', description: 'Runs every preview frame while Play is active.' };
+      return { label: 'Update', description: 'Runs every preview frame while Play is active. Set Interval above 0 to throttle it.' };
     case 'event.keyDown':
       return { label: `Key Down: ${keyLabel}`, description: `Fires while ${keyLabel} is pressed during preview.` };
     case 'event.keyUp':

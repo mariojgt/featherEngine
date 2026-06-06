@@ -508,6 +508,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'logic.compare' ||
     node.data.nodeKind === 'animator.setFloat' ||
     node.data.nodeKind === 'action.burstParticles' ||
+    node.data.nodeKind === 'event.update' ||
     node.data.nodeKind === 'event.timer' ||
     node.data.nodeKind === 'logic.cooldown' ||
     node.data.nodeKind === 'logic.delay';
@@ -681,8 +682,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 ? 'B fallback'
                 : node.data.nodeKind === 'math.lerp'
                   ? 'T fallback'
-                  : node.data.nodeKind === 'event.timer'
-                    ? 'Interval (seconds)'
+                    : node.data.nodeKind === 'event.timer' || node.data.nodeKind === 'event.update'
+                      ? 'Interval (seconds)'
                     : node.data.nodeKind === 'logic.cooldown' || node.data.nodeKind === 'logic.delay'
                       ? 'Seconds'
                       : 'Number'}

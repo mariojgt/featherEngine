@@ -11,7 +11,7 @@ import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { FragmentMesh } from '../three/FragmentMesh';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
-import { FollowCamera, useFollowTarget, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
+import { FollowCamera, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
 import { EditorCamera, editorNav, type ViewPreset } from '../three/EditorCamera';
@@ -119,6 +119,47 @@ const SHARED_GEO = {
 const EMPTY_BATCHES: Map<string, SceneObject[]> = new Map();
 
 const hideInRuntime = (object: SceneObject) => object.renderer?.hideInPlay ?? Boolean(object.physics?.isTrigger);
+
+function viewportSceneSignature(state: ReturnType<typeof useEditorStore.getState>) {
+  return selectActiveObjects(state)
+    .map((object) => {
+      const renderer = object.renderer;
+      const base = [
+        object.id,
+        object.parentId ?? '',
+        object.kind,
+        object.name,
+        object.viewModel?.ownerObjectId ?? '',
+        object.attachment?.targetObjectId ?? '',
+        object.attachment?.socketName ?? '',
+        object.physics?.enabled ? 'p' : '',
+        object.physics?.isTrigger ? 't' : '',
+        object.character?.enabled ? 'c' : '',
+        object.vehicle?.enabled ? 'v' : '',
+        object.terrain?.enabled ? 'terrain' : '',
+        object.effect?.kind ?? '',
+        object.projectile ? 'projectile' : '',
+        renderer?.enabled === false ? 'off' : '',
+        renderer?.hideInPlay ? 'hide' : '',
+        renderer?.mesh ?? '',
+        renderer?.modelAssetId ?? '',
+        renderer?.materialId ?? '',
+        renderer?.textureAssetId ?? '',
+        renderer?.fragmentKey ?? '',
+        renderer?.overrideMaterial ? 'override' : '',
+        renderer?.materialOverrides?.color ?? '',
+        object.animator?.enabled ? 'anim' : '',
+        object.animator?.controllerId ?? '',
+        object.particles?.systemId ?? '',
+        object.ui?.documentId ?? '',
+      ];
+      if (!state.isPlaying) {
+        base.push(object.transform.position.join(','), object.transform.rotation.join(','), object.transform.scale.join(','));
+      }
+      return base.join(':');
+    })
+    .join('|');
+}
 
 function Primitive({ object, selected }: { object: SceneObject; selected: boolean }) {
   // Floating combat damage number.
@@ -684,7 +725,8 @@ function SceneContent({
   sceneApiRef: MutableRefObject<SceneApi | null>;
   suppressDeselectRef: MutableRefObject<boolean>;
 }) {
-  const allSceneObjects = useEditorStore(selectActiveObjects);
+  const sceneSignature = useEditorStore(viewportSceneSignature);
+  const allSceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [sceneSignature]);
   const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
@@ -735,7 +777,8 @@ function SceneContent({
   }, [instanceBatches]);
 
   const cameraRigTarget = useEditorStore((state) => state.cameraRigTarget);
-  const followTarget = useFollowTarget();
+  const followTargetId = useFollowTargetId();
+  const followTarget = followTargetId ? allSceneObjects.find((object) => object.id === followTargetId) : undefined;
   const cameraRigObject = cameraRigTarget ? sceneObjects.find((o) => o.id === cameraRigTarget && o.character) : undefined;
   // Every object that drives a follow camera (character or vehicle) — each gets a 3D camera gizmo
   // + frustum in edit mode so you can see where the cameras are and what they frame.
@@ -1125,7 +1168,18 @@ export function ViewportPanel() {
   const quality = useEditorStore((state) => state.renderSettings.quality);
   const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
   const qProfile = qualityProfile(quality);
-  const followTarget = useFollowTarget();
+  const followTargetMeta = useEditorStore((state) => {
+    const target = selectActiveObjects(state).find(
+      (object) =>
+        (object.character?.enabled && object.character.cameraFollow) ||
+        (object.vehicle?.enabled && object.vehicle.cameraFollow),
+    );
+    return target ? `${target.id}|${target.name}|${target.character?.mouseLook ? 'mouse' : ''}` : '';
+  });
+  const followTarget = useMemo(() => {
+    const id = followTargetMeta.split('|')[0];
+    return id ? selectActiveObjects(useEditorStore.getState()).find((object) => object.id === id) : undefined;
+  }, [followTargetMeta]);
   const showMouseHint = isPlaying && Boolean(followTarget?.character?.mouseLook);
   // Camera preview (look through the player camera) and gizmo positioning are mutually exclusive —
   // you can't grab a world handle from inside the lens. Starting to position the camera exits preview.

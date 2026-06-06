@@ -4,7 +4,7 @@
  * (The crosshair + first-person hitmarker live in DynamicCrosshair.) A click-through DOM layer mounted
  * alongside ScreenUILayer in both the editor viewport and the standalone player. Shows only while Play is on.
  */
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 
 /** Turn a KeyboardEvent.code into a short label for the prompt chip ("KeyE" → "E", "Space" → "Space"). */
@@ -16,10 +16,36 @@ function keyLabel(code: string | undefined): string {
   return code;
 }
 
+function hudSceneSignature(state: ReturnType<typeof useEditorStore.getState>) {
+  const objects = selectActiveObjects(state);
+  const player = objects.find((object) => object.character?.enabled && object.character.cameraFollow);
+  const drivingCar = objects.find((object) => object.vehicle?.enabled && object.vehicle.cameraFollow);
+  const focus = state.runtimeInteractFocusId ? objects.find((object) => object.id === state.runtimeInteractFocusId) : undefined;
+  const inventory = player?.inventory;
+  const activeSlot = inventory?.slots[inventory.equipped];
+  return [
+    state.isPlaying ? '1' : '0',
+    state.runtimeInteractFocusId ?? '',
+    player?.id ?? '',
+    player?.name ?? '',
+    player?.character?.keyInteract ?? '',
+    player?.character?.cameraMode ?? '',
+    inventory?.equipped ?? '',
+    inventory?.slots.length ?? 0,
+    activeSlot?.label ?? '',
+    activeSlot?.ranged ? 'ranged' : '',
+    drivingCar?.id ?? '',
+    drivingCar?.variables?.exitPrompt ?? '',
+    focus?.id ?? '',
+    focus?.name ?? '',
+    focus?.variables?.interactPrompt ?? '',
+  ].join('|');
+}
+
 export function GameHud() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
-  const objects = useEditorStore(selectActiveObjects);
+  const sceneSignature = useEditorStore(hudSceneSignature);
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
   const hurt = useEditorStore((state) => state.runtimeHurt);
   const objVars = useEditorStore((state) => state.runtimeObjectVariables);
@@ -27,6 +53,7 @@ export function GameHud() {
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
   const equipInventorySlot = useEditorStore((state) => state.equipInventorySlot);
   const occupants = useEditorStore((state) => state.runtimeVehicleOccupants);
+  const objects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [sceneSignature]);
 
   // Radial weapon wheel: hold Tab to show, release to hide (GTA-style). Tab's default focus-cycling is
   // suppressed while playing so it never steals focus from the canvas.

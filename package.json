@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
-    "build:player": "tsc -b && BUILD_TARGET=player vite build",
+    "build:player": "tsc -b && node scripts/build-player.mjs",
     "export:web": "node scripts/export-production.mjs",
     "export:production": "node scripts/export-production.mjs --native",
     "build:player:native": "node scripts/export-production.mjs --native",

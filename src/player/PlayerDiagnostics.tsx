@@ -79,7 +79,6 @@ export class PlayerErrorBoundary extends Component<{ children: ReactNode }, { er
 /** Live runtime readout, toggled with the backtick (`) key — so a black/blank screen can be diagnosed. */
 export function DebugOverlay() {
   const [open, setOpen] = useState(false);
-  const [fps, setFps] = useState(0);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -89,9 +88,15 @@ export function DebugOverlay() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  if (!open) return <div style={hintStyle}>press ` for debug</div>;
+  return <DebugOverlayPanel />;
+}
+
+function DebugOverlayPanel() {
+  const [fps, setFps] = useState(0);
+
   // Sample FPS only while the panel is open, so it never costs anything during normal play.
   useEffect(() => {
-    if (!open) return;
     let raf = 0;
     let frames = 0;
     let last = performance.now();
@@ -107,7 +112,7 @@ export function DebugOverlay() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [open]);
+  }, []);
 
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const allObjects = useEditorStore(selectActiveObjects);
@@ -117,8 +122,6 @@ export function DebugOverlay() {
   const cinematic = useEditorStore((state) => state.runtimeCinematic);
   const log = useEditorStore((state) => state.runtimeLog);
   const followTarget = useFollowTarget();
-
-  if (!open) return <div style={hintStyle}>press ` for debug</div>;
 
   const visible = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id));
   const cameraObject = visible.find((object) => object.kind === 'camera');

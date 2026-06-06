@@ -1,12 +1,12 @@
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   ContactShadows,
   OrbitControls,
   PerformanceMonitor,
   PerspectiveCamera,
 } from '@react-three/drei';
-import { Suspense, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useThree } from '@react-three/fiber';
+import { memo, Suspense, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
@@ -37,9 +37,54 @@ import { qualityProfile } from '../three/quality';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { Terrain } from '../three/Terrain';
 import { FragmentMesh } from '../three/FragmentMesh';
+import { readTransform } from '../runtime/transformBuffer';
 import type { SceneObject, Vector3Tuple } from '../types';
 
 const hideInRuntime = (object: SceneObject) => object.renderer?.hideInPlay ?? Boolean(object.physics?.isTrigger);
+
+const SHARED_GEO = {
+  box: new THREE.BoxGeometry(1, 1, 1),
+  sphere: new THREE.SphereGeometry(0.55, 32, 24),
+  capsule: new THREE.CapsuleGeometry(0.34, 0.82, 8, 18),
+  plane: new THREE.PlaneGeometry(1, 1, 12, 12),
+};
+
+function gameSceneSignature(state: ReturnType<typeof useEditorStore.getState>) {
+  return selectActiveObjects(state)
+    .map((object) => {
+      const renderer = object.renderer;
+      return [
+        object.id,
+        object.parentId ?? '',
+        object.kind,
+        object.name,
+        object.viewModel?.ownerObjectId ?? '',
+        object.attachment?.targetObjectId ?? '',
+        object.attachment?.socketName ?? '',
+        object.physics?.enabled ? 'p' : '',
+        object.physics?.isTrigger ? 't' : '',
+        object.character?.enabled ? 'c' : '',
+        object.vehicle?.enabled ? 'v' : '',
+        object.terrain?.enabled ? 'terrain' : '',
+        object.effect?.kind ?? '',
+        object.projectile ? 'projectile' : '',
+        renderer?.enabled === false ? 'off' : '',
+        renderer?.hideInPlay ? 'hide' : '',
+        renderer?.mesh ?? '',
+        renderer?.modelAssetId ?? '',
+        renderer?.materialId ?? '',
+        renderer?.textureAssetId ?? '',
+        renderer?.fragmentKey ?? '',
+        renderer?.overrideMaterial ? 'override' : '',
+        renderer?.materialOverrides?.color ?? '',
+        object.animator?.enabled ? 'anim' : '',
+        object.animator?.controllerId ?? '',
+        object.particles?.systemId ?? '',
+        object.ui?.documentId ?? '',
+      ].join(':');
+    })
+    .join('|');
+}
 
 /** Built-in mesh rendering — mirrors the editor's primitives, minus selection/gizmo chrome. */
 function GameMesh({ object, focused = false }: { object: SceneObject; focused?: boolean }) {
@@ -154,7 +199,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   if (renderer.mesh === 'sphere') {
     return (
       <mesh castShadow receiveShadow>
-        <sphereGeometry args={[0.55, 32, 24]} />
+        <primitive object={SHARED_GEO.sphere} attach="geometry" dispose={null} />
         {material}
       </mesh>
     );
@@ -163,7 +208,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   if (renderer.mesh === 'capsule') {
     return (
       <mesh castShadow receiveShadow>
-        <capsuleGeometry args={[0.34, 0.82, 8, 18]} />
+        <primitive object={SHARED_GEO.capsule} attach="geometry" dispose={null} />
         {material}
       </mesh>
     );
@@ -172,7 +217,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   if (renderer.mesh === 'plane') {
     return (
       <mesh receiveShadow>
-        <planeGeometry args={[1, 1, 12, 12]} />
+        <primitive object={SHARED_GEO.plane} attach="geometry" dispose={null} />
         {material}
       </mesh>
     );
@@ -180,7 +225,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
 
   return (
     <mesh castShadow receiveShadow>
-      <boxGeometry args={[1, 1, 1]} />
+      <primitive object={SHARED_GEO.box} attach="geometry" dispose={null} />
       {material}
     </mesh>
   );
@@ -194,6 +239,77 @@ function CameraTarget({ target }: { target: Vector3Tuple }) {
   }, [camera, target]);
   return null;
 }
+
+function applyRuntimeTransform(group: THREE.Group, object: SceneObject) {
+  const transform = readTransform(object.id) ?? object.transform;
+  group.position.set(transform.position[0], transform.position[1], transform.position[2]);
+  group.rotation.set(transform.rotation[0], transform.rotation[1], transform.rotation[2]);
+  group.scale.set(transform.scale[0], transform.scale[1], transform.scale[2]);
+}
+
+function sameRenderObject(prev: SceneObject, next: SceneObject) {
+  if (prev === next) return true;
+  return (
+    prev.id === next.id &&
+    prev.kind === next.kind &&
+    prev.name === next.name &&
+    prev.parentId === next.parentId &&
+    prev.renderer === next.renderer &&
+    prev.light === next.light &&
+    prev.terrain === next.terrain &&
+    prev.effect === next.effect &&
+    prev.projectile === next.projectile &&
+    prev.particles === next.particles &&
+    prev.animator === next.animator &&
+    prev.attachment === next.attachment &&
+    prev.ui === next.ui &&
+    prev.viewModel === next.viewModel
+  );
+}
+
+const GameObjectView = memo(
+  function GameObjectView({
+    object,
+    focused,
+    children,
+  }: {
+    object: SceneObject;
+    focused: boolean;
+    children?: ReactNode;
+  }) {
+    const groupRef = useRef<THREE.Group>(null);
+
+    useFrame(() => {
+      const group = groupRef.current;
+      if (group) applyRuntimeTransform(group, object);
+    });
+
+    const body = (
+      <>
+        <GameMesh object={object} focused={focused} />
+        {object.particles && <ParticleSystem object={object} />}
+        {children}
+      </>
+    );
+
+    return object.attachment ? (
+      <BoneAttachment object={object} onSelect={() => undefined}>
+        {body}
+      </BoneAttachment>
+    ) : (
+      <group
+        ref={groupRef}
+        userData={{ nfObjectId: object.id }}
+        position={object.transform.position}
+        rotation={object.transform.rotation}
+        scale={object.transform.scale}
+      >
+        {body}
+      </group>
+    );
+  },
+  (prev, next) => prev.focused === next.focused && prev.children === next.children && sameRenderObject(prev.object, next.object),
+);
 
 /**
  * Render the running game's objects as a parent/child scene graph — children sit inside their
@@ -219,27 +335,10 @@ function renderGameTree(objects: SceneObject[], focusId: string | null): ReactNo
 
   const renderNode = (object: SceneObject): ReactNode => {
     const kids = childrenByParent.get(object.id)?.map(renderNode);
-    const body = (
-      <>
-        <GameMesh object={object} focused={object.id === focusId} />
-        {object.particles && <ParticleSystem object={object} />}
+    return (
+      <GameObjectView key={object.id} object={object} focused={object.id === focusId}>
         {kids}
-      </>
-    );
-    return object.attachment ? (
-      <BoneAttachment key={object.id} object={object} onSelect={() => undefined}>
-        {body}
-      </BoneAttachment>
-    ) : (
-      <group
-        key={object.id}
-        userData={{ nfObjectId: object.id }}
-        position={object.transform.position}
-        rotation={object.transform.rotation}
-        scale={object.transform.scale}
-      >
-        {body}
-      </group>
+      </GameObjectView>
     );
   };
 
@@ -247,7 +346,8 @@ function renderGameTree(objects: SceneObject[], focusId: string | null): ReactNo
 }
 
 function GameScene() {
-  const allObjects = useEditorStore(selectActiveObjects);
+  const sceneSignature = useEditorStore(gameSceneSignature);
+  const allObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [sceneSignature]);
   const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);

@@ -27,7 +27,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,6 +62,14 @@ function slugify(name) {
 
 function run(cmd, args) {
   console.log(`\n$ ${cmd} ${args.join(' ')}`);
+  if (process.platform === 'win32') {
+    const quote = (part) => {
+      const text = String(part);
+      return /[\s&()^%!<>|"]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    execFileSync('cmd.exe', ['/d', '/c', [cmd, ...args].map(quote).join(' ')], { cwd: root, stdio: 'inherit' });
+    return;
+  }
   execFileSync(cmd, args, { cwd: root, stdio: 'inherit' });
 }
 
@@ -198,7 +206,7 @@ if (opts.native) {
     rmSync(nativeOut, { recursive: true, force: true });
     mkdirSync(nativeOut, { recursive: true });
     for (const src of collected) {
-      cpSync(src, resolve(nativeOut, src.split('/').pop()), { recursive: true });
+      cpSync(src, resolve(nativeOut, basename(src)), { recursive: true });
     }
     console.log(`✓ Native app copied → ${nativeOut}`);
   }
