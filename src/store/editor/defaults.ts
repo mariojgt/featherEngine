@@ -6,6 +6,7 @@ import type {
   MaterialDefinition,
   MeshRendererComponent,
   PhysicsComponent,
+  PhysicsMaterialPresetId,
   RagdollSettings,
   RenderSettings,
   RigidBodyType,
@@ -232,16 +233,22 @@ export const defaultRenderer = (
   roughness: 0.65,
 });
 
-export const defaultPhysics = (bodyType: RigidBodyType = 'dynamic', collider: ColliderType = 'box'): PhysicsComponent => ({
+export const defaultPhysics = (
+  bodyType: RigidBodyType = 'dynamic',
+  collider: ColliderType = 'box',
+  materialPreset: PhysicsMaterialPresetId = 'default',
+): PhysicsComponent => ({
   enabled: false,
   bodyType,
   collider,
+  materialPreset,
   isTrigger: false,
   collisionLayer: 0,
   collisionMask: 0xffff,
   mass: 1,
   gravityScale: 1,
   friction: 0.6,
+  restitution: 0.05,
   linearDamping: 0,
   angularDamping: 0.05,
 });

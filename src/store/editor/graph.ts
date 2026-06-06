@@ -595,7 +595,7 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return {
         label: `Set Physics ${data.physicsEnabled === false ? 'Off' : 'On'}`,
         description:
-          'Enables, disables, or reconfigures the Target object\'s physics body at runtime. Change body type, collider, trigger mode, mass, gravity, friction, and damping. Target defaults to self and supports $player/$trigger/$cast or a wired Target reference. Physics rebuilds from these values during Play and resets on Stop.',
+          'Enables, disables, or reconfigures the Target object\'s physics body at runtime. Change body type, collider, trigger mode, mass, gravity, material preset, friction, bounce, and damping. Target defaults to self and supports $player/$trigger/$cast or a wired Target reference. Physics rebuilds from these values during Play and resets on Stop.',
       };
     case 'action.applyTorque':
       return {
@@ -817,7 +817,9 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     if (typeof normalized.physicsIsTrigger !== 'boolean') normalized.physicsIsTrigger = false;
     if (typeof normalized.physicsMass !== 'number') normalized.physicsMass = 1;
     if (typeof normalized.physicsGravityScale !== 'number') normalized.physicsGravityScale = 1;
+    if (!normalized.physicsMaterialPreset) normalized.physicsMaterialPreset = 'default';
     if (typeof normalized.physicsFriction !== 'number') normalized.physicsFriction = 0.6;
+    if (typeof normalized.physicsRestitution !== 'number') normalized.physicsRestitution = 0.05;
     if (typeof normalized.physicsLinearDamping !== 'number') normalized.physicsLinearDamping = 0;
     if (typeof normalized.physicsAngularDamping !== 'number') normalized.physicsAngularDamping = 0.05;
   }

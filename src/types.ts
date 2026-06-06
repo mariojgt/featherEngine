@@ -190,10 +190,12 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   physicsEnabled?: boolean;
   physicsBodyType?: RigidBodyType;
   physicsCollider?: ColliderType;
+  physicsMaterialPreset?: PhysicsMaterialPresetId;
   physicsIsTrigger?: boolean;
   physicsMass?: number;
   physicsGravityScale?: number;
   physicsFriction?: number;
+  physicsRestitution?: number;
   physicsLinearDamping?: number;
   physicsAngularDamping?: number;
   valueType?: GraphValueType;
@@ -864,6 +866,8 @@ export interface PhysicsComponent {
   enabled: boolean;
   bodyType: RigidBodyType;
   collider: ColliderType;
+  /** Named tuning preset for physical surface behavior. */
+  materialPreset?: PhysicsMaterialPresetId;
   /** When true, the collider is a sensor/trigger: it fires trigger events but does not block or push. */
   isTrigger: boolean;
   /** Collision layer index, 0-15. */
@@ -873,9 +877,13 @@ export interface PhysicsComponent {
   mass: number;
   gravityScale: number;
   friction: number;
+  /** Bounciness, 0 = no bounce, 1 = very elastic. */
+  restitution?: number;
   linearDamping: number;
   angularDamping: number;
 }
+
+export type PhysicsMaterialPresetId = 'default' | 'rubber' | 'slime' | 'ice' | 'metal' | 'stone' | 'wood' | 'mud';
 
 export interface ScriptGraphComponent {
   blueprintId: string;

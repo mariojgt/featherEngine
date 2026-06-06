@@ -13,6 +13,8 @@ import type {
   InventorySlot,
   MaterialDefinition,
   MeshRendererComponent,
+  PhysicsComponent,
+  PhysicsMaterialPresetId,
   RigidBodyType,
   SceneEnvironmentSettings,
   SceneObjectKind,
@@ -27,6 +29,7 @@ import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { findLightingPreset, findMaterialPreset, lightingPresetIds, materialPresetIds } from '../three/presets';
+import { applyPhysicsMaterialPreset, physicsMaterialPresetIds } from '../runtime/physicsMaterials';
 
 const store = () => useEditorStore.getState();
 const projectStore = () => useProjectStore.getState();
@@ -994,12 +997,14 @@ export const engineTools = {
       enabled: z.boolean().optional(),
       bodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional(),
       collider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional(),
+      materialPreset: z.enum(physicsMaterialPresetIds).optional().describe('Physical surface preset: default, rubber, slime, ice, metal, stone, wood, or mud. Applies friction/bounce/damping.'),
       isTrigger: z.boolean().optional(),
       collisionLayer: z.number().int().min(0).max(15).optional(),
       collisionMask: z.number().int().min(0).max(0xffff).optional(),
       mass: z.number().optional(),
       gravityScale: z.number().optional(),
       friction: z.number().optional(),
+      restitution: z.number().min(0).max(1).optional().describe('Bounciness: 0 = no bounce, 1 = very elastic.'),
       linearDamping: z.number().optional(),
       angularDamping: z.number().optional(),
     }),
@@ -1010,11 +1015,16 @@ export const engineTools = {
         // togglePhysics seeds a default physics component (enabled = true).
         store().togglePhysics(id);
       }
-      store().updatePhysics(id, {
+      const physics = findObject(id)?.physics;
+      const materialPatch = patch.materialPreset && physics ? applyPhysicsMaterialPreset(physics, patch.materialPreset as PhysicsMaterialPresetId) : {};
+      const update: Partial<PhysicsComponent> = {
+        ...materialPatch,
         ...patch,
-        bodyType: patch.bodyType as RigidBodyType | undefined,
-        collider: patch.collider as ColliderType | undefined,
-      });
+      };
+      if (patch.materialPreset !== undefined) update.materialPreset = patch.materialPreset as PhysicsMaterialPresetId;
+      if (patch.bodyType !== undefined) update.bodyType = patch.bodyType as RigidBodyType;
+      if (patch.collider !== undefined) update.collider = patch.collider as ColliderType;
+      store().updatePhysics(id, update);
       return `Updated physics of ${id}.`;
     },
   }),
@@ -3250,10 +3260,12 @@ export const engineTools = {
       physicsEnabled: z.boolean().optional().describe('Set Physics: enable/disable target physics body during Play.'),
       physicsBodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional().describe('Set Physics: body type.'),
       physicsCollider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional().describe('Set Physics: collider shape.'),
+      physicsMaterialPreset: z.enum(physicsMaterialPresetIds).optional().describe('Set Physics: physical material preset, e.g. rubber, slime, ice, metal, stone, wood, mud.'),
       physicsIsTrigger: z.boolean().optional().describe('Set Physics: trigger/sensor collider.'),
       physicsMass: z.number().optional().describe('Set Physics: mass.'),
       physicsGravityScale: z.number().optional().describe('Set Physics: gravity scale.'),
       physicsFriction: z.number().optional().describe('Set Physics: friction.'),
+      physicsRestitution: z.number().min(0).max(1).optional().describe('Set Physics: bounce/restitution, 0..1.'),
       physicsLinearDamping: z.number().optional().describe('Set Physics: linear damping.'),
       physicsAngularDamping: z.number().optional().describe('Set Physics: angular damping.'),
     }),
@@ -3315,10 +3327,12 @@ export const engineTools = {
       physicsEnabled,
       physicsBodyType,
       physicsCollider,
+      physicsMaterialPreset,
       physicsIsTrigger,
       physicsMass,
       physicsGravityScale,
       physicsFriction,
+      physicsRestitution,
       physicsLinearDamping,
       physicsAngularDamping,
     }) => {
@@ -3386,10 +3400,12 @@ export const engineTools = {
         physicsEnabled,
         physicsBodyType,
         physicsCollider,
+        physicsMaterialPreset,
         physicsIsTrigger,
         physicsMass,
         physicsGravityScale,
         physicsFriction,
+        physicsRestitution,
         physicsLinearDamping,
         physicsAngularDamping,
       });
@@ -3475,10 +3491,12 @@ export const engineTools = {
       physicsEnabled: z.boolean().optional().describe('Set Physics: enable/disable target physics body during Play.'),
       physicsBodyType: z.enum(['dynamic', 'fixed', 'kinematic']).optional().describe('Set Physics: body type.'),
       physicsCollider: z.enum(['box', 'sphere', 'capsule', 'mesh', 'convex']).optional().describe('Set Physics: collider shape.'),
+      physicsMaterialPreset: z.enum(physicsMaterialPresetIds).optional().describe('Set Physics: physical material preset, e.g. rubber, slime, ice, metal, stone, wood, mud.'),
       physicsIsTrigger: z.boolean().optional().describe('Set Physics: trigger/sensor collider.'),
       physicsMass: z.number().optional().describe('Set Physics: mass.'),
       physicsGravityScale: z.number().optional().describe('Set Physics: gravity scale.'),
       physicsFriction: z.number().optional().describe('Set Physics: friction.'),
+      physicsRestitution: z.number().min(0).max(1).optional().describe('Set Physics: bounce/restitution, 0..1.'),
       physicsLinearDamping: z.number().optional().describe('Set Physics: linear damping.'),
       physicsAngularDamping: z.number().optional().describe('Set Physics: angular damping.'),
     }),

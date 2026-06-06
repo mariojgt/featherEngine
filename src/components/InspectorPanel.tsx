@@ -8,6 +8,7 @@ import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
 import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent } from '../types';
 import { particlePresetIds } from '../runtime/particlePresets';
+import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { withTerrainDefaults } from '../terrain/terrain';
 
 const axes = ['X', 'Y', 'Z'] as const;
@@ -1563,6 +1564,7 @@ function PhysicsSection({
   physics: PhysicsComponent;
   onChange: (patch: Partial<PhysicsComponent>) => void;
 }) {
+  const selectedPreset = PHYSICS_MATERIAL_PRESETS.find((preset) => preset.id === (physics.materialPreset ?? 'default'));
   return (
     <section className="inspector-section">
       <h3>Physics</h3>
@@ -1619,7 +1621,22 @@ function PhysicsSection({
         <span>Gravity</span>
         <NumberInput value={physics.gravityScale} step={0.1} onChange={(gravityScale) => onChange({ gravityScale })} />
       </label>
+      <label className="field-row">
+        <span>Material</span>
+        <select
+          value={physics.materialPreset ?? 'default'}
+          onChange={(event) => onChange(applyPhysicsMaterialPreset(physics, event.target.value as NonNullable<PhysicsComponent['materialPreset']>))}
+        >
+          {PHYSICS_MATERIAL_PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {selectedPreset && <p className="field-hint">{selectedPreset.description}</p>}
       <RangeField label="Friction" value={physics.friction} onChange={(friction) => onChange({ friction })} />
+      <RangeField label="Bounce" value={physics.restitution ?? 0.05} onChange={(restitution) => onChange({ restitution })} />
     </section>
   );
 }

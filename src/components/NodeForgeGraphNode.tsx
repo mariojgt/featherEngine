@@ -412,6 +412,7 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'mass', label: 'Mass' },
         { id: 'gravityScale', label: 'Gravity' },
         { id: 'friction', label: 'Friction' },
+        { id: 'restitution', label: 'Bounce' },
       ];
     case 'action.setVelocity':
       return [{ id: 'vector', label: 'Velocity' }];

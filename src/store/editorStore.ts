@@ -91,6 +91,7 @@ import { sendParticleCommand } from '../runtime/particleBus';
 import { publishTransforms, clearTransformBuffer } from '../runtime/transformBuffer';
 import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSight } from '../runtime/aiPerception';
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
+import { applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { resolveMaterial } from '../three/materialResolve';
 import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import { applyTerrainPaint, applyTerrainSculpt, createTerrainHeightSampler, terrainLocalPointFromWorld, withTerrainDefaults } from '../terrain/terrain';
@@ -5903,16 +5904,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const physicsTargetId = objectVarTarget(node);
               const physicsTarget = activeObjectById.get(physicsTargetId);
               if (physicsTarget) {
+                const basePhysics = withPhysicsDefaults({
+                  ...defaultPhysics(),
+                  ...(physicsTarget.physics ?? {}),
+                  materialPreset: node.data.physicsMaterialPreset ?? physicsTarget.physics?.materialPreset ?? 'default',
+                });
+                const presetPhysics = node.data.physicsMaterialPreset
+                  ? applyPhysicsMaterialPreset(basePhysics, node.data.physicsMaterialPreset)
+                  : basePhysics;
                 nextPhysics[physicsTargetId] = {
+                  ...presetPhysics,
                   enabled: toBoolean(valueInput(node, 'enabled', node.data.physicsEnabled ?? true)),
                   bodyType: node.data.physicsBodyType ?? 'dynamic',
                   collider: node.data.physicsCollider ?? 'box',
+                  materialPreset: node.data.physicsMaterialPreset ?? presetPhysics.materialPreset ?? 'default',
                   isTrigger: Boolean(node.data.physicsIsTrigger),
                   mass: Math.max(0.001, toNumber(valueInput(node, 'mass', Number(node.data.physicsMass ?? 1)))),
                   gravityScale: toNumber(valueInput(node, 'gravityScale', Number(node.data.physicsGravityScale ?? 1))),
-                  friction: Math.max(0, toNumber(valueInput(node, 'friction', Number(node.data.physicsFriction ?? 0.6)))),
-                  linearDamping: Math.max(0, Number(node.data.physicsLinearDamping ?? 0)),
-                  angularDamping: Math.max(0, Number(node.data.physicsAngularDamping ?? 0.05)),
+                  friction: Math.max(0, toNumber(valueInput(node, 'friction', Number(node.data.physicsFriction ?? presetPhysics.friction)))),
+                  restitution: Math.min(1, Math.max(0, toNumber(valueInput(node, 'restitution', Number(node.data.physicsRestitution ?? presetPhysics.restitution))))),
+                  linearDamping: Math.max(0, Number(node.data.physicsLinearDamping ?? presetPhysics.linearDamping)),
+                  angularDamping: Math.max(0, Number(node.data.physicsAngularDamping ?? presetPhysics.angularDamping)),
                 };
               }
             }

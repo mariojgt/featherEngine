@@ -42,7 +42,6 @@ export function initRapier(): Promise<void> {
 // ever clicks Play (the compat build inlines its WASM, so this is just CPU work).
 void initRapier();
 
-const RESTITUTION = 0;
 const EPSILON = 1e-5;
 const DEFAULT_COLLISION_MASK = 0xffff;
 
@@ -149,7 +148,7 @@ function colliderDescFor(object: SceneObject) {
   }
   const physics = object.physics;
   desc.setFriction(physics?.friction ?? 0.5);
-  desc.setRestitution(RESTITUTION);
+  desc.setRestitution(physics?.restitution ?? 0.05);
   desc.setMass(Math.max(physics?.mass ?? 1, 0.001));
   desc.setSensor(Boolean(physics?.isTrigger));
   const groups = collisionGroups(physics?.collisionLayer, physics?.collisionMask);
@@ -190,6 +189,7 @@ function bodySignature(object: SceneObject): string {
     sy.toFixed(3),
     sz.toFixed(3),
     p?.friction,
+    p?.restitution,
     p?.mass,
     p?.linearDamping,
     p?.angularDamping,
@@ -334,7 +334,7 @@ class PhysicsRuntime {
         },
       )
         .setFriction(object.physics?.friction ?? 0.85)
-        .setRestitution(RESTITUTION)
+        .setRestitution(object.physics?.restitution ?? 0.02)
         .setCollisionGroups(groups)
         .setSolverGroups(groups)
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS),
