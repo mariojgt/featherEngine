@@ -530,6 +530,7 @@ class PhysicsRuntime {
     this.syncBodies(objects);
     this.syncCharacters(objects);
 
+    const movedFixedBodies = new Set<string>();
     for (const object of objects) {
       if (!object.physics?.enabled) continue;
       const entry = this.entries.get(object.id);
@@ -582,8 +583,12 @@ class PhysicsRuntime {
         // fixed — only respond to an explicit scripted teleport.
         if (Math.abs(dp[0]) > EPSILON || Math.abs(dp[1]) > EPSILON || Math.abs(dp[2]) > EPSILON) {
           body.setTranslation({ x: cur[0], y: cur[1], z: cur[2] }, true);
+          movedFixedBodies.add(object.id);
         }
-        if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
+        if (movedRotation) {
+          body.setRotation(quatFromEuler(curRot), true);
+          movedFixedBodies.add(object.id);
+        }
       }
     }
 
@@ -639,9 +644,18 @@ class PhysicsRuntime {
     const transforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
     const velocities = new Map<string, Vector3Tuple>();
     for (const [id, entry] of this.entries) {
+      const object = byId.get(id);
       if (entry.body.isDynamic()) {
+        if (entry.body.isSleeping()) {
+          velocities.set(id, [0, 0, 0]);
+          continue;
+        }
         const lv = entry.body.linvel();
         velocities.set(id, [lv.x, lv.y, lv.z]);
+      } else if (object?.physics?.bodyType === 'fixed' && !movedFixedBodies.has(id)) {
+        // Static scenery still collides, but its authored transform is already correct.
+        // Avoid per-frame Rapier readback and store churn for floors, walls, and cover.
+        continue;
       }
       const t = entry.body.translation();
       const q = entry.body.rotation();
@@ -651,7 +665,6 @@ class PhysicsRuntime {
       const rotation: Vector3Tuple = [reuseEuler.x, reuseEuler.y, reuseEuler.z];
       // The body simulates in WORLD space; convert back to LOCAL so a parented body's stored transform
       // stays relative to its parent (root objects: world == local, so this is a no-op).
-      const object = byId.get(id);
       transforms.set(id, object?.parentId ? worldToLocalUnder(byId, object.parentId, position, rotation) : { position, rotation });
     }
     // Characters: collision resolves position; facing (rotation) stays whatever the controller set.

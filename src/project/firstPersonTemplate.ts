@@ -775,7 +775,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   block('Room 4 UI Cinematic Floor Strip', [0, 0.02, 24.8], [9, 0.04, 0.18], '#39ff9e', { emissive: '#39ff9e', intensity: 1.25, solid: false });
 
   // STATION 1 — loose cubes right by the spawn: walk into them to feel the physics immediately.
-  ([[-1.7, 0.3, 4.4], [-0.9, 0.3, 5.0], [-0.1, 0.3, 4.5], [1.3, 0.3, 4.4], [2.0, 0.3, 5.0]] as Vector3Tuple[]).forEach((p, i) =>
+  ([[-1.4, 0.3, 4.4], [-0.2, 0.3, 5.0], [1.2, 0.3, 4.4]] as Vector3Tuple[]).forEach((p, i) =>
     target(`Loose Cube ${i + 1}`, p, i % 2 ? '#bfe3ff' : '#f2f5f8', i % 2 ? '#2b7fff' : undefined),
   );
 
@@ -794,11 +794,10 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     ([-0.33, 0.33] as number[]).forEach((dx) => target('Target Cube', [bx + dx, 0.9, bz], '#bfe3ff', '#2b7fff'));
     target('Target Cube', [bx, 1.5, bz], '#f2f5f8');
   };
-  pyramid(-5, 9);
   pyramid(5, 9);
 
   // STATION 3 — pedestal targets: a row of single cubes perched on posts to pop off with a clean shot.
-  [-6, -2, 2, 6].forEach((x) => {
+  [-5, 0, 5].forEach((x) => {
     block('Pedestal', [x, 0.5, 15], [0.5, 1.0, 0.5], '#b6bcc6', { roughness: 0.7 });
     target('Pedestal Target', [x, 1.25, 15], '#ffd27f', '#ff8a3d');
   });
@@ -809,9 +808,8 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   ([[0.35, 20.05], [0.7, 20.75], [1.05, 21.45], [1.4, 22.15]] as Array<[number, number]>).forEach(([topY, z], i) =>
     block(`Step ${i + 1}`, [0, topY / 2, z], [5, topY, 0.7], '#d3d9e0', { roughness: 0.8 }),
   );
-  target('Platform Target', [-1.4, 1.7, 25], '#bfe3ff', '#2b7fff');
-  target('Platform Target', [0, 1.7, 24.4], '#ffd27f', '#ff8a3d');
-  target('Platform Target', [1.4, 1.7, 25], '#bfe3ff', '#2b7fff');
+  target('Platform Target', [-1.1, 1.7, 25], '#bfe3ff', '#2b7fff');
+  target('Platform Target', [1.1, 1.7, 25], '#ffd27f', '#ff8a3d');
 
   // ROOM 4 — UI + cinematic showcase. The orb is animated by a real CinematicSequence and can be played
   // either by walking through the trigger or by interacting with the console in this room.
@@ -998,7 +996,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     const get = makeId('node');
     const inc = makeId('node');
     const set = makeId('node');
-    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Each frame.' }));
+    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, numberValue: 0.1, description: 'Living tally at 10 Hz.' }));
     n.push(graphNode(get, 'Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: targetsAliveVarId, valueType: 'number', hasInput: false }));
     n.push(graphNode(inc, 'Add', 'Math', 300, 200, { nodeKind: 'math.add', amount: 1, description: 'Count myself as still standing.' }));
     n.push(graphNode(set, 'Set Variable', 'Variables', 540, 40, { nodeKind: 'variable.set', variableId: targetsAliveVarId, valueType: 'number', description: 'Re-assert each frame.' }));
@@ -1026,7 +1024,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     const get = makeId('node');
     const setLeft = makeId('node');
     const reset = makeId('node');
-    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Tally watcher.' }));
+    n.push(graphNode(upd, 'Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, numberValue: 0.1, description: 'Tally watcher at 10 Hz.' }));
     n.push(graphNode(get, 'Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: targetsAliveVarId, valueType: 'number', hasInput: false }));
     n.push(graphNode(setLeft, 'Set Variable', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: targetsLeftVarId, valueType: 'number', description: 'Stable count for the HUD.' }));
     n.push(graphNode(reset, 'Set Variable', 'Variables', 560, 40, { nodeKind: 'variable.set', variableId: targetsAliveVarId, valueType: 'number', numberValue: 0, description: 'Living targets re-add themselves.' }));
@@ -1117,7 +1115,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   });
 
   // --- PHYSICS TOWER — a tall stack of light cubes to spray down in one burst (pure physics spectacle). ---
-  for (let r = 0; r < 6; r++) {
+  for (let r = 0; r < 4; r++) {
     for (let c = 0; c < 3; c++) {
       target('Tower Cube', [7 + (c - 1) * 0.62, 0.3 + r * 0.62, 12], r % 2 ? '#f2f5f8' : '#dbe7f5', c === 1 ? '#2b7fff' : undefined);
     }
@@ -1171,7 +1169,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
       const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
     };
-    const upd = node('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Guard brain — runs each frame.' });
+    const upd = node('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, numberValue: 0.12, description: 'Guard brain at 8 Hz.' });
     // (1) Stay-alive tally.
     const getAlive = node('Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: guardsAliveVarId, valueType: 'number', hasInput: false });
     const incAlive = node('Add', 'Math', 260, 200, { nodeKind: 'math.add', amount: 1, description: 'Count myself among the living.' });
@@ -1204,7 +1202,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
       const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
     };
-    const upd = node('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, description: 'Hostile tally.' });
+    const upd = node('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false, numberValue: 0.12, description: 'Hostile tally at 8 Hz.' });
     const get = node('Get Variable', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: guardsAliveVarId, valueType: 'number', hasInput: false });
     const setLeft = node('Set Variable', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: guardsLeftVarId, valueType: 'number', description: 'Stable count for the HUD.' });
     const reset = node('Set Variable', 'Variables', 560, 40, { nodeKind: 'variable.set', variableId: guardsAliveVarId, valueType: 'number', numberValue: 0, description: 'Living guards re-add themselves.' });
@@ -1224,7 +1222,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     const sHp = node('Set Variable', 'Variables', 760, 40, { nodeKind: 'variable.set', variableId: healthVarId, valueType: 'number', numberValue: 100, description: 'Full integrity.' });
     e.push(execEdge(st, sIn), execEdge(sIn, sStage), execEdge(sStage, sHp));
     // Update: once engaged (stage 1) and the sector is clear → EXTRACT (stage 2).
-    const upd = node('Update', 'Events', 40, 220, { nodeKind: 'event.update', hasInput: false });
+    const upd = node('Update', 'Events', 40, 220, { nodeKind: 'event.update', hasInput: false, numberValue: 0.2, description: 'Mission state check at 5 Hz.' });
     const gStage = node('Get Variable', 'Variables', 40, 360, { nodeKind: 'variable.get', variableId: stageVarId, valueType: 'number', hasInput: false });
     const cStage = node('Compare', 'Logic', 280, 340, { nodeKind: 'logic.compare', compareOp: '==', numberValue: 1, description: 'In the fight?' });
     const gGuards = node('Get Variable', 'Variables', 40, 480, { nodeKind: 'variable.get', variableId: guardsLeftVarId, valueType: 'number', hasInput: false });

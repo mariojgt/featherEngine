@@ -68,17 +68,30 @@ export interface PerfSnapshot {
   fps: number;
   frameMs: SampleStats;
   tickMs: SampleStats;
+  sections: Record<RuntimeSection, SampleStats>;
   render: RenderStats;
 }
 
+export type RuntimeSection = 'scripts' | 'physics' | 'combat' | 'animator';
+
 const frameRing = new Ring();
 const tickRing = new Ring();
+const sectionRings: Record<RuntimeSection, Ring> = {
+  scripts: new Ring(),
+  physics: new Ring(),
+  combat: new Ring(),
+  animator: new Ring(),
+};
 const render: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 };
 
 /** Called once per rAF from the runtime loop. `frameMs` is wall-clock between frames; `tickMs` is the cost of `tickRuntime`. */
 export const recordFrame = (frameMs: number, tickMs: number) => {
   frameRing.push(frameMs);
   tickRing.push(tickMs);
+};
+
+export const recordRuntimeSection = (section: RuntimeSection, ms: number) => {
+  sectionRings[section].push(ms);
 };
 
 /** Called from inside the Canvas (after a render) with `gl.info` counters. */
@@ -103,6 +116,12 @@ export const getPerfSnapshot = (): PerfSnapshot => {
     fps: frameMs.avg > 0 ? 1000 / frameMs.avg : 0,
     frameMs,
     tickMs: sample(tickRing),
+    sections: {
+      scripts: sample(sectionRings.scripts),
+      physics: sample(sectionRings.physics),
+      combat: sample(sectionRings.combat),
+      animator: sample(sectionRings.animator),
+    },
     render: { ...render },
   };
 };

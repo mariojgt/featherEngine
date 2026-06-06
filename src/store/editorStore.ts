@@ -194,6 +194,7 @@ import { getGraphRuntimeMap, layoutGraphNodes } from './editor/graphRuntime';
 import { buildContactIndex, contactMatches, contactOthers, contactTouches, firstContactOther } from './editor/runtimeIndexes';
 import { makeId, stripUndefined } from './editor/ids';
 import { createArrayIndexer } from './editor/arrayIndex';
+import { recordRuntimeSection } from '../runtime/perfStats';
 
 // Per-frame lookup Maps over project-level arrays. The arrays are replaced
 // immutably only on edit, so these WeakMap-cached indexers return the same Map
@@ -4666,9 +4667,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const priorTriggerExitIndex = buildContactIndex(state.runtimeTriggersExit);
       const priorCollisionExitIndex = buildContactIndex(state.runtimeCollisionsExit);
       const graphRuntimes = getGraphRuntimeMap(state.graphs);
-      // Timer events: advance each Timer node's countdown once per tick (NOT inside eventRootFires, which is
-      // a pure predicate called twice per tick). A timer that reaches 0 fires this frame and re-arms to its
-      // interval. firedTimers is read by eventRootFires; nextTimers is persisted.
+      // Timer events and throttled Update roots: advance countdowns once per tick (NOT inside
+      // eventRootFires, which is a pure predicate called twice per tick). A root that reaches 0 fires this
+      // frame and re-arms to its interval. firedTimers is read by eventRootFires; nextTimers is persisted.
       const nextTimers: Record<string, number> = {};
       const firedTimers = new Set<string>();
       const timerStep = delta || 1 / 60;
@@ -4677,10 +4678,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const gr = graphRuntimes.get(obj.script.graphId);
         if (!gr) continue;
         for (const node of gr.eventRoots) {
-          if (node.data.nodeKind !== 'event.timer') continue;
+          const isTimer = node.data.nodeKind === 'event.timer';
+          const isThrottledUpdate = node.data.nodeKind === 'event.update' && Number(node.data.numberValue ?? 0) > 0;
+          if (!isTimer && !isThrottledUpdate) continue;
           const key = `${obj.id}:${node.id}`;
           const interval = Math.max(0.05, Number(node.data.numberValue ?? 1));
-          let remaining = (state.runtimeTimers[key] ?? interval) - timerStep;
+          let remaining = (state.runtimeTimers[key] ?? (isThrottledUpdate ? 0 : interval)) - timerStep;
           if (remaining <= 0) {
             firedTimers.add(key);
             remaining += interval;
@@ -4807,6 +4810,39 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const movementModeNow: Record<string, string> = { ...state.runtimeMovementMode };
       // The local player = the camera-follow character (drives hit marker / hurt flash / who enemies chase).
       const playerId = activeObjects.find((o) => o.character?.enabled && o.character.cameraFollow)?.id;
+      const physicsFocusPoints = activeObjects
+        .filter((o) => (o.character?.enabled && o.character.cameraFollow) || (o.vehicle?.enabled && o.vehicle.cameraFollow))
+        .map((o) => o.transform.position);
+      if (!physicsFocusPoints.length && playerId) {
+        const player = activeObjectById.get(playerId);
+        if (player) physicsFocusPoints.push(player.transform.position);
+      }
+      const physicsActivationRadius = 55;
+      const shouldSimulatePhysicsObject = (o: SceneObject): boolean => {
+        if (!o.physics?.enabled || o.physics.bodyType !== 'dynamic') return true;
+        if (
+          o.projectile ||
+          o.character?.enabled ||
+          o.vehicle?.enabled ||
+          o.script?.enabled ||
+          o.fracture?.enabled ||
+          o.variables?.health !== undefined ||
+          o.variables?.enemy ||
+          o.variables?.explosive
+        ) {
+          return true;
+        }
+        if (!physicsFocusPoints.length) return true;
+        const [x, y, z] = o.transform.position;
+        const pad = Math.max(Math.abs(o.transform.scale[0]), Math.abs(o.transform.scale[1]), Math.abs(o.transform.scale[2]), 1);
+        const limitSq = (physicsActivationRadius + pad) * (physicsActivationRadius + pad);
+        return physicsFocusPoints.some(([fx, fy, fz]) => {
+          const dx = x - fx;
+          const dy = y - fy;
+          const dz = z - fz;
+          return dx * dx + dy * dy + dz * dz <= limitSq;
+        });
+      };
       // Objects hidden by action.setVisible — carried across frames so weapons stay holstered.
       const nextHidden = new Set<string>(state.runtimeHidden);
       // Deactivated objects (Set Active off): no render, no script, no physics body, ignored by AI. Persisted
@@ -4946,7 +4982,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           case 'event.start':
             return !state.runtimeStarted;
           case 'event.update':
-            return true;
+            return Number(node.data.numberValue ?? 0) > 0 ? firedTimers.has(`${objectId}:${node.id}`) : true;
           case 'event.keyDown':
             return Boolean(currentKeys[node.data.keyCode ?? 'KeyW']);
           case 'event.keyUp': {
@@ -4980,6 +5016,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Run each object's script graph. Physics-enabled objects are simulated by Rapier
       // in the post-pass below, so here we only collect scripted motion + side effects.
+      const scriptsStart = performance.now();
       let mappedObjects = activeObjects.map((object) => {
           if (destroyedIds.has(object.id)) return object;
           // A deactivated object (Set Active off) runs no script.
@@ -6308,17 +6345,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
               // Recoil punch: when the PLAYER fires, add a little camera-shake trauma for weighty feedback.
               if (object.id === playerId) cameraShake = Math.min(1, cameraShake + 0.12);
-              const projectileObj = makeProjectileObject(muzzle, velocity, object.id, damage, setup);
-              spawned.push(projectileObj);
               // Muzzle flash at the barrel for punchy weapon feedback.
               spawned.push(makeMuzzleFlash(muzzle));
-              if (setup.debug) {
-                prints.push(
-                  `${object.name}: 🔫 spawned ${projectileObj.name} [${projectileObj.id.slice(-4)}] ` +
-                    `at (${muzzle.map((n) => n.toFixed(1)).join(', ')}) ` +
-                    `vel (${velocity.map((n) => n.toFixed(1)).join(', ')}) speed ${speed} dmg ${damage}` +
-                    (template ? ` · template "${template.name}"` : ''),
-                );
+              const gravity = typeof setup.gravity === 'number' ? setup.gravity : 0;
+              const useHitscan = !setup.explosive && !setup.template && Math.abs(gravity) < 1e-6;
+              if (useHitscan) {
+                const phys = getActivePhysics();
+                const sp = Math.hypot(velocity[0], velocity[1], velocity[2]) || speed || 1;
+                const dirNorm: Vector3Tuple = [velocity[0] / sp, velocity[1] / sp, velocity[2] / sp];
+                const maxDistance = Math.max(1, sp * (setup.life ?? 3));
+                const exclude = new Set<string>([object.id]);
+                for (const o of activeObjects) if (o.projectile || isRagdoll(o.id)) exclude.add(o.id);
+                const hit = phys?.castRay(muzzle, dirNorm, maxDistance, exclude);
+                if (hit) {
+                  const target = activeObjectById.get(hit.objectId);
+                  const hitPoint: Vector3Tuple = [
+                    muzzle[0] + dirNorm[0] * hit.distance,
+                    muzzle[1] + dirNorm[1] * hit.distance,
+                    muzzle[2] + dirNorm[2] * hit.distance,
+                  ];
+                  if (target && !(hit.objectId === playerId && Boolean(state.runtimeCinematic || pendingCinematicId))) {
+                    const cur = toNumber(nextObjectVariables[hit.objectId]?.health ?? target.variables?.health ?? 0);
+                    if (target.variables?.health !== undefined || nextObjectVariables[hit.objectId]?.health !== undefined) {
+                      const next = Math.max(0, cur - damage);
+                      mutableObjectVars(hit.objectId, target.variables).health = next;
+                      recordDamage(hit.objectId, cur - next);
+                      if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+                      if (next <= 0) killTarget(target, hit.objectId, hitPoint);
+                      spawned.push(makeDamageNumber(hitPoint, damage));
+                      if (object.id === playerId) hitMarker += 1;
+                      if (hit.objectId === playerId) hurt += 1;
+                    } else {
+                      const knockMul = setup.knockback ?? 1;
+                      if (knockMul > 0 && target.physics?.bodyType === 'dynamic') {
+                        const k = Math.min(4, Math.max(1.5, sp * 0.045)) * knockMul;
+                        phys.applyImpulse(hit.objectId, [dirNorm[0] * k, dirNorm[1] * k + 0.5 * knockMul, dirNorm[2] * k]);
+                      }
+                    }
+                    spawned.push(makeImpactObject(hitPoint, setup.color));
+                    if (setup.debug) prints.push(`Hitscan shot hit ${target.name}: ${target.variables?.health !== undefined ? `-${damage} hp` : 'impact'}`);
+                  }
+                } else if (setup.debug) {
+                  prints.push(`Hitscan shot missed (${maxDistance.toFixed(1)}u)`);
+                }
+              } else {
+                const projectileObj = makeProjectileObject(muzzle, velocity, object.id, damage, setup);
+                spawned.push(projectileObj);
+                if (setup.debug) {
+                  prints.push(
+                    `${object.name}: 🔫 spawned ${projectileObj.name} [${projectileObj.id.slice(-4)}] ` +
+                      `at (${muzzle.map((n) => n.toFixed(1)).join(', ')}) ` +
+                      `vel (${velocity.map((n) => n.toFixed(1)).join(', ')}) speed ${speed} dmg ${damage}` +
+                      (template ? ` · template "${template.name}"` : ''),
+                  );
+                }
               }
             }
 
@@ -6346,6 +6426,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
             : object;
       });
+      recordRuntimeSection('scripts', performance.now() - scriptsStart);
 
       // Character controller pass: turn input into ground movement + jump for character objects.
       // Runs after scripts, before physics; the motion it produces feeds the animator's speed params.
@@ -7212,6 +7293,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // transform (object-to-object collisions, stacking, gravity). Non-physics objects
       // keep whatever their script produced. Contacts/triggers are reported one frame later
       // so graph events run from a stable, previous-step physics result.
+      const physicsStart = performance.now();
       let collisions: PhysicsContactEvent[] = [];
       let triggers: PhysicsContactEvent[] = [];
       let triggersExit: PhysicsContactEvent[] = [];
@@ -7231,7 +7313,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (physics) {
         // Deactivated objects are excluded from the physics objects list, so syncBodies removes their
         // bodies (no collision) until re-enabled.
-        const physicsObjects = nextDisabled.size ? movedObjects.filter((o) => !nextDisabled.has(o.id)) : movedObjects;
+        const physicsObjects = movedObjects.filter(
+          (o) =>
+            !nextDisabled.has(o.id) &&
+            (shouldSimulatePhysicsObject(o) ||
+              physicsImpulses[o.id] !== undefined ||
+              physicsAngularImpulses[o.id] !== undefined ||
+              setVelocities[o.id] !== undefined),
+        );
         const result = physics.frame(physicsObjects, prevTransforms, physicsImpulses, delta, setVelocities, physicsAngularImpulses);
         collisions = result.collisions;
         triggers = result.triggers;
@@ -7290,6 +7379,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         });
         groundedIds = [...groundedSet];
       }
+      recordRuntimeSection('physics', performance.now() - physicsStart);
       const resolvedObjectById = new Map(resolvedObjects.map((object) => [object.id, object]));
       // Auto-fracture: a destructible object shatters when it (or the thing it hit) is moving fast enough on
       // contact. No contact-force readout exists, so approximate the impact with this-frame speed.

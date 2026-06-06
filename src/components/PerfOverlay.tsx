@@ -14,6 +14,12 @@ const ZERO_SNAPSHOT: PerfSnapshot = {
   fps: 0,
   frameMs: { avg: 0, p95: 0, max: 0, last: 0 },
   tickMs: { avg: 0, p95: 0, max: 0, last: 0 },
+  sections: {
+    scripts: { avg: 0, p95: 0, max: 0, last: 0 },
+    physics: { avg: 0, p95: 0, max: 0, last: 0 },
+    combat: { avg: 0, p95: 0, max: 0, last: 0 },
+    animator: { avg: 0, p95: 0, max: 0, last: 0 },
+  },
   render: { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 },
 };
 
@@ -81,7 +87,7 @@ export function PerfOverlay() {
 
   if (!visible) return null;
 
-  const { frameMs, tickMs, render } = snap;
+  const { frameMs, tickMs, sections, render } = snap;
 
   return (
     <div
@@ -118,6 +124,10 @@ export function PerfOverlay() {
         <>
           <Row label="frame" value={`${fmt(frameMs.avg)} / p95 ${fmt(frameMs.p95)}ms`} />
           <Row label="tick (sim)" value={`${fmt(tickMs.avg)} / max ${fmt(tickMs.max)}ms`} />
+          <Row label="scripts" value={`${fmt(sections.scripts.avg)}ms`} />
+          <Row label="physics" value={`${fmt(sections.physics.avg)}ms`} />
+          <Row label="combat" value={`${fmt(sections.combat.avg)}ms`} />
+          <Row label="animator" value={`${fmt(sections.animator.avg)}ms`} />
           <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '6px 0' }} />
           <Row label="draw calls" value={fmtInt(render.calls)} />
           <Row label="triangles" value={fmtInt(render.triangles)} />
