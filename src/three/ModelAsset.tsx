@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import * as THREE from 'three';
@@ -162,18 +162,37 @@ type OriginalMaterial = {
  * cloned materials — so per-object material overrides never leak into the `useGLTF` cache shared
  * by every other instance of the same model. Suspends while loading — render inside a <Suspense>.
  */
-export function ModelAsset({ url, material, geometryKey }: { url: string; material?: ModelMaterial; geometryKey?: string }) {
+export function ModelAsset({
+  url,
+  material,
+  slotMaterials,
+  geometryKey,
+}: {
+  url: string;
+  /** Whole-model override; the fallback for any slot without a per-slot material. */
+  material?: ModelMaterial;
+  /** Per-material-slot overrides, indexed by the model's slot order (see useResolvedMaterialSlots). */
+  slotMaterials?: (ModelMaterial | undefined)[];
+  geometryKey?: string;
+}) {
   const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
-  const baseTexture = useAssetTexture(material?.baseColorUrl, false);
-  const normalTexture = useAssetTexture(material?.normalUrl, false);
 
   const clone = useMemo(() => {
     const anisotropy = currentAnisotropy();
     const root = scene.clone(true);
+    // Assign each distinct source material a slot index in first-appearance traversal order — the SAME
+    // order inspectModel reports — so slot i here is the i-th imported material. `scene.clone(true)`
+    // shares material objects with the source, so this Map keys correctly across submeshes.
+    const slotByMaterial = new Map<THREE.Material, number>();
     root.traverse((node) => {
       const mesh = node as THREE.Mesh;
       if (!mesh.isMesh || !mesh.material) return;
       const cloneMat = (mat: THREE.Material) => {
+        let slot = slotByMaterial.get(mat);
+        if (slot === undefined) {
+          slot = slotByMaterial.size;
+          slotByMaterial.set(mat, slot);
+        }
         const next = mat.clone();
         const std = next as THREE.MeshStandardMaterial;
         // Anisotropic filtering on every baked map keeps the model's textures crisp at grazing angles.
@@ -189,6 +208,7 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
           map: std.map ?? null,
           normalMap: std.normalMap ?? null,
         } satisfies OriginalMaterial;
+        next.userData.__slotIndex = slot;
         return next;
       };
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(cloneMat) : cloneMat(mesh.material);
@@ -220,26 +240,51 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
     [clone],
   );
 
+  // Base-color/normal maps for the whole-model material AND every per-slot material are loaded here
+  // imperatively through the shared refcounted cache, keyed by URL. `useAssetTexture` is a hook, so it
+  // can't scale to an unknown number of slots; driving acquire/release directly does. The acquired
+  // Texture is returned synchronously (its image fills in async and uploads itself), so we can assign it
+  // to the material right away. The set of live URLs is reconciled each run; leftovers free on unmount.
+  const textureMapRef = useRef(new Map<string, THREE.Texture>());
   useEffect(() => {
+    const textures = textureMapRef.current;
+    const needed = new Set<string>();
+    const consider = (m?: ModelMaterial) => {
+      if (m?.baseColorUrl) needed.add(m.baseColorUrl);
+      if (m?.normalUrl) needed.add(m.normalUrl);
+    };
+    consider(material);
+    slotMaterials?.forEach(consider);
+    for (const u of needed) if (!textures.has(u)) textures.set(u, acquireTexture(u, false));
+    for (const u of [...textures.keys()])
+      if (!needed.has(u)) {
+        releaseTexture(u, false);
+        textures.delete(u);
+      }
+    const tex = (u?: string) => (u ? textures.get(u) : undefined);
+
     clone.traverse((node) => {
       const mesh = node as THREE.Mesh;
       if (!mesh.isMesh || !mesh.material) return;
-      const materials = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as THREE.MeshStandardMaterial[];
-      for (const mat of materials) {
+      const meshMaterials = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as THREE.MeshStandardMaterial[];
+      for (const mat of meshMaterials) {
         const original = mat.userData.__original as OriginalMaterial | undefined;
         if (!original) continue;
+        // Per-slot binding wins; otherwise the whole-model material applies (or neither → baked).
+        const slot = mat.userData.__slotIndex as number | undefined;
+        const chosen = (slot !== undefined ? slotMaterials?.[slot] : undefined) ?? material;
 
         // Texture maps: a chosen map overrides the imported one; clearing it restores the original.
-        mat.map = material?.baseColorUrl ? baseTexture ?? original.map : original.map;
-        mat.normalMap = material?.normalUrl ? normalTexture ?? original.normalMap : original.normalMap;
+        mat.map = chosen?.baseColorUrl ? tex(chosen.baseColorUrl) ?? original.map : original.map;
+        mat.normalMap = chosen?.normalUrl ? tex(chosen.normalUrl) ?? original.normalMap : original.normalMap;
 
         // Material props: applied as a full override, or reverted to the imported values.
-        if (material?.override) {
-          mat.color?.set(material.color);
-          if (typeof mat.metalness === 'number') mat.metalness = material.metalness;
-          if (typeof mat.roughness === 'number') mat.roughness = material.roughness;
-          mat.emissive?.set(material.emissiveColor);
-          if (typeof mat.emissiveIntensity === 'number') mat.emissiveIntensity = material.emissiveIntensity;
+        if (chosen?.override) {
+          mat.color?.set(chosen.color);
+          if (typeof mat.metalness === 'number') mat.metalness = chosen.metalness;
+          if (typeof mat.roughness === 'number') mat.roughness = chosen.roughness;
+          mat.emissive?.set(chosen.emissiveColor);
+          if (typeof mat.emissiveIntensity === 'number') mat.emissiveIntensity = chosen.emissiveIntensity;
         } else {
           if (original.color && mat.color) mat.color.copy(original.color);
           if (typeof original.metalness === 'number') mat.metalness = original.metalness;
@@ -250,19 +295,17 @@ export function ModelAsset({ url, material, geometryKey }: { url: string; materi
         mat.needsUpdate = true;
       }
     });
-  }, [
-    clone,
-    baseTexture,
-    normalTexture,
-    material?.baseColorUrl,
-    material?.normalUrl,
-    material?.override,
-    material?.color,
-    material?.metalness,
-    material?.roughness,
-    material?.emissiveColor,
-    material?.emissiveIntensity,
-  ]);
+  }, [clone, material, slotMaterials]);
+
+  // Release every texture this instance still holds when it unmounts (the reconcile above balances
+  // acquire/release during life; this frees whatever remains).
+  useEffect(() => {
+    const textures = textureMapRef.current;
+    return () => {
+      for (const u of textures.keys()) releaseTexture(u, false);
+      textures.clear();
+    };
+  }, []);
 
   return <primitive object={clone} />;
 }

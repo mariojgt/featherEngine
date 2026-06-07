@@ -29,6 +29,7 @@ import {
   useInstancingEnabled,
   useIsInstanced,
   computeInstanceBatches,
+  customizedModelIds,
   batchSignature,
   InstancedIdsContext,
   EMPTY_INSTANCE_BATCHES,
@@ -359,7 +360,10 @@ function GameScene() {
   // runtime, so it's gated only on the toggle. Batches are kept structurally stable (the object array
   // gets a new identity every frame) so the InstancedMeshes aren't rebuilt 60×/s.
   const instancingOn = useInstancingEnabled();
-  const rawInstanceBatches = instancingOn ? computeInstanceBatches(objects) : EMPTY_INSTANCE_BATCHES;
+  // Models with custom-textured imported materials can't share the baked-material instanced draw.
+  const allMaterials = useEditorStore((state) => state.materials);
+  const customizedModels = useMemo(() => customizedModelIds(allMaterials), [allMaterials]);
+  const rawInstanceBatches = instancingOn ? computeInstanceBatches(objects, customizedModels) : EMPTY_INSTANCE_BATCHES;
   const instanceSig = batchSignature(rawInstanceBatches);
   const instanceBatchesRef = useRef<Map<string, SceneObject[]>>(EMPTY_INSTANCE_BATCHES);
   const instanceSigRef = useRef('');

@@ -3,7 +3,7 @@ import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, FolderOpen,
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { editorCameraPose } from '../three/EditorCamera';
-import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicTransformKeyframe, MaterialOverrides, SceneObjectKind, Vector3Tuple } from '../types';
+import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicLook, CinematicTransformKeyframe, MaterialOverrides, RuntimeCinematicFade, RuntimeCinematicText, SceneObjectKind, Vector3Tuple } from '../types';
 import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
 import { createStoryboardCinematic, type StoryboardPreset } from '../project/cinematicStoryboard';
 import { getPlatform } from '../platform';
@@ -61,6 +61,167 @@ const textStyleOptions: { value: NonNullable<CinematicAction['textStyle']>; labe
   { value: 'lowerThird', label: 'Lower third (bottom-left)' },
   { value: 'credit', label: 'Credit (small, centered)' },
 ];
+
+/** Draw one text overlay onto the export compositor canvas, mirroring CinematicOverlay's DOM layout. */
+function drawOverlayText(ctx: CanvasRenderingContext2D, w: number, h: number, entry: RuntimeCinematicText) {
+  const sizeByStyle: Record<string, number> = { subtitle: 0.045, title: 0.085, lowerThird: 0.05, credit: 0.038 };
+  const fontPx = Math.max(10, Math.round(h * (sizeByStyle[entry.style] ?? 0.045)));
+  const weight = entry.style === 'title' ? 800 : entry.style === 'credit' ? 400 : 600;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, Math.max(0, entry.opacity));
+  ctx.fillStyle = entry.color || '#ffffff';
+  ctx.font = `${weight} ${fontPx}px sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur = fontPx * 0.3;
+  let x = w / 2;
+  let y = h * 0.88;
+  let align: CanvasTextAlign = 'center';
+  if (entry.style === 'title') { y = h * 0.5; }
+  else if (entry.style === 'lowerThird') { align = 'left'; x = w * 0.06; y = h * 0.84; }
+  else if (entry.style === 'credit') { y = h * 0.82; }
+  ctx.textAlign = align;
+  const lines = entry.text.split('\n');
+  const lh = fontPx * 1.25;
+  const startY = y - ((lines.length - 1) * lh) / 2;
+  lines.forEach((line, i) => ctx.fillText(line, x, startY + i * lh));
+  ctx.restore();
+}
+
+/**
+ * Composite the film overlay onto an export frame: letterbox bars, an edge vignette, text/title beats and
+ * the fade-to-colour. The color grade / DoF / bloom / motion blur already live in the captured WebGL pixels
+ * (rendered by PostFx); this adds the DOM-layer look the canvas itself can't carry into the recording.
+ */
+function drawCinematicFilmOverlay(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  look: CinematicLook | undefined,
+  fade: RuntimeCinematicFade | undefined,
+  texts: RuntimeCinematicText[] | undefined,
+) {
+  const aspect = look?.letterbox ?? 0;
+  if (aspect > 0) {
+    ctx.fillStyle = '#000000';
+    if (w / h > aspect) {
+      const bar = Math.max(0, (w - h * aspect) / 2);
+      ctx.fillRect(0, 0, bar, h);
+      ctx.fillRect(w - bar, 0, bar, h);
+    } else {
+      const bar = Math.max(0, (h - w / aspect) / 2);
+      ctx.fillRect(0, 0, w, bar);
+      ctx.fillRect(0, h - bar, w, bar);
+    }
+  }
+  if (look?.vignette) {
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.32, w / 2, h / 2, Math.max(w, h) * 0.75);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, `rgba(0,0,0,${Math.min(1, look.vignette)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+  if (texts && texts.length) texts.forEach((entry) => drawOverlayText(ctx, w, h, entry));
+  if (fade && fade.opacity > 0.001) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, fade.opacity);
+    ctx.fillStyle = fade.color || '#000000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+}
+
+// Decoded-waveform cache, keyed by audio URL so a clip's peaks are computed once and reused across
+// renders (and across every sound beat that uses the same asset). Failures resolve to an empty result.
+const waveformCache = new Map<string, Promise<{ peaks: number[]; duration: number }>>();
+
+async function decodeWaveform(url: string): Promise<{ peaks: number[]; duration: number }> {
+  const response = await fetch(url);
+  const bytes = await response.arrayBuffer();
+  const AudioCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtor) return { peaks: [], duration: 0 };
+  const audioCtx = new AudioCtor();
+  try {
+    const buffer = await audioCtx.decodeAudioData(bytes);
+    const channel = buffer.getChannelData(0);
+    const buckets = 240;
+    const size = Math.max(1, Math.floor(channel.length / buckets));
+    const peaks: number[] = [];
+    for (let i = 0; i < buckets; i++) {
+      let max = 0;
+      const start = i * size;
+      for (let j = 0; j < size; j++) {
+        const v = Math.abs(channel[start + j] ?? 0);
+        if (v > max) max = v;
+      }
+      peaks.push(max);
+    }
+    const loudest = Math.max(0.001, ...peaks);
+    return { peaks: peaks.map((p) => Math.min(1, p / loudest)), duration: buffer.duration };
+  } finally {
+    void audioCtx.close();
+  }
+}
+
+function getWaveform(url: string): Promise<{ peaks: number[]; duration: number }> {
+  let pending = waveformCache.get(url);
+  if (!pending) {
+    pending = decodeWaveform(url).catch(() => ({ peaks: [], duration: 0 }));
+    waveformCache.set(url, pending);
+  }
+  return pending;
+}
+
+/** Decode an audio asset's waveform peaks (cached), re-rendering the host when they're ready. */
+function useDecodedWaveform(url?: string): { peaks: number[]; duration: number } | null {
+  const [data, setData] = useState<{ peaks: number[]; duration: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setData(null);
+    if (!url) return;
+    getWaveform(url).then((result) => {
+      if (alive) setData(result);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+  return data;
+}
+
+/**
+ * A sound beat's decoded waveform, drawn as a translucent envelope in the audio lane spanning the clip's
+ * real audio duration (from `action.time`). Lets editors see how long a cue runs and cut to its beats.
+ */
+function SoundWaveform({
+  url,
+  startPct,
+  secondsToWidthPct,
+  color,
+}: {
+  url: string;
+  startPct: number;
+  secondsToWidthPct: (seconds: number) => number;
+  color: string;
+}) {
+  const data = useDecodedWaveform(url);
+  if (!data || !data.peaks.length || !data.duration) return null;
+  const width = Math.max(0.5, secondsToWidthPct(data.duration));
+  const n = data.peaks.length;
+  const top = data.peaks.map((p, i) => `${i},${50 - p * 46}`).join(' ');
+  const bottom = data.peaks.map((_, i) => `${n - 1 - i},${50 + data.peaks[n - 1 - i] * 46}`).join(' ');
+  return (
+    <svg
+      className="seq-waveform"
+      style={{ position: 'absolute', left: `${startPct}%`, width: `${width}%`, top: '12%', height: '76%', pointerEvents: 'none' }}
+      viewBox={`0 0 ${Math.max(1, n - 1)} 100`}
+      preserveAspectRatio="none"
+      aria-hidden
+    >
+      <polygon points={`${top} ${bottom}`} fill={color} opacity={0.4} />
+    </svg>
+  );
+}
 const spawnKinds: SceneObjectKind[] = ['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera'];
 const emptyVec: Vector3Tuple = [0, 0, 0];
 const unitVec: Vector3Tuple = [1, 1, 1];
@@ -449,38 +610,76 @@ export function CinematicPanel() {
    * WebM blob via the promise so callers (e.g. MP4 export) can post-process it. Resolves with
    * `undefined` and surfaces an inline status if MediaRecorder isn't available.
    */
-  const captureCinematicWebM = (statusPrefix: string): Promise<Blob | undefined> =>
-    new Promise((resolve) => {
-      if (!active) return resolve(undefined);
-      // r3f's <Canvas className="scene-canvas"> applies the class to its wrapper <div>, not the
-      // inner <canvas>, so we have to descend into it. The player's <canvas className="game-canvas">
-      // is a raw canvas element so the direct selector works.
-      const canvas =
-        document.querySelector<HTMLCanvasElement>('.scene-canvas canvas') ??
-        document.querySelector<HTMLCanvasElement>('canvas.game-canvas');
-      if (!canvas?.captureStream || typeof MediaRecorder === 'undefined') {
-        setMovieStatus('Recording is not supported in this browser.');
-        window.setTimeout(() => setMovieStatus(''), 2800);
-        return resolve(undefined);
-      }
-      const stream = canvas.captureStream(Math.max(1, active.frameRate ?? 24));
-      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      const chunks: BlobPart[] = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) chunks.push(event.data);
-      };
+  const captureCinematicWebM = async (statusPrefix: string): Promise<Blob | undefined> => {
+    if (!active) return undefined;
+    // r3f's <Canvas className="scene-canvas"> applies the class to its wrapper <div>, not the inner
+    // <canvas>, so we descend into it. The player's <canvas className="game-canvas"> is a raw element.
+    const src =
+      document.querySelector<HTMLCanvasElement>('.scene-canvas canvas') ??
+      document.querySelector<HTMLCanvasElement>('canvas.game-canvas');
+    if (!src || typeof src.captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+      setMovieStatus('Recording is not supported in this browser.');
+      window.setTimeout(() => setMovieStatus(''), 2800);
+      return undefined;
+    }
+    const fps = Math.max(1, Math.round(active.frameRate ?? 24));
+    // Compositor canvas: the WebGL frame (with its grade/DoF/bloom/motion blur) plus the DOM film overlay
+    // (letterbox / titles / fade / vignette) drawn on top, so the recording matches what the panel shows.
+    const out = document.createElement('canvas');
+    out.width = src.width;
+    out.height = src.height;
+    const ctx = out.getContext('2d');
+    if (!ctx) return undefined;
+    // Manual-cadence stream (true frame-lock via requestFrame) when the browser supports it; otherwise a
+    // timed stream as a fallback (still even, since we pace the draws ourselves).
+    const manualStream = out.captureStream(0);
+    const track = manualStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+    const manual = typeof track.requestFrame === 'function';
+    const stream = manual ? manualStream : out.captureStream(fps);
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+    const done = new Promise<Blob>((resolve) => {
       recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
+        stream.getTracks().forEach((t) => t.stop());
         resolve(new Blob(chunks, { type: 'video/webm' }));
       };
-      setMovieStatus(statusPrefix);
-      playCinematic(active.id);
-      recorder.start();
-      window.setTimeout(() => {
-        if (recorder.state !== 'inactive') recorder.stop();
-      }, Math.max(1, active.duration) * 1000 + 350);
     });
+    const raf = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const wasPreviewing = Boolean(editorPreview && editorPreview.sequenceId === active.id);
+    try {
+      if (running) stopCinematic();
+      setMovieStatus(statusPrefix);
+      recorder.start();
+      const frames = Math.max(1, Math.round(active.duration * fps));
+      for (let i = 0; i <= frames; i++) {
+        const t = Math.min(active.duration, i / fps);
+        // Pose the cinematic at this exact frame, then let the viewport render it (two RAFs: one for the
+        // store→camera useFrame, one for the actual draw).
+        previewCinematic(active.id, t);
+        await raf();
+        await raf();
+        ctx.clearRect(0, 0, out.width, out.height);
+        ctx.drawImage(src, 0, 0, out.width, out.height);
+        const st = useEditorStore.getState();
+        drawCinematicFilmOverlay(ctx, out.width, out.height, active.look, st.editorCinematicPreviewFade, st.editorCinematicPreviewText);
+        if (manual) track.requestFrame();
+        await raf();
+        if (i % 4 === 0) setMovieStatus(`${statusPrefix} ${Math.round((i / frames) * 100)}%`);
+      }
+      // Let the encoder ingest the final frame(s) before we stop.
+      await raf();
+      await raf();
+    } finally {
+      if (recorder.state !== 'inactive') recorder.stop();
+    }
+    const blob = await done;
+    if (!wasPreviewing) clearCinematicPreview();
+    return blob;
+  };
 
   const recordCinematicMovie = async () => {
     if (!active || movieStatus) return;
@@ -860,6 +1059,22 @@ export function CinematicPanel() {
           );
         });
       } else {
+        // Sound beats: paint the decoded audio waveform in the lane, spanning the clip's real audio
+        // length from its trigger time — so cuts can be synced to the music/dialogue.
+        if (action.type === 'sound' && action.soundId) {
+          const soundUrl = assets.find((asset) => asset.id === action.soundId)?.url;
+          if (soundUrl) {
+            nodes.push(
+              <SoundWaveform
+                key={`${action.id}-wave`}
+                url={soundUrl}
+                startPct={pct(action.time)}
+                secondsToWidthPct={(seconds) => (seconds / Math.max(active.duration, 0.5)) * 100}
+                color="#7BE0AD"
+              />,
+            );
+          }
+        }
         // Clips with a real span (fade, material, time-dilation, animation…) get edge grips so the
         // duration can be stretched directly on the timeline. Instantaneous beats (events, spawn,
         // visibility) have no meaningful duration, so they stay move-only.
@@ -1647,11 +1862,11 @@ export function CinematicPanel() {
                     <Flag size={14} aria-hidden />
                     Marker
                   </button>
-                  <button className="full-button" disabled={Boolean(movieStatus)} title="Record the current viewport canvas to a WebM while this sequence plays" onClick={recordCinematicMovie}>
+                  <button className="full-button" disabled={Boolean(movieStatus)} title="Frame-locked offline render to WebM: each frame is rendered and composited (letterbox/titles/fade baked in) at the sequence frame rate — no dropped frames on a hitch." onClick={recordCinematicMovie}>
                     <Download size={14} aria-hidden />
                     {movieStatus && !movieStatus.toLowerCase().includes('mp4') && !movieStatus.toLowerCase().includes('ffmpeg') && !movieStatus.toLowerCase().includes('converting') ? movieStatus : 'Export WebM'}
                   </button>
-                  <button className="full-button" disabled={Boolean(movieStatus)} title="Record the viewport, then transcode WebM → MP4 (H.264/AAC) in-browser via ffmpeg.wasm. First run downloads ~30MB of ffmpeg core from unpkg." onClick={exportCinematicMp4}>
+                  <button className="full-button" disabled={Boolean(movieStatus)} title="Frame-locked offline render, then transcode WebM → MP4 (H.264/AAC) in-browser via ffmpeg.wasm. First run downloads ~30MB of ffmpeg core from unpkg." onClick={exportCinematicMp4}>
                     <Download size={14} aria-hidden />
                     {movieStatus && (movieStatus.toLowerCase().includes('mp4') || movieStatus.toLowerCase().includes('ffmpeg') || movieStatus.toLowerCase().includes('converting')) ? movieStatus : 'Export MP4'}
                   </button>

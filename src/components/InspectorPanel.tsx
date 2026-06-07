@@ -159,6 +159,7 @@ function RendererSection({
   onChange,
   onModelChange,
   onMaterialChange,
+  onSlotMaterialChange,
   onEditMaterial,
 }: {
   renderer: MeshRendererComponent;
@@ -169,10 +170,15 @@ function RendererSection({
   onChange: (patch: Partial<MeshRendererComponent>) => void;
   onModelChange: (assetId?: string) => void;
   onMaterialChange: (materialId?: string) => void;
+  onSlotMaterialChange: (slotIndex: number, materialId?: string) => void;
   onEditMaterial: (materialId: string) => void;
 }) {
   const usingModel = Boolean(renderer.modelAssetId);
   const usingMaterial = Boolean(renderer.materialId && materials.some((m) => m.id === renderer.materialId));
+  // The imported materials for this model, in slot order (created by registerImportedModel). Each slot
+  // defaults to its imported material and can be swapped for another here, or edited in the Material panel.
+  const modelSlotMaterials = usingModel ? materials.filter((m) => m.sourceAssetId === renderer.modelAssetId) : [];
+  const hasSlots = modelSlotMaterials.length > 0;
   const materialControls = (
     <>
       <label className="field-row">
@@ -223,23 +229,54 @@ function RendererSection({
         </label>
       )}
 
-      {/* A reusable material asset, when assigned, drives the whole surface. */}
-      <label className="field-row">
-        <span>Material</span>
-        <select
-          value={renderer.materialId ?? ''}
-          onChange={(event) => onMaterialChange(event.target.value || undefined)}
-        >
-          <option value="">None (inline)</option>
-          {materials.map((material) => (
-            <option key={material.id} value={material.id}>
-              {material.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {/* An imported model exposes one editable material per slot; each defaults to the material created
+          for it on import (edit in the Material panel) and can be swapped for another here. */}
+      {hasSlots ? (
+        <div className="field-stack">
+          <span className="field-label">Model Materials</span>
+          {modelSlotMaterials.map((slotDefault, index) => {
+            const overrideId = renderer.materialSlots?.[index];
+            const effectiveId = overrideId ?? slotDefault.id;
+            return (
+              <label className="field-row" key={slotDefault.id}>
+                <span title={slotDefault.name}>{slotDefault.name}</span>
+                <span className="inline-with-button">
+                  <select value={overrideId ?? ''} onChange={(event) => onSlotMaterialChange(index, event.target.value || undefined)}>
+                    <option value="">Default ({slotDefault.name})</option>
+                    {materials.map((material) => (
+                      <option key={material.id} value={material.id}>
+                        {material.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="icon-button compact" title="Edit this material" onClick={() => onEditMaterial(effectiveId)}>
+                    <Palette size={13} aria-hidden />
+                  </button>
+                </span>
+              </label>
+            );
+          })}
+          <p className="field-hint">Each material can be edited in the Material panel (assign a base-color/normal map, etc.) or replaced with another material here.</p>
+        </div>
+      ) : (
+        <>
+          {/* A reusable material asset, when assigned, drives the whole surface. */}
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              value={renderer.materialId ?? ''}
+              onChange={(event) => onMaterialChange(event.target.value || undefined)}
+            >
+              <option value="">None (inline)</option>
+              {materials.map((material) => (
+                <option key={material.id} value={material.id}>
+                  {material.name}
+                </option>
+              ))}
+            </select>
+          </label>
 
-      {usingMaterial ? (
+          {usingMaterial ? (
         <div className="script-card">
           <div>
             <Palette size={14} aria-hidden />
@@ -287,6 +324,8 @@ function RendererSection({
             </>
           ) : (
             materialControls
+          )}
+            </>
           )}
         </>
       )}
@@ -1799,6 +1838,7 @@ export function InspectorPanel() {
   const updateRenderer = useEditorStore((state) => state.updateRenderer);
   const setObjectModel = useEditorStore((state) => state.setObjectModel);
   const setObjectMaterial = useEditorStore((state) => state.setObjectMaterial);
+  const setObjectMaterialSlot = useEditorStore((state) => state.setObjectMaterialSlot);
   const updateTerrain = useEditorStore((state) => state.updateTerrain);
   const setActiveMaterial = useEditorStore((state) => state.setActiveMaterial);
   const materials = useEditorStore((state) => state.materials);
@@ -1925,6 +1965,7 @@ export function InspectorPanel() {
               onChange={(patch) => updateRenderer(object.id, patch)}
               onModelChange={(assetId) => setObjectModel(object.id, assetId)}
               onMaterialChange={(materialId) => setObjectMaterial(object.id, materialId)}
+              onSlotMaterialChange={(slotIndex, materialId) => setObjectMaterialSlot(object.id, slotIndex, materialId)}
               onEditMaterial={(materialId) => {
                 setActiveMaterial(materialId);
                 focusWorkspacePanel('materials');

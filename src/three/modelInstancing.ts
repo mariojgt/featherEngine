@@ -1,5 +1,5 @@
 import { createContext, useContext, useSyncExternalStore } from 'react';
-import type { SceneObject } from '../types';
+import type { MaterialDefinition, SceneObject } from '../types';
 
 /**
  * GPU instancing for repeated static decoration models (towers, props, foliage, streetlights…). Each
@@ -51,10 +51,14 @@ export function useInstancingEnabled(): boolean {
  * never individually interactive during Play, so a shared instanced draw is indistinguishable from its
  * own mesh.
  */
-export function isInstanceable(o: SceneObject): boolean {
+export function isInstanceable(o: SceneObject, customizedModelIds?: ReadonlySet<string>): boolean {
   const r = o.renderer;
   if (!r?.enabled || !r.modelAssetId) return false;
   if (r.overrideMaterial || r.materialId || r.materialOverrides || r.textureAssetId || r.fragmentKey) return false;
+  // Per-object slot overrides, or a model whose shared imported materials carry a custom texture/normal
+  // map, both diverge from the baked materials the instanced path draws — keep those as individual meshes.
+  if (r.materialSlots?.some(Boolean)) return false;
+  if (customizedModelIds?.has(r.modelAssetId)) return false;
   if (r.opacity !== undefined && r.opacity < 1) return false; // transparency needs per-instance sorting
   if (o.parentId) return false; // root only — a child of a moving parent would move
   if (o.script?.enabled || o.physics?.enabled || o.animator?.enabled) return false;
@@ -69,10 +73,13 @@ export function isInstanceable(o: SceneObject): boolean {
  * Group instanceable objects by model asset id, dropping groups below the batch threshold. Returns a
  * map of modelAssetId → the objects that should be drawn as that batch. Pure; cheap to call.
  */
-export function computeInstanceBatches(objects: SceneObject[]): Map<string, SceneObject[]> {
+export function computeInstanceBatches(
+  objects: SceneObject[],
+  customizedModelIds?: ReadonlySet<string>,
+): Map<string, SceneObject[]> {
   const byModel = new Map<string, SceneObject[]>();
   for (const o of objects) {
-    if (!isInstanceable(o)) continue;
+    if (!isInstanceable(o, customizedModelIds)) continue;
     const key = o.renderer!.modelAssetId!;
     const arr = byModel.get(key);
     if (arr) arr.push(o);
@@ -80,6 +87,21 @@ export function computeInstanceBatches(objects: SceneObject[]): Map<string, Scen
   }
   for (const [key, arr] of byModel) if (arr.length < INSTANCE_MIN_BATCH) byModel.delete(key);
   return byModel;
+}
+
+/**
+ * The set of model asset ids whose imported materials carry a custom base-color/normal map — i.e. the
+ * shared per-slot materials diverge from the model's baked maps, so those models must NOT be instanced
+ * (the instanced path reuses the baked materials). Cheap field check; graph-driven texture nodes are not
+ * covered here (instancing is opt-in + Play-only, so that edge case keeps its individual mesh anyway when
+ * any other override is present). Pass the result to {@link computeInstanceBatches}.
+ */
+export function customizedModelIds(materials: MaterialDefinition[]): ReadonlySet<string> {
+  const set = new Set<string>();
+  for (const m of materials) {
+    if (m.sourceAssetId && (m.textureAssetId || m.normalMapAssetId)) set.add(m.sourceAssetId);
+  }
+  return set;
 }
 
 /**

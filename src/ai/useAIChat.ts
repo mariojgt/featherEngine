@@ -180,6 +180,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Updated material';
     case 'set_object_material':
       return input.materialId ? 'Assigned material' : 'Detached material';
+    case 'set_submesh_material':
+      return input.materialId ? `Set slot ${String(input.slotIndex ?? 0)} material` : `Reset slot ${String(input.slotIndex ?? 0)} material`;
     case 'delete_material':
       return 'Deleted material';
     case 'add_material_node':

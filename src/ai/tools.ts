@@ -173,7 +173,7 @@ function normalizeWaterPatch<T extends { surfaceOpacity?: number }>(patch: T): O
   return surfaceOpacity === undefined ? rest : { ...rest, opacity: surfaceOpacity };
 }
 const cinematicActionSchema = z.object({
-  type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence']),
+  type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence', 'text']),
   time: z.number().min(0).describe('Seconds from cinematic start.'),
   duration: z.number().min(0).optional().describe('Seconds this beat lasts; use for camera/transform/fade interpolation.'),
   ease: z.enum(['linear', 'smooth', 'in', 'out']).optional().describe('Interpolation curve for camera/transform/fade beats. Default smooth (ease in-out); use linear for constant-speed moves.'),
@@ -235,6 +235,15 @@ const cinematicActionSchema = z.object({
   fov: z.number().min(10).max(140).optional(),
   focusDistance: z.number().min(0).optional().describe('Camera beats only: depth-of-field focus distance (world units ahead of camera). Blends with the next shot for rack-focus pulls. Needs aperture > 0.'),
   aperture: z.number().min(0).max(12).optional().describe('Camera beats only: depth-of-field blur strength (bokeh). 0 = everything sharp, 3–6 = shallow cinematic focus.'),
+  lookAtObjectId: z.string().optional().describe('Camera beats only (single shot, no keyframe track): live-aim the camera at this object every frame — a tracking shot that follows a mover. Overrides lookAt.'),
+  followObjectId: z.string().optional().describe('Camera beats only (single shot): ride this object — the camera sits at its position plus followOffset each frame, trailing it. Also looks at it unless lookAt/lookAtObjectId is set.'),
+  followOffset: vec3.optional().describe('Camera beats only: world-space offset from followObjectId (e.g. [0,2.5,-6] to sit above and behind).'),
+  focusObjectId: z.string().optional().describe('Camera beats only: auto rack-focus — depth-of-field focus tracks this object\'s distance each frame (needs aperture > 0). Overrides focusDistance.'),
+  shake: z.number().min(0).max(1).optional().describe('Camera beats only: handheld shake amount (0 = locked tripod, 1 = heavy wobble). Deterministic, so exports reproduce it.'),
+  shakeFrequency: z.number().min(0.5).max(20).optional().describe('Camera beats only: shake speed — low = slow drift, high = nervous jitter. Default ~7.'),
+  text: z.string().optional().describe('Text beats only: on-screen copy (title card / subtitle / lower-third / credit). Fades in/out over the beat duration.'),
+  textStyle: z.enum(['subtitle', 'title', 'lowerThird', 'credit']).optional().describe('Text beats only: placement/typography. Default subtitle (bottom-center).'),
+  textColor: z.string().optional().describe('Text beats only: hex text color. Default white.'),
   visible: z.boolean().optional(),
   animationId: z.string().optional(),
   animationSpeed: z.number().min(0.05).max(5).optional(),
@@ -276,6 +285,7 @@ function normalizeCinematicAction(input: z.infer<typeof cinematicActionSchema>):
     rotation: input.rotation ? asVec3(input.rotation) : undefined,
     scale: input.scale ? asVec3(input.scale) : undefined,
     lookAt: input.lookAt ? asVec3(input.lookAt) : undefined,
+    followOffset: input.followOffset ? asVec3(input.followOffset) : undefined,
     keyframes: input.keyframes
       ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov, focusDistance: frame.focusDistance, aperture: frame.aperture }))
       : undefined,
@@ -299,6 +309,7 @@ function normalizeCinematicActionPatch(input: Partial<z.infer<typeof cinematicAc
     rotation: input.rotation ? asVec3(input.rotation) : undefined,
     scale: input.scale ? asVec3(input.scale) : undefined,
     lookAt: input.lookAt ? asVec3(input.lookAt) : undefined,
+    followOffset: input.followOffset ? asVec3(input.followOffset) : undefined,
     keyframes: input.keyframes
       ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov, focusDistance: frame.focusDistance, aperture: frame.aperture }))
       : undefined,
@@ -1996,10 +2007,11 @@ export const engineTools = {
       tintAmount: z.number().min(0).max(1).optional().describe('Strength of the custom tint, 0–1.'),
       grain: z.number().min(0).max(1).optional().describe('Film-grain strength, 0–1.'),
       vignette: z.number().min(0).max(1).optional().describe('Darkened-edge vignette strength, 0–1.'),
+      motionBlur: z.number().min(0).max(1).optional().describe('Camera motion blur (shutter) strength, 0–1. Pans/dollies smear like film. Only applies while the cinematic camera is live.'),
     }),
-    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette }) => {
+    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur }) => {
       if (!store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
-      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette });
+      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur });
       return `Updated film look for cinematic ${cinematicId}.`;
     },
   }),
@@ -2090,6 +2102,7 @@ export const engineTools = {
         color: object.renderer?.color ?? null,
         modelAssetId: object.renderer?.modelAssetId ?? null,
         materialId: object.renderer?.materialId ?? null,
+        materialSlots: object.renderer?.materialSlots ?? null,
         physics: object.physics?.enabled ? { bodyType: object.physics.bodyType, collider: object.physics.collider } : null,
         blueprintId: object.script?.enabled ? object.script.blueprintId : null,
         animatorControllerId: object.animator?.controllerId ?? null,
@@ -2326,6 +2339,26 @@ export const engineTools = {
       if (materialId && !findMaterial(materialId)) return `No material with id ${materialId}.`;
       store().setObjectMaterial(objectId, materialId || undefined);
       return materialId ? `Assigned material ${materialId} to ${objectId}.` : `Detached the material from ${objectId}.`;
+    },
+  }),
+
+  set_submesh_material: tool({
+    description:
+      "Override a single material slot of an imported model (multi-material models expose one slot per baked material). Each slot already defaults to the material auto-created for it on import — use this only to swap a slot for a DIFFERENT material, or pass empty materialId to revert the slot to its imported default. slotIndex is 0-based in the model's material order (see the object's materialSlots in the snapshot).",
+    inputSchema: z.object({
+      objectId: z.string(),
+      slotIndex: z.number().int().min(0).describe("0-based material-slot index in the model's material order."),
+      materialId: z.string().optional().describe('Material id to bind to this slot, or omit/empty to revert to the slot default.'),
+    }),
+    execute: async ({ objectId, slotIndex, materialId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.renderer?.modelAssetId) return `Object ${objectId} isn't rendering an imported model, so it has no material slots.`;
+      if (materialId && !findMaterial(materialId)) return `No material with id ${materialId}.`;
+      store().setObjectMaterialSlot(objectId, slotIndex, materialId || undefined);
+      return materialId
+        ? `Bound material ${materialId} to slot ${slotIndex} of ${objectId}.`
+        : `Reverted slot ${slotIndex} of ${objectId} to its default material.`;
     },
   }),
 

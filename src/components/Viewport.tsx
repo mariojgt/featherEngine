@@ -17,7 +17,7 @@ import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
 import { EditorCamera, editorNav, type ViewPreset } from '../three/EditorCamera';
 import { ViewCube } from './ViewCube';
 import { BoneAttachment } from '../three/BoneAttachment';
-import { useResolvedMaterial } from '../three/resolveMaterial';
+import { useResolvedMaterial, useResolvedMaterialSlots } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, isPrefabDrag, prefabDrag, readAssetDragId, readPrefabDragId } from './dragShared';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
@@ -39,6 +39,7 @@ import {
   useInstancingEnabled,
   useIsInstanced,
   computeInstanceBatches,
+  customizedModelIds,
   batchSignature,
   InstancedIdsContext,
 } from '../three/modelInstancing';
@@ -177,10 +178,45 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.
   const interactFocusId = useEditorStore((state) => state.runtimeInteractFocusId);
   // Combat damage reads via the floating damage number only — no emissive tint on the struck object.
-  const resolved =
-    interactFocusId === object.id
-      ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
-      : baseResolved;
+  const focusGlow = interactFocusId === object.id;
+  const resolved = focusGlow
+    ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+    : baseResolved;
+  // Per-slot materials for imported models (each model material editable independently). Folds in the
+  // interact-focus glow so a slot-bound model still highlights. Memoized so ModelAsset's apply effect
+  // doesn't re-run every frame during Play.
+  const slotResolved = useResolvedMaterialSlots(renderer);
+  const slotMaterials = useMemo(
+    () =>
+      slotResolved?.map((slot) =>
+        slot
+          ? {
+              color: slot.color,
+              metalness: slot.metalness,
+              roughness: slot.roughness,
+              emissiveColor: focusGlow ? '#ffcf66' : slot.emissiveColor,
+              emissiveIntensity: focusGlow ? 0.7 : slot.emissiveIntensity,
+              override: focusGlow ? true : slot.overrideModel,
+              baseColorUrl: slot.baseColorUrl,
+              normalUrl: slot.normalUrl,
+            }
+          : undefined,
+      ),
+    [slotResolved, focusGlow],
+  );
+  const modelMaterial = useMemo(
+    () => ({
+      color: resolved.color,
+      metalness: resolved.metalness,
+      roughness: resolved.roughness,
+      emissiveColor: resolved.emissiveColor,
+      emissiveIntensity: resolved.emissiveIntensity,
+      override: resolved.overrideModel,
+      baseColorUrl: resolved.baseColorUrl,
+      normalUrl: resolved.normalUrl,
+    }),
+    [resolved],
+  );
   const modelUrl = useModelUrl(renderer?.modelAssetId);
   const usingModel = Boolean(renderer?.modelAssetId && modelUrl);
   const instanced = useIsInstanced(object.id);
@@ -235,16 +271,8 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
         <ModelAsset
           url={modelUrl as string}
           geometryKey={renderer?.modelAssetId}
-          material={{
-            color: resolved.color,
-            metalness: resolved.metalness,
-            roughness: resolved.roughness,
-            emissiveColor: resolved.emissiveColor,
-            emissiveIntensity: resolved.emissiveIntensity,
-            override: resolved.overrideModel,
-            baseColorUrl: resolved.baseColorUrl,
-            normalUrl: resolved.normalUrl,
-          }}
+          material={modelMaterial}
+          slotMaterials={slotMaterials}
         />
       </Suspense>
     );
@@ -770,7 +798,12 @@ function SceneContent({
   // SAME batches object until the membership SIGNATURE changes (object added/removed/hidden), which stops
   // the InstancedMeshes from being torn down and rebuilt 60×/s when nothing structural moved.
   const instancingOn = useInstancingEnabled();
-  const rawInstanceBatches = instancingOn && isPlaying ? computeInstanceBatches(sceneObjects) : EMPTY_BATCHES;
+  // Models whose imported materials carry a custom texture diverge from their baked maps, so they can't
+  // share the instanced (baked-material) draw — exclude them from batching.
+  const allMaterials = useEditorStore((state) => state.materials);
+  const customizedModels = useMemo(() => customizedModelIds(allMaterials), [allMaterials]);
+  const rawInstanceBatches =
+    instancingOn && isPlaying ? computeInstanceBatches(sceneObjects, customizedModels) : EMPTY_BATCHES;
   const instanceSig = batchSignature(rawInstanceBatches);
   const instanceBatchesRef = useRef<Map<string, SceneObject[]>>(EMPTY_BATCHES);
   const instanceSigRef = useRef('');
@@ -1550,7 +1583,9 @@ export function ViewportPanel() {
               // render Play at the quality preset's DPR; in edit mode let PerformanceMonitor adapt but never
               // exceed the preset's cap (each dpr switch reallocates framebuffers = a hitch/spike).
               dpr={isPlaying ? qProfile.dpr : Math.min(dpr, qProfile.dpr)}
-              gl={{ powerPreference: 'high-performance' }}
+              // preserveDrawingBuffer lets the cinematic exporter read finished frames off the canvas
+              // (drawImage into the compositor) at any time — required for frame-locked offline export.
+              gl={{ powerPreference: 'high-performance', preserveDrawingBuffer: true }}
               performance={{ min: 0.5 }}
               camera={{ position: [6, 4.2, 7], fov: 46 }}
             >

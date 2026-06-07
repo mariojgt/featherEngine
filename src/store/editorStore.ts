@@ -761,6 +761,8 @@ interface EditorState {
   deleteMaterial: (id: string) => void;
   setActiveMaterial: (id: string) => void;
   setObjectMaterial: (objectId: string, materialId?: string) => void;
+  /** Bind a single material slot of an imported model (by slot index) to a material, or clear it (undefined). */
+  setObjectMaterialSlot: (objectId: string, slotIndex: number, materialId?: string) => void;
   // --- Reusable particle-system assets (Unreal-style). Edit once, every referencing emitter updates. ---
   createParticleSystem: (name?: string, preset?: ParticlePresetId, folderId?: string) => string;
   renameParticleSystem: (id: string, name: string) => void;
@@ -1637,7 +1639,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (object.id !== id) return object;
           // Assigning a model needs a renderer to hang it on; seed a default one if missing.
           const renderer = object.renderer ?? defaultRenderer('cube');
-          return { ...object, renderer: { ...renderer, modelAssetId: modelAssetId || undefined } };
+          return {
+            ...object,
+            // Each model slot defaults to its imported material (resolved by sourceAssetId — see
+            // useResolvedMaterialSlots), so editing that material shows on the model with no per-object
+            // wiring. `materialSlots` only holds explicit per-object overrides; clear them when the model
+            // changes/clears so a different model's slots don't inherit stale bindings.
+            renderer: { ...renderer, modelAssetId: modelAssetId || undefined, materialSlots: undefined },
+          };
+        }),
+      ),
+    ),
+  setObjectMaterialSlot: (objectId, slotIndex, materialId) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.renderer) return object;
+          const slots = [...(object.renderer.materialSlots ?? [])];
+          // Grow the array if needed so the slot index is addressable.
+          while (slots.length <= slotIndex) slots.push(undefined);
+          slots[slotIndex] = materialId || undefined;
+          return { ...object, renderer: { ...object.renderer, materialSlots: slots } };
         }),
       ),
     ),
@@ -1940,6 +1962,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         emissiveColor: material.emissiveColor,
         emissiveIntensity: material.emissiveIntensity,
         graphId: makeId('graph'),
+        sourceAssetId: assetId,
         folderId,
         createdAt: now,
       }));
@@ -4043,11 +4066,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Clear dangling references so no object points at a removed material.
         scenes: state.scenes.map((scene) => ({
           ...scene,
-          objects: scene.objects.map((object) =>
-            object.renderer?.materialId === id
-              ? { ...object, renderer: { ...object.renderer, materialId: undefined } }
-              : object,
-          ),
+          objects: scene.objects.map((object) => {
+            const renderer = object.renderer;
+            if (!renderer) return object;
+            const usesAsId = renderer.materialId === id;
+            const usesInSlot = renderer.materialSlots?.includes(id);
+            if (!usesAsId && !usesInSlot) return object;
+            return {
+              ...object,
+              renderer: {
+                ...renderer,
+                materialId: usesAsId ? undefined : renderer.materialId,
+                materialSlots: usesInSlot
+                  ? renderer.materialSlots!.map((slot) => (slot === id ? undefined : slot))
+                  : renderer.materialSlots,
+              },
+            };
+          }),
         })),
         isDirty: true,
       };

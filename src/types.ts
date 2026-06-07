@@ -359,6 +359,10 @@ export interface MeshRendererComponent {
   overrideMaterial?: boolean;
   /** When set, a reusable MaterialDefinition supplies this object's surface (overrides the inline props above and a model's baked materials). */
   materialId?: string;
+  /** Per-slot material overrides for an imported model, indexed by the model's material-slot order (the
+   *  same order `inspectModel` reports). Each entry is a MaterialDefinition id, or undefined to keep that
+   *  slot's baked material. Takes precedence over `materialId` (which acts as a whole-model fallback). */
+  materialSlots?: (string | undefined)[];
   /** Per-object tweaks applied on top of the assigned material — written by runtime "Set Material" nodes, never mutating the shared definition. */
   materialOverrides?: MaterialOverrides;
   /** Runtime-only: a key into the raw-geometry cache for a spawned fracture shard — the renderer draws
@@ -476,6 +480,8 @@ export interface MaterialDefinition {
   normalMapAssetId?: string;
   /** Optional node graph (in `graphs`) whose Material Output pins override the flat fields above. */
   graphId?: string;
+  /** The model asset this material was extracted from on import (lets a placed model auto-link it). */
+  sourceAssetId?: string;
   /** Containing folder id, or undefined for the project root. */
   folderId?: string;
   createdAt: number;
