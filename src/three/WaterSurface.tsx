@@ -84,7 +84,8 @@ uniform vec2 uFlowDir;
 // surface falls back to fresnel-sky reflection + UV-edge foam so it still looks right on Low/Medium.
 uniform sampler2D uReflection, uSceneColor, uSceneDepth;
 uniform vec2 uResolution;
-uniform float uUseReflection, uUseRefraction, uNear, uFar, uRefract, uShoreFade;
+uniform float uUseReflection, uUseRefraction, uNear, uFar, uRefract, uShoreFade, uRain;
+uniform vec3 uAbsorb; // per-channel Beer-Lambert absorption coefficient (red highest)
 varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying vec2 vUv;
@@ -98,8 +99,36 @@ float linearViewZ(float depth) {
   return (2.0 * uNear * uFar) / (uFar + uNear - ndc * (uFar - uNear));
 }
 
+// Raindrop ripples: expanding rings with a RANDOM centre + phase per grid cell, summed over two octaves
+// at non-integer scales so the cell grid dissolves into scattered drops. Returns .xy = normal nudge
+// (radial, for the dimple highlight) and .z = a foam ring factor.
+vec3 rainRipples(vec2 p, float t) {
+  vec3 acc = vec3(0.0);
+  for (int k = 0; k < 2; k++) {
+    float s = k == 0 ? 2.0 : 3.3;
+    vec2 q = p * s + (k == 0 ? 0.0 : 11.0);
+    vec2 cell = floor(q);
+    vec2 f = fract(q);
+    float h1 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+    float h2 = fract(sin(dot(cell, vec2(269.5, 183.3))) * 43758.5453);
+    vec2 center = vec2(h1, h2) * 0.6 + 0.2;
+    float phase = fract(t * 0.9 + h1 * 7.0);
+    vec2 d = f - center;
+    float ring = smoothstep(0.07, 0.0, abs(length(d) - phase * 0.55)) * (1.0 - phase);
+    acc.xy += normalize(d + 1e-4) * ring;
+    acc.z += ring;
+  }
+  return acc;
+}
+
 void main() {
   vec3 N = normalize(vNormal);
+  float rainFoam = 0.0;
+  if (uRain > 0.001) {
+    vec3 rf = rainRipples(vWorldPos.xz, uTime);
+    N = normalize(N + vec3(rf.x, 0.0, rf.y) * uRain * 0.6);
+    rainFoam = rf.z * uRain;
+  }
   vec3 V = normalize(uCamPos - vWorldPos);
   float ndv = clamp(dot(N, V), 0.0, 1.0);
   vec2 screenUV = gl_FragCoord.xy / uResolution;
@@ -117,10 +146,14 @@ void main() {
     : smoothstep(0.0, 0.7, ndv);
   vec3 baseColor = mix(uShallow, uDeep, depthMix);
 
-  // Refraction: the distorted view of whatever is submerged, blended in by clarity (1 - opacity).
+  // Refraction: the distorted view of whatever is submerged, blended in by clarity (1 - opacity), with
+  // physical Beer-Lambert absorption — light dies off with depth, red fastest, so deeper water both
+  // darkens and shifts toward its deep tint the way real water does.
   if (uUseRefraction > 0.5) {
     vec2 refrUV = clamp(screenUV + N.xz * uRefract, 0.001, 0.999);
     vec3 refrCol = texture2D(uSceneColor, refrUV).rgb;
+    vec3 transmit = exp(-waterDepth * uAbsorb); // per-channel transmittance through the water column
+    refrCol *= transmit;
     float clarity = (1.0 - uOpacity) * (1.0 - smoothstep(0.0, uShoreFade * 10.0, waterDepth));
     baseColor = mix(baseColor, refrCol, clamp(clarity, 0.0, 0.85));
   }
@@ -161,7 +194,7 @@ void main() {
     float edgeDist = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
     shore = 1.0 - smoothstep(0.0, 0.05, edgeDist);
   }
-  float foamMask = clamp(max(crest, shore * 0.9) * uFoam * 1.6, 0.0, 1.0);
+  float foamMask = clamp(max(max(crest, shore * 0.9) * uFoam * 1.6, rainFoam * 0.5), 0.0, 1.0);
   col = mix(col, uFoamColor, foamMask);
 
   // Self-illumination (lava / toxic).
@@ -235,6 +268,8 @@ export function WaterSurface({ object }: { object: SceneObject }) {
       uFar: { value: 1000 },
       uRefract: { value: 0.04 },
       uShoreFade: { value: 0.5 },
+      uAbsorb: { value: new THREE.Vector3(0.35, 0.12, 0.06) },
+      uRain: { value: 0 },
     }),
     [],
   );
@@ -309,6 +344,10 @@ export function WaterSurface({ object }: { object: SceneObject }) {
     u.uFar.value = waterCapture.cameraFar;
     u.uRefract.value = 0.025 + (water.waveAmplitude ?? 0.2) * 0.05;
     u.uShoreFade.value = 0.6;
+    // Murkier water (higher opacity) absorbs light over a shorter distance → shallower visibility.
+    const absorbScale = 0.5 + (water.opacity ?? 0.82) * 2.4;
+    u.uAbsorb.value.set(0.35 * absorbScale, 0.12 * absorbScale, 0.06 * absorbScale);
+    u.uRain.value = water.rainStrength ?? 0;
 
     // Consume new surface impacts that land inside this volume → spawn an expanding ripple ring.
     const impacts = store.runtimeWaterImpacts;

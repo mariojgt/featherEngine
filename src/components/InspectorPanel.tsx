@@ -1718,6 +1718,7 @@ function WaterSection({
       <RangeField label="Wave frequency" value={water.waveFrequency} min={0.05} max={2} onChange={(waveFrequency) => onChange({ waveFrequency })} />
       <RangeField label="Current strength" value={water.flowStrength ?? 0} min={0} max={4} onChange={(flowStrength) => onChange({ flowStrength })} />
       <RangeField label="Current angle" value={water.flowAngle ?? 0} min={0} max={360} step={1} onChange={(flowAngle) => onChange({ flowAngle })} />
+      <RangeField label="Rain" value={water.rainStrength ?? 0} min={0} max={1} onChange={(rainStrength) => onChange({ rainStrength })} />
       <p className="field-hint">Current &gt; 0 makes a river: the surface flows and dynamic bodies drift along the angle. Floating bodies ride the visible crest and tilt with the waves.</p>
       <p className="field-hint">Use a box/cube scale for the volume size. Dynamic bodies inside float and bob; characters enter swimming mode.</p>
       <button className="full-button" onClick={onToggle}>Remove Water Volume</button>

@@ -1,5 +1,5 @@
 import { useFrame, useThree } from '@react-three/fiber';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { defaultWaterVolume } from '../store/editor/defaults';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
@@ -31,11 +31,15 @@ const biasMatrix = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0,
 export function WaterEnvCapture() {
   const { gl, scene, camera, size } = useThree();
   const quality = useEditorStore((state) => state.renderSettings?.quality);
-  const enabled = useMemo(() => {
+  const frame = useRef(0);
+  // Tier the capture: Epic gets the heavier/fresher reflection, High a cheaper/lower-cadence one.
+  const tier = useMemo(() => {
     const p = qualityProfile(quality);
-    // Reuse the SSR/ssao "heavy effects" tiers: High & Epic. (qualityProfile exposes booleans, not a name.)
-    return Boolean(p.ssao || p.ssr);
+    if (p.ssr) return { enabled: true, reflectScale: 0.5, reflectInterval: 2 }; // Epic
+    if (p.ssao) return { enabled: true, reflectScale: 0.25, reflectInterval: 3 }; // High
+    return { enabled: false, reflectScale: 0.25, reflectInterval: 3 }; // Low/Medium → no captures
   }, [quality]);
+  const enabled = tier.enabled;
 
   const dpr = Math.min(gl.getPixelRatio(), 2);
   const sceneW = Math.max(2, Math.floor(size.width * dpr));
@@ -58,8 +62,11 @@ export function WaterEnvCapture() {
       sceneFBO.depthTexture.image.width = sceneW;
       sceneFBO.depthTexture.image.height = sceneH;
     }
-    reflectFBO.setSize(Math.max(2, Math.floor(sceneW / 2)), Math.max(2, Math.floor(sceneH / 2)));
-  }, [sceneFBO, reflectFBO, sceneW, sceneH]);
+    reflectFBO.setSize(
+      Math.max(2, Math.floor(sceneW * tier.reflectScale)),
+      Math.max(2, Math.floor(sceneH * tier.reflectScale)),
+    );
+  }, [sceneFBO, reflectFBO, sceneW, sceneH, tier.reflectScale]);
 
   useEffect(
     () => () => {
@@ -76,14 +83,17 @@ export function WaterEnvCapture() {
       return;
     }
     // Find the dominant (largest-footprint) enabled water volume → its top face is the reflection plane.
+    // Also note whether ANY water wants reflections — if none do we skip that (expensive) capture entirely.
     const objects = selectActiveObjects(useEditorStore.getState());
     let planeY = 0;
     let bestArea = -1;
+    let anyReflective = false;
     for (const object of objects) {
       if (!object.water?.enabled) continue;
       const sx = Math.abs(object.transform.scale[0]);
       const sz = Math.abs(object.transform.scale[2]);
       const area = sx * sz;
+      if ((object.water.reflectivity ?? 0.6) > 0.02) anyReflective = true;
       if (area > bestArea) {
         bestArea = area;
         planeY = object.transform.position[1] + Math.abs(object.transform.scale[1]) * 0.5;
@@ -122,10 +132,15 @@ export function WaterEnvCapture() {
     waterCapture.hasRefraction = true;
 
     // --- Planar reflection (mirror camera across y = planeY) ---
+    // Throttled: re-rendered every `reflectInterval` frames (the scene barely changes between), and skipped
+    // entirely when no water surface uses reflection. Between updates the last texture/matrix are reused
+    // (a few frames of reflection lag is imperceptible).
+    frame.current += 1;
+    const doReflection = anyReflective && frame.current % tier.reflectInterval === 0;
     reflectorPos.set(0, planeY, 0);
     cameraPos.setFromMatrixPosition(camera.matrixWorld);
     view.subVectors(reflectorPos, cameraPos);
-    if (view.dot(normal) < 0) {
+    if (doReflection && view.dot(normal) < 0) {
       // Camera is above the water — safe to build the mirrored view.
       view.reflect(normal).negate().add(reflectorPos);
       rotationMatrix.extractRotation(camera.matrixWorld);
@@ -156,9 +171,12 @@ export function WaterEnvCapture() {
 
       waterCapture.reflection = reflectFBO.texture;
       waterCapture.hasReflection = true;
-    } else {
+    } else if (!anyReflective) {
+      // No surface wants reflections → turn it off (shader uses the sky-gradient fallback).
       waterCapture.hasReflection = false;
     }
+    // On skipped (throttled) frames we leave hasReflection / the last texture as-is so the reflection
+    // simply persists rather than flickering off.
 
     // Restore state.
     gl.setRenderTarget(prevTarget);

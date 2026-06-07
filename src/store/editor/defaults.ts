@@ -277,6 +277,7 @@ export const defaultWaterVolume = (): WaterVolumeComponent => ({
   underwaterFog: true,
   flowAngle: 0,
   flowStrength: 0,
+  rainStrength: 0,
 });
 
 export const withPhysicsDefaults = (physics: PhysicsComponent): PhysicsComponent => ({

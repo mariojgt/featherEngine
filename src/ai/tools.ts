@@ -165,6 +165,7 @@ const waterPatchSchema = z.object({
   underwaterFog: z.boolean().optional().describe('Tint the screen + murk the view while the camera is submerged.'),
   flowStrength: z.number().min(0).max(4).optional().describe('Current strength: 0 = still lake, >0 = flowing river/waterfall (surface scrolls + bodies drift).'),
   flowAngle: z.number().min(0).max(360).optional().describe('Current direction in degrees on XZ (0 = +X, 90 = +Z).'),
+  rainStrength: z.number().min(0).max(1).optional().describe('Rain on the water: 0 = clear, >0 speckles the surface with raindrop ripple rings (use for storms).'),
 });
 /** Map the AI-facing `surfaceOpacity` onto the component's `opacity` field (kept distinct from the box tint). */
 function normalizeWaterPatch<T extends { surfaceOpacity?: number }>(patch: T): Omit<T, 'surfaceOpacity'> & { opacity?: number } {

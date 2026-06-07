@@ -236,6 +236,7 @@ export const WATER_LOOK_KEYS = [
   'waveSpeed',
   'flowAngle',
   'flowStrength',
+  'rainStrength',
 ] as const;
 
 /** The visual patch for a named water style ({} for 'custom' or unknown ids). */

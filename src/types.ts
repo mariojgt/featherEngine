@@ -932,6 +932,8 @@ export interface WaterVolumeComponent {
   flowAngle?: number;
   /** Current strength 0–4: scrolls the surface and pushes dynamic bodies along `flowAngle`. 0 = still. */
   flowStrength?: number;
+  /** Rain intensity 0–1: speckles the surface with expanding raindrop ripple rings. 0 = clear weather. */
+  rainStrength?: number;
 }
 
 export interface ScriptGraphComponent {
