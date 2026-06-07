@@ -50,9 +50,17 @@ const actionLabel: Record<CinematicActionType, string> = {
   material: 'Material',
   timeDilation: 'Time Dilation',
   subsequence: 'Subsequence',
+  text: 'Text / Title',
 };
 
-const actionTypes: CinematicActionType[] = ['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence'];
+const actionTypes: CinematicActionType[] = ['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence', 'text'];
+
+const textStyleOptions: { value: NonNullable<CinematicAction['textStyle']>; label: string }[] = [
+  { value: 'subtitle', label: 'Subtitle (bottom)' },
+  { value: 'title', label: 'Title card (center)' },
+  { value: 'lowerThird', label: 'Lower third (bottom-left)' },
+  { value: 'credit', label: 'Credit (small, centered)' },
+];
 const spawnKinds: SceneObjectKind[] = ['empty', 'cube', 'sphere', 'capsule', 'plane', 'light', 'camera'];
 const emptyVec: Vector3Tuple = [0, 0, 0];
 const unitVec: Vector3Tuple = [1, 1, 1];
@@ -798,6 +806,7 @@ export function CinematicPanel() {
       { id: 'animation', label: 'Animation', types: ['animation'] },
       { id: 'scene', label: 'Scene', types: ['spawn', 'visibility'] },
       { id: 'audio', label: 'Audio & Events', types: ['sound', 'event'] },
+      { id: 'text', label: 'Text & Titles', types: ['text'] },
       { id: 'fade', label: 'Fade', types: ['fade'] },
     ];
     groups.forEach((group) => {
@@ -1153,6 +1162,79 @@ export function CinematicPanel() {
                 />
               </label>
               <label className="field-row">
+                <span>Track (look at)</span>
+                <select
+                  value={selectedAction.lookAtObjectId ?? ''}
+                  title="Live-aim this shot at an object every frame — a tracking shot that follows a mover (overrides Look at)."
+                  onChange={(event) => updateSelectedAction({ lookAtObjectId: event.target.value || undefined })}
+                >
+                  <option value="">— fixed look-at —</option>
+                  {objects.filter((object) => object.kind !== 'camera').map((object) => (
+                    <option key={object.id} value={object.id}>{object.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field-row">
+                <span>Follow</span>
+                <select
+                  value={selectedAction.followObjectId ?? ''}
+                  title="Ride an object — the camera sits at its position plus the follow offset each frame, trailing a mover."
+                  onChange={(event) => updateSelectedAction({ followObjectId: event.target.value || undefined })}
+                >
+                  <option value="">— stationary —</option>
+                  {objects.filter((object) => object.kind !== 'camera').map((object) => (
+                    <option key={object.id} value={object.id}>{object.name}</option>
+                  ))}
+                </select>
+              </label>
+              {selectedAction.followObjectId && (
+                <VectorEditor
+                  label="Follow offset"
+                  value={selectedAction.followOffset ?? selectedAction.position}
+                  fallback={[0, 2.5, -6]}
+                  onChange={(value) => updateSelectedAction({ followOffset: value })}
+                />
+              )}
+              <label className="field-row">
+                <span>Focus on</span>
+                <select
+                  value={selectedAction.focusObjectId ?? ''}
+                  title="Auto rack-focus: depth-of-field focus tracks this object's distance every frame (needs Aperture > 0)."
+                  onChange={(event) => updateSelectedAction({ focusObjectId: event.target.value || undefined })}
+                >
+                  <option value="">— manual focus dist —</option>
+                  {objects.filter((object) => object.kind !== 'camera').map((object) => (
+                    <option key={object.id} value={object.id}>{object.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field-row">
+                <span>Shake</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={selectedAction.shake ?? 0}
+                  title="Handheld camera shake on this shot. 0 = locked-off tripod; higher = more living-camera wobble."
+                  onChange={(event) => updateSelectedAction({ shake: Number(event.target.value) || undefined })}
+                />
+              </label>
+              {selectedAction.shake ? (
+                <label className="field-row">
+                  <span>Shake speed</span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={20}
+                    step={0.5}
+                    value={selectedAction.shakeFrequency ?? 7}
+                    title="Shake frequency: low = slow breathing drift, high = nervous jitter."
+                    onChange={(event) => updateSelectedAction({ shakeFrequency: Number(event.target.value) })}
+                  />
+                </label>
+              ) : null}
+              <label className="field-row">
                 <span>Easing</span>
                 <select value={selectedAction.ease ?? 'smooth'} onChange={(event) => updateSelectedAction({ ease: event.target.value as CinematicEase })}>
                   {easeOptions.map((option) => (
@@ -1434,6 +1516,37 @@ export function CinematicPanel() {
               ))}
           </select>
         </label>
+      );
+    }
+
+    if (selectedAction.type === 'text') {
+      return (
+        <>
+          <label className="field-row cinematic-text-field">
+            <span>Text</span>
+            <textarea
+              rows={2}
+              value={selectedAction.text ?? ''}
+              placeholder="Title, subtitle or credit…"
+              onChange={(event) => updateSelectedAction({ text: event.target.value })}
+            />
+          </label>
+          <label className="field-row">
+            <span>Style</span>
+            <select value={selectedAction.textStyle ?? 'subtitle'} onChange={(event) => updateSelectedAction({ textStyle: event.target.value as NonNullable<CinematicAction['textStyle']> })}>
+              {textStyleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Color</span>
+            <input type="color" value={selectedAction.textColor ?? '#ffffff'} onChange={(event) => updateSelectedAction({ textColor: event.target.value })} />
+          </label>
+          <p className="field-hint">Fades in/out at the edges of the beat’s length. Drag the clip on the timeline to retime, or stretch its edges to change how long it holds.</p>
+        </>
       );
     }
 
@@ -1798,6 +1911,18 @@ export function CinematicPanel() {
                     onChange={(event) => setCinematicLook(active.id, { vignette: Number(event.target.value) })}
                   />
                 </label>
+                <label className="field-row">
+                  <span>Motion blur</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={active.look?.motionBlur ?? 0}
+                    title="Camera shutter motion blur — pans and dollies smear like real film. Only applies while the cinematic camera is live."
+                    onChange={(event) => setCinematicLook(active.id, { motionBlur: Number(event.target.value) })}
+                  />
+                </label>
               </section>
               <section className="inspector-section">
                 <h3>Recording</h3>
@@ -2005,6 +2130,13 @@ export function CinematicPanel() {
                     onClick={() => addBeat({ type: 'event', time: beatTime, label: 'Custom event', eventName: 'cinematic_event' })}
                   >
                     Event
+                  </button>
+                  <button
+                    className="full-button"
+                    title="Add an on-screen text beat (title / subtitle / lower-third / credit) that fades in and out"
+                    onClick={() => addBeat({ type: 'text', time: beatTime, duration: 3, label: 'Title', text: 'Title', textStyle: 'subtitle', textColor: '#ffffff' })}
+                  >
+                    Title / subtitle
                   </button>
                   <button
                     className="full-button"

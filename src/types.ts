@@ -1441,7 +1441,10 @@ export interface ParticleSystemDefinition extends ParticleConfig {
   createdAt: number;
 }
 
-export type CinematicActionType = 'camera' | 'transform' | 'visibility' | 'spawn' | 'animation' | 'sound' | 'event' | 'fade' | 'material' | 'timeDilation' | 'subsequence';
+export type CinematicActionType = 'camera' | 'transform' | 'visibility' | 'spawn' | 'animation' | 'sound' | 'event' | 'fade' | 'material' | 'timeDilation' | 'subsequence' | 'text';
+
+/** On-screen placement for a `type: 'text'` overlay beat (title card / subtitle / lower-third / credit). */
+export type CinematicTextStyle = 'subtitle' | 'title' | 'lowerThird' | 'credit';
 
 /**
  * Interpolation curve applied to a beat's progress (and to camera shot-to-shot blends).
@@ -1569,6 +1572,32 @@ export interface CinematicAction {
   focusDistance?: number;
   /** Camera beats only: depth-of-field blur strength (bokeh scale). 0/omitted = sharp (no DoF). */
   aperture?: number;
+  /** Camera beats only: when set, depth-of-field focus continuously tracks this object's distance from
+   *  the camera each frame (auto rack-focus), overriding `focusDistance`. Needs `aperture > 0` to show. */
+  focusObjectId?: string;
+  /** Camera beats only (single-shot, no keyframe track): live-aim the camera at this object's position
+   *  every frame, overriding `lookAt`/`rotation`. The classic "tracking shot" that follows a mover. */
+  lookAtObjectId?: string;
+  /** Camera beats only (single-shot, no keyframe track): ride this object — the camera sits at the
+   *  followed object's position plus `followOffset` (world units) every frame, so it trails a mover.
+   *  When set without an explicit `lookAt`/`lookAtObjectId`, the camera also looks at the followed object. */
+  followObjectId?: string;
+  /** Camera beats only: world-space offset from `followObjectId` for the follow rig (e.g. [0, 2, -6]
+   *  to sit above and behind). Defaults to the beat's `position`, else [0, 0, 0]. */
+  followOffset?: Vector3Tuple;
+  /** Camera beats only: handheld/shake amount 0–1 layered on the final framing (deterministic noise of
+   *  time, so exports are reproducible). 0/omitted = a locked-off tripod shot. */
+  shake?: number;
+  /** Camera beats only: handheld shake frequency (Hz-ish). Higher = jittery/nervous, lower = a slow
+   *  drift/breathing camera. Defaults to ~7. */
+  shakeFrequency?: number;
+  /** `type: 'text'`: the on-screen copy (title card / subtitle / lower-third / credit). Fades in over the
+   *  first/last ~0.4s of the beat's `duration` and holds in between. */
+  text?: string;
+  /** `type: 'text'`: on-screen placement/typography preset. Defaults to 'subtitle'. */
+  textStyle?: CinematicTextStyle;
+  /** `type: 'text'`: text color (hex). Defaults to white. */
+  textColor?: string;
 }
 
 /** A film color-grade preset. `custom` = driven purely by the manual grade params below. */
@@ -1604,6 +1633,10 @@ export interface CinematicLook {
   grain?: number;
   /** Extra darkened-edge vignette, 0–1, on top of any project vignette. 0/omitted = none. */
   vignette?: number;
+  /** Camera motion blur (shutter) strength, 0–1. Reprojects the depth buffer against the previous
+   *  frame's camera to blur along screen-space camera motion — pans/dollies smear like real film.
+   *  0/omitted = no blur. Applied as a post pass on the cinematic camera. */
+  motionBlur?: number;
 }
 
 export interface CinematicSequence {
@@ -1640,6 +1673,15 @@ export interface RuntimeCinematicCamera {
 export interface RuntimeCinematicFade {
   opacity: number;
   color: string;
+}
+
+/** A text overlay (title/subtitle/lower-third/credit) currently on screen, with its faded-in opacity. */
+export interface RuntimeCinematicText {
+  id: string;
+  text: string;
+  style: CinematicTextStyle;
+  color: string;
+  opacity: number;
 }
 
 export interface RuntimeCinematicState {

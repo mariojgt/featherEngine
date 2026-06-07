@@ -137,17 +137,11 @@ void main() {
   }
   vec3 col = mix(baseColor, skyCol, fres * uReflect);
 
-  // Sharp sun glint + animated micro-sparkle. The sparkle is a SUM of three sines at odd, non-aligned
-  // angles — their interference scatters highlights irregularly (organic glitter) instead of the regular
-  // dot lattice a sin*sin product makes. Concentrated near grazing angles so it reads as surface glint.
+  // Sun glint — a smooth, broad sheen. Sparkle widens/strengthens the highlight rather than sharpening it
+  // to a pinpoint (a high exponent on a faceted wave mesh produced a field of dotty per-facet glints).
   vec3 H = normalize(uSunDir + V);
-  float spec = pow(max(dot(N, H), 0.0), mix(48.0, 420.0, uSparkle));
-  col += uSunColor * spec * (0.6 + uSparkle);
-  float g = sin(dot(vWorldPos.xz, vec2(12.9, 7.3)) + uTime * 3.1)
-          + sin(dot(vWorldPos.xz, vec2(-6.7, 14.1)) - uTime * 2.3)
-          + sin(dot(vWorldPos.xz, vec2(9.2, -5.5)) + uTime * 2.7);
-  float glitter = smoothstep(2.5, 3.0, g + length(N.xz) * 2.0);
-  col += uSunColor * glitter * uSparkle * (0.35 + fres * 0.6);
+  float spec = pow(max(dot(N, H), 0.0), mix(24.0, 90.0, uSparkle));
+  col += uSunColor * spec * (0.35 + uSparkle * 0.4);
 
   // Caustic shimmer crawling across the surface (drifts along the current when flowing).
   vec2 cp = vWorldPos.xz - uFlowDir * uFlowStrength * uTime * 0.6;
@@ -156,9 +150,10 @@ void main() {
   float caust = pow(max(0.0, (c1 + c2) * 0.25 + 0.5), 2.0);
   col += baseColor * caust * uCaustics * 0.6;
 
-  // Foam: wave crests, plus a shoreline line. With depth, the line traces real intersections; without
-  // it, falls back to the volume's UV edges.
-  float crest = smoothstep(uAmp * 0.45, uAmp * 0.95, vHeight);
+  // Foam: only the genuine breaking crests (near peak height), plus a shoreline line. With depth, the
+  // line traces real intersections; without it, falls back to the volume's UV edges. The high threshold
+  // keeps foam off every little ripple (which otherwise speckled the surface with white dots).
+  float crest = smoothstep(uAmp * 0.82, uAmp * 1.02, vHeight);
   float shore;
   if (uUseRefraction > 0.5) {
     shore = 1.0 - smoothstep(0.0, uShoreFade, waterDepth);

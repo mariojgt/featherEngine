@@ -2,6 +2,7 @@ import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR } from '
 import { SMAAPreset } from 'postprocessing';
 import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
+import { MotionBlur } from './MotionBlurEffect';
 import { VolumetricFog, resolveVolumetric } from './VolumetricFog';
 import { qualityProfile } from './quality';
 
@@ -87,6 +88,11 @@ export function PostFx() {
     children.push(
       <DepthOfField key="dof" target={target} focalLength={0.02} bokehScale={pose.aperture} />,
     );
+  }
+  // Cinematic camera motion blur (shutter smear along camera moves). Only while a cinematic with a
+  // motionBlur look is live (runtime or scrub preview) — never in normal gameplay.
+  if (pose && look?.motionBlur && look.motionBlur > 0.001) {
+    children.push(<MotionBlur key="motionblur" strength={look.motionBlur} />);
   }
   // Cinematic color grade (exposure / contrast / saturation / temperature / tint), rendered on the
   // cinematic camera. resolveGrade returns null when there's nothing to grade.

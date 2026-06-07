@@ -9,6 +9,7 @@ import type {
   MaterialOverrides,
   RuntimeCinematicCamera,
   RuntimeCinematicFade,
+  RuntimeCinematicText,
   SceneObject,
   TransformComponent,
   Vector3Tuple,
@@ -196,6 +197,9 @@ const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: numbe
   };
 };
 
+const objectPositionById = (objects: SceneObject[], id?: string): Vector3Tuple | undefined =>
+  id ? objects.find((object) => object.id === id)?.transform.position : undefined;
+
 const cameraFromCinematicAction = (
   action: CinematicAction,
   objects: SceneObject[],
@@ -207,9 +211,14 @@ const cameraFromCinematicAction = (
     if (sampled) return sampled;
   }
   const cameraObject = action.objectId ? objects.find((object) => object.id === action.objectId) : undefined;
+  // Follow rig: ride the followed object's position plus a world-space offset, so the camera trails a
+  // moving subject without hand-keyframing. Overrides the static/from→to position when present.
+  const followTarget = objectPositionById(objects, action.followObjectId);
+  const followOffset = action.followOffset ?? action.position ?? [0, 0, 0];
   const toPosition = action.toPosition ?? action.position;
-  const position =
-    action.fromPosition && toPosition && isCinematicActionActive(action, time)
+  const position = followTarget
+    ? ([followTarget[0] + followOffset[0], followTarget[1] + followOffset[1], followTarget[2] + followOffset[2]] as Vector3Tuple)
+    : action.fromPosition && toPosition && isCinematicActionActive(action, time)
       ? mixVec3(action.fromPosition, toPosition, cinematicActionLocalTime(action, time))
       : action.position ?? action.toPosition ?? action.fromPosition ?? cameraObject?.transform.position;
   if (!position) return undefined;
@@ -218,12 +227,46 @@ const cameraFromCinematicAction = (
     action.fromRotation && toRotation && isCinematicActionActive(action, time)
       ? mixVec3(action.fromRotation, toRotation, cinematicActionLocalTime(action, time))
       : action.rotation ?? action.toRotation ?? action.fromRotation ?? cameraObject?.transform.rotation;
+  // Aim constraint: lock the look target onto an object (tracking shot). Precedence: explicit
+  // lookAtObjectId → explicit lookAt vector → the followed object → the beat's rotation → default.
+  const aimTarget = objectPositionById(objects, action.lookAtObjectId);
+  const lookAt = aimTarget ?? action.lookAt ?? followTarget ?? (rotation ? lookAtFromRotation(position, rotation) : [0, 1, 0]);
+  // Auto rack-focus: when a focus object is set, the DoF focus distance is the live camera→object
+  // distance every frame (a focus pull that tracks the subject), overriding the manual focusDistance.
+  const focusTarget = objectPositionById(objects, action.focusObjectId);
+  const focusDistance = focusTarget
+    ? Math.hypot(focusTarget[0] - position[0], focusTarget[1] - position[1], focusTarget[2] - position[2])
+    : action.focusDistance;
   return {
     position,
-    lookAt: action.lookAt ?? (rotation ? lookAtFromRotation(position, rotation) : [0, 1, 0]),
+    lookAt,
     fov: action.fov ?? 50,
-    focusDistance: action.focusDistance,
+    focusDistance,
     aperture: action.aperture,
+  };
+};
+
+/**
+ * Deterministic handheld/shake offset layered on the final framing. Sum-of-sines noise of `time` (no
+ * RNG) so a recorded export reproduces the exact same wobble. Nudges both the camera position and its
+ * look target, giving a living-camera feel: low frequency = a slow breathing drift, high = nervous jitter.
+ */
+const applyCinematicShake = (
+  pose: RuntimeCinematicCamera,
+  amount: number | undefined,
+  frequency: number | undefined,
+  time: number,
+): RuntimeCinematicCamera => {
+  if (!amount || amount <= 0.001) return pose;
+  const f = Math.max(0.1, frequency ?? 7);
+  const noise = (seed: number) =>
+    Math.sin(time * f + seed) * 0.6 + Math.sin(time * f * 0.47 + seed * 1.7) * 0.3 + Math.sin(time * f * 1.93 + seed * 0.31) * 0.1;
+  const posAmp = amount * 0.12;
+  const aimAmp = amount * 0.2;
+  return {
+    ...pose,
+    position: [pose.position[0] + noise(0) * posAmp, pose.position[1] + noise(11.3) * posAmp, pose.position[2] + noise(23.7) * posAmp],
+    lookAt: [pose.lookAt[0] + noise(31.1) * aimAmp, pose.lookAt[1] + noise(43.9) * aimAmp, pose.lookAt[2] + noise(57.4) * aimAmp],
   };
 };
 
@@ -243,16 +286,18 @@ export const cinematicCameraAt = (
 
   // Glide from the previous shot's framing into this one over `current.blend` seconds — a smooth
   // dolly instead of a hard cut. `blend` 0 (or no previous shot) keeps the classic instant cut.
+  let pose = currentPose;
   const previous = past.length >= 2 ? past[past.length - 2] : undefined;
   const blend = current.blend ?? 0;
   if (previous && blend > 0.001 && time < current.time + blend) {
     const previousPose = cameraFromCinematicAction(previous, objects, current.time);
     if (previousPose) {
       const t = applyCinematicEase((time - current.time) / blend, current.ease);
-      return mixCinematicCamera(previousPose, currentPose, t);
+      pose = mixCinematicCamera(previousPose, currentPose, t);
     }
   }
-  return currentPose;
+  // Handheld shake is layered last so it rides on top of any shot-to-shot blend.
+  return applyCinematicShake(pose, current.shake, current.shakeFrequency, time);
 };
 
 /** Sample an animated object transform track: fly smoothly through the keyframes via Catmull-Rom. */
@@ -417,6 +462,34 @@ export const cinematicTimeScaleAt = (
   }
   return Math.max(0.05, action.toTimeScale ?? action.timeScale ?? 1);
 };
+
+/**
+ * The text overlays (titles / subtitles / lower-thirds / credits) on screen at `time`, each with an
+ * eased-in/out opacity. A beat fades up over the first ~0.4s of its `duration` and back out over the
+ * last ~0.4s, holding solid in between. Multiple beats can overlap (e.g. a title + a credit line).
+ */
+export const cinematicTextAt = (
+  sequence: CinematicSequence | undefined,
+  time: number,
+  sequences?: CinematicSequence[],
+): RuntimeCinematicText[] =>
+  cinematicActionsAt(sequence, sequences, time)
+    .filter((action) => action.type === 'text' && action.text && isCinematicActionActive(action, time))
+    .map((action) => {
+      const duration = Math.max(action.duration ?? 0, 0.001);
+      const fade = Math.min(0.4, duration / 2);
+      const into = time - action.time;
+      const toEnd = action.time + duration - time;
+      const opacity = clamp01(Math.min(into / fade, toEnd / fade, 1));
+      return {
+        id: action.id,
+        text: action.text ?? '',
+        style: action.textStyle ?? 'subtitle',
+        color: action.textColor ?? '#ffffff',
+        opacity,
+      };
+    })
+    .filter((entry) => entry.opacity > 0.001);
 
 export const cinematicHiddenAt = (sequence: CinematicSequence | undefined, time: number, sequences?: CinematicSequence[]): string[] => {
   if (!sequence) return [];

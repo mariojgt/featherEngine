@@ -70,6 +70,7 @@ import {
   type RuntimeCinematicCamera,
   type RuntimeCinematicFade,
   type RuntimeCinematicState,
+  type RuntimeCinematicText,
   type TerrainComponent,
   type TerrainBrushSettings,
   type TerrainMaterialLayer,
@@ -106,6 +107,7 @@ import {
   cinematicFadeAt,
   cinematicHiddenAt,
   cinematicMaterialsAt,
+  cinematicTextAt,
   cinematicTimeScaleAt,
   cinematicTransformsAt,
   clamp01,
@@ -465,11 +467,15 @@ interface EditorState {
   runtimeCinematicFade?: RuntimeCinematicFade;
   /** The active cinematic's film look (letterbox/grade/grain) while playing; drives CinematicOverlay. */
   runtimeCinematicLook?: CinematicLook;
+  /** Text overlays (titles/subtitles/credits) on screen this frame while playing; drives CinematicOverlay. */
+  runtimeCinematicText?: RuntimeCinematicText[];
   editorCinematicPreview?: { sequenceId: string; time: number };
   editorCinematicPreviewCamera?: RuntimeCinematicCamera;
   editorCinematicPreviewFade?: RuntimeCinematicFade;
   /** The previewed cinematic's film look while scrubbing in the editor (mirrors runtimeCinematicLook). */
   editorCinematicPreviewLook?: CinematicLook;
+  /** Text overlays shown while scrubbing the editor preview (mirrors runtimeCinematicText). */
+  editorCinematicPreviewText?: RuntimeCinematicText[];
   editorCinematicPreviewTransforms: Record<string, TransformComponent>;
   editorCinematicPreviewHidden: string[];
   editorCinematicPreviewMaterials: Record<string, MaterialOverrides>;
@@ -1036,10 +1042,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeCinematicCamera: undefined,
   runtimeCinematicFade: undefined,
   runtimeCinematicLook: undefined,
+  runtimeCinematicText: undefined,
   editorCinematicPreview: undefined,
   editorCinematicPreviewCamera: undefined,
   editorCinematicPreviewFade: undefined,
   editorCinematicPreviewLook: undefined,
+  editorCinematicPreviewText: undefined,
   editorCinematicPreviewTransforms: {},
   editorCinematicPreviewHidden: [],
   editorCinematicPreviewMaterials: {},
@@ -3400,6 +3408,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         editorCinematicPreviewCamera: cinematicCameraAt(sequence, objects, previewTime, undefined, sequences),
         editorCinematicPreviewFade: cinematicFadeAt(sequence, previewTime, undefined, sequences),
         editorCinematicPreviewLook: sequence.look,
+        editorCinematicPreviewText: cinematicTextAt(sequence, previewTime, sequences),
         editorCinematicPreviewTransforms: cinematicTransformsAt(sequence, objects, previewTime, sequences),
         editorCinematicPreviewHidden: cinematicHiddenAt(sequence, previewTime, sequences),
         editorCinematicPreviewMaterials: cinematicMaterialsAt(sequence, objects, previewTime, sequences),
@@ -3413,6 +3422,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             editorCinematicPreviewCamera: undefined,
             editorCinematicPreviewFade: undefined,
             editorCinematicPreviewLook: undefined,
+            editorCinematicPreviewText: undefined,
             editorCinematicPreviewTransforms: {},
             editorCinematicPreviewHidden: [],
             editorCinematicPreviewMaterials: {},
@@ -3437,6 +3447,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematicCamera: initialCinematicCamera(sequence, scene?.objects ?? [], sequences),
         runtimeCinematicFade: initialCinematicFade(sequence, sequences),
         runtimeCinematicLook: sequence.look,
+        runtimeCinematicText: cinematicTextAt(sequence, 0, sequences),
       };
     });
   },
@@ -3451,6 +3462,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematicCamera: undefined,
         runtimeCinematicFade: undefined,
         runtimeCinematicLook: undefined,
+        runtimeCinematicText: undefined,
       };
     }),
   attachScript: (id, nextBlueprintId) =>
@@ -4702,10 +4714,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeCinematicCamera: initialCinematicCamera(autoplay, objects, state.scenes.find((s) => s.id === state.activeSceneId)?.cinematics ?? []),
           runtimeCinematicFade: initialCinematicFade(autoplay, state.scenes.find((s) => s.id === state.activeSceneId)?.cinematics ?? []),
           runtimeCinematicLook: autoplay?.look,
+          runtimeCinematicText: undefined,
           editorCinematicPreview: undefined,
           editorCinematicPreviewCamera: undefined,
           editorCinematicPreviewFade: undefined,
           editorCinematicPreviewLook: undefined,
+          editorCinematicPreviewText: undefined,
           editorCinematicPreviewTransforms: {},
           editorCinematicPreviewHidden: [],
           editorCinematicPreviewMaterials: {},
@@ -4785,10 +4799,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematicCamera: undefined,
         runtimeCinematicFade: undefined,
         runtimeCinematicLook: undefined,
+        runtimeCinematicText: undefined,
         editorCinematicPreview: undefined,
         editorCinematicPreviewCamera: undefined,
         editorCinematicPreviewFade: undefined,
         editorCinematicPreviewLook: undefined,
+        editorCinematicPreviewText: undefined,
         editorCinematicPreviewTransforms: {},
         editorCinematicPreviewHidden: [],
         editorCinematicPreviewMaterials: {},
@@ -8065,6 +8081,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let nextRuntimeCinematicCamera = startingCinematic ? undefined : state.runtimeCinematicCamera;
       let nextRuntimeCinematicFade = startingCinematic ? undefined : state.runtimeCinematicFade;
       let nextRuntimeCinematicLook = startingCinematic ? undefined : state.runtimeCinematicLook;
+      let nextRuntimeCinematicText = startingCinematic ? undefined : state.runtimeCinematicText;
       if (nextRuntimeCinematic) {
         const scene = state.scenes.find((item) => item.id === state.activeSceneId);
         const sequence = scene?.cinematics?.find((item) => item.id === nextRuntimeCinematic?.sequenceId);
@@ -8073,6 +8090,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           nextRuntimeCinematicCamera = undefined;
           nextRuntimeCinematicFade = undefined;
           nextRuntimeCinematicLook = undefined;
+          nextRuntimeCinematicText = undefined;
         } else {
           const prevTime = nextRuntimeCinematic.time;
           const sequenceList = scene?.cinematics ?? [];
@@ -8084,6 +8102,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           nextRuntimeCinematicCamera = cinematicCameraAt(sequence, allObjects, currentTime, nextRuntimeCinematicCamera, sequenceList);
           nextRuntimeCinematicFade = cinematicFadeAt(sequence, currentTime, nextRuntimeCinematicFade, sequenceList);
           nextRuntimeCinematicLook = sequence.look;
+          nextRuntimeCinematicText = cinematicTextAt(sequence, currentTime, sequenceList);
           const transformOverrides = cinematicTransformsAt(sequence, allObjects, currentTime, sequenceList);
           const materialOverrides = cinematicMaterialsAt(sequence, allObjects, currentTime, sequenceList);
           if (Object.keys(transformOverrides).length || Object.keys(materialOverrides).length) {
@@ -8164,6 +8183,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             nextRuntimeCinematicCamera = undefined;
             nextRuntimeCinematicFade = undefined;
             nextRuntimeCinematicLook = undefined;
+            nextRuntimeCinematicText = undefined;
           } else {
             nextRuntimeCinematic = { ...nextRuntimeCinematic, time: currentTime, firedActionIds: [...fired], spawnedObjectIds: [...spawnedByCinematic] };
           }
@@ -8480,6 +8500,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematicCamera: nextRuntimeCinematicCamera,
         runtimeCinematicFade: nextRuntimeCinematicFade,
         runtimeCinematicLook: nextRuntimeCinematicLook,
+        runtimeCinematicText: nextRuntimeCinematicText,
         scenes: nextScenes,
         // A Set Quality node fired → update the project's render settings (no isDirty: tickRuntime never dirties).
         ...(pendingQuality && pendingQuality !== state.renderSettings.quality
