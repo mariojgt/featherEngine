@@ -6,9 +6,10 @@ import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, WaterVolumeComponent } from '../types';
 import { particlePresetIds } from '../runtime/particlePresets';
 import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
+import { WATER_STYLE_PRESETS } from '../three/presets';
 import { withTerrainDefaults } from '../terrain/terrain';
 
 const axes = ['X', 'Y', 'Z'] as const;
@@ -1641,6 +1642,89 @@ function PhysicsSection({
   );
 }
 
+function WaterSection({
+  water,
+  onToggle,
+  onChange,
+}: {
+  water?: WaterVolumeComponent;
+  onToggle: () => void;
+  onChange: (patch: Partial<WaterVolumeComponent>) => void;
+}) {
+  if (!water?.enabled) {
+    return (
+      <section className="inspector-section">
+        <h3>Water Volume</h3>
+        <p className="field-hint">Adds swim mode for characters and buoyancy, drag, wave lift, and surface bounce for dynamic physics bodies.</p>
+        <button className="full-button" onClick={onToggle}>Add Water Volume</button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="inspector-section">
+      <h3>Water Volume</h3>
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={water.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+      </label>
+
+      <label className="field-row">
+        <span>Style</span>
+        <select
+          value={water.style ?? 'custom'}
+          onChange={(event) => onChange({ style: event.target.value as WaterVolumeComponent['style'] })}
+        >
+          {WATER_STYLE_PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}
+            </option>
+          ))}
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <p className="field-hint">Picking a style sets the look below; tweaking any value switches it to Custom.</p>
+
+      <h4 className="inspector-subhead">Look</h4>
+      <label className="field-row">
+        <span>Shallow color</span>
+        <input type="color" value={water.shallowColor ?? '#4FD2E8'} onChange={(event) => onChange({ shallowColor: event.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>Deep color</span>
+        <input type="color" value={water.deepColor ?? '#0A3A66'} onChange={(event) => onChange({ deepColor: event.target.value })} />
+      </label>
+      <label className="field-row">
+        <span>Foam color</span>
+        <input type="color" value={water.foamColor ?? '#EAF6FF'} onChange={(event) => onChange({ foamColor: event.target.value })} />
+      </label>
+      <RangeField label="Opacity" value={water.opacity ?? 0.82} min={0} max={1} onChange={(opacity) => onChange({ opacity })} />
+      <RangeField label="Reflectivity" value={water.reflectivity ?? 0.6} min={0} max={1} onChange={(reflectivity) => onChange({ reflectivity })} />
+      <RangeField label="Foam" value={water.foam ?? 0.5} min={0} max={1} onChange={(foam) => onChange({ foam })} />
+      <RangeField label="Sparkle" value={water.sparkle ?? 0.6} min={0} max={1} onChange={(sparkle) => onChange({ sparkle })} />
+      <RangeField label="Caustics" value={water.caustics ?? 0.35} min={0} max={1} onChange={(caustics) => onChange({ caustics })} />
+      <RangeField label="Emissive glow" value={water.emissiveIntensity ?? 0} min={0} max={2} onChange={(emissiveIntensity) => onChange({ emissiveIntensity })} />
+      <label className="field-row">
+        <span>Underwater fog</span>
+        <input type="checkbox" checked={water.underwaterFog ?? false} onChange={(event) => onChange({ underwaterFog: event.target.checked })} />
+      </label>
+
+      <h4 className="inspector-subhead">Waves &amp; physics</h4>
+      <RangeField label="Buoyancy" value={water.buoyancy} min={0} max={3} onChange={(buoyancy) => onChange({ buoyancy })} />
+      <RangeField label="Drag" value={water.drag} min={0} max={6} onChange={(drag) => onChange({ drag })} />
+      <RangeField label="Surface bounce" value={water.surfaceBounce} min={0} max={2} onChange={(surfaceBounce) => onChange({ surfaceBounce })} />
+      <RangeField label="Wave height" value={water.waveAmplitude} min={0} max={2} onChange={(waveAmplitude) => onChange({ waveAmplitude })} />
+      <RangeField label="Wave speed" value={water.waveSpeed} min={0} max={6} onChange={(waveSpeed) => onChange({ waveSpeed })} />
+      <RangeField label="Wave frequency" value={water.waveFrequency} min={0.05} max={2} onChange={(waveFrequency) => onChange({ waveFrequency })} />
+      <RangeField label="Current strength" value={water.flowStrength ?? 0} min={0} max={4} onChange={(flowStrength) => onChange({ flowStrength })} />
+      <RangeField label="Current angle" value={water.flowAngle ?? 0} min={0} max={360} step={1} onChange={(flowAngle) => onChange({ flowAngle })} />
+      <p className="field-hint">Current &gt; 0 makes a river: the surface flows and dynamic bodies drift along the angle. Floating bodies ride the visible crest and tilt with the waves.</p>
+      <p className="field-hint">Use a box/cube scale for the volume size. Dynamic bodies inside float and bob; characters enter swimming mode.</p>
+      <button className="full-button" onClick={onToggle}>Remove Water Volume</button>
+    </section>
+  );
+}
+
 function FractureSection({ objectId, fracture }: { objectId: string; fracture?: import('../types').FractureComponent }) {
   const setObjectFracture = useEditorStore((state) => state.setObjectFracture);
 
@@ -1720,6 +1804,8 @@ export function InspectorPanel() {
   const assets = useEditorStore((state) => state.assets);
   const updatePhysics = useEditorStore((state) => state.updatePhysics);
   const togglePhysics = useEditorStore((state) => state.togglePhysics);
+  const updateWater = useEditorStore((state) => state.updateWater);
+  const toggleWater = useEditorStore((state) => state.toggleWater);
   const toggleAnimator = useEditorStore((state) => state.toggleAnimator);
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
   const toggleCharacterController = useEditorStore((state) => state.toggleCharacterController);
@@ -1880,6 +1966,12 @@ export function InspectorPanel() {
           <AttachmentSection objectId={object.id} />
 
           <UISection objectId={object.id} />
+
+          <WaterSection
+            water={object.water}
+            onToggle={() => toggleWater(object.id)}
+            onChange={(patch) => updateWater(object.id, patch)}
+          />
 
           {object.physics ? (
             <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />

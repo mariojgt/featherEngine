@@ -19,6 +19,14 @@ export const defaultSceneEnvironment = (): SceneEnvironmentSettings => ({
   fogColor: '#101623',
   fogNear: 16,
   fogFar: 44,
+  volumetricFogEnabled: false,
+  volumetricFogDensity: 0.1,
+  volumetricFogColor: '#cfd8e8',
+  volumetricFogHeight: 0,
+  volumetricFogFalloff: 0.03,
+  volumetricScattering: 0.6,
+  volumetricSunStrength: 1.6,
+  volumetricMaxDistance: 140,
 });
 
 export function withSceneEnvironmentDefaults(

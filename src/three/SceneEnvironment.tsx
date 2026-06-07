@@ -134,7 +134,11 @@ export function SceneEnvironment({
   const sunPosition = useMemo(() => sunPositionFromEnvironment(env), [env]);
   const lightIntensity = Math.max(0, env.environmentIntensity);
   // IBL cubemap resolution follows the quality preset — sharper reflections at High/Epic.
-  const envResolution = qualityProfile(useEditorStore((state) => state.renderSettings?.quality)).envResolution;
+  const profile = qualityProfile(useEditorStore((state) => state.renderSettings?.quality));
+  const envResolution = profile.envResolution;
+  // The sun also casts shadows when volumetric fog is on (even in the editor viewport, which otherwise
+  // skips sun shadows) — the volumetric pass samples that shadow map to carve god-ray light shafts.
+  const castSunShadow = shadows || (Boolean(env.volumetricFogEnabled) && profile.shadows);
 
   // Optional image-based lighting: an equirectangular panorama/HDRI drives ambient + reflections,
   // replacing the studio Lightformer rig when set. Loads the same way as any image asset.
@@ -152,10 +156,12 @@ export function SceneEnvironment({
   return (
     <>
       <color attach="background" args={[env.backgroundColor]} />
-      {env.fogEnabled && <fog attach="fog" args={[env.fogColor, Math.max(0, env.fogNear), Math.max(env.fogNear + 1, env.fogFar)]} />}
+      {/* Linear distance fog. Suppressed when volumetric fog is on (PostFx) to avoid doubled haze —
+          the volumetric pass replaces it with height-based mist + sun in-scattering. */}
+      {env.fogEnabled && !env.volumetricFogEnabled && <fog attach="fog" args={[env.fogColor, Math.max(0, env.fogNear), Math.max(env.fogNear + 1, env.fogFar)]} />}
 
       <ambientLight intensity={0.38 + lightIntensity * 0.24} />
-      <directionalLight position={sunPosition} color={env.sunColor} intensity={Math.max(0, env.sunIntensity)} castShadow={shadows} />
+      <directionalLight position={sunPosition} color={env.sunColor} intensity={Math.max(0, env.sunIntensity)} castShadow={castSunShadow} />
       {useImageIbl ? (
         <Environment map={envMapTexture} environmentIntensity={lightIntensity} environmentRotation={iblRotation} />
       ) : (

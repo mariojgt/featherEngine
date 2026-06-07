@@ -1,7 +1,8 @@
 import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR } from '@react-three/postprocessing';
 import { SMAAPreset } from 'postprocessing';
-import { useEditorStore } from '../store/editorStore';
+import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
+import { VolumetricFog, resolveVolumetric } from './VolumetricFog';
 import { qualityProfile } from './quality';
 
 /**
@@ -15,6 +16,7 @@ export function PostFx() {
   const rs = useEditorStore((state) => state.renderSettings);
   const pose = useEditorStore((state) => state.runtimeCinematicCamera ?? state.editorCinematicPreviewCamera);
   const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook ?? state.renderSettings.colorGrade);
+  const environment = useEditorStore(selectActiveSceneEnvironment);
   const profile = qualityProfile(rs?.quality);
   const children = [];
   // Ambient occlusion FIRST so the contact-shadow darkening it adds in crevices/corners is in the
@@ -48,6 +50,14 @@ export function PostFx() {
         rayStep={0.5}
       />,
     );
+  }
+  // Unreal-style raymarched volumetric fog: height-based mist, sun in-scattering (glow toward the sun)
+  // and — on Epic — god-ray shafts from the sun shadow map. Before bloom so bright shafts/glow bloom.
+  // Reads the active scene environment; sample count is tier-driven (off on Low). resolveVolumetric
+  // returns null when it shouldn't render at all.
+  const volumetric = resolveVolumetric(environment, profile);
+  if (volumetric) {
+    children.push(<VolumetricFog key="volumetric" {...volumetric} />);
   }
   if (rs?.bloomEnabled) {
     children.push(

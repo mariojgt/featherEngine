@@ -200,6 +200,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.particleSystemId ? 'Attached particle system' : 'Detached particle system';
     case 'set_physics':
       return input.isTrigger ? 'Configured trigger' : 'Configured physics';
+    case 'create_water_volume':
+      return `Created ${String(input.style ?? 'ocean')} water`;
+    case 'update_water_volume':
+      return input.style ? `Set ${String(input.style)} water` : 'Tuned water';
     case 'set_fracture':
       return input.enabled === false ? 'Removed destructible' : 'Made destructible';
     case 'set_light':

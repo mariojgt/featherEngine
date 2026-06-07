@@ -1162,23 +1162,20 @@ function buildSwimPool(): void {
   decoBlock('Pool Rim E', [cx + size / 2, 0.22, cz], [0.22, 0.25, size], '#4b6577', { roughness: 0.7 });
   decoBlock('Pool Rim W', [cx - size / 2, 0.22, cz], [0.22, 0.25, size], '#4b6577', { roughness: 0.7 });
 
-  // The water surface - a glossy semi-transparent emissive blue, just below the rim. Not a trigger
-  // itself (the volume below is what flips swim mode); this is purely visual.
-  const surface = store.createObjectWithProps('cube', { name: 'Water Surface', position: [cx, 0.14, cz], color: '#3a7fb3' });
-  scaled(surface, [size - 0.3, 0.05, size - 0.3]);
-  store.updateRenderer(surface, { metalness: 0.4, roughness: 0.18, materialOverrides: { emissiveColor: '#3a7fb3', emissiveIntensity: 0.7 } });
-
-  // The water VOLUME - an isTrigger box filling the pool. Tag it `volume:'water'` so the runtime puts
-  // characters that overlap it into swim mode (see runtimeSwimming). Sits between the rim and the floor.
+  // The water VOLUME — an isTrigger box filling the pool, with a real Water Volume component (style
+  // "pool"). The box mesh stays hidden; the engine renders an animated shader surface on its top face
+  // (waves, fresnel, caustics, foam) and flips overlapping characters into swim mode. Sized so the
+  // waterline sits right at the rim.
   const volume = store.createObjectWithProps('cube', {
     name: 'Water Volume',
-    position: [cx, 0.78, cz],
+    position: [cx, 0.18, cz],
     color: '#3a7fb3',
     physics: { enabled: true, bodyType: 'fixed', collider: 'box', isTrigger: true },
   });
-  scaled(volume, [size - 0.4, depth, size - 0.4]);
-  store.updateRenderer(volume, { enabled: false, materialOverrides: { emissiveColor: '#3a7fb3', emissiveIntensity: 0.0 } });
-  store.setObjectVariable(volume, 'volume', 'water');
+  scaled(volume, [size - 0.4, depth * 0.36, size - 0.4]);
+  store.updateRenderer(volume, { enabled: false });
+  store.toggleWater(volume);
+  store.updateWater(volume, { style: 'pool', underwaterFog: true });
 
   // A small "Swim Zone" label cube at the pool edge so it reads as an intentional demo, not a hole.
   block('Sign - Swim', [cx + size / 2 + 1.1, 1.0, cz], [0.3, 1.2, 2.4], '#a5f3fc', {

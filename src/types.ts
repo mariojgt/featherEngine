@@ -885,6 +885,55 @@ export interface PhysicsComponent {
 
 export type PhysicsMaterialPresetId = 'default' | 'rubber' | 'slime' | 'ice' | 'metal' | 'stone' | 'wood' | 'mud';
 
+/** Ready-made looks for a Water Volume. 'custom' = keep whatever visual fields are set by hand. */
+export type WaterStylePreset = 'ocean' | 'pool' | 'lake' | 'toxic' | 'lava' | 'custom';
+
+export interface WaterVolumeComponent {
+  enabled: boolean;
+  /** Upward force multiplier for dynamic bodies below the water surface. */
+  buoyancy: number;
+  /** Linear drag applied while inside the volume; higher slows bodies faster. */
+  drag: number;
+  /** Angular drag applied while inside the volume. */
+  angularDrag: number;
+  /** Extra upward kick when a body hits/oscillates near the water surface. */
+  surfaceBounce: number;
+  /** Vertical wave height used by buoyancy and surface bounce. */
+  waveAmplitude: number;
+  /** Wave cycles per world unit. */
+  waveFrequency: number;
+  /** Wave scroll speed. */
+  waveSpeed: number;
+
+  // --- Visuals (rendered by the WaterSurface shader; all optional so legacy water keeps working) ---
+  /** Look preset; applying one (other than 'custom') overwrites the visual fields below. */
+  style?: WaterStylePreset;
+  /** Tint near the surface / shallow edges. */
+  shallowColor?: string;
+  /** Tint of deep water (blended toward by view depth & fresnel). */
+  deepColor?: string;
+  /** Base surface opacity 0–1 (clear pools low, murky water high). */
+  opacity?: number;
+  /** Fresnel + sky-reflection strength 0–1. */
+  reflectivity?: number;
+  /** Crest + shoreline foam amount 0–1. */
+  foam?: number;
+  /** Foam tint. */
+  foamColor?: string;
+  /** Animated micro-ripple sparkle / specular sharpness 0–1. */
+  sparkle?: number;
+  /** Self-illumination 0–2 (glowing lava / toxic sludge). */
+  emissiveIntensity?: number;
+  /** Animated caustic shimmer across the surface 0–1. */
+  caustics?: number;
+  /** Tint the screen & add fog while the active camera is submerged. */
+  underwaterFog?: boolean;
+  /** Current direction in degrees on the XZ plane (0 = +X, 90 = +Z). Drives rivers/waterfalls. */
+  flowAngle?: number;
+  /** Current strength 0–4: scrolls the surface and pushes dynamic bodies along `flowAngle`. 0 = still. */
+  flowStrength?: number;
+}
+
 export interface ScriptGraphComponent {
   blueprintId: string;
   graphId: string;
@@ -1000,6 +1049,27 @@ export interface SceneEnvironmentSettings {
   fogColor: string;
   fogNear: number;
   fogFar: number;
+  /**
+   * Unreal-style raymarched volumetric fog (src/three/VolumetricFog.tsx), layered on top of (and
+   * replacing) the flat linear `fog*` haze. A depth-buffer post pass that adds height-based density,
+   * sun in-scattering (the bright "glow" toward the sun) and — on Epic — god-ray light shafts where
+   * geometry occludes the sun. Disabled on the Low quality preset regardless of this flag.
+   */
+  volumetricFogEnabled?: boolean;
+  /** Overall fog extinction/density (per world unit). Higher = thicker. */
+  volumetricFogDensity?: number;
+  /** Scattering/fog tint (ambient color of the medium). */
+  volumetricFogColor?: string;
+  /** World Y where density starts falling off. */
+  volumetricFogHeight?: number;
+  /** Exponential height falloff rate above `volumetricFogHeight` (0 = uniform with height). */
+  volumetricFogFalloff?: number;
+  /** Henyey–Greenstein anisotropy g (−1..1). Positive forward-scatters toward the sun (stronger glow). */
+  volumetricScattering?: number;
+  /** Strength of sun in-scattering / light shafts. */
+  volumetricSunStrength?: number;
+  /** Raymarch far clamp in world units (caps cost + keeps distant fog bounded). */
+  volumetricMaxDistance?: number;
 }
 
 /** A reusable named attach point on a skeleton (Unreal socket): a bone + a local offset. */
@@ -1172,6 +1242,8 @@ export interface SceneObject {
   ui?: UIComponent;
   /** Procedural streamed terrain surface and optional instanced foliage. */
   terrain?: TerrainComponent;
+  /** Unreal-style water/physics volume: swim mode for characters plus buoyancy/drag/waves for dynamic bodies. */
+  water?: WaterVolumeComponent;
   /** Per-instance data (e.g. this enemy's `health`), read/written by scripts and world UI bindings via `self.*`. */
   variables?: Record<string, GraphValue>;
   /** Present on runtime-spawned projectiles (action.spawnProjectile): flies forward, damages on hit, despawns. */

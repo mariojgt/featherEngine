@@ -21,6 +21,7 @@ import type {
   TerrainComponent,
   UIElement,
   Vector3Tuple,
+  WaterVolumeComponent,
 } from '../types';
 import { buildSceneSnapshot, type SceneSnapshotDetail } from './systemPrompt';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
@@ -104,6 +105,17 @@ const environmentPatchSchema = z.object({
   fogColor: z.string().optional(),
   fogNear: z.number().min(0).optional(),
   fogFar: z.number().min(1).optional(),
+  volumetricFogEnabled: z
+    .boolean()
+    .optional()
+    .describe('Unreal-style raymarched volumetric fog: height-based mist + sun glow (in-scattering) and god-ray light shafts. Replaces flat linear fog when on. Great for atmospheric/cinematic/foggy/dusty looks.'),
+  volumetricFogDensity: z.number().min(0).optional().describe('Volumetric fog thickness (≈0.02 thin haze, 0.1+ thick).'),
+  volumetricFogColor: z.string().optional().describe('Volumetric mist/scatter tint hex color.'),
+  volumetricFogHeight: z.number().optional().describe('World Y where volumetric density starts thinning out.'),
+  volumetricFogFalloff: z.number().min(0).optional().describe('How fast volumetric fog thins with height (0 = uniform).'),
+  volumetricScattering: z.number().min(-0.95).max(0.95).optional().describe('Sun scatter anisotropy (−0.95..0.95); higher = stronger forward glow toward the sun.'),
+  volumetricSunStrength: z.number().min(0).optional().describe('Strength of the volumetric sun glow / light shafts.'),
+  volumetricMaxDistance: z.number().min(1).optional().describe('Far clamp (world units) for the volumetric raymarch.'),
 });
 const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   skyTopColor: true,
@@ -118,7 +130,47 @@ const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   fogColor: true,
   fogNear: true,
   fogFar: true,
+  volumetricFogEnabled: true,
+  volumetricFogDensity: true,
+  volumetricFogColor: true,
+  volumetricFogHeight: true,
+  volumetricFogFalloff: true,
+  volumetricScattering: true,
+  volumetricSunStrength: true,
+  volumetricMaxDistance: true,
 });
+const waterPatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  buoyancy: z.number().min(0).max(3).optional().describe('Upward force multiplier for dynamic bodies in the volume.'),
+  drag: z.number().min(0).max(6).optional().describe('Linear drag in water; higher slows objects faster.'),
+  angularDrag: z.number().min(0).max(4).optional().describe('Rotational damping hint for water interaction.'),
+  surfaceBounce: z.number().min(0).max(2).optional().describe('Extra upward bounce when objects hit the water surface.'),
+  waveAmplitude: z.number().min(0).max(2).optional().describe('Wave height in world units.'),
+  waveFrequency: z.number().min(0.05).max(2).optional().describe('Wave cycles per world unit.'),
+  waveSpeed: z.number().min(0).max(6).optional().describe('Wave scroll speed.'),
+  // Visuals — the rendered surface. Setting `style` stamps a whole look; any other field switches it to custom.
+  style: z
+    .enum(['ocean', 'pool', 'lake', 'toxic', 'lava', 'custom'])
+    .optional()
+    .describe('Ready-made look: ocean | pool | lake | toxic | lava | custom. Sets all the visual fields below.'),
+  shallowColor: z.string().optional().describe('Hex tint near the surface / shallow edges.'),
+  deepColor: z.string().optional().describe('Hex tint of deep water (also the underwater fog color).'),
+  foamColor: z.string().optional().describe('Hex foam color.'),
+  surfaceOpacity: z.number().min(0).max(1).optional().describe('Rendered water-surface opacity (clear pool low, murky high).'),
+  reflectivity: z.number().min(0).max(1).optional().describe('Fresnel + sky-reflection strength 0-1.'),
+  foam: z.number().min(0).max(1).optional().describe('Crest + shoreline foam amount 0-1.'),
+  sparkle: z.number().min(0).max(1).optional().describe('Animated micro-ripple sparkle / sun-glint sharpness 0-1.'),
+  caustics: z.number().min(0).max(1).optional().describe('Animated caustic shimmer across the surface 0-1.'),
+  emissiveIntensity: z.number().min(0).max(2).optional().describe('Self-illumination glow (use for lava/toxic).'),
+  underwaterFog: z.boolean().optional().describe('Tint the screen + murk the view while the camera is submerged.'),
+  flowStrength: z.number().min(0).max(4).optional().describe('Current strength: 0 = still lake, >0 = flowing river/waterfall (surface scrolls + bodies drift).'),
+  flowAngle: z.number().min(0).max(360).optional().describe('Current direction in degrees on XZ (0 = +X, 90 = +Z).'),
+});
+/** Map the AI-facing `surfaceOpacity` onto the component's `opacity` field (kept distinct from the box tint). */
+function normalizeWaterPatch<T extends { surfaceOpacity?: number }>(patch: T): Omit<T, 'surfaceOpacity'> & { opacity?: number } {
+  const { surfaceOpacity, ...rest } = patch;
+  return surfaceOpacity === undefined ? rest : { ...rest, opacity: surfaceOpacity };
+}
 const cinematicActionSchema = z.object({
   type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence']),
   time: z.number().min(0).describe('Seconds from cinematic start.'),
@@ -691,6 +743,46 @@ export const engineTools = {
     },
   }),
 
+  create_water_volume: tool({
+    description:
+      'Create an Unreal-style water/physics volume: a box trigger that renders a realistic ANIMATED water surface (Gerstner waves, fresnel reflection, depth color, foam, caustics, optional underwater screen tint) and makes characters swim + gives dynamic bodies buoyancy/drag/wave lift. Scale controls the volume size. Pick a `style` (ocean/pool/lake/toxic/lava) for an instant look, or set the individual visual fields. Defaults to the "ocean" look.',
+    inputSchema: waterPatchSchema.extend({
+      name: z.string().optional(),
+      position: vec3.optional().describe('Center of the water volume. Default [0,1,0].'),
+      scale: vec3.optional().describe('Volume size [width,height,depth]. Default [10,2,10].'),
+      color: z.string().optional().describe('Underlying box tint hex (the animated surface is driven by style/shallowColor/deepColor). Default #2BA8FF.'),
+      opacity: z.number().min(0).max(1).optional().describe('Underlying box opacity. Default 0.45 (the surface has its own surfaceOpacity).'),
+    }),
+    execute: async ({ name, position, scale, color = '#2BA8FF', opacity = 0.45, ...water }) => {
+      const id = store().createObjectWithProps('cube', {
+        name: name ?? 'Water Volume',
+        position: position ? asVec3(position) : [0, 1, 0],
+        color,
+        physics: { enabled: true, bodyType: 'fixed', collider: 'box', isTrigger: true, gravityScale: 0 },
+      });
+      store().updateTransform(id, 'scale', scale ? asVec3(scale) : [10, 2, 10]);
+      store().updateRenderer(id, { color, opacity, roughness: 0.12, metalness: 0 });
+      store().toggleWater(id);
+      // Default to the 'ocean' look unless the caller named a style; surface visuals override on top.
+      store().updateWater(id, { style: 'ocean', ...normalizeWaterPatch(water) } as Partial<WaterVolumeComponent>);
+      store().setObjectVariable(id, 'volume', 'water');
+      return `Created water volume "${findObject(id)?.name}" with id ${id}. Dynamic bodies float/bob; characters swim inside it.`;
+    },
+  }),
+
+  update_water_volume: tool({
+    description:
+      'Tune a water volume: swap its `style` (ocean/pool/lake/toxic/lava), adjust visuals (colors, surfaceOpacity, reflectivity, foam, sparkle, caustics, emissiveIntensity, underwaterFog) or physics (buoyancy/drag/wave* / surfaceBounce). Setting any visual/wave field flips style to custom.',
+    inputSchema: waterPatchSchema.extend({ objectId: z.string() }),
+    execute: async ({ objectId, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.water) store().toggleWater(objectId);
+      store().updateWater(objectId, normalizeWaterPatch(patch) as Partial<WaterVolumeComponent>);
+      return `Updated water volume ${objectId}.`;
+    },
+  }),
+
   update_terrain: tool({
     description:
       'Update a terrain object created with create_terrain/create_object kind:"terrain". Controls chunk streaming, procedural height, editable material layers, and instanced/custom foliage.',
@@ -898,7 +990,7 @@ export const engineTools = {
 
   set_scene_environment: tool({
     description:
-      'Set the active scene sky/fog/base lighting. Use this for mood, time of day, sunset/night/daylight, panorama skyboxes, and fog. This is scene-level World Settings, not a Blueprint node.',
+      'Set the active scene sky/fog/base lighting. Use this for mood, time of day, sunset/night/daylight, panorama skyboxes, fog, and Unreal-style volumetric fog/light shafts (volumetricFog* fields — atmospheric mist, sun glow, god rays). This is scene-level World Settings, not a Blueprint node.',
     inputSchema: environmentPatchSchema,
     execute: async ({ skyTextureAssetId, environmentMapAssetId, ...patch }) => {
       if (skyTextureAssetId) {
@@ -925,7 +1017,7 @@ export const engineTools = {
     description:
       'Apply a complete one-click scene lighting/look preset. It updates sky, fog, sun, environment intensity, bloom/vignette, quality/shadow/AO budget, and project color grade together.',
     inputSchema: z.object({
-      preset: z.enum(lightingPresetIds).describe('sunny, overcast, night, cyberpunk, indoor, or cinematic.'),
+      preset: z.enum(lightingPresetIds).describe('sunny, overcast, night, cyberpunk, indoor, cinematic, or godrays (low hazy sun + strong volumetric light shafts).'),
     }),
     execute: async ({ preset }) => {
       const selected = findLightingPreset(preset);

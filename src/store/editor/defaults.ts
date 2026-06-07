@@ -15,6 +15,7 @@ import type {
   TransformComponent,
   VehicleComponent,
   Vector3Tuple,
+  WaterVolumeComponent,
 } from '../../types';
 
 import { makeId } from './ids';
@@ -251,6 +252,31 @@ export const defaultPhysics = (
   restitution: 0.05,
   linearDamping: 0,
   angularDamping: 0.05,
+});
+
+export const defaultWaterVolume = (): WaterVolumeComponent => ({
+  enabled: true,
+  buoyancy: 1.25,
+  drag: 1.8,
+  angularDrag: 0.65,
+  surfaceBounce: 0.55,
+  waveAmplitude: 0.22,
+  waveFrequency: 0.55,
+  waveSpeed: 1.4,
+  // Visuals — defaults read as a believable "ocean" until a style preset is applied.
+  style: 'ocean',
+  shallowColor: '#4FD2E8',
+  deepColor: '#0A3A66',
+  opacity: 0.82,
+  reflectivity: 0.6,
+  foam: 0.5,
+  foamColor: '#EAF6FF',
+  sparkle: 0.6,
+  emissiveIntensity: 0,
+  caustics: 0.35,
+  underwaterFog: true,
+  flowAngle: 0,
+  flowStrength: 0,
 });
 
 export const withPhysicsDefaults = (physics: PhysicsComponent): PhysicsComponent => ({

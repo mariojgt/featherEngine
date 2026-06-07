@@ -83,6 +83,7 @@ import {
   type UIComponent,
   type UISurface,
   type UIPresetKind,
+  type WaterVolumeComponent,
 } from '../types';
 import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent } from '../runtime/physicsWorld';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
@@ -93,6 +94,7 @@ import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSi
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
 import { applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { resolveMaterial } from '../three/materialResolve';
+import { WATER_LOOK_KEYS, waterStylePatch } from '../three/presets';
 import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import { applyTerrainPaint, applyTerrainSculpt, createTerrainHeightSampler, terrainLocalPointFromWorld, withTerrainDefaults } from '../terrain/terrain';
 import { worldTransformOf, worldToLocalUnderParent } from '../utils/transformHierarchy';
@@ -123,6 +125,7 @@ import {
   defaultTerrainBrush,
   defaultTransform,
   defaultVehicle,
+  defaultWaterVolume,
   lerpAngle,
   syncTerrainLayerColors,
   titleCase,
@@ -200,6 +203,39 @@ import { recordRuntimeSection } from '../runtime/perfStats';
 // Per-frame lookup Maps over project-level arrays. The arrays are replaced
 // immutably only on edit, so these WeakMap-cached indexers return the same Map
 // across Play frames instead of rebuilding it 60×/s (see tickRuntime).
+// Monotonic id for water surface-impact ripple events (transient FX; the WaterSurface shader dedupes by it).
+let waterImpactSeq = 0;
+const nextWaterImpactId = () => (waterImpactSeq = (waterImpactSeq + 1) % 1_000_000);
+
+/**
+ * Surface displacement of a water volume at world (px,pz) and time t — the SAME 4-octave swell the
+ * WaterSurface shader renders (plus directional flow), so buoyant bodies ride the VISIBLE crest. Keep
+ * this in sync with `waterHeight` in src/three/WaterSurface.tsx.
+ */
+function waterSurfaceHeight(
+  water: { waveAmplitude: number; waveFrequency: number; waveSpeed: number; flowStrength?: number; flowAngle?: number },
+  px: number,
+  pz: number,
+  t: number,
+): number {
+  const a = water.waveAmplitude;
+  const f = water.waveFrequency;
+  const s = water.waveSpeed;
+  let h = 0;
+  h += Math.sin((px * 1 + pz * 0) * f + t * s) * a * 0.5;
+  h += Math.sin((px * 0.7071 + pz * 0.7071) * f * 1.7 - t * s * 1.3) * a * 0.28;
+  h += Math.sin((px * -0.6 + pz * 0.8) * f * 2.6 + t * s * 1.7) * a * 0.16;
+  h += Math.sin((px * 0.2 + pz * -0.98) * f * 3.7 - t * s * 2.1) * a * 0.09;
+  const flow = water.flowStrength ?? 0;
+  if (flow > 0) {
+    const ang = ((water.flowAngle ?? 0) * Math.PI) / 180;
+    const dx = Math.cos(ang);
+    const dz = Math.sin(ang);
+    h += Math.sin((px * dx + pz * dz) * f * 1.2 - t * s * (1 + flow)) * a * 0.2;
+  }
+  return h;
+}
+
 const indexVariablesById = createArrayIndexer((v: ProjectVariable) => v.id);
 const indexVariablesByName = createArrayIndexer((v: ProjectVariable) => v.name);
 const indexDataAssetsById = createArrayIndexer((a: DataAsset) => a.id);
@@ -343,6 +379,13 @@ interface EditorState {
    *  via trigger enter/exit against objects whose `volume` instance variable is 'water' / 'climb'. */
   runtimeSwimming: string[];
   runtimeClimbing: string[];
+  /** Object ids (any dynamic body or character) overlapping a water volume last frame — used to fire a
+   *  one-shot splash + surface ripple the frame something first breaks the surface. */
+  runtimeInWater: string[];
+  /** Recent surface-impact points for the water shader's expanding ripple rings (newest last, capped). */
+  runtimeWaterImpacts: { id: number; x: number; z: number }[];
+  /** Per-body cooldown (last runtimeTime a wake ripple was shed) so surface-skimming wakes stay throttled. */
+  runtimeWaterWake: Record<string, number>;
   /** Remaining roll/dodge time (seconds) per object — drives the forward dash + "rolling" param. */
   runtimeRoll: Record<string, number>;
   /** Active mantle/vault arcs per character. The controller owns the arc until time reaches duration. */
@@ -516,6 +559,8 @@ interface EditorState {
   removeTerrainMaterialLayer: (objectId: string, layerId: string) => void;
   clearTerrainEdits: (objectId: string, edits?: 'height' | 'paint' | 'all') => void;
   updatePhysics: (id: string, patch: Partial<PhysicsComponent>) => void;
+  updateWater: (id: string, patch: Partial<WaterVolumeComponent>) => void;
+  toggleWater: (id: string) => void;
   togglePhysics: (id: string) => void;
   /** Make an object destructible / patch its fracture config (seeds defaults on first use). */
   setObjectFracture: (id: string, patch: Partial<FractureComponent>) => void;
@@ -871,6 +916,12 @@ const cloneObjectTree = (
 export const selectActiveObjects = (state: EditorState): SceneObject[] =>
   state.scenes.find((scene) => scene.id === state.activeSceneId)?.objects ?? [];
 
+/** Stable selector for the active scene's environment settings (sky/fog/sun). May be undefined. */
+export const selectActiveSceneEnvironment = (
+  state: EditorState,
+): SceneEnvironmentSettings | undefined =>
+  state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment;
+
 /**
  * The effective selection: the multi-select set when it actually contains the active object,
  * otherwise just the active object. This lets every single-select consumer keep reading
@@ -944,6 +995,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeCameraShake: 0,
   runtimeGrounded: [],
   runtimeSwimming: [],
+  runtimeInWater: [],
+  runtimeWaterImpacts: [],
+  runtimeWaterWake: {},
   runtimeClimbing: [],
   runtimeRoll: {},
   runtimeMantle: {},
@@ -1740,6 +1794,56 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         objects.map((object) =>
           object.id === id && object.physics ? { ...object, physics: withPhysicsDefaults({ ...object.physics, ...patch }) } : object,
         ),
+      ),
+    ),
+  updateWater: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id) return object;
+          // Choosing a named style stamps its look; the rest of `patch` can still override on top.
+          // Hand-editing a visual/wave field with no style in the patch marks the volume 'custom' so the
+          // inspector dropdown stops claiming a preset it no longer matches.
+          const stylePatch =
+            patch.style && patch.style !== 'custom' ? waterStylePatch(patch.style) : {};
+          const touchesLook = WATER_LOOK_KEYS.some((key) => key in patch);
+          const derivedStyle = patch.style ?? (touchesLook ? 'custom' : undefined);
+          return {
+            ...object,
+            water: {
+              ...defaultWaterVolume(),
+              ...object.water,
+              ...stylePatch,
+              ...patch,
+              ...(derivedStyle ? { style: derivedStyle } : {}),
+            },
+          };
+        }),
+      ),
+    ),
+  toggleWater: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id) return object;
+          const water = { ...defaultWaterVolume(), ...object.water };
+          const enabled = !water.enabled;
+          const nextPhysics = withPhysicsDefaults({
+            ...(object.physics ?? defaultPhysics('fixed', 'box')),
+            enabled: true,
+            bodyType: 'fixed',
+            collider: 'box',
+            isTrigger: true,
+            gravityScale: 0,
+          });
+          return {
+            ...object,
+            water: { ...water, enabled },
+            physics: nextPhysics,
+            variables: { ...(object.variables ?? {}), volume: enabled ? 'water' : object.variables?.volume ?? 'water' },
+            renderer: object.renderer ? { ...object.renderer, color: '#2BA8FF', opacity: object.renderer.opacity ?? 0.45 } : object.renderer,
+          };
+        }),
       ),
     ),
   togglePhysics: (id) =>
@@ -7398,6 +7502,118 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           kickedChunkIds.add(o.id);
         }
       }
+      // Surface FX: bodies overlapping a water volume this frame (drives splash/ripple on first entry),
+      // and the new ripple impacts to feed the water shader. Both also collected from the swim-entry block.
+      const inWaterIds: string[] = [];
+      const newWaterImpacts: { id: number; x: number; z: number }[] = [];
+      const nextWaterWake: Record<string, number> = {};
+      const waterVolumes = movedObjects
+        .filter((object) => !nextDisabled.has(object.id))
+        .map((object) => {
+          const taggedWater = !object.water && object.variables?.volume === 'water';
+          const water = object.water?.enabled ? { ...defaultWaterVolume(), ...object.water } : taggedWater ? defaultWaterVolume() : undefined;
+          if (!water?.enabled) return null;
+          const [x, y, z] = object.transform.position;
+          const [sx, sy, sz] = object.transform.scale.map((value) => Math.max(0.001, Math.abs(value))) as Vector3Tuple;
+          return {
+            id: object.id,
+            water,
+            minX: x - sx * 0.5,
+            maxX: x + sx * 0.5,
+            minY: y - sy * 0.5,
+            maxY: y + sy * 0.5,
+            minZ: z - sz * 0.5,
+            maxZ: z + sz * 0.5,
+          };
+        })
+        .filter((volume): volume is NonNullable<typeof volume> => Boolean(volume));
+      if (waterVolumes.length) {
+        const runtimeInWaterSet = new Set(state.runtimeInWater);
+        for (const object of movedObjects) {
+          if (nextDisabled.has(object.id) || object.water?.enabled || object.projectile) continue;
+          if (!object.physics?.enabled || object.physics.bodyType !== 'dynamic') continue;
+          const [x, y, z] = object.transform.position;
+          const radius = Math.max(0.05, Math.max(Math.abs(object.transform.scale[0]), Math.abs(object.transform.scale[1]), Math.abs(object.transform.scale[2])) * 0.5);
+          for (const volume of waterVolumes) {
+            if (object.id === volume.id) continue;
+            if (x + radius < volume.minX || x - radius > volume.maxX || z + radius < volume.minZ || z - radius > volume.maxZ) continue;
+            if (y + radius < volume.minY || y - radius > volume.maxY) continue;
+            const water = volume.water;
+            // Wave-accurate: sample the SAME surface the shader draws at the body + small offsets so the
+            // body rides the visible crest and we can read the wave slope (for tilt + horizontal sway).
+            const eps = Math.max(0.25, radius * 0.6);
+            const wave = waterSurfaceHeight(water, x, z, runtimeTime);
+            const waveX = waterSurfaceHeight(water, x + eps, z, runtimeTime);
+            const waveZ = waterSurfaceHeight(water, x, z + eps, runtimeTime);
+            const slopeX = (waveX - wave) / eps; // d(height)/dx
+            const slopeZ = (waveZ - wave) / eps; // d(height)/dz
+            const surfaceY = volume.maxY + wave;
+            const bottomY = volume.minY;
+            const bodyBottom = y - radius;
+            const bodyTop = y + radius;
+            if (bodyBottom > surfaceY || bodyTop < bottomY) continue;
+            // First frame this body breaks the surface → splash crown + an expanding ripple on the water.
+            inWaterIds.push(object.id);
+            if (!runtimeInWaterSet.has(object.id)) {
+              spawned.push(makeSplashObject([x, surfaceY, z]));
+              // A hard, fast entry throws up a bigger, denser splash.
+              const entrySpeed = -(state.runtimeVelocities[object.id]?.[1] ?? 0);
+              if (entrySpeed > 4) spawned.push(makeSplashObject([x, surfaceY, z]));
+              newWaterImpacts.push({ id: nextWaterImpactId(), x, z });
+            }
+            const submerged = Math.min(1, Math.max(0, (surfaceY - bodyBottom) / Math.max(radius * 2, 0.001)));
+            const mass = Math.max(0.001, object.physics.mass ?? 1);
+            const velocity = nextVelocities[object.id] ?? state.runtimeVelocities[object.id] ?? [0, 0, 0];
+            const drag = Math.max(0, water.drag) * submerged;
+            const waveLift = Math.max(0, wave) * water.waveSpeed * 2.4;
+            let impulseY = mass * (9.81 * water.buoyancy * submerged + waveLift) * delta;
+            const nearSurface = Math.abs(y - surfaceY) < radius * 0.9;
+            if (nearSurface && velocity[1] < 0) impulseY += -velocity[1] * mass * water.surfaceBounce;
+            const dragScale = Math.min(0.9, drag * delta);
+            // Crests push bodies down their slope (toward troughs) — the sideways shove that bobs a raft.
+            const slopeShoveX = -slopeX * water.waveAmplitude * water.waveSpeed * 6 * mass * delta * submerged;
+            const slopeShoveZ = -slopeZ * water.waveAmplitude * water.waveSpeed * 6 * mass * delta * submerged;
+            // Directional current pushes bodies along flowAngle.
+            const flow = water.flowStrength ?? 0;
+            let flowX = 0;
+            let flowZ = 0;
+            if (flow > 0) {
+              const ang = ((water.flowAngle ?? 0) * Math.PI) / 180;
+              flowX = Math.cos(ang) * flow * 4 * mass * delta * submerged;
+              flowZ = Math.sin(ang) * flow * 4 * mass * delta * submerged;
+            }
+            const accrued = physicsImpulses[object.id] ?? [0, 0, 0];
+            physicsImpulses[object.id] = [
+              accrued[0] - velocity[0] * mass * dragScale + slopeShoveX + flowX,
+              accrued[1] + impulseY - velocity[1] * mass * dragScale,
+              accrued[2] - velocity[2] * mass * dragScale + slopeShoveZ + flowZ,
+            ];
+            // Tilt to lie along the wave surface: a gentle torque rolls the body toward the wave normal so
+            // rafts/crates pitch and roll with the swell (Rapier's angular damping keeps it from tumbling).
+            if (submerged > 0.05) {
+              const tilt = water.waveAmplitude * 1.8 * submerged * mass * delta;
+              const accruedTorque = physicsAngularImpulses[object.id] ?? [0, 0, 0];
+              physicsAngularImpulses[object.id] = [
+                accruedTorque[0] - slopeZ * tilt,
+                accruedTorque[1],
+                accruedTorque[2] + slopeX * tilt,
+              ];
+            }
+            // Continuous wake: a body skimming the surface sheds a ripple ring behind it (throttled).
+            const horizSpeed = Math.hypot(velocity[0], velocity[2]);
+            if (nearSurface && horizSpeed > 1.6) {
+              const lastWake = state.runtimeWaterWake?.[object.id] ?? -1;
+              if (runtimeTime - lastWake > 0.16) {
+                newWaterImpacts.push({ id: nextWaterImpactId(), x: x - velocity[0] * 0.12, z: z - velocity[2] * 0.12 });
+                nextWaterWake[object.id] = runtimeTime;
+              } else {
+                nextWaterWake[object.id] = lastWake;
+              }
+            }
+            break;
+          }
+        }
+      }
       const physics = getActivePhysics();
       if (physics) {
         // Deactivated objects are excluded from the physics objects list, so syncBodies removes their
@@ -7504,7 +7720,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (triggers.length || triggersExit.length) {
         const otherObj = (id: string) => resolvedObjectById.get(id);
         const volumeKind = (id: string) => {
-          const v = otherObj(id)?.variables?.volume;
+          const object = otherObj(id);
+          if (object?.water) return object.water.enabled ? 'water' : undefined;
+          const v = object?.variables?.volume;
           return typeof v === 'string' ? v : undefined;
         };
         const isCharacter = (id: string) => Boolean(resolvedObjectById.get(id)?.character?.enabled);
@@ -7541,6 +7759,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const obj = resolvedObjectById.get(id);
         if (!obj) continue;
         spawned.push(makeSplashObject(obj.transform.position));
+        newWaterImpacts.push({ id: nextWaterImpactId(), x: obj.transform.position[0], z: obj.transform.position[2] });
         const splashSound = obj.character?.swimSoundId;
         if (splashSound) sounds.push(splashSound);
       }
@@ -8215,6 +8434,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCameraShake: cameraShake,
         runtimeGrounded: groundedIds,
         runtimeSwimming: swimmingIds,
+        runtimeInWater: inWaterIds,
+        runtimeWaterImpacts: [...state.runtimeWaterImpacts, ...newWaterImpacts].slice(-10),
+        runtimeWaterWake: nextWaterWake,
         runtimeClimbing: climbingIds,
         runtimeRoll: nextRoll,
         runtimeMantle: nextMantle,
@@ -8379,6 +8601,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         terrain: object.terrain ? withTerrainDefaults(object.terrain) : object.terrain,
         character: object.character ? { ...defaultCharacter(), ...object.character } : object.character,
         physics: object.physics ? withPhysicsDefaults(object.physics) : object.physics,
+        water: object.water ? { ...defaultWaterVolume(), ...object.water } : object.water,
       });
       const scenes = rawScenes.map((scene) => ({
         ...scene,

@@ -304,6 +304,86 @@ export function SceneSettingsPanel() {
             </label>
           </>
         )}
+        <label className="field-row">
+          <span><CloudFog size={13} aria-hidden /> Volumetric Fog</span>
+          <input
+            type="checkbox"
+            checked={environment.volumetricFogEnabled ?? false}
+            onChange={(event) => updateEnvironment({ volumetricFogEnabled: event.target.checked })}
+          />
+        </label>
+        {environment.volumetricFogEnabled && (
+          <>
+            <label className="field-row">
+              <span>Volume Color</span>
+              <input
+                type="color"
+                value={environment.volumetricFogColor ?? '#cfd8e8'}
+                onChange={(event) => updateEnvironment({ volumetricFogColor: event.target.value })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Density</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={environment.volumetricFogDensity ?? 0.06}
+                onChange={(event) => updateEnvironment({ volumetricFogDensity: num(event.target.value, environment.volumetricFogDensity ?? 0.06) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Height</span>
+              <input
+                type="number"
+                step={0.5}
+                value={environment.volumetricFogHeight ?? 0}
+                onChange={(event) => updateEnvironment({ volumetricFogHeight: num(event.target.value, environment.volumetricFogHeight ?? 0) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Height Falloff</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={environment.volumetricFogFalloff ?? 0.08}
+                onChange={(event) => updateEnvironment({ volumetricFogFalloff: num(event.target.value, environment.volumetricFogFalloff ?? 0.08) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Sun Scatter</span>
+              <input
+                type="number"
+                min={-0.95}
+                max={0.95}
+                step={0.05}
+                value={environment.volumetricScattering ?? 0.7}
+                onChange={(event) => updateEnvironment({ volumetricScattering: num(event.target.value, environment.volumetricScattering ?? 0.7) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Sun Strength</span>
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={environment.volumetricSunStrength ?? 1.2}
+                onChange={(event) => updateEnvironment({ volumetricSunStrength: num(event.target.value, environment.volumetricSunStrength ?? 1.2) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Max Distance</span>
+              <input
+                type="number"
+                min={1}
+                step={5}
+                value={environment.volumetricMaxDistance ?? 120}
+                onChange={(event) => updateEnvironment({ volumetricMaxDistance: num(event.target.value, environment.volumetricMaxDistance ?? 120) })}
+              />
+            </label>
+          </>
+        )}
       </section>
     </aside>
   );

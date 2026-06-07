@@ -45,6 +45,9 @@ import {
 import { qualityProfile, QUALITY_LEVELS } from '../three/quality';
 import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
+import { WaterSurface } from '../three/WaterSurface';
+import { WaterEnvCapture } from '../three/WaterEnvCapture';
+import { UnderwaterOverlay } from '../three/UnderwaterOverlay';
 import { Terrain } from '../three/Terrain';
 import { highestTerrainWorldHeight } from '../terrain/terrain';
 import type { MaterialOverrides, SceneObject } from '../types';
@@ -748,6 +751,12 @@ function SceneContent({
   const recording = useEditorStore((state) => state.cinematicRecording);
   const editingKeyframe = useEditorStore((state) => Boolean(state.selectedCinematicKeyframe));
   const previewingCinematic = !isPlaying && Boolean(cinematicPreview);
+  // Volumetric fog (post-FX) renders in the editor viewport too, not just Play, so its look is
+  // authorable live in Scene Settings. Mount PostFx whenever it's enabled on the active scene.
+  const volumetricFogActive = useEditorStore(
+    (state) =>
+      Boolean(state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment?.volumetricFogEnabled),
+  );
   // Camera-space view-models are hidden from the world viewport; select them from the Hierarchy
   // and edit their transform in the Inspector when their first-person placement needs tuning.
   const sceneObjects = allSceneObjects.filter(
@@ -977,6 +986,16 @@ function SceneContent({
       {/* World-space UI widgets anchored to objects (edit + play). Use the UNFILTERED list so signs on
           invisible/empty anchors (e.g. tutorial labels) still show during Play. */}
       {allSceneObjects.map((object) => (object.ui ? <WorldUIAnchor key={`ui-${object.id}`} object={object} /> : null))}
+      {/* Animated, translucent skin for every enabled Water Volume — renders the buoyancy wave so the
+          surface is visible in edit AND Play. Unfiltered list: volumes are usually triggers (hidden in
+          runtime), but their water must still show. */}
+      {allSceneObjects.map((object) =>
+        object.water?.enabled ? <WaterSurface key={`water-${object.id}`} object={object} /> : null,
+      )}
+      {/* Scene-capture pass feeding water reflections/refraction/depth-foam (High/Epic; no-op otherwise). */}
+      <WaterEnvCapture />
+      {/* Screen tint + murk while the active camera is submerged in a Water Volume (edit + play). */}
+      <UnderwaterOverlay />
       {/* WebGL HUD (uikit) for renderMode:'webgl' screen docs — lives in-canvas so PostFx bloom hits it. */}
       <WebGLScreenUILayer />
       {selectedTarget && !isPlaying && !cameraRigObject && (!previewingCinematic || recording) && (
@@ -1029,7 +1048,7 @@ function SceneContent({
       )}
       {/* Post-FX (bloom/vignette + cinematic grade/DoF) during Play so the editor matches the shipped
           game look — and also while scrubbing a cinematic preview so grading/focus are visible there. */}
-      {(isPlaying || previewingCinematic) && <PostFx />}
+      {(isPlaying || previewingCinematic || volumetricFogActive) && <PostFx />}
     </>
   );
 }

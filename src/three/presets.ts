@@ -1,4 +1,4 @@
-import type { CinematicLook, MaterialDefinition, RenderSettings, SceneEnvironmentSettings } from '../types';
+import type { CinematicLook, MaterialDefinition, RenderSettings, SceneEnvironmentSettings, WaterStylePreset, WaterVolumeComponent } from '../types';
 
 export type MaterialPresetId =
   | 'plastic'
@@ -9,9 +9,10 @@ export type MaterialPresetId =
   | 'rock'
   | 'grass'
   | 'skin'
-  | 'rubber';
+  | 'rubber'
+  | 'water';
 
-export type LightingPresetId = 'sunny' | 'overcast' | 'night' | 'cyberpunk' | 'indoor' | 'cinematic';
+export type LightingPresetId = 'sunny' | 'overcast' | 'night' | 'cyberpunk' | 'indoor' | 'cinematic' | 'godrays';
 
 export interface MaterialPreset {
   id: MaterialPresetId;
@@ -84,7 +85,163 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
     description: 'Dark grippy material for tires, grips, and pads.',
     patch: { color: '#16181D', metalness: 0, roughness: 0.74, emissiveColor: '#000000', emissiveIntensity: 0 },
   },
+  {
+    id: 'water',
+    name: 'Water',
+    description: 'Glossy blue water surface; pair with a Water Volume for buoyancy and waves.',
+    patch: { color: '#2BA8FF', metalness: 0, roughness: 0.08, emissiveColor: '#0B5C88', emissiveIntensity: 0.08 },
+  },
 ];
+
+/** Visual + motion fields a Water Volume style preset overrides (physics buoyancy/drag are left alone). */
+export type WaterStylePatch = Partial<
+  Pick<
+    WaterVolumeComponent,
+    | 'shallowColor'
+    | 'deepColor'
+    | 'opacity'
+    | 'reflectivity'
+    | 'foam'
+    | 'foamColor'
+    | 'sparkle'
+    | 'emissiveIntensity'
+    | 'caustics'
+    | 'waveAmplitude'
+    | 'waveFrequency'
+    | 'waveSpeed'
+    | 'flowAngle'
+    | 'flowStrength'
+  >
+>;
+
+export interface WaterStyleDef {
+  id: WaterStylePreset;
+  name: string;
+  description: string;
+  patch: WaterStylePatch;
+}
+
+/** Ready-made water looks. Picking one in the inspector (or via the AI) stamps these onto the volume. */
+export const WATER_STYLE_PRESETS: WaterStyleDef[] = [
+  {
+    id: 'ocean',
+    name: 'Ocean',
+    description: 'Deep rolling sea — big swell, strong reflections, crest foam.',
+    patch: {
+      shallowColor: '#4FD2E8',
+      deepColor: '#0A3A66',
+      opacity: 0.86,
+      reflectivity: 0.7,
+      foam: 0.6,
+      foamColor: '#EAF6FF',
+      sparkle: 0.7,
+      emissiveIntensity: 0,
+      caustics: 0.3,
+      waveAmplitude: 0.4,
+      waveFrequency: 0.4,
+      waveSpeed: 1.6,
+    },
+  },
+  {
+    id: 'pool',
+    name: 'Pool / Clear',
+    description: 'Calm, very transparent light cyan with gentle ripples and bright caustics.',
+    patch: {
+      shallowColor: '#7FE9FF',
+      deepColor: '#1C8FBF',
+      opacity: 0.5,
+      reflectivity: 0.45,
+      foam: 0.12,
+      foamColor: '#FFFFFF',
+      sparkle: 0.85,
+      emissiveIntensity: 0,
+      caustics: 0.8,
+      waveAmplitude: 0.08,
+      waveFrequency: 0.9,
+      waveSpeed: 1.0,
+    },
+  },
+  {
+    id: 'lake',
+    name: 'Lake / River',
+    description: 'Soft calm green-blue inland water with subtle waves and light foam.',
+    patch: {
+      shallowColor: '#5FC9B0',
+      deepColor: '#15564F',
+      opacity: 0.8,
+      reflectivity: 0.5,
+      foam: 0.25,
+      foamColor: '#E6FFF6',
+      sparkle: 0.45,
+      emissiveIntensity: 0,
+      caustics: 0.35,
+      waveAmplitude: 0.16,
+      waveFrequency: 0.5,
+      waveSpeed: 1.1,
+    },
+  },
+  {
+    id: 'toxic',
+    name: 'Toxic Sludge',
+    description: 'Murky glowing green hazard — thick slow waves, faint emissive shimmer.',
+    patch: {
+      shallowColor: '#9BFF45',
+      deepColor: '#15401A',
+      opacity: 0.92,
+      reflectivity: 0.3,
+      foam: 0.35,
+      foamColor: '#D6FF8F',
+      sparkle: 0.35,
+      emissiveIntensity: 0.7,
+      caustics: 0.5,
+      waveAmplitude: 0.18,
+      waveFrequency: 0.35,
+      waveSpeed: 0.7,
+    },
+  },
+  {
+    id: 'lava',
+    name: 'Lava',
+    description: 'Glowing molten rock — slow heavy swell, hot emissive glow, no reflection.',
+    patch: {
+      shallowColor: '#FFD23F',
+      deepColor: '#7A1500',
+      opacity: 1,
+      reflectivity: 0.12,
+      foam: 0.2,
+      foamColor: '#FF7B2E',
+      sparkle: 0.2,
+      emissiveIntensity: 1.5,
+      caustics: 0.6,
+      waveAmplitude: 0.22,
+      waveFrequency: 0.28,
+      waveSpeed: 0.45,
+    },
+  },
+];
+
+/** Visual/wave fields a style preset (or a manual edit) governs — used to flag a volume 'custom'. */
+export const WATER_LOOK_KEYS = [
+  'shallowColor',
+  'deepColor',
+  'opacity',
+  'reflectivity',
+  'foam',
+  'foamColor',
+  'sparkle',
+  'emissiveIntensity',
+  'caustics',
+  'waveAmplitude',
+  'waveFrequency',
+  'waveSpeed',
+  'flowAngle',
+  'flowStrength',
+] as const;
+
+/** The visual patch for a named water style ({} for 'custom' or unknown ids). */
+export function waterStylePatch(style: WaterStylePreset): WaterStylePatch {
+  return WATER_STYLE_PRESETS.find((preset) => preset.id === style)?.patch ?? {};
+}
 
 export const LIGHTING_PRESETS: LightingPreset[] = [
   {
@@ -152,6 +309,14 @@ export const LIGHTING_PRESETS: LightingPreset[] = [
       fogColor: '#07101E',
       fogNear: 12,
       fogFar: 65,
+      volumetricFogEnabled: true,
+      volumetricFogDensity: 0.05,
+      volumetricFogColor: '#0B1626',
+      volumetricFogHeight: 0,
+      volumetricFogFalloff: 0.07,
+      volumetricScattering: 0.6,
+      volumetricSunStrength: 0.7,
+      volumetricMaxDistance: 75,
     },
     renderSettings: { quality: 'High', bloomEnabled: true, bloomIntensity: 1.05, bloomThreshold: 0.48, bloomRadius: 0.72, vignetteEnabled: true },
     colorGrade: { grade: 'cool', gradeIntensity: 0.55, exposure: -0.12, contrast: 0.12, saturation: -0.08 },
@@ -175,6 +340,14 @@ export const LIGHTING_PRESETS: LightingPreset[] = [
       fogColor: '#12112A',
       fogNear: 10,
       fogFar: 58,
+      volumetricFogEnabled: true,
+      volumetricFogDensity: 0.07,
+      volumetricFogColor: '#171433',
+      volumetricFogHeight: 0,
+      volumetricFogFalloff: 0.06,
+      volumetricScattering: 0.55,
+      volumetricSunStrength: 0.8,
+      volumetricMaxDistance: 70,
     },
     renderSettings: { quality: 'Epic', bloomEnabled: true, bloomIntensity: 1.45, bloomThreshold: 0.34, bloomRadius: 0.78, vignetteEnabled: true },
     colorGrade: { grade: 'teal-orange', gradeIntensity: 0.72, exposure: 0.02, contrast: 0.18, saturation: 0.26, tint: '#35E8FF', tintAmount: 0.08 },
@@ -218,9 +391,51 @@ export const LIGHTING_PRESETS: LightingPreset[] = [
       fogColor: '#2A1D24',
       fogNear: 12,
       fogFar: 72,
+      volumetricFogEnabled: true,
+      volumetricFogDensity: 0.055,
+      volumetricFogColor: '#3A2A30',
+      volumetricFogHeight: 2,
+      volumetricFogFalloff: 0.05,
+      volumetricScattering: 0.8,
+      volumetricSunStrength: 1.6,
+      volumetricMaxDistance: 95,
     },
     renderSettings: { quality: 'Epic', bloomEnabled: true, bloomIntensity: 0.9, bloomThreshold: 0.58, bloomRadius: 0.7, vignetteEnabled: true },
     colorGrade: { grade: 'warm', gradeIntensity: 0.55, exposure: -0.02, contrast: 0.16, saturation: 0.1, tint: '#FFB26B', tintAmount: 0.1 },
+  },
+  {
+    id: 'godrays',
+    name: 'God Rays',
+    description: 'Low hazy sun with strong volumetric light shafts — the Unreal-style beam look.',
+    environment: {
+      skyMode: 'procedural',
+      backgroundColor: '#A9C2E8',
+      skyTopColor: '#3E78D0',
+      skyHorizonColor: '#FFE0A8',
+      skyGroundColor: '#9FB6CC',
+      environmentIntensity: 0.85,
+      sunColor: '#FFE6B0',
+      sunIntensity: 1.4,
+      sunAzimuth: 135,
+      // Low sun so the beams rake across the scene and catch geometry edges.
+      sunElevation: 11,
+      fogEnabled: true,
+      fogColor: '#DDE8F5',
+      fogNear: 20,
+      fogFar: 120,
+      volumetricFogEnabled: true,
+      volumetricFogDensity: 0.13,
+      volumetricFogColor: '#E6EEFA',
+      volumetricFogHeight: 0,
+      volumetricFogFalloff: 0.02,
+      // Strong forward scattering + sun strength = pronounced shafts toward the sun.
+      volumetricScattering: 0.82,
+      volumetricSunStrength: 2.4,
+      volumetricMaxDistance: 160,
+    },
+    // High/Epic both render shafts; Epic gives the crispest shadow sampling.
+    renderSettings: { quality: 'Epic', bloomEnabled: true, bloomIntensity: 0.8, bloomThreshold: 0.6, bloomRadius: 0.6, vignetteEnabled: true },
+    colorGrade: { grade: 'warm', gradeIntensity: 0.3, exposure: 0.03, contrast: 0.08, saturation: 0.06 },
   },
 ];
 
