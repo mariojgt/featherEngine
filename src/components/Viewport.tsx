@@ -51,7 +51,7 @@ import { SceneEnvironment } from '../three/SceneEnvironment';
 import { WaterSurface } from '../three/WaterSurface';
 import { WaterEnvCapture } from '../three/WaterEnvCapture';
 import { UnderwaterOverlay } from '../three/UnderwaterOverlay';
-import { Terrain } from '../three/Terrain';
+import { Terrain, TerrainBrushCursor } from '../three/Terrain';
 import { highestTerrainWorldHeight } from '../terrain/terrain';
 import type { MaterialOverrides, SceneObject } from '../types';
 
@@ -142,7 +142,7 @@ function viewportSceneSignature(state: ReturnType<typeof useEditorStore.getState
         object.physics?.isTrigger ? 't' : '',
         object.character?.enabled ? 'c' : '',
         object.vehicle?.enabled ? 'v' : '',
-        object.terrain?.enabled ? 'terrain' : '',
+        object.terrain?.enabled ? `terrain:${object.terrain.editVersion ?? 0}` : '',
         object.effect?.kind ?? '',
         object.projectile ? 'projectile' : '',
         renderer?.enabled === false ? 'off' : '',
@@ -1070,6 +1070,8 @@ function SceneContent({
       {selectedColliderObject && <ColliderGizmo object={selectedColliderObject} />}
       {/* Anchor + link + axis preview for the selected object's physics joint. */}
       {selectedJointObject && <JointGizmo object={selectedJointObject} sceneObjects={sceneObjects} />}
+      {/* Unreal-style terrain brush ring — self-gates on the active sculpt/paint tool + cursor hover. */}
+      <TerrainBrushCursor />
       {/* Film Mode: draggable spline + keyframe handles so camera/object paths are built in 3D. */}
       <CinematicPathGizmo />
       {/* Editor ground aids — hidden during Play so they don't show up (or sit at the origin over terrain) in
@@ -1354,6 +1356,9 @@ export function ViewportPanel() {
   // Drag a rectangle over empty viewport space to select everything inside it (Shift = add).
   const handleViewportMouseDown = (event: React.MouseEvent) => {
     if (isPlaying || previewCamera) return;
+    // A terrain tool (sculpt/paint/foliage) is active — left-drag paints the terrain, so don't also start
+    // a box-select marquee (it would fight the brush and obscure the terrain).
+    if (useEditorStore.getState().terrainBrush.enabled) return;
     // Plain left-drag only — RMB/MMB/Alt belong to the camera; Ctrl/Cmd are reserved.
     if (event.button !== 0 || event.altKey || event.metaKey || event.ctrlKey) return;
     // Pressing a transform-gizmo handle starts a drag, not a box-select.

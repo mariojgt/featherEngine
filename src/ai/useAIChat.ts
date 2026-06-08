@@ -58,6 +58,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Sculpted terrain';
     case 'paint_terrain':
       return 'Painted terrain';
+    case 'paint_foliage':
+      return input.erase ? 'Erased foliage' : 'Painted foliage';
     case 'add_terrain_layer':
       return 'Added terrain layer';
     case 'update_terrain_layer':

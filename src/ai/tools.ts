@@ -54,8 +54,13 @@ const terrainFoliagePatchSchema = z.object({
   slopeLimit: z.number().min(0).max(1).optional().describe('Minimum normal Y for placement; higher avoids steep slopes.'),
   grassMesh: z.enum(['blade', 'cross', 'tuft']).optional(),
   treeMesh: z.enum(['cone', 'round']).optional(),
-  grassModelAssetId: z.string().optional().describe('Optional model asset id to render custom grass/clumps, or "" to clear.'),
-  treeModelAssetId: z.string().optional().describe('Optional model asset id to render custom trees, or "" to clear.'),
+  grassSource: z.enum(['builtin', 'image', 'model']).optional().describe("Grass mesh source: 'builtin' high-quality wind-animated blades (default), 'image' a 2D billboard from grassImageAssetId, or 'model' from grassModelAssetId."),
+  treeSource: z.enum(['builtin', 'image', 'model']).optional().describe("Tree mesh source: 'builtin', 'image' billboard (treeImageAssetId), or 'model' (treeModelAssetId)."),
+  grassModelAssetId: z.string().optional().describe('Model asset id for 3D grass (sets grassSource to model), or "" to clear.'),
+  treeModelAssetId: z.string().optional().describe('Model asset id for 3D trees (sets treeSource to model), or "" to clear.'),
+  grassImageAssetId: z.string().optional().describe('Image asset id for 2D billboard grass (use with grassSource:"image"), or "" to clear.'),
+  treeImageAssetId: z.string().optional().describe('Image asset id for 2D billboard trees (use with treeSource:"image"), or "" to clear.'),
+  windStrength: z.number().min(0).max(4).optional().describe('Foliage sway multiplier on the global scene wind (0 = stiff, no sway). Set the wind via set_scene_environment.'),
   grassColor: z.string().optional(),
   trunkColor: z.string().optional(),
   treeColor: z.string().optional(),
@@ -965,6 +970,15 @@ export const engineTools = {
       const object = findObject(objectId);
       if (!object) return `No object with id ${objectId}.`;
       if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      // Convenience: providing a grass/tree IMAGE or MODEL id implies that source, so the caller doesn't
+      // have to also pass the matching *Source field.
+      if (patch.foliage) {
+        const f = patch.foliage;
+        if (f.grassImageAssetId && f.grassSource === undefined) f.grassSource = 'image';
+        if (f.grassModelAssetId && f.grassSource === undefined) f.grassSource = 'model';
+        if (f.treeImageAssetId && f.treeSource === undefined) f.treeSource = 'image';
+        if (f.treeModelAssetId && f.treeSource === undefined) f.treeSource = 'model';
+      }
       store().updateTerrain(objectId, patch as Partial<TerrainComponent>);
       return `Updated terrain ${objectId}.`;
     },
@@ -1012,6 +1026,25 @@ export const engineTools = {
       if (!layer) return `Terrain ${objectId} has no material layers.`;
       store().paintTerrainAt(objectId, asVec3(worldPosition), { layerId: layer.id, radius });
       return `Painted terrain ${objectId} with layer ${layer.name} (${layer.id}).`;
+    },
+  }),
+
+  paint_foliage: tool({
+    description:
+      'Hand-paint foliage (grass/trees) onto the terrain at a world-space point — the Unreal-style foliage brush. The first paint switches the terrain to "painted areas only" mode, so grass/trees appear ONLY where painted (the global density is then ignored). Call repeatedly along a path to paint a meadow/treeline. Set erase:true to clear painted foliage. The foliage TYPE (grass vs trees) follows the terrain foliage.mode.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      worldPosition: vec3.describe('World-space brush center [x,y,z]. The y value is ignored; x/z choose the terrain point.'),
+      radius: z.number().min(0.5).max(256).optional().describe('Brush radius in world units. Default = the current brush radius.'),
+      density: z.number().min(0).max(1).optional().describe('Painted density 0..1 (how much grass in the brushed area). Default 1.'),
+      erase: z.boolean().optional().describe('Erase painted foliage instead of adding.'),
+    }),
+    execute: async ({ objectId, worldPosition, radius, density, erase }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.terrain) return `Object ${objectId} is not a terrain object.`;
+      store().paintFoliageAt(objectId, asVec3(worldPosition), { radius, density, erase });
+      return `${erase ? 'Erased' : 'Painted'} foliage on terrain ${objectId}.`;
     },
   }),
 

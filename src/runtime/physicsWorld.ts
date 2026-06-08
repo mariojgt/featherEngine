@@ -22,7 +22,7 @@ import {
 } from './colliderShape';
 import { getModelGeometry } from './meshGeometryCache';
 import {
-  buildTerrainHeightfield,
+  buildTerrainChunkTrimesh,
   terrainChunkKeysAroundWorld,
   withTerrainDefaults,
 } from '../terrain/terrain';
@@ -336,40 +336,26 @@ class PhysicsRuntime {
   private createTerrainChunk(object: SceneObject, chunkX: number, chunkZ: number, key: string, signature: string) {
     if (!object.terrain) return;
     const terrain = withTerrainDefaults(object.terrain);
-    const heightfield = buildTerrainHeightfield(terrain, chunkX, chunkZ);
-    const rotation = quatFromEuler(object.transform.rotation);
-    const center = new THREE.Vector3(
-      heightfield.center[0] * object.transform.scale[0],
-      0,
-      heightfield.center[2] * object.transform.scale[2],
-    ).applyQuaternion(reuseQuat);
+    // TRIMESH collider built from the SAME local vertices as the visual chunk mesh, with the object's scale
+    // baked in and the body placed at the object's world transform. This makes the collision surface match
+    // the rendered terrain EXACTLY — including sculpted hills — instead of a separate heightfield that could
+    // (and did) drift in shape/scale so dropped bodies fell through edited terrain.
+    const mesh = buildTerrainChunkTrimesh(terrain, chunkX, chunkZ);
+    const [sx, sy, sz] = object.transform.scale;
+    const scaled = new Float32Array(mesh.vertices.length);
+    for (let i = 0; i < mesh.vertices.length; i += 3) {
+      scaled[i] = mesh.vertices[i] * sx;
+      scaled[i + 1] = mesh.vertices[i + 1] * sy;
+      scaled[i + 2] = mesh.vertices[i + 2] * sz;
+    }
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.fixed()
-        .setTranslation(
-          object.transform.position[0] + center.x,
-          object.transform.position[1] + center.y,
-          object.transform.position[2] + center.z,
-        )
-        .setRotation(rotation),
+        .setTranslation(object.transform.position[0], object.transform.position[1], object.transform.position[2])
+        .setRotation(quatFromEuler(object.transform.rotation)),
     );
     const groups = collisionGroups(object.physics?.collisionLayer, object.physics?.collisionMask);
-    // Rapier's heightfield takes the number of SUBDIVISIONS (nrows/ncols) and expects exactly
-    // (nrows+1)*(ncols+1) height samples. buildTerrainHeightfield reports nrows/ncols as the SAMPLE
-    // count (segments+1), so subtract one here — otherwise Rapier panics ("unreachable") on the
-    // mismatched matrix size.
-    const hfRows = Math.max(1, heightfield.nrows - 1);
-    const hfCols = Math.max(1, heightfield.ncols - 1);
     const collider = this.world.createCollider(
-      RAPIER.ColliderDesc.heightfield(
-        hfRows,
-        hfCols,
-        heightfield.heights,
-        {
-          x: heightfield.scale.x * Math.abs(object.transform.scale[0] || 1),
-          y: Math.abs(object.transform.scale[1] || 1),
-          z: heightfield.scale.z * Math.abs(object.transform.scale[2] || 1),
-        },
-      )
+      RAPIER.ColliderDesc.trimesh(scaled, mesh.indices)
         .setFriction(object.physics?.friction ?? 0.85)
         .setRestitution(object.physics?.restitution ?? 0.02)
         .setCollisionGroups(groups)
@@ -607,6 +593,10 @@ class PhysicsRuntime {
       terrain.octaves,
       terrain.persistence,
       terrain.lacunarity,
+      // Edit counter: bumped on every sculpt/paint so the heightfield COLLIDER rebuilds to match the new
+      // shape. Without it the signature ignored heightOverrides, so after sculpting a hill the physics
+      // surface stayed flat/stale and dropped bodies rested on the old height (or fell through).
+      terrain.editVersion ?? 0,
       object.physics?.enabled,
       object.physics?.friction,
       object.physics?.collisionLayer,
@@ -731,13 +721,14 @@ class PhysicsRuntime {
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
         const impulse = impulses[object.id];
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
-        // Global wind: a continuous force on bodies that opt in via windInfluence (0 = ignore). Applied as
-        // an impulse (force × dt) scaled by mass so light props blow around while heavy ones barely budge,
-        // matching intuition; the shared per-frame `gust` adds turbulence. This is what makes loose blocks,
-        // debris, leaves, etc. drift and tumble in the scene's wind.
+        // Global wind: a continuous FORCE on bodies that opt in via windInfluence (0 = ignore). Wind is a
+        // roughly constant push (like pressure on a sail), so we apply force×dt WITHOUT a mass term — Rapier
+        // then divides by mass, giving acceleration = force/mass. That makes LIGHT props blow around while
+        // HEAVY ones barely budge (mass-based, as expected). windInfluence is the per-object "sail" factor;
+        // the shared per-frame `gust` adds turbulence. This is what drifts/tumbles loose blocks, debris, etc.
         const windInfluence = object.physics.windInfluence ?? 0;
         if (hasWind && windInfluence > 0) {
-          const k = windInfluence * gust * dt * body.mass();
+          const k = windInfluence * gust * dt;
           body.applyImpulse({ x: wind[0] * k, y: wind[1] * k, z: wind[2] * k }, true);
         }
         // Apply Torque node: an angular impulse (kicks the body's spin). Used for physics-driven steering /

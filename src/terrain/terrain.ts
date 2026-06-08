@@ -22,9 +22,13 @@ export const defaultTerrainFoliage = (): TerrainFoliageComponent => ({
   slopeLimit: 0.68,
   grassMesh: 'blade',
   treeMesh: 'cone',
+  grassSource: 'builtin',
+  treeSource: 'builtin',
   grassColor: '#4f9b48',
   trunkColor: '#6b4a2f',
   treeColor: '#2f7d45',
+  windStrength: 1,
+  usePaintMask: false,
 });
 
 export const defaultTerrainMaterialLayers = (): TerrainMaterialLayer[] => [
@@ -53,6 +57,7 @@ export const defaultTerrain = (): TerrainComponent => ({
   materialLayers: defaultTerrainMaterialLayers(),
   heightOverrides: {},
   paintOverrides: {},
+  foliageOverrides: {},
   foliage: defaultTerrainFoliage(),
 });
 
@@ -85,6 +90,8 @@ function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainC
     ...base,
     ...terrain,
     enabled: terrain?.enabled ?? base.enabled,
+    // Carry the edit counter through normalization so the viewport's live-update signature keeps seeing it.
+    editVersion: terrain?.editVersion ?? 0,
     size,
     chunkSize,
     resolution: clampInt(terrain?.resolution ?? base.resolution, 4, 64),
@@ -103,6 +110,7 @@ function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainC
     materialLayers,
     heightOverrides: sanitizeNumberRecord(terrain?.heightOverrides),
     paintOverrides: sanitizeStringRecord(terrain?.paintOverrides),
+    foliageOverrides: sanitizeNumberRecord(terrain?.foliageOverrides),
     foliage: {
       ...foliage,
       density: clamp(foliage.density, 0, 1),
@@ -114,6 +122,13 @@ function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainC
       treeMesh: foliage.treeMesh ?? base.foliage.treeMesh,
       grassModelAssetId: foliage.grassModelAssetId || undefined,
       treeModelAssetId: foliage.treeModelAssetId || undefined,
+      grassImageAssetId: foliage.grassImageAssetId || undefined,
+      treeImageAssetId: foliage.treeImageAssetId || undefined,
+      // Back-compat: a project saved with only a model asset (before the source field) keeps using it.
+      grassSource: foliage.grassSource ?? (foliage.grassModelAssetId ? 'model' : 'builtin'),
+      treeSource: foliage.treeSource ?? (foliage.treeModelAssetId ? 'model' : 'builtin'),
+      windStrength: clamp(foliage.windStrength ?? 1, 0, 4),
+      usePaintMask: foliage.usePaintMask ?? false,
     },
   };
 }
@@ -407,6 +422,70 @@ export function applyTerrainPaint(
   return withTerrainDefaults({ ...terrain, paintOverrides: nextPaint });
 }
 
+export interface TerrainFoliagePaintOptions {
+  radius: number;
+  /** Target density 0..1 to paint into the brushed cells (ignored when erasing). */
+  density: number;
+  /** Erase painted foliage (clear the cells) instead of adding. */
+  erase?: boolean;
+}
+
+/**
+ * Hand-paint the foliage density mask (Unreal-style). Writes 0..1 values into `foliageOverrides` for the
+ * grid cells inside the brush (feathered toward the edge), and flips `foliage.usePaintMask` on so the
+ * scatter switches from uniform density to "only where painted". Erasing clears the cells.
+ */
+export function applyTerrainFoliagePaint(
+  input: TerrainComponent | Partial<TerrainComponent>,
+  localX: number,
+  localZ: number,
+  options: TerrainFoliagePaintOptions,
+): TerrainComponent {
+  const terrain = withTerrainDefaults(input);
+  if (!localPointInsideTerrain(terrain, localX, localZ)) return terrain;
+  const radius = clamp(options.radius, terrain.editSpacing, 256);
+  const minX = Math.floor((localX - radius) / terrain.editSpacing);
+  const maxX = Math.ceil((localX + radius) / terrain.editSpacing);
+  const minZ = Math.floor((localZ - radius) / terrain.editSpacing);
+  const maxZ = Math.ceil((localZ + radius) / terrain.editSpacing);
+  const next = { ...(terrain.foliageOverrides ?? {}) };
+  const target = clamp(options.density, 0, 1);
+
+  for (let iz = minZ; iz <= maxZ; iz += 1) {
+    for (let ix = minX; ix <= maxX; ix += 1) {
+      const sampleX = ix * terrain.editSpacing;
+      const sampleZ = iz * terrain.editSpacing;
+      if (!localPointInsideTerrain(terrain, sampleX, sampleZ)) continue;
+      const dist = Math.hypot(sampleX - localX, sampleZ - localZ);
+      if (dist > radius) continue;
+      const key = terrainEditKey(ix, iz);
+      if (options.erase) {
+        delete next[key];
+        continue;
+      }
+      // Feather toward the brush edge so repeated strokes build up softly (like a falloff brush).
+      const falloff = 1 - (dist / radius) ** 2;
+      const prev = next[key] ?? 0;
+      next[key] = clamp(Math.max(prev, target * falloff), 0, 1);
+    }
+  }
+
+  return withTerrainDefaults({
+    ...terrain,
+    foliageOverrides: next,
+    foliage: { ...terrain.foliage, usePaintMask: true },
+  });
+}
+
+/** Sample the painted foliage density (0..1) at a local point — nearest grid cell. 0 where unpainted. */
+export function sampleFoliageMask(terrain: TerrainComponent, localX: number, localZ: number): number {
+  const overrides = terrain.foliageOverrides;
+  if (!overrides) return 0;
+  const ix = Math.round(localX / terrain.editSpacing);
+  const iz = Math.round(localZ / terrain.editSpacing);
+  return overrides[terrainEditKey(ix, iz)] ?? 0;
+}
+
 export function terrainLocalPointFromWorld(object: SceneObject, world: Vector3Tuple): Vector3Tuple {
   const sx = object.transform.scale[0] || 1;
   const sy = object.transform.scale[1] || 1;
@@ -550,4 +629,41 @@ export function buildTerrainHeightfield(input: TerrainComponent | Partial<Terrai
     center: [bounds.centerX, 0, bounds.centerZ] as Vector3Tuple,
     scale: { x: terrain.chunkSize, y: 1, z: terrain.chunkSize },
   };
+}
+
+/**
+ * Build a TRIMESH (vertices + indices) for a terrain chunk in terrain-LOCAL space, identical to the
+ * visual chunk mesh (createChunkGeometry). Used for the physics collider so the collision surface matches
+ * exactly what's rendered — including sculpted hills — with no heightfield row/col/scale ambiguity. The
+ * caller bakes the object's scale into the vertices and places the body at the object's world transform.
+ */
+export function buildTerrainChunkTrimesh(input: TerrainComponent | Partial<TerrainComponent>, chunkX: number, chunkZ: number) {
+  const terrain = withTerrainDefaults(input);
+  const segments = terrain.resolution;
+  const perSide = segments + 1;
+  const vertices = new Float32Array(perSide * perSide * 3);
+  const indices = new Uint32Array(segments * segments * 6);
+  const bounds = terrainChunkBounds(terrain, chunkX, chunkZ);
+  let v = 0;
+  for (let z = 0; z <= segments; z += 1) {
+    const localZ = bounds.minZ + (z / segments) * terrain.chunkSize;
+    for (let x = 0; x <= segments; x += 1) {
+      const localX = bounds.minX + (x / segments) * terrain.chunkSize;
+      vertices[v++] = localX;
+      vertices[v++] = sampleTerrainLocalHeight(terrain, localX, localZ);
+      vertices[v++] = localZ;
+    }
+  }
+  let t = 0;
+  for (let z = 0; z < segments; z += 1) {
+    for (let x = 0; x < segments; x += 1) {
+      const a = z * perSide + x;
+      const b = a + 1;
+      const d = (z + 1) * perSide + x;
+      const e = d + 1;
+      indices[t++] = a; indices[t++] = d; indices[t++] = b;
+      indices[t++] = b; indices[t++] = d; indices[t++] = e;
+    }
+  }
+  return { vertices, indices };
 }

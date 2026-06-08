@@ -376,6 +376,8 @@ export interface MeshRendererComponent {
 export type TerrainFoliageMode = 'grass' | 'trees' | 'mixed';
 export type TerrainGrassMeshStyle = 'blade' | 'cross' | 'tuft';
 export type TerrainTreeMeshStyle = 'cone' | 'round';
+/** Where a foliage instance's mesh comes from: engine primitive, a 2D image billboard, or a 3D model asset. */
+export type TerrainFoliageSource = 'builtin' | 'image' | 'model';
 
 export interface TerrainMaterialLayer {
   id: string;
@@ -386,7 +388,7 @@ export interface TerrainMaterialLayer {
 }
 
 export type TerrainSculptOperation = 'raise' | 'lower' | 'flatten' | 'smooth';
-export type TerrainBrushMode = 'sculpt' | 'paint';
+export type TerrainBrushMode = 'sculpt' | 'paint' | 'foliage';
 
 export interface TerrainBrushSettings {
   enabled: boolean;
@@ -397,6 +399,10 @@ export interface TerrainBrushSettings {
   strength: number;
   targetLayerId?: string;
   flattenHeight: number;
+  /** Foliage brush: paint density 0..1 written into the foliage mask (the brushed area's grass amount). */
+  foliageDensity?: number;
+  /** Foliage brush: erase painted foliage instead of adding it. */
+  foliageErase?: boolean;
 }
 
 /** Procedural foliage scattered on terrain chunks. MVP intentionally uses built-in instanced shapes. */
@@ -413,12 +419,27 @@ export interface TerrainFoliageComponent {
   slopeLimit: number;
   grassMesh: TerrainGrassMeshStyle;
   treeMesh: TerrainTreeMeshStyle;
+  /** Mesh source for grass: 'builtin' high-quality wind-animated blades, 'image' 2D billboard, or 'model'. */
+  grassSource?: TerrainFoliageSource;
+  /** Mesh source for trees: 'builtin', 'image' 2D billboard, or 'model'. */
+  treeSource?: TerrainFoliageSource;
   /** Optional model assets override the built-in foliage mesh for previewable custom vegetation. */
   grassModelAssetId?: string;
   treeModelAssetId?: string;
+  /** Image (texture) assets for the 'image' 2D-billboard source (alpha-cutout cross quads). */
+  grassImageAssetId?: string;
+  treeImageAssetId?: string;
   grassColor: string;
   trunkColor: string;
   treeColor: string;
+  /** Multiplier on the global scene wind for foliage sway (0 = stiff/no sway, the blades just stand). */
+  windStrength?: number;
+  /**
+   * When true, grass/trees scatter ONLY where painted (the terrain's foliageOverrides mask) instead of
+   * uniformly by density — the Unreal-style hand-painted foliage workflow. The foliage paint brush flips
+   * this on the first stroke; turn it off to go back to uniform `density` coverage everywhere.
+   */
+  usePaintMask?: boolean;
 }
 
 /**
@@ -455,7 +476,15 @@ export interface TerrainComponent {
   heightOverrides: Record<string, number>;
   /** Sparse material-layer paint overrides keyed as "gridX:gridZ", value = TerrainMaterialLayer.id. */
   paintOverrides: Record<string, string>;
+  /** Sparse hand-painted foliage density mask keyed as "gridX:gridZ", value 0..1 (used when foliage.usePaintMask). */
+  foliageOverrides?: Record<string, number>;
   foliage: TerrainFoliageComponent;
+  /**
+   * Bumped on every terrain edit (sculpt/paint/settings/foliage). The viewport's structural signature
+   * watches this so live edits re-render immediately — without it, edits only showed after toggling the
+   * terrain off/on (the signature couldn't see value-level changes inside the sparse override maps).
+   */
+  editVersion?: number;
 }
 
 /** Per-object overrides layered over an assigned MaterialDefinition (Unreal "dynamic material instance" style). */

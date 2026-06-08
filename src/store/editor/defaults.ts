@@ -209,6 +209,8 @@ export const defaultTerrainBrush = (): TerrainBrushSettings => ({
   strength: 0.65,
   flattenHeight: 0,
   targetLayerId: 'terrain-grass',
+  foliageDensity: 1,
+  foliageErase: false,
 });
 
 export const syncTerrainLayerColors = (terrain: TerrainComponent): TerrainComponent => ({

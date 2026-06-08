@@ -2,11 +2,19 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
-import { useEditorStore } from '../store/editorStore';
+import { useEditorStore, selectActiveObjects, selectActiveSceneEnvironment } from '../store/editorStore';
 import { useAssetUrl } from './ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
+import {
+  BLADE_GEOMETRY,
+  GRASS_CROSS_GEOMETRY,
+  TREE_BILLBOARD_GEOMETRY,
+  WindFoliage,
+  WindFoliageImage,
+} from './foliageWind';
 import type { SceneObject, TerrainComponent, Vector3Tuple } from '../types';
 import {
+  sampleFoliageMask,
   sampleTerrainLocalHeight,
   sampleTerrainMaterialLayer,
   sampleTerrainNormal,
@@ -123,6 +131,19 @@ function terrainChunkSignatures(terrain: TerrainComponent): { base: string; chun
   return result;
 }
 
+// Shared, render-free brush-cursor target: TerrainChunk writes the hovered world point here on every
+// pointer move while a terrain tool is active, and TerrainBrushCursor reads it imperatively in useFrame
+// (no React re-render per mouse move). `stamp` lets the cursor auto-hide when the pointer leaves the
+// terrain (no onPointerMove → goes stale).
+export const terrainBrushCursor = { point: new THREE.Vector3(), stamp: 0, objectId: '' };
+const noRaycast = () => null;
+const SCULPT_CURSOR_COLOR: Record<string, string> = {
+  raise: '#5BE27A',
+  lower: '#FF6B6B',
+  flatten: '#4DA6FF',
+  smooth: '#FFD166',
+};
+
 function TerrainChunk({
   object,
   terrain,
@@ -163,6 +184,13 @@ function TerrainChunk({
       userData={{ nfGround: true }} // tag as ground so the follow-camera spring-arm ignores it (no pull-in on the floor)
       onPointerDown={applyBrushAt}
       onPointerMove={(event) => {
+        // Track the hovered point for the brush-cursor ring (even when not dragging), so the user sees
+        // exactly where/how big the stroke will land before pressing — like Unreal's landscape brush.
+        if (brushActive) {
+          terrainBrushCursor.point.set(event.point.x, event.point.y, event.point.z);
+          terrainBrushCursor.stamp = performance.now();
+          terrainBrushCursor.objectId = object.id;
+        }
         applyBrushAt(event, true);
       }}
     >
@@ -194,10 +222,17 @@ function useVisibleTerrainChunks(object: SceneObject, terrain: TerrainComponent)
     if (next.chunkX !== center.x || next.chunkZ !== center.z) setCenter({ x: next.chunkX, z: next.chunkZ });
   });
 
-  return useMemo(
-    () => terrainChunkKeysAroundLocal(terrain, center.x * terrain.chunkSize, center.z * terrain.chunkSize, terrain.streamRadius),
-    [terrain, center.x, center.z],
-  );
+  return useMemo(() => {
+    const keys = terrainChunkKeysAroundLocal(terrain, center.x * terrain.chunkSize, center.z * terrain.chunkSize, terrain.streamRadius);
+    // Sort NEAREST-FIRST around the camera chunk. generateFoliage fills grass in this order and stops at
+    // the instance cap, so the (bounded) blade budget concentrates AROUND the player — a thick field where
+    // you are, fading to none far away — instead of being spread thin across the whole streamed area. This
+    // is what lets density go very high while staying cheap. (Order doesn't affect chunk rendering.)
+    return keys
+      .map((key) => ({ key, d: (key.x - center.x) ** 2 + (key.z - center.z) ** 2 }))
+      .sort((a, b) => a.d - b.d)
+      .map((entry) => entry.key);
+  }, [terrain, center.x, center.z]);
 }
 
 function composeMatrix(position: Vector3Tuple, yaw: number, scale: Vector3Tuple) {
@@ -219,32 +254,54 @@ function generateFoliage(terrain: TerrainComponent, chunks: TerrainChunkKey[]) {
   const wantsGrass = foliage.mode === 'grass' || foliage.mode === 'mixed';
   const wantsTrees = foliage.mode === 'trees' || foliage.mode === 'mixed';
   const chunkArea = terrain.chunkSize * terrain.chunkSize;
-  const grassPerChunk = wantsGrass ? Math.floor(chunkArea * foliage.density * 0.08) : 0;
-  const treesPerChunk = wantsTrees ? Math.max(0, Math.floor(chunkArea * foliage.treeDensity * 0.006)) : 0;
-  const maxGrass = 9000;
-  const maxTrees = 900;
+  // Painted (mask) mode: scatter the FULL candidate pool and let the per-point mask decide where they
+  // survive, so grass appears only where you painted. Uniform mode: candidate count scales with density.
+  const useMask = Boolean(foliage.usePaintMask);
+  // Grass scatter density. The high factor makes each near-camera chunk a THICK lawn (density=1 → ~2000
+  // blades per 32² chunk). Combined with nearest-first chunks + the instance cap, the dense grass forms a
+  // bounded disc around the player — so it stays one cheap instanced draw call no matter how big the world.
+  // Want denser? Raise foliage.density toward 1; want a bigger dense radius? raise the cap (costs more CPU
+  // on regen). Lawn-thick everywhere isn't free — concentrate the budget near the camera instead.
+  const grassPerChunk = wantsGrass ? Math.floor(chunkArea * (useMask ? 2 : foliage.density * 2)) : 0;
+  const treesPerChunk = wantsTrees ? Math.max(0, Math.floor(chunkArea * (useMask ? 0.006 : foliage.treeDensity * 0.006))) : 0;
+  const maxGrass = 60000;
+  const maxTrees = 2000;
 
   for (const chunk of chunks) {
     const bounds = terrainChunkBounds(terrain, chunk.x, chunk.z);
     for (let i = 0; i < grassPerChunk && grass.length < maxGrass; i += 1) {
-      const rx = terrainHash01(terrain.seed + 5001, chunk.x, chunk.z, i);
-      const rz = terrainHash01(terrain.seed + 5002, chunk.x, chunk.z, i);
+      // Use DISTINCT hash indices for x and z (2i vs 2i+1). Sharing the same index `i` (differing only by a
+      // near-identical seed) made rx and rz correlate, so the blades landed on diagonal/straight lines
+      // instead of scattering — give each axis its own hash input so the placement is properly random.
+      const rx = terrainHash01(terrain.seed + 5001, chunk.x, chunk.z, i * 2);
+      const rz = terrainHash01(terrain.seed + 5002, chunk.x, chunk.z, i * 2 + 1);
       const localX = bounds.minX + rx * terrain.chunkSize;
       const localZ = bounds.minZ + rz * terrain.chunkSize;
       const normal = sampleTerrainNormal(terrain, localX, localZ);
       if (normal[1] < foliage.slopeLimit) continue;
+      // Painted mode: keep this blade only where the painted mask covers it (probability = painted density).
+      if (useMask) {
+        const mask = sampleFoliageMask(terrain, localX, localZ);
+        if (mask <= 0 || terrainHash01(terrain.seed + 5005, chunk.x, chunk.z, i) > mask) continue;
+      }
       const h = sampleTerrainLocalHeight(terrain, localX, localZ);
       const s = THREE.MathUtils.lerp(foliage.minScale, foliage.maxScale, terrainHash01(terrain.seed + 5003, chunk.x, chunk.z, i));
       const yaw = terrainHash01(terrain.seed + 5004, chunk.x, chunk.z, i) * Math.PI * 2;
-      grass.push(composeMatrix([localX, h + 0.22 * s, localZ], yaw, [0.7 * s, s, 0.7 * s]));
+      // Base-at-ground: blade/cross/model foliage geometry all originate at y=0, so place the instance
+      // origin right on the terrain height (the old +0.22s lift was for the centred cone mesh).
+      grass.push(composeMatrix([localX, h, localZ], yaw, [0.7 * s, s, 0.7 * s]));
     }
     for (let i = 0; i < treesPerChunk && trunks.length < maxTrees; i += 1) {
-      const rx = terrainHash01(terrain.seed + 7001, chunk.x, chunk.z, i);
-      const rz = terrainHash01(terrain.seed + 7002, chunk.x, chunk.z, i);
+      const rx = terrainHash01(terrain.seed + 7001, chunk.x, chunk.z, i * 2);
+      const rz = terrainHash01(terrain.seed + 7002, chunk.x, chunk.z, i * 2 + 1);
       const localX = bounds.minX + rx * terrain.chunkSize;
       const localZ = bounds.minZ + rz * terrain.chunkSize;
       const normal = sampleTerrainNormal(terrain, localX, localZ);
       if (normal[1] < Math.max(foliage.slopeLimit, 0.74)) continue;
+      if (useMask) {
+        const mask = sampleFoliageMask(terrain, localX, localZ);
+        if (mask <= 0 || terrainHash01(terrain.seed + 7005, chunk.x, chunk.z, i) > mask) continue;
+      }
       const h = sampleTerrainLocalHeight(terrain, localX, localZ);
       const s = THREE.MathUtils.lerp(foliage.minScale, foliage.maxScale, terrainHash01(terrain.seed + 7003, chunk.x, chunk.z, i)) * 1.9;
       const yaw = terrainHash01(terrain.seed + 7004, chunk.x, chunk.z, i) * Math.PI * 2;
@@ -276,7 +333,7 @@ function InstancedMatrices({
   // Bounding sphere is computed above, so the instanced foliage can frustum-cull when off-screen
   // instead of submitting all (up to thousands of) instances to the vertex shader every frame.
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, matrices.length]} castShadow receiveShadow userData={{ nfGround: true }}>
+    <instancedMesh ref={ref} args={[undefined, undefined, matrices.length]} castShadow receiveShadow raycast={noRaycast} userData={{ nfGround: true }}>
       {children}
     </instancedMesh>
   );
@@ -330,6 +387,7 @@ function FoliageInstancedPart({
       args={[geometry, material, placements.length]}
       castShadow
       receiveShadow
+      raycast={noRaycast}
       userData={{ nfGround: true }}
     />
   );
@@ -370,20 +428,56 @@ function LoadedFoliageModel({
 function TerrainFoliage({ terrain, chunks }: { terrain: TerrainComponent; chunks: TerrainChunkKey[] }) {
   const foliage = terrain.foliage;
   const matrices = useMemo(() => generateFoliage(terrain, chunks), [terrain, chunks]);
-  const useCustomGrass = Boolean(foliage.grassModelAssetId);
-  const useCustomTrees = Boolean(foliage.treeModelAssetId);
+  // The global scene wind drives the grass/leaf sway (see foliageWind.tsx) — the same wind that moves
+  // cloth and wind-affected bodies. Read it once here and feed every foliage draw call.
+  const env = useEditorStore(selectActiveSceneEnvironment);
+  const windVec = env?.wind ?? [0, 0, 0];
+  const turbulence = env?.windTurbulence ?? 0;
+  const windStrength = foliage.windStrength ?? 1;
+  const grassSource = foliage.grassSource ?? (foliage.grassModelAssetId ? 'model' : 'builtin');
+  const treeSource = foliage.treeSource ?? (foliage.treeModelAssetId ? 'model' : 'builtin');
+
   return (
     <>
-      {useCustomGrass ? (
+      {grassSource === 'model' ? (
         <FoliageModelClones assetId={foliage.grassModelAssetId} matrices={matrices.grass} limit={320} />
+      ) : grassSource === 'image' && foliage.grassImageAssetId ? (
+        <WindFoliageImage
+          assetId={foliage.grassImageAssetId}
+          geometry={GRASS_CROSS_GEOMETRY}
+          color={foliage.grassColor}
+          matrices={matrices.grass}
+          windVec={windVec}
+          turbulence={turbulence}
+          windStrength={windStrength}
+        />
       ) : (
-        <InstancedMatrices matrices={matrices.grass}>
-          {foliage.grassMesh === 'cross' ? <planeGeometry args={[0.22, 0.72]} /> : <coneGeometry args={[foliage.grassMesh === 'tuft' ? 0.11 : 0.065, 0.55, foliage.grassMesh === 'tuft' ? 7 : 5]} />}
-          <meshStandardMaterial color={foliage.grassColor} roughness={0.9} side={foliage.grassMesh === 'cross' ? THREE.DoubleSide : THREE.FrontSide} />
-        </InstancedMatrices>
+        // Built-in: high-quality wind-animated blades (or a cross billboard for the 'cross' style).
+        <WindFoliage
+          geometry={foliage.grassMesh === 'cross' ? GRASS_CROSS_GEOMETRY : BLADE_GEOMETRY}
+          color={foliage.grassColor}
+          matrices={matrices.grass}
+          windVec={windVec}
+          turbulence={turbulence}
+          windStrength={windStrength}
+        />
       )}
-      {useCustomTrees ? (
+
+      {treeSource === 'model' ? (
         <FoliageModelClones assetId={foliage.treeModelAssetId} matrices={matrices.treeModels} limit={180} />
+      ) : treeSource === 'image' && foliage.treeImageAssetId ? (
+        // Tree billboards sway gently (mostly the canopy) — softer wind + slower idle flutter than grass.
+        <WindFoliageImage
+          assetId={foliage.treeImageAssetId}
+          geometry={TREE_BILLBOARD_GEOMETRY}
+          color={foliage.treeColor}
+          matrices={matrices.treeModels}
+          windVec={windVec}
+          turbulence={turbulence}
+          windStrength={windStrength * 0.4}
+          swaySpeed={1.1}
+          baseSway={0.015}
+        />
       ) : (
         <>
           <InstancedMatrices matrices={matrices.trunks}>
@@ -419,5 +513,65 @@ export function Terrain({ object }: { object: SceneObject }) {
       ))}
       <TerrainFoliage terrain={terrain} chunks={chunks} />
     </>
+  );
+}
+
+/**
+ * Unreal-style terrain brush preview: a flat ring + soft fill disc that tracks the cursor on the terrain
+ * surface while a sculpt/paint tool is active, sized to the brush radius and tinted by the tool (sculpt
+ * operation colour, or the paint layer's colour). Rendered at the SCENE ROOT (world space) so the world
+ * hover point from TerrainChunk maps directly; it positions itself imperatively in useFrame (no per-move
+ * re-render) and auto-hides when the pointer leaves the terrain (stale stamp).
+ */
+export function TerrainBrushCursor() {
+  const brush = useEditorStore((state) => state.terrainBrush);
+  const isPlaying = useEditorStore((state) => state.isPlaying);
+  const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
+  const objects = useEditorStore(selectActiveObjects);
+  const groupRef = useRef<THREE.Group>(null);
+
+  const terrainObject = useMemo(() => {
+    const terrains = objects.filter((object) => object.terrain?.enabled);
+    if (brush.objectId) return terrains.find((object) => object.id === brush.objectId) ?? terrains[0];
+    return terrains.find((object) => object.id === selectedObjectId) ?? terrains[0];
+  }, [objects, brush.objectId, selectedObjectId]);
+
+  const color = useMemo(() => {
+    if (brush.mode === 'foliage') return brush.foliageErase ? '#FF6B6B' : '#5BE27A';
+    if (brush.mode === 'paint') {
+      const layers = terrainObject?.terrain?.materialLayers ?? [];
+      const layer = layers.find((item) => item.id === brush.targetLayerId) ?? layers[0];
+      return layer?.color ?? '#19E3D6';
+    }
+    return SCULPT_CURSOR_COLOR[brush.operation] ?? '#19E3D6';
+  }, [brush.mode, brush.operation, brush.targetLayerId, brush.foliageErase, terrainObject]);
+
+  const worldRadius = brush.radius * (terrainObject?.transform.scale[0] ?? 1);
+  const active = !isPlaying && brush.enabled && Boolean(terrainObject);
+
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const fresh = performance.now() - terrainBrushCursor.stamp < 140;
+    const visible = active && fresh;
+    group.visible = visible;
+    if (!visible) return;
+    group.position.set(terrainBrushCursor.point.x, terrainBrushCursor.point.y + 0.06, terrainBrushCursor.point.z);
+    group.scale.setScalar(Math.max(worldRadius, 0.05));
+  });
+
+  return (
+    <group ref={groupRef} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
+      {/* Outer ring outline. */}
+      <mesh raycast={noRaycast}>
+        <ringGeometry args={[0.9, 1, 64]} />
+        <meshBasicMaterial color={color} transparent opacity={0.95} depthTest={false} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+      {/* Soft fill so the affected disc reads at a glance. */}
+      <mesh raycast={noRaycast} position={[0, 0, 0.001]}>
+        <circleGeometry args={[1, 64]} />
+        <meshBasicMaterial color={color} transparent opacity={0.12} depthTest={false} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+    </group>
   );
 }

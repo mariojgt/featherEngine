@@ -100,7 +100,7 @@ import { applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { resolveMaterial } from '../three/materialResolve';
 import { WATER_LOOK_KEYS, waterStylePatch } from '../three/presets';
 import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
-import { applyTerrainPaint, applyTerrainSculpt, createTerrainHeightSampler, terrainLocalPointFromWorld, withTerrainDefaults } from '../terrain/terrain';
+import { applyTerrainFoliagePaint, applyTerrainPaint, applyTerrainSculpt, createTerrainHeightSampler, terrainLocalPointFromWorld, withTerrainDefaults } from '../terrain/terrain';
 import { worldTransformOf, worldToLocalUnderParent } from '../utils/transformHierarchy';
 import type { ModelInspection } from '../three/inspectModel';
 import { collectPackage, collectPrefabPackage, type PackageContent, type PackageSeeds, type PackageSource } from '../project/package';
@@ -565,6 +565,8 @@ interface EditorState {
     options: { operation?: TerrainSculptOperation; radius?: number; strength?: number; flattenHeight?: number },
   ) => void;
   paintTerrainAt: (objectId: string, worldPosition: Vector3Tuple, options: { layerId: string; radius?: number }) => void;
+  /** Hand-paint the foliage density mask within the brush (Unreal-style). erase clears instead of adding. */
+  paintFoliageAt: (objectId: string, worldPosition: Vector3Tuple, options: { radius?: number; density?: number; erase?: boolean }) => void;
   updateTerrainMaterialLayer: (objectId: string, layerId: string, patch: Partial<TerrainMaterialLayer>) => void;
   addTerrainMaterialLayer: (objectId: string) => string | undefined;
   removeTerrainMaterialLayer: (objectId: string, layerId: string) => void;
@@ -1696,7 +1698,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               ...(patch.foliage ? stripUndefined(patch.foliage) : {}),
             },
           });
-          return { ...object, terrain: syncTerrainLayerColors(terrain) };
+          const synced = syncTerrainLayerColors(terrain);
+          return { ...object, terrain: { ...synced, editVersion: (current.editVersion ?? 0) + 1 } };
         }),
       ),
     ),
@@ -1717,6 +1720,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const layerId = brush.targetLayerId && terrain.materialLayers.some((layer) => layer.id === brush.targetLayerId)
       ? brush.targetLayerId
       : terrain.materialLayers[0]?.id;
+    if (brush.mode === 'foliage') {
+      get().paintFoliageAt(objectId, worldPosition, {
+        radius: brush.radius,
+        density: brush.foliageDensity ?? 1,
+        erase: brush.foliageErase ?? false,
+      });
+      return;
+    }
     if (brush.mode === 'paint' && layerId) {
       get().paintTerrainAt(objectId, worldPosition, { layerId, radius: brush.radius });
       return;
@@ -1735,15 +1746,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (object.id !== objectId || !object.terrain) return object;
           const terrain = withTerrainDefaults(object.terrain);
           const local = terrainLocalPointFromWorld(object, worldPosition);
-          return {
-            ...object,
-            terrain: applyTerrainSculpt(terrain, local[0], local[2], {
-              operation: options.operation ?? 'raise',
-              radius: options.radius ?? get().terrainBrush.radius,
-              strength: options.strength ?? get().terrainBrush.strength,
-              flattenHeight: options.flattenHeight ?? get().terrainBrush.flattenHeight,
-            }),
-          };
+          const sculpted = applyTerrainSculpt(terrain, local[0], local[2], {
+            operation: options.operation ?? 'raise',
+            radius: options.radius ?? get().terrainBrush.radius,
+            strength: options.strength ?? get().terrainBrush.strength,
+            flattenHeight: options.flattenHeight ?? get().terrainBrush.flattenHeight,
+          });
+          return { ...object, terrain: { ...sculpted, editVersion: (terrain.editVersion ?? 0) + 1 } };
         }),
       ),
     ),
@@ -1754,13 +1763,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (object.id !== objectId || !object.terrain) return object;
           const terrain = withTerrainDefaults(object.terrain);
           const local = terrainLocalPointFromWorld(object, worldPosition);
-          return {
-            ...object,
-            terrain: applyTerrainPaint(terrain, local[0], local[2], {
-              layerId: options.layerId,
-              radius: options.radius ?? get().terrainBrush.radius,
-            }),
-          };
+          const painted = applyTerrainPaint(terrain, local[0], local[2], {
+            layerId: options.layerId,
+            radius: options.radius ?? get().terrainBrush.radius,
+          });
+          return { ...object, terrain: { ...painted, editVersion: (terrain.editVersion ?? 0) + 1 } };
+        }),
+      ),
+    ),
+  paintFoliageAt: (objectId, worldPosition, options) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== objectId || !object.terrain) return object;
+          const terrain = withTerrainDefaults(object.terrain);
+          const local = terrainLocalPointFromWorld(object, worldPosition);
+          const painted = applyTerrainFoliagePaint(terrain, local[0], local[2], {
+            radius: options.radius ?? get().terrainBrush.radius,
+            density: options.density ?? 1,
+            erase: options.erase ?? false,
+          });
+          return { ...object, terrain: { ...painted, editVersion: (terrain.editVersion ?? 0) + 1 } };
         }),
       ),
     ),

@@ -209,20 +209,53 @@ function FoliageControls({
   objectId,
   terrain,
   modelAssets,
+  imageAssets,
 }: {
   objectId: string;
   terrain: TerrainComponent;
   modelAssets: AssetItem[];
+  imageAssets: AssetItem[];
 }) {
   const updateTerrain = useEditorStore((state) => state.updateTerrain);
+  const brush = useEditorStore((state) => state.terrainBrush);
+  const setTerrainBrush = useEditorStore((state) => state.setTerrainBrush);
   const foliage = terrain.foliage;
   const setFoliage = (patch: Partial<TerrainComponent['foliage']>) => updateTerrain(objectId, { foliage: { ...foliage, ...patch } });
+  const grassSource = foliage.grassSource ?? (foliage.grassModelAssetId ? 'model' : 'builtin');
+  const treeSource = foliage.treeSource ?? (foliage.treeModelAssetId ? 'model' : 'builtin');
+  const painting = brush.enabled && brush.mode === 'foliage';
   return (
     <div className="terrain-control-grid">
       <label className="node-field row">
         <span>Enabled</span>
         <input type="checkbox" checked={foliage.enabled} onChange={(event) => setFoliage({ enabled: event.target.checked })} />
       </label>
+
+      <h4 className="inspector-subhead">Paint</h4>
+      <label className="node-field row">
+        <span>Paint Foliage</span>
+        <input
+          type="checkbox"
+          checked={painting}
+          onChange={(event) => setTerrainBrush({ enabled: event.target.checked, mode: 'foliage', objectId })}
+        />
+      </label>
+      <p className="field-hint">Drag on the terrain to paint grass/trees where the brush ring covers (Unreal-style). The global density below is ignored once you start painting.</p>
+      {painting && (
+        <>
+          <label className="node-field row">
+            <span>Erase</span>
+            <input type="checkbox" checked={brush.foliageErase ?? false} onChange={(event) => setTerrainBrush({ foliageErase: event.target.checked })} />
+          </label>
+          <NumberField label="Brush Radius" value={brush.radius} min={0.5} step={0.5} onChange={(radius) => setTerrainBrush({ radius })} />
+          <RangeField label="Paint Density" value={brush.foliageDensity ?? 1} onChange={(foliageDensity) => setTerrainBrush({ foliageDensity })} />
+        </>
+      )}
+      <label className="node-field row">
+        <span>Painted areas only</span>
+        <input type="checkbox" checked={foliage.usePaintMask ?? false} onChange={(event) => setFoliage({ usePaintMask: event.target.checked })} />
+      </label>
+      <p className="field-hint">On = grass only where you painted. Off = uniform coverage by the density slider.</p>
       <label className="node-field">
         <span>Mode</span>
         <select value={foliage.mode} onChange={(event) => setFoliage({ mode: event.target.value as TerrainComponent['foliage']['mode'] })}>
@@ -231,23 +264,58 @@ function FoliageControls({
           <option value="mixed">Mixed</option>
         </select>
       </label>
+
       <label className="node-field">
-        <span>Grass Mesh</span>
-        <select value={foliage.grassMesh} onChange={(event) => setFoliage({ grassMesh: event.target.value as TerrainComponent['foliage']['grassMesh'] })}>
-          <option value="blade">Blade</option>
-          <option value="cross">Cross</option>
-          <option value="tuft">Tuft</option>
+        <span>Grass Source</span>
+        <select value={grassSource} onChange={(event) => setFoliage({ grassSource: event.target.value as TerrainComponent['foliage']['grassSource'] })}>
+          <option value="builtin">Built-in blades (wind)</option>
+          <option value="image">2D image billboard</option>
+          <option value="model">3D model</option>
         </select>
       </label>
+      {grassSource === 'builtin' && (
+        <label className="node-field">
+          <span>Grass Mesh</span>
+          <select value={foliage.grassMesh} onChange={(event) => setFoliage({ grassMesh: event.target.value as TerrainComponent['foliage']['grassMesh'] })}>
+            <option value="blade">Blade</option>
+            <option value="cross">Cross</option>
+            <option value="tuft">Tuft</option>
+          </select>
+        </label>
+      )}
+      {grassSource === 'image' && (
+        <AssetSelect label="Grass Image" value={foliage.grassImageAssetId} assets={imageAssets} emptyLabel="Pick an image…" onChange={(grassImageAssetId) => setFoliage({ grassImageAssetId })} />
+      )}
+      {grassSource === 'model' && (
+        <AssetSelect label="Grass Model" value={foliage.grassModelAssetId} assets={modelAssets} emptyLabel="Pick a model…" onChange={(grassModelAssetId) => setFoliage({ grassModelAssetId })} />
+      )}
+
       <label className="node-field">
-        <span>Tree Mesh</span>
-        <select value={foliage.treeMesh} onChange={(event) => setFoliage({ treeMesh: event.target.value as TerrainComponent['foliage']['treeMesh'] })}>
-          <option value="cone">Cone</option>
-          <option value="round">Round</option>
+        <span>Tree Source</span>
+        <select value={treeSource} onChange={(event) => setFoliage({ treeSource: event.target.value as TerrainComponent['foliage']['treeSource'] })}>
+          <option value="builtin">Built-in</option>
+          <option value="image">2D image billboard</option>
+          <option value="model">3D model</option>
         </select>
       </label>
-      <AssetSelect label="Grass Model" value={foliage.grassModelAssetId} assets={modelAssets} emptyLabel="Built-in" onChange={(grassModelAssetId) => setFoliage({ grassModelAssetId })} />
-      <AssetSelect label="Tree Model" value={foliage.treeModelAssetId} assets={modelAssets} emptyLabel="Built-in" onChange={(treeModelAssetId) => setFoliage({ treeModelAssetId })} />
+      {treeSource === 'builtin' && (
+        <label className="node-field">
+          <span>Tree Mesh</span>
+          <select value={foliage.treeMesh} onChange={(event) => setFoliage({ treeMesh: event.target.value as TerrainComponent['foliage']['treeMesh'] })}>
+            <option value="cone">Cone</option>
+            <option value="round">Round</option>
+          </select>
+        </label>
+      )}
+      {treeSource === 'image' && (
+        <AssetSelect label="Tree Image" value={foliage.treeImageAssetId} assets={imageAssets} emptyLabel="Pick an image…" onChange={(treeImageAssetId) => setFoliage({ treeImageAssetId })} />
+      )}
+      {treeSource === 'model' && (
+        <AssetSelect label="Tree Model" value={foliage.treeModelAssetId} assets={modelAssets} emptyLabel="Pick a model…" onChange={(treeModelAssetId) => setFoliage({ treeModelAssetId })} />
+      )}
+
+      <RangeField label="Wind Strength" value={foliage.windStrength ?? 1} max={4} onChange={(windStrength) => setFoliage({ windStrength })} />
+      <p className="field-hint">Foliage sway scales the global scene Wind (set it in Scene Settings → Wind). 0 = stiff.</p>
       <RangeField label="Grass Density" value={foliage.density} onChange={(density) => setFoliage({ density })} />
       <RangeField label="Tree Density" value={foliage.treeDensity} onChange={(treeDensity) => setFoliage({ treeDensity })} />
       <RangeField label="Slope Limit" value={foliage.slopeLimit} onChange={(slopeLimit) => setFoliage({ slopeLimit })} />
@@ -308,7 +376,10 @@ export function TerrainEditorPanel() {
 
   const setTabAndBrush = (next: TerrainTab) => {
     setTab(next);
+    // Sculpt/Paint arm the brush immediately. Foliage/Settings turn it off — the Foliage tab has its own
+    // "Paint Foliage" toggle (so you can tweak global density there without accidentally brushing).
     if (next === 'sculpt' || next === 'paint') setTerrainBrush({ enabled: true, mode: next as TerrainBrushMode });
+    else setTerrainBrush({ enabled: false });
   };
 
   return (
@@ -380,7 +451,7 @@ export function TerrainEditorPanel() {
             <div className="node-inspector-body">
               {tab === 'sculpt' && <SculptControls objectId={activeTerrainObject.id} />}
               {tab === 'paint' && <PaintControls objectId={activeTerrainObject.id} terrain={terrain} imageAssets={imageAssets} />}
-              {tab === 'foliage' && <FoliageControls objectId={activeTerrainObject.id} terrain={terrain} modelAssets={modelAssets} />}
+              {tab === 'foliage' && <FoliageControls objectId={activeTerrainObject.id} terrain={terrain} modelAssets={modelAssets} imageAssets={imageAssets} />}
               {tab === 'settings' && <TerrainSettings objectId={activeTerrainObject.id} terrain={terrain} />}
             </div>
           </aside>
