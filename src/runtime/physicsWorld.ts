@@ -658,8 +658,13 @@ class PhysicsRuntime {
     delta: number,
     setVelocities: Record<string, Vector3Tuple> = {},
     angularImpulses: Record<string, Vector3Tuple> = {},
+    wind: Vector3Tuple = [0, 0, 0],
+    windTurbulence = 0,
   ): PhysicsFrameResult {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
+    // Per-frame gust factor for wind (shared by every wind-affected body this step).
+    const hasWind = wind[0] !== 0 || wind[1] !== 0 || wind[2] !== 0;
+    const gust = 1 + (Math.random() - 0.5) * 2 * Math.min(Math.max(windTurbulence, 0), 1);
     this.world.timestep = dt;
     // Resolve parent chains in WORLD space: bodies are simulated in world coordinates, but objects
     // store LOCAL transforms. `byId` powers world-transform composition for parented bodies; `prevById`
@@ -726,6 +731,15 @@ class PhysicsRuntime {
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
         const impulse = impulses[object.id];
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
+        // Global wind: a continuous force on bodies that opt in via windInfluence (0 = ignore). Applied as
+        // an impulse (force × dt) scaled by mass so light props blow around while heavy ones barely budge,
+        // matching intuition; the shared per-frame `gust` adds turbulence. This is what makes loose blocks,
+        // debris, leaves, etc. drift and tumble in the scene's wind.
+        const windInfluence = object.physics.windInfluence ?? 0;
+        if (hasWind && windInfluence > 0) {
+          const k = windInfluence * gust * dt * body.mass();
+          body.applyImpulse({ x: wind[0] * k, y: wind[1] * k, z: wind[2] * k }, true);
+        }
         // Apply Torque node: an angular impulse (kicks the body's spin). Used for physics-driven steering /
         // tip-over forces — pair it with applyImpulse for thrust to drive a car purely from physics.
         const torque = angularImpulses[object.id];

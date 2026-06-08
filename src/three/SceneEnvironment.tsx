@@ -161,7 +161,26 @@ export function SceneEnvironment({
       {env.fogEnabled && !env.volumetricFogEnabled && <fog attach="fog" args={[env.fogColor, Math.max(0, env.fogNear), Math.max(env.fogNear + 1, env.fogFar)]} />}
 
       <ambientLight intensity={0.38 + lightIntensity * 0.24} />
-      <directionalLight position={sunPosition} color={env.sunColor} intensity={Math.max(0, env.sunIntensity)} castShadow={castSunShadow} />
+      {/* The sun. The shadow camera is explicitly framed (not the tiny three.js ±5 default) so it covers
+          the play area — this is the shadow map the volumetric pass samples to carve god-ray light shafts,
+          so if the frustum is too small every fog sample reads "lit" and no shafts appear. Map size follows
+          the quality tier; bias/normalBias kill acne (which would otherwise stripe the shafts). */}
+      <directionalLight
+        position={sunPosition}
+        color={env.sunColor}
+        intensity={Math.max(0, env.sunIntensity)}
+        castShadow={castSunShadow}
+        shadow-mapSize-width={profile.shadowMapSize}
+        shadow-mapSize-height={profile.shadowMapSize}
+        shadow-bias={-0.0004}
+        shadow-normalBias={0.02}
+        shadow-camera-near={0.5}
+        shadow-camera-far={200}
+        shadow-camera-left={-80}
+        shadow-camera-right={80}
+        shadow-camera-top={80}
+        shadow-camera-bottom={-80}
+      />
       {useImageIbl ? (
         <Environment map={envMapTexture} environmentIntensity={lightIntensity} environmentRotation={iblRotation} />
       ) : (

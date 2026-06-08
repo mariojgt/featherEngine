@@ -2095,6 +2095,25 @@ button {
   outline: none;
 }
 
+/* Three inline number inputs for a vector field (e.g. the Set Environment node's Wind X/Y/Z). */
+.vec-inline {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.vec-inline input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(8, 10, 15, 0.44);
+  outline: none;
+}
+
 .library-row.two {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

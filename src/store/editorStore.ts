@@ -18,6 +18,7 @@ import {
   type GraphNodeKind,
   type GraphNodeTone,
   type AnimatorComponent,
+  type ClothComponent,
   type JointComponent,
   type JointType,
   type MaterialDefinition,
@@ -121,6 +122,7 @@ import { getAnimatorControllerRuntime } from './editor/animatorRuntime';
 import {
   defaultAnimator,
   defaultCharacter,
+  defaultCloth,
   defaultJoint,
   defaultLight,
   defaultPhysics,
@@ -574,6 +576,10 @@ interface EditorState {
   addJoint: (id: string, type?: JointType) => void;
   updateJoint: (id: string, patch: Partial<JointComponent>) => void;
   removeJoint: (id: string) => void;
+  /** Add a cloth sheet to `id`. No-op if it already has one. */
+  addCloth: (id: string) => void;
+  updateCloth: (id: string, patch: Partial<ClothComponent>) => void;
+  removeCloth: (id: string) => void;
   togglePhysics: (id: string) => void;
   /** Make an object destructible / patch its fracture config (seeds defaults on first use). */
   setObjectFracture: (id: string, patch: Partial<FractureComponent>) => void;
@@ -1931,6 +1937,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) =>
       mapActiveSceneObjects(state, (objects) =>
         objects.map((object) => (object.id === id ? { ...object, joint: undefined } : object)),
+      ),
+    ),
+  addCloth: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id && !object.cloth ? { ...object, cloth: defaultCloth() } : object)),
+      ),
+    ),
+  updateCloth: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) =>
+          object.id === id ? { ...object, cloth: { ...defaultCloth(), ...object.cloth, ...patch } } : object,
+        ),
+      ),
+    ),
+  removeCloth: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id ? { ...object, cloth: undefined } : object)),
       ),
     ),
   setObjectFracture: (id, patch) =>
@@ -5045,7 +5071,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let pendingQuality: QualityLevel | undefined;
       // action.setEnvironment patches accumulated this frame — sky/fog/sun overrides applied to the active
       // scene's environment at the end of the tick. Each successive node overlays on top.
-      let pendingEnvironment: Record<string, string | number | boolean> | undefined;
+      let pendingEnvironment: Partial<SceneEnvironmentSettings> | undefined;
       // Combat feedback counters (bumped on hits / when the local player is hurt) + per-enemy attack cooldowns.
       let hitMarker = state.runtimeHitMarker;
       let hurt = state.runtimeHurt;
@@ -6084,7 +6110,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (node.data.nodeKind === 'action.setEnvironment') {
               const patch = node.data.envPatch;
               if (patch && typeof patch === 'object') {
-                pendingEnvironment = { ...(pendingEnvironment ?? {}), ...(patch as Record<string, string | number | boolean>) };
+                pendingEnvironment = { ...(pendingEnvironment ?? {}), ...(patch as Partial<SceneEnvironmentSettings>) };
               }
             }
 
@@ -7724,7 +7750,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               physicsAngularImpulses[o.id] !== undefined ||
               setVelocities[o.id] !== undefined),
         );
-        const result = physics.frame(physicsObjects, prevTransforms, physicsImpulses, delta, setVelocities, physicsAngularImpulses);
+        const sceneEnv = selectActiveSceneEnvironment(state);
+        const sceneWind = sceneEnv?.wind ?? [0, 0, 0];
+        const result = physics.frame(
+          physicsObjects,
+          prevTransforms,
+          physicsImpulses,
+          delta,
+          setVelocities,
+          physicsAngularImpulses,
+          sceneWind,
+          sceneEnv?.windTurbulence ?? 0,
+        );
         collisions = result.collisions;
         triggers = result.triggers;
         triggersExit = result.triggersExit;
@@ -8706,6 +8743,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         physics: object.physics ? withPhysicsDefaults(object.physics) : object.physics,
         water: object.water ? { ...defaultWaterVolume(), ...object.water } : object.water,
         joint: object.joint ? { ...defaultJoint(), ...object.joint } : object.joint,
+        cloth: object.cloth ? { ...defaultCloth(), ...object.cloth } : object.cloth,
       });
       const scenes = rawScenes.map((scene) => ({
         ...scene,

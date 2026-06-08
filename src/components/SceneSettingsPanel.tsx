@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { CloudFog, CloudSun, Image as ImageIcon, Music2, Sparkles, Sun, Volume2 } from 'lucide-react';
+import { CloudFog, CloudSun, Image as ImageIcon, Music2, Sparkles, Sun, Volume2, Wind } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import type { SceneEnvironmentSettings } from '../types';
@@ -384,6 +384,37 @@ export function SceneSettingsPanel() {
             </label>
           </>
         )}
+      </section>
+
+      <section className="settings-section">
+        <h3><Wind size={13} aria-hidden /> Wind</h3>
+        <p className="field-hint">Global wind drives cloth and pushes dynamic bodies (by their Wind Influence). Set a direction + strength.</p>
+        {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+          <label className="field-row" key={axis}>
+            <span>Wind {axis}</span>
+            <input
+              type="number"
+              step={0.5}
+              value={(environment.wind ?? [0, 0, 0])[index]}
+              onChange={(event) => {
+                const next = [...(environment.wind ?? [0, 0, 0])] as [number, number, number];
+                next[index] = num(event.target.value, next[index]);
+                updateEnvironment({ wind: next });
+              }}
+            />
+          </label>
+        ))}
+        <label className="field-row">
+          <span>Turbulence</span>
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={environment.windTurbulence ?? 0}
+            onChange={(event) => updateEnvironment({ windTurbulence: num(event.target.value, environment.windTurbulence ?? 0) })}
+          />
+        </label>
       </section>
     </aside>
   );

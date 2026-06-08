@@ -9,6 +9,7 @@ import type {
   GraphNodeCategory,
   NodeForgeNodeData,
   GraphValue,
+  ClothComponent,
   GraphValueType,
   InventorySlot,
   JointComponent,
@@ -118,6 +119,8 @@ const environmentPatchSchema = z.object({
   volumetricScattering: z.number().min(-0.95).max(0.95).optional().describe('Sun scatter anisotropy (−0.95..0.95); higher = stronger forward glow toward the sun.'),
   volumetricSunStrength: z.number().min(0).optional().describe('Strength of the volumetric sun glow / light shafts.'),
   volumetricMaxDistance: z.number().min(1).optional().describe('Far clamp (world units) for the volumetric raymarch.'),
+  wind: vec3.optional().describe('Global wind force vector [x,y,z] (world space). Drives all cloth and pushes dynamic bodies by their windInfluence. [0,0,0] = calm.'),
+  windTurbulence: z.number().min(0).max(1).optional().describe('Global wind gust turbulence 0–1.'),
 });
 const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   skyTopColor: true,
@@ -140,6 +143,8 @@ const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   volumetricScattering: true,
   volumetricSunStrength: true,
   volumetricMaxDistance: true,
+  wind: true,
+  windTurbulence: true,
 });
 const waterPatchSchema = z.object({
   enabled: z.boolean().optional(),
@@ -882,6 +887,76 @@ export const engineTools = {
     },
   }),
 
+  create_cloth: tool({
+    description:
+      'Create a real-time CLOTH sheet — a deforming Verlet-simulated mesh (separate from rigid-body physics, which has no soft bodies). Use for flags, banners, curtains, capes, hanging cloth, nets, tarps. It integrates gravity + wind, collides with nearby colliders + the floor, and anchors particles per `pinMode`: "top-edge" (banner/curtain), "top-corners" (flag on ropes), "four-corners" (tarp/net), "left-edge" (flag on a vertical pole), or "none" (free falling sheet). Pinned particles follow the object, so parent the cloth to a character (set_object_parent) to make a CAPE. Animates in edit and Play.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      position: vec3.optional().describe('Cloth origin. Default [0,3,0].'),
+      color: z.string().optional().describe('Cloth color hex. Default #C8385A.'),
+      width: z.number().min(0.1).optional().describe('Sheet width. Default 2.'),
+      height: z.number().min(0.1).optional().describe('Sheet height. Default 2.'),
+      pinMode: z.enum(['top-edge', 'top-corners', 'four-corners', 'left-edge', 'none']).optional().describe('Which edge/corners are anchored. Default top-edge.'),
+      wind: vec3.optional().describe('Wind force [x,y,z]. Default [1.5,0,0].'),
+      turbulence: z.number().min(0).max(1).optional().describe('Gust randomness 0–1. Default 0.4.'),
+      resolution: z.number().min(4).max(32).optional().describe('Grid divisions per side 4–32. Default 16.'),
+    }),
+    execute: async ({ name, position, color = '#C8385A', width, height, ...cloth }) => {
+      const id = store().createObjectWithProps('plane', {
+        name: name ?? 'Cloth',
+        position: position ? asVec3(position) : [0, 3, 0],
+        color,
+      });
+      store().addCloth(id);
+      store().updateCloth(id, {
+        ...(width !== undefined ? { width } : {}),
+        ...(height !== undefined ? { height } : {}),
+        ...(cloth.wind ? { wind: asVec3(cloth.wind) } : {}),
+        ...cloth,
+      } as Partial<ClothComponent>);
+      return `Created cloth "${findObject(id)?.name}" with id ${id}. It simulates in edit + Play; parent it to a character for a cape.`;
+    },
+  }),
+
+  update_cloth: tool({
+    description:
+      'Tune (or add) a cloth sheet on an object: pinMode, width/height, resolution, stiffness, damping, gravityScale, wind, turbulence, collideFloor/floorY, collideBodies, tearFactor (0 = never tears, >1 lets seams snap when stretched past that ratio). Adds a cloth component if the object has none.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      pinMode: z.enum(['top-edge', 'top-corners', 'four-corners', 'left-edge', 'none']).optional(),
+      width: z.number().min(0.1).optional(),
+      height: z.number().min(0.1).optional(),
+      resolution: z.number().min(4).max(32).optional(),
+      stiffness: z.number().min(1).max(12).optional(),
+      damping: z.number().min(0).max(0.95).optional(),
+      gravityScale: z.number().optional(),
+      wind: vec3.optional(),
+      turbulence: z.number().min(0).max(1).optional(),
+      collideFloor: z.boolean().optional(),
+      floorY: z.number().optional(),
+      collideBodies: z.boolean().optional(),
+      tearFactor: z.number().min(0).max(5).optional(),
+    }),
+    execute: async ({ objectId, wind, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.cloth) store().addCloth(objectId);
+      store().updateCloth(objectId, { ...(wind ? { wind: asVec3(wind) } : {}), ...patch } as Partial<ClothComponent>);
+      return `Updated cloth on ${objectId}.`;
+    },
+  }),
+
+  remove_cloth: tool({
+    description: 'Remove the cloth sheet from an object (reverts it to a normal mesh).',
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      store().removeCloth(objectId);
+      return `Removed cloth from ${objectId}.`;
+    },
+  }),
+
   update_terrain: tool({
     description:
       'Update a terrain object created with create_terrain/create_object kind:"terrain". Controls chunk streaming, procedural height, editable material layers, and instanced/custom foliage.',
@@ -1091,7 +1166,7 @@ export const engineTools = {
     description:
       'Set the active scene sky/fog/base lighting. Use this for mood, time of day, sunset/night/daylight, panorama skyboxes, fog, and Unreal-style volumetric fog/light shafts (volumetricFog* fields — atmospheric mist, sun glow, god rays). This is scene-level World Settings, not a Blueprint node.',
     inputSchema: environmentPatchSchema,
-    execute: async ({ skyTextureAssetId, environmentMapAssetId, ...patch }) => {
+    execute: async ({ skyTextureAssetId, environmentMapAssetId, wind, ...patch }) => {
       if (skyTextureAssetId) {
         const asset = findAsset(skyTextureAssetId);
         if (!asset) return `No asset with id ${skyTextureAssetId}.`;
@@ -1104,6 +1179,7 @@ export const engineTools = {
       }
       const environmentPatch: Partial<SceneEnvironmentSettings> = {
         ...patch,
+        ...(wind ? { wind: asVec3(wind) } : {}),
         ...(skyTextureAssetId !== undefined ? { skyTextureAssetId: skyTextureAssetId || undefined } : {}),
         ...(environmentMapAssetId !== undefined ? { environmentMapAssetId: environmentMapAssetId || undefined } : {}),
       };
@@ -1198,6 +1274,7 @@ export const engineTools = {
       restitution: z.number().min(0).max(1).optional().describe('Bounciness: 0 = no bounce, 1 = very elastic.'),
       linearDamping: z.number().optional(),
       angularDamping: z.number().optional(),
+      windInfluence: z.number().min(0).optional().describe('How strongly global scene wind pushes this DYNAMIC body (0 = ignores wind). Set the wind itself via set_environment.'),
     }),
     execute: async ({ id, ...patch }) => {
       const object = findObject(id);
@@ -3609,7 +3686,7 @@ export const engineTools = {
         shakeAmount,
         qualityLevel,
         damageAmount,
-        envPatch,
+        envPatch: (envPatch ? { ...envPatch, ...(envPatch.wind ? { wind: asVec3(envPatch.wind) } : {}) } : undefined) as NodeForgeNodeData['envPatch'],
         physicsEnabled,
         physicsBodyType,
         physicsCollider,
@@ -3713,7 +3790,7 @@ export const engineTools = {
       physicsLinearDamping: z.number().optional().describe('Set Physics: linear damping.'),
       physicsAngularDamping: z.number().optional().describe('Set Physics: angular damping.'),
     }),
-    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, ...patch }) => {
+    execute: async ({ blueprintId, nodeId, vectorValue, variableId, dataAssetId, tableId, otherObjectId, targetObjectId, projectileTemplateId, projectileMuzzle, cinematicId, targetSceneId, envPatch, ...patch }) => {
       if (!findBlueprint(blueprintId)) return `No blueprint with id ${blueprintId}.`;
       if (targetSceneId && !findScene(targetSceneId)) return `No scene with id ${targetSceneId}.`;
       if (variableId && !findVariable(variableId)) return `No variable with id ${variableId}.`;
@@ -3724,6 +3801,7 @@ export const engineTools = {
       const resolvedDataAssetId = dataAssetId ?? tableId;
       if (resolvedDataAssetId && !findDataAsset(resolvedDataAssetId)) return `No Data Asset with id ${resolvedDataAssetId}.`;
       const updates: Partial<NodeForgeNodeData> = { ...patch };
+      if (envPatch !== undefined) updates.envPatch = { ...envPatch, ...(envPatch.wind ? { wind: asVec3(envPatch.wind) } : {}) } as NodeForgeNodeData['envPatch'];
       if (variableId !== undefined) updates.variableId = variableId;
       if (resolvedDataAssetId !== undefined) updates.tableId = resolvedDataAssetId;
       if (otherObjectId !== undefined) updates.otherObjectId = otherObjectId || undefined;

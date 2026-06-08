@@ -111,7 +111,7 @@ const spawnKinds: Array<['cube' | 'sphere' | 'capsule' | 'plane', string]> = [
 const valueTypes: GraphValueType[] = ['number', 'string', 'boolean', 'vector3'];
 const compareOps = ['==', '!=', '>', '>=', '<', '<='] as const;
 type EnvPatchKey = keyof NonNullable<NodeForgeNodeData['envPatch']>;
-const environmentFields: Array<{ key: EnvPatchKey; label: string; type: 'color' | 'number' | 'boolean'; step?: number; min?: number }> = [
+const environmentFields: Array<{ key: EnvPatchKey; label: string; type: 'color' | 'number' | 'boolean' | 'vector'; step?: number; min?: number }> = [
   { key: 'skyTopColor', label: 'Sky Top', type: 'color' },
   { key: 'skyHorizonColor', label: 'Sky Horizon', type: 'color' },
   { key: 'skyGroundColor', label: 'Sky Ground', type: 'color' },
@@ -124,6 +124,8 @@ const environmentFields: Array<{ key: EnvPatchKey; label: string; type: 'color' 
   { key: 'sunAzimuth', label: 'Sun Azimuth', type: 'number', step: 1 },
   { key: 'sunElevation', label: 'Sun Elevation', type: 'number', step: 1 },
   { key: 'environmentIntensity', label: 'Environment Intensity', type: 'number', step: 0.05, min: 0 },
+  { key: 'wind', label: 'Wind', type: 'vector', step: 0.5 },
+  { key: 'windTurbulence', label: 'Wind Turbulence', type: 'number', step: 0.05, min: 0 },
 ];
 
 const emptyValue = (type: GraphValueType): GraphValue => {
@@ -603,7 +605,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const selectedTable = dataAssets.find((table) => table.id === node.data.tableId);
   const selectedColumn =
     selectedTable?.columns.find((column) => column.id === node.data.columnId) ?? selectedTable?.columns[0];
-  const updateEnvPatchField = (key: EnvPatchKey, value: string | number | boolean) => {
+  const updateEnvPatchField = (key: EnvPatchKey, value: string | number | boolean | [number, number, number]) => {
     updateGraphNodeData(node.id, { envPatch: { ...(node.data.envPatch ?? {}), [key]: value } });
   };
   const clearEnvPatchField = (key: EnvPatchKey) => {
@@ -846,7 +848,26 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 <label key={field.key} className="node-field">
                   <span>{field.label}{isSet ? '' : ' (unchanged)'}</span>
                   <div className="library-row">
-                    {field.type === 'boolean' ? (
+                    {field.type === 'vector' ? (
+                      <div className="vec-inline">
+                        {([0, 1, 2] as const).map((axis) => {
+                          const vec = (Array.isArray(value) ? value : Array.isArray(sceneValue) ? sceneValue : [0, 0, 0]) as number[];
+                          return (
+                            <input
+                              key={axis}
+                              type="number"
+                              step={field.step}
+                              value={Number(vec[axis] ?? 0)}
+                              onChange={(event) => {
+                                const next = [...vec] as [number, number, number];
+                                next[axis] = Number(event.target.value);
+                                updateEnvPatchField(field.key, next);
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : field.type === 'boolean' ? (
                       <select
                         value={String(typeof value === 'boolean' ? value : Boolean(sceneValue))}
                         onChange={(event) => updateEnvPatchField(field.key, event.target.value === 'true')}

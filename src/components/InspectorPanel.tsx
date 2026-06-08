@@ -6,7 +6,7 @@ import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, WaterVolumeComponent } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, ClothComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, WaterVolumeComponent } from '../types';
 import { particlePresetIds } from '../runtime/particlePresets';
 import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { WATER_STYLE_PRESETS } from '../three/presets';
@@ -1751,6 +1751,99 @@ function JointSection({
   );
 }
 
+const CLOTH_PIN_LABELS: Record<ClothComponent['pinMode'], string> = {
+  'top-edge': 'Top edge (banner / curtain)',
+  'top-corners': 'Top corners (flag on ropes)',
+  'four-corners': 'Four corners (tarp / net)',
+  'left-edge': 'Left edge (flag on a pole)',
+  none: 'None (free falling sheet)',
+};
+
+function ClothSection({
+  cloth,
+  onAdd,
+  onChange,
+  onRemove,
+}: {
+  cloth?: ClothComponent;
+  onAdd: () => void;
+  onChange: (patch: Partial<ClothComponent>) => void;
+  onRemove: () => void;
+}) {
+  if (!cloth) {
+    return (
+      <section className="inspector-section">
+        <h3>Cloth</h3>
+        <p className="field-hint">
+          Turn this object into a real-time cloth sheet (Verlet sim, separate from rigid-body physics):
+          flags, banners, curtains, capes, hanging cloth. Wind + gravity + collision, pinned per the mode you pick.
+        </p>
+        <button className="full-button" onClick={onAdd}>Add Cloth</button>
+      </section>
+    );
+  }
+  return (
+    <section className="inspector-section">
+      <h3>Cloth</h3>
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={cloth.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Pinned</span>
+        <select value={cloth.pinMode} onChange={(event) => onChange({ pinMode: event.target.value as ClothComponent['pinMode'] })}>
+          {(Object.keys(CLOTH_PIN_LABELS) as ClothComponent['pinMode'][]).map((mode) => (
+            <option key={mode} value={mode}>{CLOTH_PIN_LABELS[mode]}</option>
+          ))}
+        </select>
+      </label>
+      <p className="field-hint">Pinned particles follow this object — parent the cloth to a character to make a cape.</p>
+      <label className="field-row">
+        <span>Width</span>
+        <NumberInput value={cloth.width} min={0.1} step={0.1} onChange={(width) => onChange({ width })} />
+      </label>
+      <label className="field-row">
+        <span>Height</span>
+        <NumberInput value={cloth.height} min={0.1} step={0.1} onChange={(height) => onChange({ height })} />
+      </label>
+      <label className="field-row">
+        <span>Resolution</span>
+        <NumberInput value={cloth.resolution} min={4} max={32} step={1} onChange={(resolution) => onChange({ resolution })} />
+      </label>
+      <p className="field-hint">Grid divisions per side (4–32). Higher = smoother + softer, but costlier.</p>
+      <label className="field-row">
+        <span>Stiffness</span>
+        <NumberInput value={cloth.stiffness} min={1} max={12} step={1} onChange={(stiffness) => onChange({ stiffness })} />
+      </label>
+      <RangeField label="Damping" value={cloth.damping} max={0.95} onChange={(damping) => onChange({ damping })} />
+      <label className="field-row">
+        <span>Gravity</span>
+        <NumberInput value={cloth.gravityScale} step={0.1} onChange={(gravityScale) => onChange({ gravityScale })} />
+      </label>
+      <VectorField label="Wind" value={cloth.wind} onChange={(wind) => onChange({ wind })} />
+      <RangeField label="Turbulence" value={cloth.turbulence} onChange={(turbulence) => onChange({ turbulence })} />
+      <label className="field-row">
+        <span>Collide floor</span>
+        <input type="checkbox" checked={cloth.collideFloor} onChange={(event) => onChange({ collideFloor: event.target.checked })} />
+      </label>
+      {cloth.collideFloor && (
+        <label className="field-row">
+          <span>Floor Y</span>
+          <NumberInput value={cloth.floorY} step={0.1} onChange={(floorY) => onChange({ floorY })} />
+        </label>
+      )}
+      <label className="field-row">
+        <span>Collide bodies</span>
+        <input type="checkbox" checked={cloth.collideBodies} onChange={(event) => onChange({ collideBodies: event.target.checked })} />
+      </label>
+      <p className="field-hint">Collides with nearby physics/character colliders (sphere/box/capsule approximations).</p>
+      <RangeField label="Tear" value={cloth.tearFactor} max={5} onChange={(tearFactor) => onChange({ tearFactor })} />
+      <p className="field-hint">0 = never tears; &gt;1 lets seams snap when stretched past that ratio.</p>
+      <button className="full-button" onClick={onRemove}>Remove Cloth</button>
+    </section>
+  );
+}
+
 function PhysicsSection({
   physics,
   onChange,
@@ -1831,6 +1924,15 @@ function PhysicsSection({
       {selectedPreset && <p className="field-hint">{selectedPreset.description}</p>}
       <RangeField label="Friction" value={physics.friction} onChange={(friction) => onChange({ friction })} />
       <RangeField label="Bounce" value={physics.restitution ?? 0.05} onChange={(restitution) => onChange({ restitution })} />
+      {physics.bodyType === 'dynamic' && (
+        <>
+          <label className="field-row">
+            <span>Wind influence</span>
+            <NumberInput value={physics.windInfluence ?? 0} min={0} step={0.1} onChange={(windInfluence) => onChange({ windInfluence })} />
+          </label>
+          <p className="field-hint">How strongly global scene Wind pushes this body. 0 = ignores wind. Set the wind itself in Scene Settings.</p>
+        </>
+      )}
     </section>
   );
 }
@@ -2004,6 +2106,9 @@ export function InspectorPanel() {
   const addJoint = useEditorStore((state) => state.addJoint);
   const updateJoint = useEditorStore((state) => state.updateJoint);
   const removeJoint = useEditorStore((state) => state.removeJoint);
+  const addCloth = useEditorStore((state) => state.addCloth);
+  const updateCloth = useEditorStore((state) => state.updateCloth);
+  const removeCloth = useEditorStore((state) => state.removeCloth);
   const sceneObjects = useEditorStore((state) => selectActiveObjects(state));
   const toggleAnimator = useEditorStore((state) => state.toggleAnimator);
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
@@ -2207,6 +2312,13 @@ export function InspectorPanel() {
             onAdd={() => addJoint(object.id)}
             onChange={(patch) => updateJoint(object.id, patch)}
             onRemove={() => removeJoint(object.id)}
+          />
+
+          <ClothSection
+            cloth={object.cloth}
+            onAdd={() => addCloth(object.id)}
+            onChange={(patch) => updateCloth(object.id, patch)}
+            onRemove={() => removeCloth(object.id)}
           />
 
           {object.renderer && object.kind !== 'terrain' && (

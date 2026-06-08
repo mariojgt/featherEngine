@@ -90,13 +90,22 @@ const fragmentShader = /* glsl */ `
   }
 
   // 1.0 = lit, 0.0 = in sun shadow. Outside the shadow frustum counts as lit (no shaft data there).
+  // A small 3x3 PCF kernel softens the shaft edges into proper volumetric beams (vs a hard single tap).
   float vfSunVisibility(vec3 worldPos) {
     if (shaftStrength <= 0.0) return 1.0;
     vec4 sc = shadowMatrix * vec4(worldPos, 1.0);
     vec3 s = sc.xyz / sc.w;
     if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) return 1.0;
-    float occluder = vfUnpackDepth(texture(shadowMap, s.xy));
-    return (s.z - 0.0015) <= occluder ? 1.0 : 0.0;
+    float depthRef = s.z - 0.0015;
+    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    float lit = 0.0;
+    for (int x = -1; x <= 1; x++) {
+      for (int y = -1; y <= 1; y++) {
+        float occluder = vfUnpackDepth(texture(shadowMap, s.xy + vec2(float(x), float(y)) * texel));
+        lit += depthRef <= occluder ? 1.0 : 0.0;
+      }
+    }
+    return lit / 9.0;
   }
 
   float vfHash(vec2 p) {
@@ -115,8 +124,9 @@ const fragmentShader = /* glsl */ `
     float sceneDist = depth >= 0.9999 ? maxDistance : min(length(worldPos - cameraPos), maxDistance);
 
     float stepLen = sceneDist / float(steps);
-    // Per-pixel + temporal dither so low step counts don't band.
-    float jitter = vfHash(gl_FragCoord.xy + time);
+    // Stable per-pixel dither so low step counts don't band. Deliberately NOT time-varying: there's no
+    // TAA to resolve per-frame noise, so animated jitter would make the fog visibly shimmer/boil.
+    float jitter = vfHash(gl_FragCoord.xy);
     float t = stepLen * jitter;
 
     float phase = vfPhase(dot(rayDir, sunDirection), scattering);

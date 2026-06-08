@@ -291,6 +291,9 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
     sunAzimuth: number;
     sunElevation: number;
     environmentIntensity: number;
+    /** Global wind force [x,y,z] — drives cloth + wind-affected dynamic bodies. Change it live to gust/storm. */
+    wind: Vector3Tuple;
+    windTurbulence: number;
   }>;
   /** action.setVisible: whether the target object is shown (false hides it during Play). */
   visible?: boolean;
@@ -887,6 +890,8 @@ export interface PhysicsComponent {
   restitution?: number;
   linearDamping: number;
   angularDamping: number;
+  /** How strongly global scene wind pushes this DYNAMIC body (0 = ignores wind, the default). */
+  windInfluence?: number;
 }
 
 export type PhysicsMaterialPresetId = 'default' | 'rubber' | 'slime' | 'ice' | 'metal' | 'stone' | 'wood' | 'mud';
@@ -1171,6 +1176,13 @@ export interface SceneEnvironmentSettings {
   volumetricSunStrength?: number;
   /** Raymarch far clamp in world units (caps cost + keeps distant fog bounded). */
   volumetricMaxDistance?: number;
+  /**
+   * Global wind as a world-space force vector. Drives every cloth sheet (added on top of each cloth's
+   * own wind) and pushes DYNAMIC physics bodies scaled by their `physics.windInfluence`. [0,0,0] = calm.
+   */
+  wind?: Vector3Tuple;
+  /** Random gust turbulence layered on the global wind, 0–1. */
+  windTurbulence?: number;
 }
 
 /** A reusable named attach point on a skeleton (Unreal socket): a bone + a local offset. */

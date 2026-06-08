@@ -212,6 +212,12 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Tuned joint';
     case 'remove_joint':
       return 'Removed joint';
+    case 'create_cloth':
+      return 'Created cloth';
+    case 'update_cloth':
+      return 'Tuned cloth';
+    case 'remove_cloth':
+      return 'Removed cloth';
     case 'set_fracture':
       return input.enabled === false ? 'Removed destructible' : 'Made destructible';
     case 'set_light':

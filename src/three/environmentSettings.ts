@@ -27,6 +27,8 @@ export const defaultSceneEnvironment = (): SceneEnvironmentSettings => ({
   volumetricScattering: 0.6,
   volumetricSunStrength: 1.6,
   volumetricMaxDistance: 140,
+  wind: [0, 0, 0],
+  windTurbulence: 0,
 });
 
 export function withSceneEnvironmentDefaults(

@@ -255,6 +255,7 @@ export const defaultPhysics = (
   restitution: 0.05,
   linearDamping: 0,
   angularDamping: 0.05,
+  windInfluence: 0,
 });
 
 export const defaultWaterVolume = (): WaterVolumeComponent => ({
