@@ -1406,9 +1406,13 @@ export interface SceneObject {
   light?: LightComponent;
   /** Weapon/item inventory — drives the on-screen slot bar and click-to-equip (spawn attached + montage). */
   inventory?: InventoryComponent;
-  /** Set on the ROOT of an object stamped from a prefab — the source prefab's id. Lets the editor
-   * find all instances of a prefab. Instances are independent copies; this is just provenance. */
+  /** Set on EVERY object stamped from a prefab — the source prefab's id. Lets the editor find all
+   * instances of a prefab and propagate edits to them (with per-instance overrides preserved). */
   prefabSourceId?: string;
+  /** The id of the object WITHIN the prefab definition this instance object was stamped from. Pairs with
+   * prefabSourceId to 3-way-merge prefab edits while keeping per-instance overrides. Absent on objects
+   * the user ADDED to an instance (instance-local additions, which are kept as-is on re-merge). */
+  prefabObjectId?: string;
   /** Destructible setup — when enabled, the object shatters into dynamic cubes on impact/damage or the Fracture node. */
   fracture?: FractureComponent;
 }

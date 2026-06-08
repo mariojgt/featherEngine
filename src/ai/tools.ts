@@ -1337,11 +1337,11 @@ export const engineTools = {
 
   set_fracture: tool({
     description:
-      'Make an object DESTRUCTIBLE (configured on the object itself). It shatters into small dynamic cubes that fly apart: automatically when hit fast enough (set impactThreshold > 0, needs physics enabled to be hit), when destroyed by damage (give it a "health" instance var), or via the "Fracture" Blueprint node. Set enabled:false to turn it off.',
+      'Make an object DESTRUCTIBLE (configured on the object itself). It shatters into dynamic pieces that fly apart — irregular convex VORONOI chunks (real cell fracture, not generic triangles) for chunks/shatter, or an even box grid for uniform: automatically when hit fast enough (set impactThreshold > 0, needs physics enabled to be hit), when destroyed by damage (give it a "health" instance var), or via the "Fracture" Blueprint node. Set enabled:false to turn it off.',
     inputSchema: z.object({
       id: z.string(),
       enabled: z.boolean().optional().describe('Turn destructibility on/off. Default on.'),
-      pattern: z.enum(['uniform', 'chunks', 'shatter']).optional().describe("Cut style: 'uniform' even grid, 'chunks' few big irregular pieces, 'shatter' many small bits."),
+      pattern: z.enum(['uniform', 'chunks', 'shatter']).optional().describe("Cut style: 'uniform' even box grid (brick walls), 'chunks' a few big irregular Voronoi chunks, 'shatter' many small Voronoi chunks."),
       pieces: z.number().int().min(2).max(6).optional().describe('Detail / base piece count (higher = more, smaller pieces).'),
       jitter: z.number().min(0).max(1).optional().describe('Irregularity 0–1 (chunks/shatter): how uneven the piece sizes are.'),
       seed: z.number().int().min(1).optional().describe('Seed for a repeatable break; change for a different look.'),

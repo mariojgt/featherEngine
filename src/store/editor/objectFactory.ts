@@ -14,8 +14,10 @@ import type {
   Vector3Tuple,
 } from '../../types';
 
+import * as THREE from 'three';
+import { Brush, Evaluator, INTERSECTION } from 'three-bvh-csg';
 import { withParticleDefaults } from '../../runtime/particlePresets';
-import { registerRawGeometry } from '../../runtime/meshGeometryCache';
+import { registerRawGeometry, getModelGeometry } from '../../runtime/meshGeometryCache';
 import { defaultTerrain } from '../../terrain/terrain';
 import { cloneGraphValue } from './graph';
 import { makeId } from './ids';
@@ -344,104 +346,255 @@ const gridCells = (n: number): FractureCell[] => {
   return cells;
 };
 
-// ── Angular shards (icosphere-based) ──────────────────────────────────────────
-// A subdivided icosahedron gives a triangulated surface; each surface triangle + the shared centre
-// apex is one tetrahedral SHARD. All shards share the centre + their surface vertices, so they tile
-// the volume with no overlap (no physics interpenetration) — and each piece is angular, like a real
-// shatter rather than a Lego cube.
+// ── Voronoi cell fracture ─────────────────────────────────────────────────────
+// Real destruction-style fracture: scatter seed points through the object's volume, then build each
+// seed's Voronoi cell — the convex region of space closer to that seed than any other, clipped to the
+// object box. Cutting the box by the bisecting plane between each pair of seeds yields irregular convex
+// CHUNKS that tile the volume with no gaps or overlap (so no physics interpenetration), each piece a
+// proper solid that matches the object's shape — not a generic triangle/cube. This is the Blender
+// "Cell Fracture" / Chaos-geometry approach.
 
 let shardSeq = 0;
+type V3 = readonly [number, number, number];
+const v3dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
-interface Sphere {
-  verts: number[][]; // unit-sphere positions
-  faces: number[][]; // triangle vertex indices
-}
+/** The 6 faces of an axis-aligned box [mn,mx], each an ordered polygon (the starting convex cell). */
+const boxFaces = (mn: V3, mx: V3): V3[][] => [
+  [[mn[0], mn[1], mx[2]], [mx[0], mn[1], mx[2]], [mx[0], mx[1], mx[2]], [mn[0], mx[1], mx[2]]], // +Z
+  [[mx[0], mn[1], mn[2]], [mn[0], mn[1], mn[2]], [mn[0], mx[1], mn[2]], [mx[0], mx[1], mn[2]]], // -Z
+  [[mx[0], mn[1], mx[2]], [mx[0], mn[1], mn[2]], [mx[0], mx[1], mn[2]], [mx[0], mx[1], mx[2]]], // +X
+  [[mn[0], mn[1], mn[2]], [mn[0], mn[1], mx[2]], [mn[0], mx[1], mx[2]], [mn[0], mx[1], mn[2]]], // -X
+  [[mn[0], mx[1], mx[2]], [mx[0], mx[1], mx[2]], [mx[0], mx[1], mn[2]], [mn[0], mx[1], mn[2]]], // +Y
+  [[mn[0], mn[1], mn[2]], [mx[0], mn[1], mn[2]], [mx[0], mn[1], mx[2]], [mn[0], mn[1], mx[2]]], // -Y
+];
 
-/** Build a `detail`-times-subdivided icosphere (detail 0 = 20 faces, 1 = 80, 2 = 320). */
-const icosphere = (detail: number): Sphere => {
-  const t = (1 + Math.sqrt(5)) / 2;
-  let verts: number[][] = [
-    [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
-    [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
-    [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
-  ].map((v) => {
-    const l = Math.hypot(v[0], v[1], v[2]);
-    return [v[0] / l, v[1] / l, v[2] / l];
-  });
-  let faces: number[][] = [
-    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-    [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
-  ];
-  for (let d = 0; d < detail; d++) {
-    const mid = new Map<string, number>();
-    const midpoint = (a: number, b: number) => {
-      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
-      const found = mid.get(key);
-      if (found !== undefined) return found;
-      const m = [(verts[a][0] + verts[b][0]) / 2, (verts[a][1] + verts[b][1]) / 2, (verts[a][2] + verts[b][2]) / 2];
-      const l = Math.hypot(m[0], m[1], m[2]);
-      const idx = verts.push([m[0] / l, m[1] / l, m[2] / l]) - 1;
-      mid.set(key, idx);
-      return idx;
-    };
-    const next: number[][] = [];
-    for (const [a, b, c] of faces) {
-      const ab = midpoint(a, b);
-      const bc = midpoint(b, c);
-      const ca = midpoint(c, a);
-      next.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
-    }
-    faces = next;
-  }
-  return { verts, faces };
+/** Build an indexed BufferGeometry (with normals + dummy uv) from a flat vertex/index pair, for CSG. */
+const csgGeometry = (vertices: Float32Array, indices: Uint32Array): THREE.BufferGeometry => {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  g.setIndex(new THREE.BufferAttribute(indices, 1));
+  g.computeVertexNormals();
+  // three-bvh-csg interpolates a fixed attribute set; both brushes must carry the same ones.
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array((vertices.length / 3) * 2), 2));
+  return g;
 };
 
-/** Break an object into angular tetrahedral shards radiating from its centre. */
-const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefined, detail: number): SceneObject[] => {
+/**
+ * The source mesh to fracture, in the local space where verts × object.scale = world size. Imported
+ * models use their real geometry; primitives synthesize a matching unit shape (so a sphere fractures into
+ * spherical caps, a box into box bits, etc.). Returns geometry + local bounding box.
+ */
+const fractureSourceGeometry = (object: SceneObject): { geometry: THREE.BufferGeometry; mn: V3; mx: V3 } => {
+  const geo = getModelGeometry(object.renderer?.modelAssetId);
+  if (geo && geo.vertices.length >= 12) {
+    let lx = Infinity, ly = Infinity, lz = Infinity, hx = -Infinity, hy = -Infinity, hz = -Infinity;
+    for (let i = 0; i < geo.vertices.length; i += 3) {
+      lx = Math.min(lx, geo.vertices[i]); hx = Math.max(hx, geo.vertices[i]);
+      ly = Math.min(ly, geo.vertices[i + 1]); hy = Math.max(hy, geo.vertices[i + 1]);
+      lz = Math.min(lz, geo.vertices[i + 2]); hz = Math.max(hz, geo.vertices[i + 2]);
+    }
+    return { geometry: csgGeometry(geo.vertices.slice(), geo.indices.slice()), mn: [lx, ly, lz], mx: [hx, hy, hz] };
+  }
+  // Primitive: synthesize a unit shape matching the renderer's SHARED_GEO sizes (already has pos/normal/uv).
+  let prim: THREE.BufferGeometry;
+  switch (object.kind) {
+    case 'sphere': prim = new THREE.SphereGeometry(0.55, 20, 14); break;
+    case 'capsule': prim = new THREE.CapsuleGeometry(0.34, 0.82, 6, 14); break;
+    case 'plane': prim = new THREE.BoxGeometry(1, 1, 0.05); break;
+    default: prim = new THREE.BoxGeometry(1, 1, 1); break;
+  }
+  prim.computeBoundingBox();
+  const bb = prim.boundingBox!;
+  return { geometry: prim, mn: [bb.min.x, bb.min.y, bb.min.z], mx: [bb.max.x, bb.max.y, bb.max.z] };
+};
+
+/** Order a coplanar point set into a polygon ring around its centroid (in the plane of normal `n`). */
+const orderRing = (pts: V3[], n: V3): V3[] => {
+  const uniq: V3[] = [];
+  for (const p of pts) {
+    if (!uniq.some((q) => Math.abs(q[0] - p[0]) < 1e-5 && Math.abs(q[1] - p[1]) < 1e-5 && Math.abs(q[2] - p[2]) < 1e-5)) uniq.push(p);
+  }
+  if (uniq.length < 3) return uniq;
+  const c: number[] = [0, 0, 0];
+  for (const p of uniq) { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; }
+  c[0] /= uniq.length; c[1] /= uniq.length; c[2] /= uniq.length;
+  const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+  const nn: V3 = [n[0] / nl, n[1] / nl, n[2] / nl];
+  let u: V3 = Math.abs(nn[0]) > 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const du = v3dot(u, nn);
+  u = [u[0] - nn[0] * du, u[1] - nn[1] * du, u[2] - nn[2] * du];
+  const ul = Math.hypot(u[0], u[1], u[2]) || 1;
+  u = [u[0] / ul, u[1] / ul, u[2] / ul];
+  const w: V3 = [nn[1] * u[2] - nn[2] * u[1], nn[2] * u[0] - nn[0] * u[2], nn[0] * u[1] - nn[1] * u[0]];
+  const ang = (p: V3) => Math.atan2(v3dot([p[0] - c[0], p[1] - c[1], p[2] - c[2]], w), v3dot([p[0] - c[0], p[1] - c[1], p[2] - c[2]], u));
+  return uniq.slice().sort((a, b) => ang(a) - ang(b));
+};
+
+/** Clip a convex polyhedron (set of face polygons) by the half-space dot(n,x) <= d; returns the inside part. */
+const clipConvex = (faces: V3[][], n: V3, d: number): V3[][] => {
+  const EPS = 1e-7;
+  const out: V3[][] = [];
+  const cap: V3[] = [];
+  for (const face of faces) {
+    const nf: V3[] = [];
+    const m = face.length;
+    for (let i = 0; i < m; i++) {
+      const a = face[i];
+      const b = face[(i + 1) % m];
+      const da = v3dot(n, a) - d;
+      const db = v3dot(n, b) - d;
+      if (da <= EPS) nf.push(a);
+      if ((da < -EPS && db > EPS) || (da > EPS && db < -EPS)) {
+        const t = da / (da - db);
+        const p: V3 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        nf.push(p);
+        cap.push(p);
+      }
+    }
+    if (nf.length >= 3) out.push(nf);
+  }
+  if (cap.length >= 3) out.push(orderRing(cap, n));
+  return out;
+};
+
+/** Triangulate a convex polyhedron's faces into vertices + indices, and return its centroid. */
+const meshFromFaces = (faces: V3[][]): { vertices: Float32Array; indices: Uint32Array; centroid: V3 } => {
+  const verts: number[] = [];
+  const idx: number[] = [];
+  const c: number[] = [0, 0, 0];
+  let n = 0;
+  for (const face of faces) {
+    const base = verts.length / 3;
+    for (const p of face) {
+      verts.push(p[0], p[1], p[2]);
+      c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; n++;
+    }
+    for (let i = 1; i < face.length - 1; i++) idx.push(base, base + i, base + i + 1);
+  }
+  if (n > 0) { c[0] /= n; c[1] /= n; c[2] /= n; }
+  return { vertices: new Float32Array(verts), indices: new Uint32Array(idx), centroid: [c[0], c[1], c[2]] };
+};
+
+/**
+ * Build `count` Voronoi cells over the box [mn,mx] from jittered seeds, each cell additionally clipped to
+ * `clip` half-spaces (the source mesh's convex hull) so the chunks fill the object's REAL shape, not a box.
+ * Returns chunk meshes in the same local space as the input box/hull.
+ */
+const voronoiChunks = (
+  count: number,
+  rng: () => number,
+  jitter: number,
+  mn: V3,
+  mx: V3,
+  clip: { n: V3; d: number }[],
+): { vertices: Float32Array; indices: Uint32Array; centroid: V3 }[] => {
+  const cx = (mn[0] + mx[0]) / 2, cy = (mn[1] + mx[1]) / 2, cz = (mn[2] + mx[2]) / 2;
+  const ex = (mx[0] - mn[0]) / 2, ey = (mx[1] - mn[1]) / 2, ez = (mx[2] - mn[2]) / 2;
+  const spread = 0.45 + 0.55 * Math.max(0, Math.min(jitter, 1));
+  const inside = (p: V3) => clip.every((pl) => v3dot(pl.n, p) <= pl.d + 1e-6);
+  // Reject-sample seeds INSIDE the hull so cells aren't wasted in the box corners outside the mesh.
+  const seeds: V3[] = [];
+  let attempts = 0;
+  while (seeds.length < count && attempts < count * 30) {
+    attempts++;
+    const p: V3 = [cx + (rng() - 0.5) * 2 * ex * spread, cy + (rng() - 0.5) * 2 * ey * spread, cz + (rng() - 0.5) * 2 * ez * spread];
+    if (clip.length && !inside(p)) continue;
+    seeds.push(p);
+  }
+  const startFaces = boxFaces(mn, mx);
+  const chunks: { vertices: Float32Array; indices: Uint32Array; centroid: V3 }[] = [];
+  for (let i = 0; i < seeds.length; i++) {
+    let faces = startFaces.map((f) => f.slice());
+    for (let j = 0; j < seeds.length && faces.length >= 4; j++) {
+      if (j === i) continue;
+      const n: V3 = [seeds[j][0] - seeds[i][0], seeds[j][1] - seeds[i][1], seeds[j][2] - seeds[i][2]];
+      const mid: V3 = [(seeds[i][0] + seeds[j][0]) / 2, (seeds[i][1] + seeds[j][1]) / 2, (seeds[i][2] + seeds[j][2]) / 2];
+      faces = clipConvex(faces, n, v3dot(n, mid));
+    }
+    // Clip to the object's convex hull so the chunk is a piece of the actual shape.
+    for (const pl of clip) {
+      if (faces.length < 4) break;
+      faces = clipConvex(faces, pl.n, pl.d);
+    }
+    if (faces.length < 4) continue;
+    const mesh = meshFromFaces(faces);
+    if (mesh.vertices.length >= 12) chunks.push(mesh);
+  }
+  return chunks;
+};
+
+/**
+ * Break an object into pieces that are EXACT cuts of its mesh (any shape, concave included): partition
+ * the volume into Voronoi cells, then boolean-INTERSECT each cell with the actual mesh (three-bvh-csg).
+ * The chunks therefore reassemble into the original object. Each chunk renders its exact cut geometry and
+ * gets a convex-hull collider (fine for small debris). Works for imported models AND primitives.
+ */
+const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefined, count: number): SceneObject[] => {
   const cfg = { ...defaultFracture(), ...source.fracture };
   const rng = mulberry32((cfg.seed || 1) >>> 0);
   const jitter = Math.max(0, Math.min(cfg.jitter ?? 0, 1));
   const kick = Math.max(0, cfg.strength ?? 3);
   const [px, py, pz] = source.transform.position;
   const [sx, sy, sz] = source.transform.scale;
-  const rx = sx / 2;
-  const ry = sy / 2;
-  const rz = sz / 2;
   const color = source.renderer?.color ?? '#9aa3b2';
 
-  const { verts, faces } = icosphere(detail);
-  // Per-vertex radial jitter (shared across faces → shards still tile without gaps/overlap).
-  const rad = verts.map(() => 1 + (rng() - 0.5) * jitter * 0.5);
-  const P = (i: number): [number, number, number] => [verts[i][0] * rx * rad[i], verts[i][1] * ry * rad[i], verts[i][2] * rz * rad[i]];
+  const src = fractureSourceGeometry(source);
+  const focus =
+    origin && cfg.focusImpact
+      ? ([(origin[0] - px) / (sx || 1), (origin[1] - py) / (sy || 1), (origin[2] - pz) / (sz || 1)] as V3)
+      : undefined;
+  const quat = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(source.transform.rotation[0], source.transform.rotation[1], source.transform.rotation[2], 'XYZ'),
+  );
 
-  // Impact point in object-local space → flings shards outward from the hit.
-  const focus = origin && cfg.focusImpact ? [origin[0] - px, origin[1] - py, origin[2] - pz] : undefined;
+  const evaluator = new Evaluator();
+  evaluator.useGroups = false;
+  evaluator.attributes = ['position', 'normal', 'uv'];
+  const sourceBrush = new Brush(src.geometry);
+  sourceBrush.updateMatrixWorld();
 
-  return faces.map((f) => {
-    const a = P(f[0]);
-    const b = P(f[1]);
-    const c = P(f[2]);
-    // Tetra: centre apex + the three surface points.
-    const vertices = new Float32Array([0, 0, 0, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]);
-    const indices = new Uint32Array([0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]);
+  const cells = voronoiChunks(Math.max(2, Math.min(count, 60)), rng, jitter, src.mn, src.mx, []);
+  const out: SceneObject[] = [];
+  for (const cell of cells) {
+    let resultGeo: THREE.BufferGeometry | null = null;
+    try {
+      const cellBrush = new Brush(csgGeometry(cell.vertices, cell.indices));
+      cellBrush.updateMatrixWorld();
+      const result = evaluator.evaluate(sourceBrush, cellBrush, INTERSECTION);
+      resultGeo = result.geometry;
+    } catch {
+      resultGeo = null;
+    }
+    const pos = resultGeo?.getAttribute('position');
+    if (!resultGeo || !pos || pos.count < 3) continue; // cell fell outside the mesh → no piece
+    // Chunk geometry (mesh-local) → scale to the object's real size.
+    const src3 = pos.array as ArrayLike<number>;
+    const vertices = new Float32Array(pos.count * 3);
+    let cxx = 0, cyy = 0, czz = 0;
+    for (let i = 0; i < pos.count; i++) {
+      vertices[i * 3] = src3[i * 3] * sx;
+      vertices[i * 3 + 1] = src3[i * 3 + 1] * sy;
+      vertices[i * 3 + 2] = src3[i * 3 + 2] * sz;
+      cxx += vertices[i * 3]; cyy += vertices[i * 3 + 1]; czz += vertices[i * 3 + 2];
+    }
+    cxx /= pos.count; cyy /= pos.count; czz /= pos.count;
+    const idxAttr = resultGeo.getIndex();
+    const indices = idxAttr ? new Uint32Array(idxAttr.array as ArrayLike<number>) : new Uint32Array(pos.count).map((_, i) => i);
+
     const key = `shard_${source.id}_${shardSeq++}`;
     registerRawGeometry(key, vertices, indices);
 
-    const mx = (a[0] + b[0] + c[0]) / 3;
-    const my = (a[1] + b[1] + c[1]) / 3;
-    const mz = (a[2] + b[2] + c[2]) / 3;
-    const dirX = focus ? mx - focus[0] : mx;
-    const dirY = focus ? my - focus[1] : my;
-    const dirZ = focus ? mz - focus[2] : mz;
-    const len = Math.hypot(dirX, dirY, dirZ) || 1;
+    const fx = focus ? focus[0] * sx : 0;
+    const fy = focus ? focus[1] * sy : 0;
+    const fz = focus ? focus[2] * sz : 0;
+    const dir = new THREE.Vector3(focus ? cxx - fx : cxx, focus ? cyy - fy : cyy, focus ? czz - fz : czz).applyQuaternion(quat);
+    const len = dir.length() || 1;
 
-    return {
+    out.push({
       id: makeId('shard'),
-      name: `${source.name} Shard`,
+      name: `${source.name} Chunk`,
       kind: 'cube',
-      transform: { position: [px, py, pz], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      transform: { position: [px, py, pz], rotation: [...source.transform.rotation] as Vector3Tuple, scale: [1, 1, 1] },
       renderer: {
         ...defaultRenderer('cube', color),
         metalness: source.renderer?.metalness ?? 0.1,
@@ -450,14 +603,16 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
         fragmentKey: key, // drives rendering
       },
       physics: { ...defaultPhysics('dynamic', 'convex'), enabled: true },
-      variables: { __impulse: [(dirX / len) * kick, (dirY / len) * kick + kick * 0.4, (dirZ / len) * kick] },
-    } as SceneObject;
-  });
+      variables: { __impulse: [(dir.x / len) * kick, (dir.y / len) * kick + kick * 0.4, (dir.z / len) * kick] },
+    } as SceneObject);
+  }
+  return out;
 };
 
 /**
  * Break an object into dynamic pieces that fly apart. 'uniform' = an even box grid (good for brick
- * walls); 'chunks' / 'shatter' = angular tetrahedral SHARDS (like a real shatter, not Lego cubes).
+ * walls); 'chunks' / 'shatter' = real cell fracture — Voronoi cells boolean-INTERSECTED with the actual
+ * mesh (CSG), so pieces are exact cuts of any shape (concave included); 'shatter' = many more, smaller.
  * Pattern/detail/jitter/seed come from the object's fracture config; `origin` (world-space hit point)
  * makes pieces fly outward from it. Each piece carries a one-shot kick in `variables.__impulse`
  * (applied once by tickRuntime). The caller destroys the original.
@@ -467,9 +622,9 @@ export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple): 
   const base = Math.max(2, Math.min(Math.round(cfg.pieces) || 2, 6));
 
   if (cfg.pattern !== 'uniform') {
-    // detail 0 = 20 shards, 1 = 80, 2 = 320. Scale with pieces; shatter goes finer than chunks.
-    const detail = cfg.pattern === 'shatter' ? (base >= 4 ? 2 : 1) : base >= 4 ? 1 : 0;
-    return makeFractureShards(source, origin, detail);
+    // Voronoi cell count: 'chunks' = a few big pieces, 'shatter' = many small ones. Scales with `pieces`.
+    const count = cfg.pattern === 'shatter' ? base * base * 2 : base * 3;
+    return makeFractureShards(source, origin, count);
   }
 
   // 'uniform' → even box grid.
