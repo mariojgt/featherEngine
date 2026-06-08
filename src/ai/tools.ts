@@ -11,6 +11,8 @@ import type {
   GraphValue,
   GraphValueType,
   InventorySlot,
+  JointComponent,
+  JointType,
   MaterialDefinition,
   MeshRendererComponent,
   PhysicsComponent,
@@ -792,6 +794,91 @@ export const engineTools = {
       if (!object.water) store().toggleWater(objectId);
       store().updateWater(objectId, normalizeWaterPatch(patch) as Partial<WaterVolumeComponent>);
       return `Updated water volume ${objectId}.`;
+    },
+  }),
+
+  add_joint: tool({
+    description:
+      'Add a physics joint/constraint linking an object\'s rigid body to another body (or pinning it in the world). Use this for mechanical motion: HINGE = door/wheel/lever (rotates about `axis`, optional limits + motor), SLIDER = lift/piston/drawer (slides along `axis`, optional limits + motor), SPRING = bungee/suspension (pulls toward `restLength` with stiffness+damping), ROPE = tether/leash (capped at `maxLength`), SPHERICAL = ball-and-socket chain/pendulum, FIXED = rigid weld. Enables physics on the object if missing. Leave `connectedObjectId` empty to anchor to the world (the body swings/slides relative to its spawn point). Anchors are LOCAL offsets from each body\'s origin.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      type: z.enum(['fixed', 'spherical', 'hinge', 'slider', 'spring', 'rope']).describe('Joint kind.'),
+      connectedObjectId: z.string().optional().describe('Other body to link to. Omit/empty = pin to the world.'),
+      localAnchor: vec3.optional().describe('Anchor offset on THIS body (local). Default [0,0,0].'),
+      connectedAnchor: vec3.optional().describe('Anchor offset on the connected body (local). Default [0,0,0].'),
+      axis: vec3.optional().describe('Rotation axis (hinge) or slide axis (slider), local. Default [0,1,0].'),
+      limitsEnabled: z.boolean().optional().describe('Hinge/slider: clamp the range to [limitMin,limitMax].'),
+      limitMin: z.number().optional().describe('Lower limit — radians (hinge) or world units (slider).'),
+      limitMax: z.number().optional().describe('Upper limit — radians (hinge) or world units (slider).'),
+      motorTargetVelocity: z.number().optional().describe('Hinge/slider motor target speed (rad/s or units/s). 0 = free.'),
+      motorMaxForce: z.number().optional().describe('Max force/torque the motor applies.'),
+      restLength: z.number().optional().describe('Spring rest length (world units).'),
+      stiffness: z.number().optional().describe('Spring stiffness.'),
+      damping: z.number().optional().describe('Spring damping.'),
+      maxLength: z.number().optional().describe('Rope max separation (world units).'),
+      collideConnected: z.boolean().optional().describe('Let the two linked bodies collide (default false).'),
+    }),
+    execute: async ({ objectId, type, localAnchor, connectedAnchor, axis, ...rest }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (rest.connectedObjectId && !findObject(rest.connectedObjectId)) {
+        return `No connected object with id ${rest.connectedObjectId}.`;
+      }
+      if (!object.joint) store().addJoint(objectId, type as JointType);
+      store().updateJoint(objectId, {
+        type: type as JointType,
+        ...(localAnchor ? { localAnchor: asVec3(localAnchor) } : {}),
+        ...(connectedAnchor ? { connectedAnchor: asVec3(connectedAnchor) } : {}),
+        ...(axis ? { axis: asVec3(axis) } : {}),
+        ...rest,
+      } as Partial<JointComponent>);
+      return `Added ${type} joint to "${object.name}" (${objectId})${rest.connectedObjectId ? ` linked to ${rest.connectedObjectId}` : ' pinned to the world'}. Takes effect on Play.`;
+    },
+  }),
+
+  update_joint: tool({
+    description:
+      'Tune an existing physics joint on an object (type, anchors, axis, limits, motor speed/force, spring stiffness/damping/restLength, rope maxLength, collideConnected). Use add_joint first if the object has no joint.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      type: z.enum(['fixed', 'spherical', 'hinge', 'slider', 'spring', 'rope']).optional(),
+      connectedObjectId: z.string().optional(),
+      localAnchor: vec3.optional(),
+      connectedAnchor: vec3.optional(),
+      axis: vec3.optional(),
+      limitsEnabled: z.boolean().optional(),
+      limitMin: z.number().optional(),
+      limitMax: z.number().optional(),
+      motorTargetVelocity: z.number().optional(),
+      motorMaxForce: z.number().optional(),
+      restLength: z.number().optional(),
+      stiffness: z.number().optional(),
+      damping: z.number().optional(),
+      maxLength: z.number().optional(),
+      collideConnected: z.boolean().optional(),
+    }),
+    execute: async ({ objectId, localAnchor, connectedAnchor, axis, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.joint) return `Object ${objectId} has no joint — call add_joint first.`;
+      store().updateJoint(objectId, {
+        ...(localAnchor ? { localAnchor: asVec3(localAnchor) } : {}),
+        ...(connectedAnchor ? { connectedAnchor: asVec3(connectedAnchor) } : {}),
+        ...(axis ? { axis: asVec3(axis) } : {}),
+        ...patch,
+      } as Partial<JointComponent>);
+      return `Updated joint on ${objectId}.`;
+    },
+  }),
+
+  remove_joint: tool({
+    description: 'Remove the physics joint from an object.',
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      store().removeJoint(objectId);
+      return `Removed joint from ${objectId}.`;
     },
   }),
 

@@ -206,6 +206,12 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Created ${String(input.style ?? 'ocean')} water`;
     case 'update_water_volume':
       return input.style ? `Set ${String(input.style)} water` : 'Tuned water';
+    case 'add_joint':
+      return `Added ${String(input.type ?? '')} joint`.replace('  ', ' ');
+    case 'update_joint':
+      return 'Tuned joint';
+    case 'remove_joint':
+      return 'Removed joint';
     case 'set_fracture':
       return input.enabled === false ? 'Removed destructible' : 'Made destructible';
     case 'set_light':

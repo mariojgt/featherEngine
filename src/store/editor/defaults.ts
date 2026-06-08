@@ -1,7 +1,10 @@
 import type {
   AnimatorComponent,
   CharacterControllerComponent,
+  ClothComponent,
   ColliderType,
+  JointComponent,
+  JointType,
   LightComponent,
   MaterialDefinition,
   MeshRendererComponent,
@@ -278,6 +281,42 @@ export const defaultWaterVolume = (): WaterVolumeComponent => ({
   flowAngle: 0,
   flowStrength: 0,
   rainStrength: 0,
+});
+
+export const defaultJoint = (type: JointType = 'hinge'): JointComponent => ({
+  enabled: true,
+  type,
+  connectedObjectId: undefined,
+  localAnchor: [0, 0, 0],
+  connectedAnchor: [0, 0, 0],
+  axis: [0, 1, 0],
+  limitsEnabled: false,
+  limitMin: -Math.PI / 2,
+  limitMax: Math.PI / 2,
+  motorTargetVelocity: 0,
+  motorMaxForce: 20,
+  stiffness: 40,
+  damping: 4,
+  restLength: 1,
+  maxLength: 2,
+  collideConnected: false,
+});
+
+export const defaultCloth = (): ClothComponent => ({
+  enabled: true,
+  resolution: 16,
+  width: 2,
+  height: 2,
+  stiffness: 4,
+  damping: 0.02,
+  gravityScale: 1,
+  wind: [1.5, 0, 0],
+  turbulence: 0.4,
+  pinMode: 'top-edge',
+  collideFloor: true,
+  floorY: 0,
+  collideBodies: true,
+  tearFactor: 0,
 });
 
 export const withPhysicsDefaults = (physics: PhysicsComponent): PhysicsComponent => ({

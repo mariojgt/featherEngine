@@ -10,7 +10,7 @@
 // events without touching the Viewport / player rendering at all.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import type { Collider, KinematicCharacterController, RigidBody, World } from '@dimforge/rapier3d-compat';
+import type { Collider, ImpulseJoint, KinematicCharacterController, RigidBody, World } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
 import { clearRagdolls } from './ragdollState';
@@ -248,6 +248,39 @@ interface CharacterEntry {
   signature: string;
 }
 
+interface JointEntry {
+  joint: ImpulseJoint;
+  /** Synthetic fixed body created for a world-anchored joint (else null). Freed with the joint. */
+  anchorBody: RigidBody | null;
+  /** The OTHER body this joint links to (empty for a world anchor) — so a body rebuild can drop it. */
+  connectedObjectId: string;
+  signature: string;
+}
+
+/** Everything that, if changed, requires tearing down and rebuilding the joint. */
+function jointSignature(object: SceneObject, body1Present: boolean, body2Present: boolean): string {
+  const j = object.joint;
+  return [
+    j?.type,
+    j?.connectedObjectId ?? '',
+    body1Present,
+    body2Present,
+    j?.localAnchor?.join(','),
+    j?.connectedAnchor?.join(','),
+    j?.axis?.join(','),
+    j?.limitsEnabled,
+    j?.limitMin,
+    j?.limitMax,
+    j?.motorTargetVelocity,
+    j?.motorMaxForce,
+    j?.stiffness,
+    j?.damping,
+    j?.restLength,
+    j?.maxLength,
+    j?.collideConnected,
+  ].join('|');
+}
+
 class PhysicsRuntime {
   private world: World;
   private events = new RAPIER.EventQueue(true);
@@ -256,6 +289,7 @@ class PhysicsRuntime {
   private handleToTrigger = new Map<number, boolean>();
   private charEntries = new Map<string, CharacterEntry>();
   private terrainEntries = new Map<string, TerrainEntry>();
+  private jointEntries = new Map<string, JointEntry>();
   /** All active objects this frame, keyed by id — lets body creation resolve parent-chain world transforms. */
   private frameById = new Map<string, SceneObject>();
   constructor() {
@@ -290,6 +324,9 @@ class PhysicsRuntime {
   private removeBody(id: string) {
     const entry = this.entries.get(id);
     if (!entry) return;
+    // Removing the body auto-detaches its impulse joints in Rapier; forget our stale joint entries first
+    // (and free their world-anchor bodies) so syncJoints rebuilds them cleanly against the new body.
+    this.dropJointsReferencing(id);
     this.handleToId.delete(entry.collider.handle);
     this.handleToTrigger.delete(entry.collider.handle);
     this.world.removeRigidBody(entry.body); // also removes attached colliders
@@ -434,6 +471,125 @@ class PhysicsRuntime {
     }
   }
 
+  private createJoint(object: SceneObject, signature: string) {
+    const j = object.joint;
+    if (!j) return;
+    const body2 = this.entries.get(object.id)?.body;
+    if (!body2) return;
+
+    // body1 is either the connected object's body, or a synthetic FIXED anchor pinned at body2's
+    // current position (a "world anchor" — the joint then holds body2 in place / lets it swing).
+    let body1: RigidBody | undefined;
+    let anchorBody: RigidBody | null = null;
+    if (j.connectedObjectId) {
+      body1 = this.entries.get(j.connectedObjectId)?.body;
+      if (!body1) return; // connected body not built yet — retry next frame (signature unchanged).
+    } else {
+      const t = body2.translation();
+      anchorBody = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(t.x, t.y, t.z));
+      body1 = anchorBody;
+    }
+
+    const a1 = { x: j.connectedAnchor[0], y: j.connectedAnchor[1], z: j.connectedAnchor[2] };
+    // For a world anchor the anchor body sits at body2's origin, so reuse body2's local anchor on it.
+    const a1Eff = j.connectedObjectId ? a1 : { x: j.localAnchor[0], y: j.localAnchor[1], z: j.localAnchor[2] };
+    const a2 = { x: j.localAnchor[0], y: j.localAnchor[1], z: j.localAnchor[2] };
+    const axisLen = Math.hypot(j.axis[0], j.axis[1], j.axis[2]) || 1;
+    const axis = { x: j.axis[0] / axisLen, y: j.axis[1] / axisLen, z: j.axis[2] / axisLen };
+
+    let params;
+    switch (j.type) {
+      case 'fixed':
+        params = RAPIER.JointData.fixed(a1Eff, { x: 0, y: 0, z: 0, w: 1 }, a2, { x: 0, y: 0, z: 0, w: 1 });
+        break;
+      case 'spherical':
+        params = RAPIER.JointData.spherical(a1Eff, a2);
+        break;
+      case 'hinge':
+        params = RAPIER.JointData.revolute(a1Eff, a2, axis);
+        break;
+      case 'slider':
+        params = RAPIER.JointData.prismatic(a1Eff, a2, axis);
+        break;
+      case 'spring':
+        params = RAPIER.JointData.spring(j.restLength ?? 1, j.stiffness ?? 40, j.damping ?? 4, a1Eff, a2);
+        break;
+      case 'rope':
+        params = RAPIER.JointData.rope(j.maxLength ?? 2, a1Eff, a2);
+        break;
+      default:
+        params = RAPIER.JointData.spherical(a1Eff, a2);
+    }
+
+    const joint = this.world.createImpulseJoint(params, body1, body2, true);
+    // Configuration that Rapier exposes on the created joint. Guarded so an API shape mismatch in a
+    // given build degrades to a plain joint instead of throwing and killing the whole physics step.
+    try {
+      const anyJoint = joint as unknown as {
+        setContactsEnabled?: (enabled: boolean) => void;
+        setLimits?: (min: number, max: number) => void;
+        configureMotorVelocity?: (targetVel: number, factor: number) => void;
+      };
+      anyJoint.setContactsEnabled?.(Boolean(j.collideConnected));
+      if ((j.type === 'hinge' || j.type === 'slider') && j.limitsEnabled) {
+        anyJoint.setLimits?.(j.limitMin ?? -Math.PI, j.limitMax ?? Math.PI);
+      }
+      if ((j.type === 'hinge' || j.type === 'slider') && (j.motorTargetVelocity ?? 0) !== 0) {
+        anyJoint.configureMotorVelocity?.(j.motorTargetVelocity ?? 0, Math.max(j.motorMaxForce ?? 1, 0.01));
+      }
+    } catch (error) {
+      console.warn('Joint config failed (using defaults):', error);
+    }
+
+    this.jointEntries.set(object.id, { joint, anchorBody, connectedObjectId: j.connectedObjectId ?? '', signature });
+  }
+
+  private removeJoint(id: string) {
+    const entry = this.jointEntries.get(id);
+    if (!entry) return;
+    this.world.removeImpulseJoint(entry.joint, true);
+    if (entry.anchorBody) this.world.removeRigidBody(entry.anchorBody);
+    this.jointEntries.delete(id);
+  }
+
+  /**
+   * Drop any joint touching `id` because its rigid body is being removed/rebuilt. Rapier already detaches
+   * impulse joints when a parent body is removed, so we must NOT call removeImpulseJoint again (the handle
+   * is dead) — just free our synthetic anchor body and forget the entry so syncJoints rebuilds it live.
+   */
+  private dropJointsReferencing(id: string) {
+    for (const [owner, entry] of [...this.jointEntries]) {
+      if (owner !== id && entry.connectedObjectId !== id) continue;
+      if (entry.anchorBody) this.world.removeRigidBody(entry.anchorBody);
+      this.jointEntries.delete(owner);
+    }
+  }
+
+  /** Build/rebuild/drop joints so the world matches the current jointed objects. */
+  private syncJoints(objects: SceneObject[]) {
+    const present = new Set<string>();
+    for (const object of objects) {
+      if (!object.joint?.enabled || !object.physics?.enabled) continue;
+      const body2Present = this.entries.has(object.id);
+      const body1Present = object.joint.connectedObjectId
+        ? this.entries.has(object.joint.connectedObjectId)
+        : true;
+      // Can't link until both ends exist; skip without marking present so it builds once they do.
+      if (!body2Present || !body1Present) continue;
+      present.add(object.id);
+      const signature = jointSignature(object, body1Present, body2Present);
+      const entry = this.jointEntries.get(object.id);
+      if (!entry) this.createJoint(object, signature);
+      else if (entry.signature !== signature) {
+        this.removeJoint(object.id);
+        this.createJoint(object, signature);
+      }
+    }
+    for (const id of [...this.jointEntries.keys()]) {
+      if (!present.has(id)) this.removeJoint(id);
+    }
+  }
+
   private terrainSignature(object: SceneObject, chunkX: number, chunkZ: number): string {
     const terrain = withTerrainDefaults(object.terrain);
     return [
@@ -529,6 +685,7 @@ class PhysicsRuntime {
     this.syncTerrainChunks(objects);
     this.syncBodies(objects);
     this.syncCharacters(objects);
+    this.syncJoints(objects);
 
     const movedFixedBodies = new Set<string>();
     for (const object of objects) {
@@ -742,6 +899,7 @@ class PhysicsRuntime {
     this.entries.clear();
     this.charEntries.clear();
     this.terrainEntries.clear();
+    this.jointEntries.clear();
     this.handleToId.clear();
     this.handleToTrigger.clear();
   }

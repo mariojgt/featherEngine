@@ -891,6 +891,99 @@ export interface PhysicsComponent {
 
 export type PhysicsMaterialPresetId = 'default' | 'rubber' | 'slime' | 'ice' | 'metal' | 'stone' | 'wood' | 'mud';
 
+/**
+ * Physics joint/constraint kind (Rapier impulse joints):
+ * - `fixed`    — welds two bodies rigidly (one moves, the other follows). Doors-on-a-pallet, welded debris.
+ * - `spherical`— ball-and-socket: free rotation about the anchor, no separation. Chains, pendulums, shoulders.
+ * - `hinge`    — revolute: rotates about one axis only. Doors, wheels, levers, valves. Supports limits + a motor.
+ * - `slider`   — prismatic: slides along one axis only. Lifts, drawers, pistons, sliding doors. Limits + motor.
+ * - `spring`   — distance spring: pulls/pushes toward a rest length with stiffness + damping. Bungees, suspension.
+ * - `rope`     — limits the two anchors to a maximum separation (slack until taut). Tethers, hanging signs.
+ */
+export type JointType = 'fixed' | 'spherical' | 'hinge' | 'slider' | 'spring' | 'rope';
+
+/**
+ * A physics constraint linking THIS object's rigid body to another body (or to a fixed point in the
+ * world). Both bodies should have physics enabled; the joint is created during Play and torn down on
+ * stop. Anchors are LOCAL offsets from each body's origin. For `hinge`/`slider`, `axis` is the local
+ * axis of rotation/translation. Motors (hinge/slider) drive a target velocity; limits clamp the range.
+ */
+export interface JointComponent {
+  enabled: boolean;
+  type: JointType;
+  /** Object id of the body to link to. Empty/undefined = anchor to a static point in the world. */
+  connectedObjectId?: string;
+  /** Local anchor offset on THIS body. */
+  localAnchor: Vector3Tuple;
+  /** Local anchor offset on the connected body (ignored for a world anchor). */
+  connectedAnchor: Vector3Tuple;
+  /** Axis of rotation (hinge) or translation (slider), local space; normalized at use. */
+  axis: Vector3Tuple;
+  /** Clamp the hinge angle (radians) / slider distance (world units) to [limitMin, limitMax]. */
+  limitsEnabled?: boolean;
+  limitMin?: number;
+  limitMax?: number;
+  /** Hinge/slider motor: drive toward this velocity (rad/s or units/s). 0 = motor off. */
+  motorTargetVelocity?: number;
+  /** Max force/torque the motor may apply (higher = stiffer drive). */
+  motorMaxForce?: number;
+  /** Spring stiffness (`spring` type). Also used as the motor stiffness factor. */
+  stiffness?: number;
+  /** Spring damping (`spring` type). */
+  damping?: number;
+  /** Spring rest length in world units (`spring` type). */
+  restLength?: number;
+  /** Max separation for a `rope` joint (world units). */
+  maxLength?: number;
+  /** Allow the two linked bodies to collide with each other (default false: they pass through). */
+  collideConnected?: boolean;
+}
+
+/**
+ * Which particles of a cloth grid are anchored (don't fall). Pinned particles follow the cloth object's
+ * world transform, so pinning to a moving/parented object (a character) makes the cloth hang off it.
+ * - `top-edge`     — the whole top row (banner/curtain hanging from a rail).
+ * - `top-corners`  — just the two top corners (a flag/sign on two ropes).
+ * - `four-corners` — all four corners (a stretched tarp/net).
+ * - `left-edge`    — the left column (a flag mounted to a vertical pole).
+ * - `none`         — nothing pinned (a free falling sheet — drop it onto colliders).
+ */
+export type ClothPinMode = 'top-edge' | 'top-corners' | 'four-corners' | 'left-edge' | 'none';
+
+/**
+ * A real-time Verlet / position-based cloth sheet. This is a SEPARATE simulation from Rapier (which has
+ * no soft bodies): the object renders a deforming grid mesh that integrates gravity + wind, satisfies
+ * distance constraints, pins per `pinMode`, and collides against simple nearby shapes. Animates in edit
+ * and Play. General-purpose: flags, banners, curtains, capes, hanging cloth.
+ */
+export interface ClothComponent {
+  enabled: boolean;
+  /** Grid divisions per axis (vertex count = (resolution+1)²). Clamped to a perf-safe range. */
+  resolution: number;
+  /** Sheet dimensions in local units before the object's scale (which also multiplies). */
+  width: number;
+  height: number;
+  /** Constraint solver iterations per frame — higher = stiffer, less stretchy (and costlier). */
+  stiffness: number;
+  /** Velocity damping 0–1 (air resistance); higher = settles faster. */
+  damping: number;
+  /** Gravity multiplier (0 = floats, 1 = normal). */
+  gravityScale: number;
+  /** Constant wind force direction × strength (world space). */
+  wind: Vector3Tuple;
+  /** Random gust turbulence layered on the wind, 0–1. */
+  turbulence: number;
+  /** Which particles are anchored. */
+  pinMode: ClothPinMode;
+  /** Collide against a ground plane at `floorY`. */
+  collideFloor: boolean;
+  floorY: number;
+  /** Collide against nearby physics/character colliders (sphere/box/capsule approximations). */
+  collideBodies: boolean;
+  /** Stretch ratio past which a constraint tears (snaps). 0 = never tears. */
+  tearFactor: number;
+}
+
 /** Ready-made looks for a Water Volume. 'custom' = keep whatever visual fields are set by hand. */
 export type WaterStylePreset = 'ocean' | 'pool' | 'lake' | 'toxic' | 'lava' | 'custom';
 
@@ -1240,6 +1333,10 @@ export interface SceneObject {
   transform: TransformComponent;
   renderer?: MeshRendererComponent;
   physics?: PhysicsComponent;
+  /** Physics constraint linking this body to another (hinge/slider/spring/rope/fixed/ball). See {@link JointComponent}. */
+  joint?: JointComponent;
+  /** Real-time cloth sheet (Verlet sim, separate from Rapier). See {@link ClothComponent}. */
+  cloth?: ClothComponent;
   script?: ScriptGraphComponent;
   animator?: AnimatorComponent;
   character?: CharacterControllerComponent;

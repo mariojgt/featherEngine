@@ -18,6 +18,8 @@ import {
   type GraphNodeKind,
   type GraphNodeTone,
   type AnimatorComponent,
+  type JointComponent,
+  type JointType,
   type MaterialDefinition,
   type MaterialOverrides,
   type MeshRendererComponent,
@@ -119,6 +121,7 @@ import { getAnimatorControllerRuntime } from './editor/animatorRuntime';
 import {
   defaultAnimator,
   defaultCharacter,
+  defaultJoint,
   defaultLight,
   defaultPhysics,
   defaultRagdollSettings,
@@ -567,6 +570,10 @@ interface EditorState {
   updatePhysics: (id: string, patch: Partial<PhysicsComponent>) => void;
   updateWater: (id: string, patch: Partial<WaterVolumeComponent>) => void;
   toggleWater: (id: string) => void;
+  /** Add a physics joint to `id` (defaults to a hinge). No-op if it already has one. */
+  addJoint: (id: string, type?: JointType) => void;
+  updateJoint: (id: string, patch: Partial<JointComponent>) => void;
+  removeJoint: (id: string) => void;
   togglePhysics: (id: string) => void;
   /** Make an object destructible / patch its fracture config (seeds defaults on first use). */
   setObjectFracture: (id: string, patch: Partial<FractureComponent>) => void;
@@ -914,6 +921,12 @@ const cloneObjectTree = (
     }
     if (clone.viewModel?.ownerObjectId) {
       clone.viewModel = { ...clone.viewModel, ownerObjectId: remap(clone.viewModel.ownerObjectId)! };
+    }
+    // A joint linking two objects INSIDE this tree (e.g. a wrecking-ball prefab roped to its crane)
+    // must point at the clone's new id, not the original — else the instantiated prefab links to the
+    // source object (or nothing). A world-anchored joint (empty connectedObjectId) is left as-is.
+    if (clone.joint?.connectedObjectId) {
+      clone.joint = { ...clone.joint, connectedObjectId: remap(clone.joint.connectedObjectId) };
     }
     return clone;
   });
@@ -1884,6 +1897,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const current = withPhysicsDefaults(object.physics ?? defaultPhysics());
           return { ...object, physics: { ...current, enabled: !current.enabled } };
         }),
+      ),
+    ),
+  addJoint: (id, type = 'hinge') =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id !== id || object.joint) return object;
+          // A joint needs a rigid body to act on — ensure physics is on (dynamic by default so it moves).
+          const physics = withPhysicsDefaults({ ...(object.physics ?? defaultPhysics('dynamic', 'box')), enabled: true });
+          return { ...object, joint: defaultJoint(type), physics };
+        }),
+      ),
+    ),
+  updateJoint: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => {
+          if (object.id === id) {
+            return { ...object, joint: { ...defaultJoint(), ...object.joint, ...patch } };
+          }
+          // A joint links two rigid BODIES — so the object we're connecting to needs physics too. Give it
+          // a dynamic body if it has none, otherwise the joint silently can't build (syncJoints waits for
+          // both bodies to exist). This makes "Connect to X" just work without a separate enable step.
+          if (patch.connectedObjectId && object.id === patch.connectedObjectId && !object.physics?.enabled) {
+            return { ...object, physics: withPhysicsDefaults({ ...(object.physics ?? defaultPhysics('dynamic', 'box')), enabled: true }) };
+          }
+          return object;
+        }),
+      ),
+    ),
+  removeJoint: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id ? { ...object, joint: undefined } : object)),
       ),
     ),
   setObjectFracture: (id, patch) =>
@@ -8658,6 +8705,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         character: object.character ? { ...defaultCharacter(), ...object.character } : object.character,
         physics: object.physics ? withPhysicsDefaults(object.physics) : object.physics,
         water: object.water ? { ...defaultWaterVolume(), ...object.water } : object.water,
+        joint: object.joint ? { ...defaultJoint(), ...object.joint } : object.joint,
       });
       const scenes = rawScenes.map((scene) => ({
         ...scene,

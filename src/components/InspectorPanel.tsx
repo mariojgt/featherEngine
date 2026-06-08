@@ -6,7 +6,7 @@ import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, WaterVolumeComponent } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, WaterVolumeComponent } from '../types';
 import { particlePresetIds } from '../runtime/particlePresets';
 import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { WATER_STYLE_PRESETS } from '../three/presets';
@@ -1597,6 +1597,160 @@ function TerrainSection({
   );
 }
 
+const JOINT_TYPE_HINTS: Record<JointType, string> = {
+  fixed: 'Welds the two bodies rigidly — they move as one. Good for stuck/welded debris.',
+  spherical: 'Ball-and-socket: free rotation about the anchor, no separation. Chains, pendulums, shoulders.',
+  hinge: 'Rotates about one axis only. Doors, wheels, levers, valves. Add limits + a motor to drive it.',
+  slider: 'Slides along one axis only. Lifts, drawers, pistons, sliding doors. Add limits + a motor.',
+  spring: 'Distance spring toward a rest length, with stiffness + damping. Bungees, suspension, soft tethers.',
+  rope: 'Caps the separation at a maximum length — slack until taut. Tethers, hanging signs, leashes.',
+};
+
+function JointSection({
+  joint,
+  objectId,
+  sceneObjects,
+  onAdd,
+  onChange,
+  onRemove,
+}: {
+  joint?: JointComponent;
+  objectId: string;
+  sceneObjects: SceneObject[];
+  onAdd: () => void;
+  onChange: (patch: Partial<JointComponent>) => void;
+  onRemove: () => void;
+}) {
+  if (!joint) {
+    return (
+      <section className="inspector-section">
+        <h3>Joint</h3>
+        <p className="field-hint">
+          Constrain this body to another (or pin it in the world): hinge doors &amp; wheels, sliding lifts,
+          springs, ropes, ball-and-socket chains, or rigid welds. Adds a physics body if missing.
+        </p>
+        <button className="full-button" onClick={onAdd}>Add Joint</button>
+      </section>
+    );
+  }
+
+  const isHinge = joint.type === 'hinge';
+  const isSlider = joint.type === 'slider';
+  const isSpring = joint.type === 'spring';
+  const isRope = joint.type === 'rope';
+  const showAxis = isHinge || isSlider;
+  const showLimits = isHinge || isSlider;
+  // List every other object — picking one auto-enables physics on it (a joint links two bodies), so we
+  // don't pre-filter to physics-enabled objects (which left the list empty and read as "can't attach").
+  const connectable = sceneObjects.filter((object) => object.id !== objectId);
+  const connected = joint.connectedObjectId ? sceneObjects.find((o) => o.id === joint.connectedObjectId) : undefined;
+
+  return (
+    <section className="inspector-section">
+      <h3>Joint</h3>
+      <label className="field-row">
+        <span>Type</span>
+        <select value={joint.type} onChange={(event) => onChange({ type: event.target.value as JointType })}>
+          <option value="fixed">Fixed (weld)</option>
+          <option value="spherical">Spherical (ball)</option>
+          <option value="hinge">Hinge (door/wheel)</option>
+          <option value="slider">Slider (lift/piston)</option>
+          <option value="spring">Spring</option>
+          <option value="rope">Rope</option>
+        </select>
+      </label>
+      <p className="field-hint">{JOINT_TYPE_HINTS[joint.type]}</p>
+
+      <label className="field-row">
+        <span>Connect to</span>
+        <select
+          value={joint.connectedObjectId ?? ''}
+          onChange={(event) => onChange({ connectedObjectId: event.target.value || undefined })}
+        >
+          <option value="">World (pin in place)</option>
+          {connectable.map((object) => (
+            <option key={object.id} value={object.id}>
+              {object.name}{object.physics?.enabled ? '' : ' (no physics)'}
+            </option>
+          ))}
+        </select>
+      </label>
+      {connected && !connected.physics?.enabled && (
+        <p className="field-hint">“{connected.name}” has no physics body yet — it will be given a dynamic body automatically so the joint can act on it.</p>
+      )}
+
+      <VectorField label="Anchor (self)" value={joint.localAnchor} onChange={(localAnchor) => onChange({ localAnchor })} />
+      {joint.connectedObjectId && (
+        <VectorField label="Anchor (other)" value={joint.connectedAnchor} onChange={(connectedAnchor) => onChange({ connectedAnchor })} />
+      )}
+      {showAxis && <VectorField label="Axis" value={joint.axis} onChange={(axis) => onChange({ axis })} />}
+
+      {showLimits && (
+        <>
+          <label className="field-row">
+            <span>Limits</span>
+            <input type="checkbox" checked={joint.limitsEnabled ?? false} onChange={(event) => onChange({ limitsEnabled: event.target.checked })} />
+          </label>
+          {joint.limitsEnabled && (
+            <>
+              <label className="field-row">
+                <span>{isHinge ? 'Min (rad)' : 'Min (units)'}</span>
+                <NumberInput value={joint.limitMin ?? 0} step={0.1} onChange={(limitMin) => onChange({ limitMin })} />
+              </label>
+              <label className="field-row">
+                <span>{isHinge ? 'Max (rad)' : 'Max (units)'}</span>
+                <NumberInput value={joint.limitMax ?? 0} step={0.1} onChange={(limitMax) => onChange({ limitMax })} />
+              </label>
+            </>
+          )}
+          <label className="field-row">
+            <span>Motor speed</span>
+            <NumberInput value={joint.motorTargetVelocity ?? 0} step={0.1} onChange={(motorTargetVelocity) => onChange({ motorTargetVelocity })} />
+          </label>
+          {(joint.motorTargetVelocity ?? 0) !== 0 && (
+            <label className="field-row">
+              <span>Motor force</span>
+              <NumberInput value={joint.motorMaxForce ?? 20} min={0} step={1} onChange={(motorMaxForce) => onChange({ motorMaxForce })} />
+            </label>
+          )}
+          <p className="field-hint">Motor speed drives the joint (rad/s for hinge, units/s for slider). 0 = free.</p>
+        </>
+      )}
+
+      {isSpring && (
+        <>
+          <label className="field-row">
+            <span>Rest length</span>
+            <NumberInput value={joint.restLength ?? 1} min={0} step={0.1} onChange={(restLength) => onChange({ restLength })} />
+          </label>
+          <label className="field-row">
+            <span>Stiffness</span>
+            <NumberInput value={joint.stiffness ?? 40} min={0} step={1} onChange={(stiffness) => onChange({ stiffness })} />
+          </label>
+          <label className="field-row">
+            <span>Damping</span>
+            <NumberInput value={joint.damping ?? 4} min={0} step={0.5} onChange={(damping) => onChange({ damping })} />
+          </label>
+        </>
+      )}
+
+      {isRope && (
+        <label className="field-row">
+          <span>Max length</span>
+          <NumberInput value={joint.maxLength ?? 2} min={0} step={0.1} onChange={(maxLength) => onChange({ maxLength })} />
+        </label>
+      )}
+
+      <label className="field-row">
+        <span>Bodies collide</span>
+        <input type="checkbox" checked={joint.collideConnected ?? false} onChange={(event) => onChange({ collideConnected: event.target.checked })} />
+      </label>
+
+      <button className="full-button" onClick={onRemove}>Remove Joint</button>
+    </section>
+  );
+}
+
 function PhysicsSection({
   physics,
   onChange,
@@ -1847,6 +2001,10 @@ export function InspectorPanel() {
   const togglePhysics = useEditorStore((state) => state.togglePhysics);
   const updateWater = useEditorStore((state) => state.updateWater);
   const toggleWater = useEditorStore((state) => state.toggleWater);
+  const addJoint = useEditorStore((state) => state.addJoint);
+  const updateJoint = useEditorStore((state) => state.updateJoint);
+  const removeJoint = useEditorStore((state) => state.removeJoint);
+  const sceneObjects = useEditorStore((state) => selectActiveObjects(state));
   const toggleAnimator = useEditorStore((state) => state.toggleAnimator);
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
   const toggleCharacterController = useEditorStore((state) => state.toggleCharacterController);
@@ -2041,6 +2199,15 @@ export function InspectorPanel() {
               </button>
             </section>
           )}
+
+          <JointSection
+            joint={object.joint}
+            objectId={object.id}
+            sceneObjects={sceneObjects}
+            onAdd={() => addJoint(object.id)}
+            onChange={(patch) => updateJoint(object.id, patch)}
+            onRemove={() => removeJoint(object.id)}
+          />
 
           {object.renderer && object.kind !== 'terrain' && (
             <FractureSection objectId={object.id} fracture={object.fracture} />

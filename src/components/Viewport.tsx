@@ -30,6 +30,7 @@ import { ParticleSystem } from '../three/ParticleSystem';
 import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
+import { JointGizmo } from '../three/JointGizmo';
 import { PostFx } from '../three/PostFx';
 import { ShadowLOD } from '../three/ShadowLOD';
 import { MeshLOD } from '../three/MeshLOD';
@@ -829,6 +830,8 @@ function SceneContent({
   const selectedColliderObject = sceneObjects.find(
     (o) => o.id === selectedObjectId && o.physics?.enabled,
   );
+  // The selected object's joint — gets an anchor/link/axis preview (see JointGizmo).
+  const selectedJointObject = sceneObjects.find((o) => o.id === selectedObjectId && o.joint?.enabled);
   const objectRefs = useRef(new Map<string, THREE.Group>());
   const [selectedTarget, setSelectedTarget] = useState<THREE.Group | null>(null);
   // Ref to the live three TransformControls. `axis` is non-null while the pointer hovers a handle
@@ -1060,6 +1063,8 @@ function SceneContent({
       {/* Wireframe preview of the selected object's true collider (edit + Play), so the
           actual physics shape — which often differs from the visual mesh — is visible. */}
       {selectedColliderObject && <ColliderGizmo object={selectedColliderObject} />}
+      {/* Anchor + link + axis preview for the selected object's physics joint. */}
+      {selectedJointObject && <JointGizmo object={selectedJointObject} sceneObjects={sceneObjects} />}
       {/* Film Mode: draggable spline + keyframe handles so camera/object paths are built in 3D. */}
       <CinematicPathGizmo />
       {/* Editor ground aids — hidden during Play so they don't show up (or sit at the origin over terrain) in
