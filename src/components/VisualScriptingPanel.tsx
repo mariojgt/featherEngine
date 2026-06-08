@@ -1957,7 +1957,13 @@ export function VisualScriptingPanel() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      const editableSel = 'input, textarea, select, [contenteditable="true"]';
+      // Never treat a keystroke as a node command while a field is being edited — guard BOTH the event
+      // target AND the currently-focused element (a number input can blur/commit between keystrokes, so
+      // the next key's target may be the body even though the user is still mid-edit). This is what stops
+      // Backspace/Delete from nuking the selected node while you're correcting a number in the inspector.
+      if (target?.closest(editableSel)) return;
+      if (document.activeElement?.closest(editableSel)) return;
       if (!flowShellRef.current?.contains(document.activeElement)) return;
       const isCopy = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c';
       const isPaste = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v';
@@ -2138,8 +2144,12 @@ export function VisualScriptingPanel() {
               onEdgesChange([{ id: edge.id, type: 'remove' }]);
             }}
             onSelectionChange={({ nodes }) => {
+              // Only ADOPT an actual selection here — never clear on an empty event. Editing a node's
+              // fields in the inspector replaces the nodes array, and because we don't persist React Flow's
+              // `selected` flag, React Flow momentarily reports an empty selection; clearing on that would
+              // deselect the node and close the inspector mid-edit. Real deselection is handled by onPaneClick.
               const id = nodes[0]?.id;
-              if (id !== selectedGraphNode?.id) selectGraphNode(id);
+              if (id && id !== selectedGraphNode?.id) selectGraphNode(id);
             }}
             onPaneClick={() => {
               selectGraphNode(undefined);
