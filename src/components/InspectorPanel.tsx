@@ -1761,11 +1761,13 @@ const CLOTH_PIN_LABELS: Record<ClothComponent['pinMode'], string> = {
 
 function ClothSection({
   cloth,
+  modelAssets,
   onAdd,
   onChange,
   onRemove,
 }: {
   cloth?: ClothComponent;
+  modelAssets: AssetItem[];
   onAdd: () => void;
   onChange: (patch: Partial<ClothComponent>) => void;
   onRemove: () => void;
@@ -1789,6 +1791,27 @@ function ClothSection({
         <span>Enabled</span>
         <input type="checkbox" checked={cloth.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
       </label>
+      <label className="field-row">
+        <span>Shape</span>
+        <select value={cloth.sourceMode ?? 'grid'} onChange={(event) => onChange({ sourceMode: event.target.value as ClothComponent['sourceMode'] })}>
+          <option value="grid">Grid sheet</option>
+          <option value="mesh">Imported mesh</option>
+        </select>
+      </label>
+      {cloth.sourceMode === 'mesh' && (
+        <>
+          <label className="field-row">
+            <span>Cloth mesh</span>
+            <select value={cloth.meshAssetId ?? ''} onChange={(event) => onChange({ meshAssetId: event.target.value || undefined })}>
+              <option value="">Pick a model…</option>
+              {modelAssets.map((asset) => (
+                <option key={asset.id} value={asset.id}>{asset.name}</option>
+              ))}
+            </select>
+          </label>
+          <p className="field-hint">The model's mesh becomes the cloth (its vertices simulate, edges hold it together). Pick a Pinned edge below to anchor it (e.g. a flag's pole edge).</p>
+        </>
+      )}
       <label className="field-row">
         <span>Pinned</span>
         <select value={cloth.pinMode} onChange={(event) => onChange({ pinMode: event.target.value as ClothComponent['pinMode'] })}>
@@ -2316,6 +2339,7 @@ export function InspectorPanel() {
 
           <ClothSection
             cloth={object.cloth}
+            modelAssets={modelAssets}
             onAdd={() => addCloth(object.id)}
             onChange={(patch) => updateCloth(object.id, patch)}
             onRemove={() => removeCloth(object.id)}

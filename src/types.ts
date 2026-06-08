@@ -992,6 +992,10 @@ export type ClothPinMode = 'top-edge' | 'top-corners' | 'four-corners' | 'left-e
  */
 export interface ClothComponent {
   enabled: boolean;
+  /** 'grid' = a procedural rectangular sheet; 'mesh' = simulate an imported model's own shape as cloth. */
+  sourceMode?: 'grid' | 'mesh';
+  /** Model asset whose mesh is used as the cloth when sourceMode is 'mesh' (e.g. an imported flag). */
+  meshAssetId?: string;
   /** Grid divisions per axis (vertex count = (resolution+1)²). Clamped to a perf-safe range. */
   resolution: number;
   /** Sheet dimensions in local units before the object's scale (which also multiplies). */

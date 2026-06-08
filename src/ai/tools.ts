@@ -925,9 +925,11 @@ export const engineTools = {
 
   update_cloth: tool({
     description:
-      'Tune (or add) a cloth sheet on an object: pinMode, width/height, resolution, stiffness, damping, gravityScale, wind, turbulence, collideFloor/floorY, collideBodies, tearFactor (0 = never tears, >1 lets seams snap when stretched past that ratio). Adds a cloth component if the object has none.',
+      'Tune (or add) a cloth sheet on an object: sourceMode (grid sheet | imported mesh), meshAssetId (a model whose mesh is simulated as cloth when sourceMode is "mesh" — e.g. an imported flag), pinMode, width/height, resolution, stiffness, damping, gravityScale, wind, turbulence, collideFloor/floorY, collideBodies, tearFactor (0 = never tears, >1 lets seams snap when stretched past that ratio). Adds a cloth component if the object has none.',
     inputSchema: z.object({
       objectId: z.string(),
+      sourceMode: z.enum(['grid', 'mesh']).optional().describe("'grid' = procedural rectangle; 'mesh' = simulate an imported model's own shape as cloth (set meshAssetId)."),
+      meshAssetId: z.string().optional().describe('Model asset id whose mesh becomes the cloth (with sourceMode "mesh"), or "" to clear.'),
       pinMode: z.enum(['top-edge', 'top-corners', 'four-corners', 'left-edge', 'none']).optional(),
       width: z.number().min(0.1).optional(),
       height: z.number().min(0.1).optional(),
@@ -945,7 +947,10 @@ export const engineTools = {
     execute: async ({ objectId, wind, ...patch }) => {
       const object = findObject(objectId);
       if (!object) return `No object with id ${objectId}.`;
+      if (patch.meshAssetId && !findAsset(patch.meshAssetId)) return `No asset with id ${patch.meshAssetId}.`;
       if (!object.cloth) store().addCloth(objectId);
+      // Providing a mesh implies mesh mode, so the caller needn't set both.
+      if (patch.meshAssetId && patch.sourceMode === undefined) patch.sourceMode = 'mesh';
       store().updateCloth(objectId, { ...(wind ? { wind: asVec3(wind) } : {}), ...patch } as Partial<ClothComponent>);
       return `Updated cloth on ${objectId}.`;
     },

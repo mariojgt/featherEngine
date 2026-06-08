@@ -307,6 +307,7 @@ export const defaultJoint = (type: JointType = 'hinge'): JointComponent => ({
 
 export const defaultCloth = (): ClothComponent => ({
   enabled: true,
+  sourceMode: 'grid',
   resolution: 16,
   width: 2,
   height: 2,

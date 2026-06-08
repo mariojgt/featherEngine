@@ -1,26 +1,38 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { ClothComponent, ClothPinMode, SceneObject } from '../types';
 import { useEditorStore, selectActiveObjects, selectActiveSceneEnvironment } from '../store/editorStore';
 import { capsuleParams, colliderKindFor, halfScale, sphereRadius } from '../runtime/colliderShape';
 import { useResolvedMaterial } from './resolveMaterial';
-import { useAssetTexture } from './ModelAsset';
+import { useAssetTexture, useAssetUrl } from './ModelAsset';
+import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 
 const clampRes = (r: number) => Math.min(Math.max(Math.round(r), 4), 32);
 
-/** Per-grid topology that only changes when size/resolution/pinMode change (rebuilt, not per frame). */
-interface ClothMesh {
-  cols: number; // vertices per row
-  rows: number;
-  rest: Float32Array; // local-space rest positions (xyz per vertex)
-  uv: Float32Array;
-  index: Uint32Array;
+/**
+ * Cloth topology — particles (the simulated points) + their distance constraints + a render geometry
+ * (which may have MORE vertices than particles, since an imported mesh's duplicated seam/UV vertices are
+ * welded to a single particle so the cloth doesn't split along seams). Shared by the grid and mesh sources.
+ */
+interface ClothTopology {
+  /** Number of simulated particles. */
+  particleCount: number;
+  /** Local-space rest position per particle (xyz). */
+  rest: Float32Array;
+  /** Anchored particles (don't fall; follow the object transform). */
   pinned: boolean[];
   constraints: { a: number; b: number; rest: number }[];
+  /** Render vertex count (>= particleCount for welded meshes). */
+  renderCount: number;
+  /** Maps each render vertex → its particle index. */
+  vertexToParticle: Uint32Array;
+  uv: Float32Array;
+  index: Uint32Array;
 }
 
-function pinnedFor(mode: ClothPinMode, x: number, y: number, cols: number, rows: number): boolean {
+function pinnedForGrid(mode: ClothPinMode, x: number, y: number, cols: number, rows: number): boolean {
   const left = x === 0;
   const right = x === cols - 1;
   const top = y === 0; // row 0 = top edge of the sheet
@@ -40,7 +52,7 @@ function pinnedFor(mode: ClothPinMode, x: number, y: number, cols: number, rows:
   }
 }
 
-function buildClothMesh(cloth: ClothComponent): ClothMesh {
+function buildGridTopology(cloth: ClothComponent): ClothTopology {
   const res = clampRes(cloth.resolution);
   const cols = res + 1;
   const rows = res + 1;
@@ -48,19 +60,21 @@ function buildClothMesh(cloth: ClothComponent): ClothMesh {
   const h = Math.max(cloth.height, 0.01);
   const dx = w / res;
   const dy = h / res;
-  const rest = new Float32Array(cols * rows * 3);
-  const uv = new Float32Array(cols * rows * 2);
-  const pinned: boolean[] = new Array(cols * rows).fill(false);
-  // Sheet laid out in the local XY plane, centered, with the TOP at +Y so it hangs downward by gravity.
+  const count = cols * rows;
+  const rest = new Float32Array(count * 3);
+  const uv = new Float32Array(count * 2);
+  const pinned: boolean[] = new Array(count).fill(false);
+  const vertexToParticle = new Uint32Array(count);
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const i = y * cols + x;
       rest[i * 3] = -w / 2 + x * dx;
-      rest[i * 3 + 1] = h / 2 - y * dy;
+      rest[i * 3 + 1] = h / 2 - y * dy; // TOP at +Y so it hangs down
       rest[i * 3 + 2] = 0;
       uv[i * 2] = x / res;
       uv[i * 2 + 1] = 1 - y / res;
-      pinned[i] = pinnedFor(cloth.pinMode, x, y, cols, rows);
+      pinned[i] = pinnedForGrid(cloth.pinMode, x, y, cols, rows);
+      vertexToParticle[i] = i; // grid: render vertex == particle
     }
   }
   const index = new Uint32Array(res * res * 6);
@@ -75,8 +89,6 @@ function buildClothMesh(cloth: ClothComponent): ClothMesh {
       index[t++] = b; index[t++] = c; index[t++] = d;
     }
   }
-  // Constraints: structural (right/down), shear (diagonals), bend (two apart) — bend keeps the sheet from
-  // collapsing on itself and gives it body.
   const constraints: { a: number; b: number; rest: number }[] = [];
   const restLen = (i: number, j: number) =>
     Math.hypot(rest[i * 3] - rest[j * 3], rest[i * 3 + 1] - rest[j * 3 + 1], rest[i * 3 + 2] - rest[j * 3 + 2]);
@@ -92,7 +104,96 @@ function buildClothMesh(cloth: ClothComponent): ClothMesh {
       if (y + 2 < rows) add(i, i + 2 * cols);
     }
   }
-  return { cols, rows, rest, uv, index, pinned, constraints };
+  return { particleCount: count, rest, pinned, constraints, renderCount: count, vertexToParticle, uv, index };
+}
+
+/**
+ * Build cloth topology from an arbitrary imported MESH geometry (local space, already baked to the cloth
+ * object's frame). Duplicated vertices at the same position are WELDED to one particle (so seams don't
+ * tear apart), triangle edges become distance constraints, and particles are pinned by mapping the chosen
+ * pinMode onto the mesh's local bounding box (top-edge → top of the mesh, left-edge → -X side, etc.) — so
+ * importing a flag and choosing "left-edge" pins it to its pole.
+ */
+function buildMeshTopology(geometry: THREE.BufferGeometry, cloth: ClothComponent): ClothTopology | null {
+  const posAttr = geometry.getAttribute('position');
+  if (!posAttr) return null;
+  const renderCount = posAttr.count;
+  const srcUv = geometry.getAttribute('uv');
+  const index = geometry.getIndex();
+  const indices = index ? new Uint32Array(index.array as ArrayLike<number>) : new Uint32Array(renderCount).map((_, i) => i);
+
+  // Weld vertices by quantized position so shared seam/UV duplicates become one particle.
+  const WELD = 1e-4;
+  const keyToParticle = new Map<string, number>();
+  const vertexToParticle = new Uint32Array(renderCount);
+  const restList: number[] = [];
+  const quant = (v: number) => Math.round(v / WELD);
+  for (let i = 0; i < renderCount; i++) {
+    const x = posAttr.getX(i);
+    const y = posAttr.getY(i);
+    const z = posAttr.getZ(i);
+    const key = `${quant(x)}:${quant(y)}:${quant(z)}`;
+    let particle = keyToParticle.get(key);
+    if (particle === undefined) {
+      particle = restList.length / 3;
+      keyToParticle.set(key, particle);
+      restList.push(x, y, z);
+    }
+    vertexToParticle[i] = particle;
+  }
+  const particleCount = restList.length / 3;
+  if (particleCount < 3) return null;
+  const rest = new Float32Array(restList);
+
+  // Unique edges from triangles → distance constraints.
+  const seen = new Set<number>();
+  const constraints: { a: number; b: number; rest: number }[] = [];
+  const restLen = (i: number, j: number) =>
+    Math.hypot(rest[i * 3] - rest[j * 3], rest[i * 3 + 1] - rest[j * 3 + 1], rest[i * 3 + 2] - rest[j * 3 + 2]);
+  const addEdge = (va: number, vb: number) => {
+    const a = vertexToParticle[va];
+    const b = vertexToParticle[vb];
+    if (a === b) return;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const id = lo * particleCount + hi;
+    if (seen.has(id)) return;
+    seen.add(id);
+    constraints.push({ a: lo, b: hi, rest: restLen(lo, hi) });
+  };
+  for (let i = 0; i < indices.length; i += 3) {
+    addEdge(indices[i], indices[i + 1]);
+    addEdge(indices[i + 1], indices[i + 2]);
+    addEdge(indices[i + 2], indices[i]);
+  }
+
+  // Pin particles by mapping pinMode onto the mesh's local bounding box.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let p = 0; p < particleCount; p++) {
+    minX = Math.min(minX, rest[p * 3]); maxX = Math.max(maxX, rest[p * 3]);
+    minY = Math.min(minY, rest[p * 3 + 1]); maxY = Math.max(maxY, rest[p * 3 + 1]);
+  }
+  const epsX = (maxX - minX) * 0.06 + 1e-4;
+  const epsY = (maxY - minY) * 0.06 + 1e-4;
+  const pinned: boolean[] = new Array(particleCount).fill(false);
+  for (let p = 0; p < particleCount; p++) {
+    const x = rest[p * 3];
+    const y = rest[p * 3 + 1];
+    const atTop = y >= maxY - epsY;
+    const atBottom = y <= minY + epsY;
+    const atLeft = x <= minX + epsX;
+    const atRight = x >= maxX - epsX;
+    switch (cloth.pinMode) {
+      case 'top-edge': pinned[p] = atTop; break;
+      case 'top-corners': pinned[p] = atTop && (atLeft || atRight); break;
+      case 'four-corners': pinned[p] = (atTop || atBottom) && (atLeft || atRight); break;
+      case 'left-edge': pinned[p] = atLeft; break;
+      default: pinned[p] = false;
+    }
+  }
+
+  const uv = srcUv ? new Float32Array(srcUv.array as ArrayLike<number>) : new Float32Array(renderCount * 2);
+  return { particleCount, rest, pinned, constraints, renderCount, vertexToParticle, uv, index: indices };
 }
 
 // --- Collision shapes gathered from the scene each frame -----------------------------------------
@@ -105,7 +206,6 @@ interface ClothCollider {
   half: THREE.Vector3; // box half-extents (local)
 }
 
-const tmpMat = new THREE.Matrix4();
 const tmpQuat = new THREE.Quaternion();
 const tmpEuler = new THREE.Euler();
 const tmpScale = new THREE.Vector3(1, 1, 1);
@@ -132,7 +232,6 @@ function gatherColliders(objects: SceneObject[], selfId: string, center: THREE.V
     const mat = objectWorldMatrix(object);
     const inv = mat.clone().invert();
     if (character) {
-      // Approximate the kinematic player capsule (feet-origin) — matches physicsWorld.characterCapsule loosely.
       const s = object.transform.scale;
       const radius = 0.34 * Math.max(Math.abs(s[0]), Math.abs(s[2]), 0.1);
       const halfHeight = 0.6 * Math.max(Math.abs(s[1]), 0.1);
@@ -146,7 +245,6 @@ function gatherColliders(objects: SceneObject[], selfId: string, center: THREE.V
       const { halfHeight, radius } = capsuleParams(object);
       out.push({ type: 'capsule', inv, mat, radius, halfHeight, half: new THREE.Vector3() });
     } else {
-      // box / plane / mesh / convex → treat as an oriented box of its scaled bounds (cheap, good enough).
       const [sx, sy, sz] = halfScale(object);
       out.push({ type: 'box', inv, mat, radius: 0, halfHeight: 0, half: new THREE.Vector3(0.5 * sx, 0.5 * sy, 0.5 * sz) });
     }
@@ -166,7 +264,6 @@ function resolveCollision(p: THREE.Vector3, col: ClothCollider, margin: number) 
     }
   } else if (col.type === 'capsule') {
     const r = col.radius + margin;
-    // Segment along local Y from -halfHeight..+halfHeight.
     const cy = Math.max(-col.halfHeight, Math.min(col.halfHeight, local.y));
     const dx = local.x;
     const dz = local.z;
@@ -178,7 +275,6 @@ function resolveCollision(p: THREE.Vector3, col: ClothCollider, margin: number) 
       p.copy(local).applyMatrix4(col.mat);
     }
   } else {
-    // Oriented box: if inside the half-extents, push out along the axis of least penetration.
     const hx = col.half.x + margin;
     const hy = col.half.y + margin;
     const hz = col.half.z + margin;
@@ -195,45 +291,36 @@ function resolveCollision(p: THREE.Vector3, col: ClothCollider, margin: number) 
 }
 
 /**
- * Renders a deforming cloth mesh and runs a Verlet/PBD sim each frame. The mesh draws in WORLD space
- * (its matrixWorld is forced to identity, like RagdollRig drives bones) so gravity/wind/collision are
- * all world-space; pinned particles instead track the object's group world matrix, so pinning to a
- * moving/parented object (a character) makes the cloth hang off it. General-purpose; mirrors the
- * decoupled-runtime pattern (no store writes).
+ * The cloth sim + render core, driven by a pre-built topology (grid OR welded mesh). Runs a Verlet/PBD
+ * sim each frame in WORLD space (mesh matrixWorld forced to identity, like RagdollRig drives bones) so
+ * gravity/wind/collision are world-space; pinned particles track the object's group world matrix so a
+ * cape follows its wearer. No store writes.
  */
-export function ClothSim({ object, selected }: { object: SceneObject; selected: boolean }) {
+function ClothBody({ object, topo, selected }: { object: SceneObject; topo: ClothTopology; selected: boolean }) {
   const cloth = object.cloth!;
-  // Full material from the object's renderer (assigned material / inline color), incl. textures + emissive,
-  // so a cloth renders exactly like any other mesh — you can drop a fabric/flag material onto it.
   const material = useResolvedMaterial(object.renderer);
   const baseTexture = useAssetTexture(material.baseColorUrl, true);
   const normalTexture = useAssetTexture(material.normalUrl, true);
-  // Global scene wind drives every cloth; the cloth's own wind adds on top (so one breeze moves them all).
   const env = useEditorStore(selectActiveSceneEnvironment);
   const meshRef = useRef<THREE.Mesh>(null);
   const geomRef = useRef<THREE.BufferGeometry>(null);
 
-  const topo = useMemo(() => buildClothMesh(cloth), [cloth.resolution, cloth.width, cloth.height, cloth.pinMode]);
-
-  // Live sim buffers (world-space) — recreated when topology changes.
   const sim = useRef<{ pos: Float32Array; prev: Float32Array; broken: boolean[]; seeded: boolean }>({
     pos: new Float32Array(0),
     prev: new Float32Array(0),
     broken: [],
     seeded: false,
   });
-
   useEffect(() => {
-    const n = topo.cols * topo.rows * 3;
     sim.current = {
-      pos: new Float32Array(n),
-      prev: new Float32Array(n),
+      pos: new Float32Array(topo.particleCount * 3),
+      prev: new Float32Array(topo.particleCount * 3),
       broken: new Array(topo.constraints.length).fill(false),
       seeded: false,
     };
   }, [topo]);
 
-  const positionAttr = useMemo(() => new THREE.BufferAttribute(new Float32Array(topo.cols * topo.rows * 3), 3), [topo]);
+  const positionAttr = useMemo(() => new THREE.BufferAttribute(new Float32Array(topo.renderCount * 3), 3), [topo]);
 
   useFrame((_, rawDelta) => {
     const mesh = meshRef.current;
@@ -244,10 +331,10 @@ export function ClothSim({ object, selected }: { object: SceneObject; selected: 
     if (!parent) return;
     parent.updateWorldMatrix(true, false);
     const groupWorld = parent.matrixWorld;
+    const count = topo.particleCount;
 
-    // Seed world positions from rest-local transformed by the current group world matrix.
     if (!s.seeded) {
-      for (let i = 0; i < topo.cols * topo.rows; i++) {
+      for (let i = 0; i < count; i++) {
         tmpV.set(topo.rest[i * 3], topo.rest[i * 3 + 1], topo.rest[i * 3 + 2]).applyMatrix4(groupWorld);
         s.pos[i * 3] = tmpV.x; s.pos[i * 3 + 1] = tmpV.y; s.pos[i * 3 + 2] = tmpV.z;
         s.prev[i * 3] = tmpV.x; s.prev[i * 3 + 1] = tmpV.y; s.prev[i * 3 + 2] = tmpV.z;
@@ -258,7 +345,6 @@ export function ClothSim({ object, selected }: { object: SceneObject; selected: 
     const dt = Math.min(Math.max(rawDelta, 1 / 240), 1 / 30);
     const g = -9.81 * cloth.gravityScale * dt * dt;
     const damp = 1 - Math.min(Math.max(cloth.damping, 0), 0.95);
-    // Effective wind = scene wind + this cloth's own wind; turbulence is the stronger of the two.
     const sceneWind = env?.wind ?? [0, 0, 0];
     const wx = cloth.wind[0] + sceneWind[0];
     const wy = cloth.wind[1] + sceneWind[1];
@@ -267,9 +353,8 @@ export function ClothSim({ object, selected }: { object: SceneObject; selected: 
     const windX = (wx + (Math.random() - 0.5) * wob) * dt * dt;
     const windY = (wy + (Math.random() - 0.5) * wob) * dt * dt;
     const windZ = (wz + (Math.random() - 0.5) * wob) * dt * dt;
-    const count = topo.cols * topo.rows;
 
-    // Pin: anchor pinned particles to the object's CURRENT world transform (so capes follow the wearer).
+    // Pin: anchor pinned particles to the object's CURRENT world transform.
     for (let i = 0; i < count; i++) {
       if (!topo.pinned[i]) continue;
       tmpV.set(topo.rest[i * 3], topo.rest[i * 3 + 1], topo.rest[i * 3 + 2]).applyMatrix4(groupWorld);
@@ -321,7 +406,7 @@ export function ClothSim({ object, selected }: { object: SceneObject; selected: 
     let colliders: ClothCollider[] = [];
     if (cloth.collideBodies) {
       const c = tmpV.set(s.pos[0], s.pos[1], s.pos[2]);
-      colliders = gatherColliders(selectActiveObjects(useEditorStore.getState()), object.id, c.clone(), Math.max(cloth.width, cloth.height) + 6);
+      colliders = gatherColliders(selectActiveObjects(useEditorStore.getState()), object.id, c.clone(), Math.max(cloth.width, cloth.height) + 8);
     }
     for (let i = 0; i < count; i++) {
       if (topo.pinned[i]) continue;
@@ -334,10 +419,12 @@ export function ClothSim({ object, selected }: { object: SceneObject; selected: 
       }
     }
 
-    // Write world positions into the geometry; force the mesh's world matrix to identity so the verts
-    // render exactly where the sim put them (instead of being transformed again by the group).
+    // Write particle positions to the render vertices (a welded mesh fans one particle out to several).
     const arr = positionAttr.array as Float32Array;
-    arr.set(s.pos);
+    for (let v = 0; v < topo.renderCount; v++) {
+      const p = topo.vertexToParticle[v] * 3;
+      arr[v * 3] = s.pos[p]; arr[v * 3 + 1] = s.pos[p + 1]; arr[v * 3 + 2] = s.pos[p + 2];
+    }
     positionAttr.needsUpdate = true;
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
@@ -368,4 +455,52 @@ export function ClothSim({ object, selected }: { object: SceneObject; selected: 
       />
     </mesh>
   );
+}
+
+/** Loads an imported model and turns its mesh into the cloth (welded particles + edge constraints). */
+function ClothMeshSource({ object, url, selected }: { object: SceneObject; url: string; selected: boolean }) {
+  const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
+  const topo = useMemo(() => {
+    // Merge the model's meshes into one local-space geometry (folding in each node's transform), then
+    // weld + build constraints. First found geometry drives UVs.
+    scene.updateWorldMatrix(true, true);
+    let merged: THREE.BufferGeometry | null = null;
+    scene.traverse((node) => {
+      const m = node as THREE.Mesh;
+      if (!m.isMesh || !m.geometry || merged) return;
+      const g = m.geometry.clone();
+      g.applyMatrix4(m.matrixWorld);
+      merged = g;
+    });
+    if (!merged) return null;
+    return buildMeshTopology(merged, object.cloth!);
+    // Rebuild on pin/tear/shape-affecting changes.
+  }, [scene, object.cloth?.pinMode]);
+  if (!topo) return null;
+  return <ClothBody object={object} topo={topo} selected={selected} />;
+}
+
+/** Grid cloth (the default rectangular sheet). */
+function ClothGridSource({ object, selected }: { object: SceneObject; selected: boolean }) {
+  const cloth = object.cloth!;
+  const topo = useMemo(() => buildGridTopology(cloth), [cloth.resolution, cloth.width, cloth.height, cloth.pinMode]);
+  return <ClothBody object={object} topo={topo} selected={selected} />;
+}
+
+/**
+ * Cloth entry point. Renders the object as a deforming cloth sheet — either a procedural grid, or (when
+ * sourceMode is 'mesh' with a model assigned) an imported mesh whose own shape is simulated as cloth,
+ * e.g. import a flag model and pin its pole edge.
+ */
+export function ClothSim({ object, selected }: { object: SceneObject; selected: boolean }) {
+  const cloth = object.cloth!;
+  const meshUrl = useAssetUrl(cloth.meshAssetId);
+  if (cloth.sourceMode === 'mesh' && cloth.meshAssetId && meshUrl) {
+    return (
+      <Suspense fallback={null}>
+        <ClothMeshSource object={object} url={meshUrl} selected={selected} />
+      </Suspense>
+    );
+  }
+  return <ClothGridSource object={object} selected={selected} />;
 }
