@@ -166,6 +166,7 @@ export type GraphNodeKind =
   | 'action.spawnParticleSystem'
   | 'action.loadScene'
   | 'action.cameraShake'
+  | 'action.explode'
   | 'action.moveTo'
   | 'action.fractureObject'
   | 'action.applyDamage'
@@ -331,6 +332,14 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   movementMode?: 'walking' | 'swimming' | 'climbing' | 'flying';
   /** action.setQuality: scalability preset this node applies at runtime (Low/Medium/High/Epic). */
   qualityLevel?: QualityLevel;
+  /** action.explode: blast radius (world units), outward physics force, and radial damage. */
+  explodeRadius?: number;
+  explodeForce?: number;
+  explodeDamage?: number;
+  /** event.receiveDamage: optional starting HP for the owning object. 0/undefined = react-only (the object
+   *  is notified by damage but never dies); > 0 = give it that HP pool so it loses health and dies at 0,
+   *  without having to hand-add a `health` instance variable. */
+  startingHealth?: number;
   hasInput?: boolean;
   hasOutput?: boolean;
 }

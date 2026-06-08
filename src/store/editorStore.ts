@@ -90,6 +90,7 @@ import {
   type WaterVolumeComponent,
 } from '../types';
 import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent } from '../runtime/physicsWorld';
+import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
@@ -5008,6 +5009,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Tear the physics world down so the next play session starts clean.
       stopPhysics();
+      clearExplosions();
       clearTransformBuffer();
       clearPerception();
       return {
@@ -5129,6 +5131,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const priorTriggerExitIndex = buildContactIndex(state.runtimeTriggersExit);
       const priorCollisionExitIndex = buildContactIndex(state.runtimeCollisionsExit);
       const graphRuntimes = getGraphRuntimeMap(state.graphs);
+      // Objects whose blueprint listens for "On Receive Damage". Having that event = intent to take damage,
+      // so damage sources notify them automatically — no manual `health` var needed (that was a silent
+      // footgun). A listener with NO health var is notify-only (fires the event, never dies); add a health
+      // var only when you want it to actually have HP and die at 0.
+      const listensForReceiveDamage = new Set<string>();
+      // Optional HP pool declared on the On Receive Damage node (startingHealth > 0) for objects without an
+      // explicit `health` var — lets damage actually reduce HP + kill, configured right on the node.
+      const receiveDamageHealth = new Map<string, number>();
+      for (const obj of activeObjects) {
+        if (!obj.script?.enabled) continue;
+        const gr = graphRuntimes.get(obj.script.graphId);
+        const dmgNode = gr?.eventRoots.find((n) => n.data.nodeKind === 'event.receiveDamage');
+        if (!dmgNode) continue;
+        listensForReceiveDamage.add(obj.id);
+        const hp = Number(dmgNode.data.startingHealth ?? 0);
+        if (hp > 0) receiveDamageHealth.set(obj.id, hp);
+      }
       // Timer events and throttled Update roots: advance countdowns once per tick (NOT inside
       // eventRootFires, which is a pure predicate called twice per tick). A root that reaches 0 fires this
       // frame and re-arms to its interval. firedTimers is read by eventRootFires; nextTimers is persisted.
@@ -5253,7 +5272,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
       // Explosions: an object with an `explosive` instance var bursts on death (barrels, grenades) — queued here,
       // then processed after the hit passes so blasts can CHAIN (a barrel killed by another barrel explodes too).
-      const explodeQueue: Array<{ pos: Vector3Tuple; dmg: number; radius: number }> = [];
+      const explodeQueue: Array<{ pos: Vector3Tuple; dmg: number; radius: number; force?: number }> = [];
       const exploded = new Set<string>();
       const killTarget = (target: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
         if (target?.variables?.explosive) {
@@ -5264,6 +5283,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             pos: [...target.transform.position] as Vector3Tuple,
             dmg: toNumber(target.variables.explosionDamage ?? 60),
             radius: toNumber(target.variables.explosionRadius ?? 4.5),
+            force: toNumber(target.variables.explosionForce ?? 16),
           });
         } else dieOrRagdoll(target, id, origin);
       };
@@ -6427,6 +6447,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               cameraShake = Math.min(1, cameraShake + Math.max(0, toNumber(valueInput(node, 'amount', Number(node.data.shakeAmount ?? 0.6)))));
             }
 
+            if (node.data.nodeKind === 'action.explode') {
+              // Blast at a wired Location, else the Target object's position, else the owner. Queues into the
+              // shared explosion pass → flings nearby dynamic bodies (radial impulse), damages health objects
+              // in radius, spawns the burst FX, and kicks the camera. Chains into explosive props it kills.
+              const loc = valueInput(node, 'location');
+              let pos: Vector3Tuple;
+              if (Array.isArray(loc) && loc.length === 3) {
+                pos = [Number(loc[0]) || 0, Number(loc[1]) || 0, Number(loc[2]) || 0];
+              } else {
+                const targetId = resolveTarget(node.data.targetObjectId);
+                const targetObj = targetId && targetId !== object.id ? activeObjectById.get(targetId) : null;
+                pos = targetObj ? ([...targetObj.transform.position] as Vector3Tuple) : [position[0], position[1], position[2]];
+              }
+              explodeQueue.push({
+                pos,
+                radius: Math.max(0.1, toNumber(valueInput(node, 'radius', Number(node.data.explodeRadius ?? 5)))),
+                dmg: Math.max(0, toNumber(valueInput(node, 'damage', Number(node.data.explodeDamage ?? 50)))),
+                force: Math.max(0, toNumber(valueInput(node, 'force', Number(node.data.explodeForce ?? 16)))),
+              });
+            }
+
             if (node.data.nodeKind === 'action.setQuality') {
               // Last Set Quality this tick wins; applied to renderSettings in the returned patch (no isDirty).
               pendingQuality = node.data.qualityLevel ?? 'High';
@@ -6495,16 +6536,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const targetObj = activeObjectById.get(targetId);
               const hasHealth = nextObjectVariables[targetId]?.health !== undefined || targetObj?.variables?.health !== undefined;
               const amount = Math.max(0, toNumber(valueInput(node, 'amount', Number(node.data.damageAmount ?? 10))));
-              if (targetObj && hasHealth && amount > 0 && !destroyedIds.has(targetId)) {
-                const cur = toNumber(nextObjectVariables[targetId]?.health ?? targetObj.variables?.health ?? 0);
-                if (cur > 0) {
-                  const next = Math.max(0, cur - amount);
-                  mutableObjectVars(targetId, targetObj.variables).health = next;
+              // Apply if the target has a health var OR listens for On Receive Damage (auto — no var needed).
+              if (targetObj && amount > 0 && !destroyedIds.has(targetId) && (hasHealth || listensForReceiveDamage.has(targetId))) {
+                const nodeHp = receiveDamageHealth.get(targetId);
+                if (hasHealth || nodeHp !== undefined) {
+                  const cur = toNumber(nextObjectVariables[targetId]?.health ?? targetObj.variables?.health ?? nodeHp ?? 0);
+                  if (cur > 0) {
+                    const next = Math.max(0, cur - amount);
+                    mutableObjectVars(targetId, targetObj.variables).health = next;
+                    recordDamage(targetId, amount);
+                    spawned.push(makeDamageNumber(targetObj.transform.position, amount));
+                    if (targetId === playerId) hurt += 1;
+                    if (next > 0 && targetObj.character?.hurtSoundId) sounds.push(targetObj.character.hurtSoundId);
+                    if (next <= 0) killTarget(targetObj, targetId, targetObj.transform.position);
+                  }
+                } else {
+                  // Listener with no health var: fire its On Receive Damage event (notify-only, never dies).
                   recordDamage(targetId, amount);
                   spawned.push(makeDamageNumber(targetObj.transform.position, amount));
-                  if (targetId === playerId) hurt += 1;
-                  if (next > 0 && targetObj.character?.hurtSoundId) sounds.push(targetObj.character.hurtSoundId);
-                  if (next <= 0) killTarget(targetObj, targetId, targetObj.transform.position);
                 }
               }
             }
@@ -8084,7 +8133,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (!proj) continue;
         // Detonate an explosive projectile (grenade/rocket) on impact OR when its fuse (life) runs out.
         const detonate = () => {
-          explodeQueue.push({ pos: [...obj.transform.position] as Vector3Tuple, dmg: proj.blastDamage ?? 60, radius: proj.blastRadius ?? 4.5 });
+          explodeQueue.push({ pos: [...obj.transform.position] as Vector3Tuple, dmg: proj.blastDamage ?? 60, radius: proj.blastRadius ?? 4.5, force: 13 });
           if (proj.blastSound) sounds.push(proj.blastSound);
         };
         if (proj.life <= 0) {
@@ -8250,6 +8299,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       while (explodeQueue.length && blastGuard++ < 64) {
         const blast = explodeQueue.shift()!;
         spawned.push(makeExplosion(blast.pos));
+        // Physical blast: fling nearby dynamic props/debris outward (the fun part — damage is separate).
+        const blastForce = blast.force ?? 14;
+        getActivePhysics()?.applyRadialImpulse(blast.pos, blast.radius, blastForce);
+        // Publish it so NON-rigid sims (cloth) can react to the same blast (a flag billows when hit).
+        pushExplosion(blast.pos, blast.radius, blastForce);
         // Explosions kick the camera, scaled down with distance from the player.
         if (aiPlayer) {
           const pp = aiPlayer.transform.position;
@@ -8259,18 +8313,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         for (const o of resolvedObjects) {
           if (o.projectile || o.effect || destroyedIds.has(o.id) || isRagdoll(o.id)) continue;
           const hasHp = nextObjectVariables[o.id]?.health !== undefined || o.variables?.health !== undefined;
-          if (!hasHp) continue;
+          // Damageable if it has a health var OR listens for On Receive Damage (auto — no var needed).
+          if (!hasHp && !listensForReceiveDamage.has(o.id)) continue;
           const dx = o.transform.position[0] - blast.pos[0];
           const dy = o.transform.position[1] - blast.pos[1];
           const dz = o.transform.position[2] - blast.pos[2];
-          if (Math.hypot(dx, dy, dz) > blast.radius) continue;
-          const cur = toNumber(nextObjectVariables[o.id]?.health ?? o.variables?.health ?? 0);
-          if (cur <= 0) continue;
-          const next = Math.max(0, cur - blast.dmg);
-          mutableObjectVars(o.id, o.variables).health = next;
-          recordDamage(o.id, cur - next);
-          if (o.id === playerId) hurt += 1;
-          if (next <= 0) killTarget(o, o.id); // chains if `o` is explosive
+          if (Math.hypot(dx, dy, dz) > blast.radius || blast.dmg <= 0) continue;
+          // Effective HP pool: explicit health var, else the node's startingHealth, else none (notify-only).
+          const nodeHp = receiveDamageHealth.get(o.id);
+          if (hasHp || nodeHp !== undefined) {
+            const cur = toNumber(nextObjectVariables[o.id]?.health ?? o.variables?.health ?? nodeHp ?? 0);
+            if (cur <= 0) continue;
+            const next = Math.max(0, cur - blast.dmg);
+            mutableObjectVars(o.id, o.variables).health = next;
+            recordDamage(o.id, cur - next);
+            if (o.id === playerId) hurt += 1;
+            if (next <= 0) killTarget(o, o.id); // chains if `o` is explosive
+          } else {
+            // Listener with no HP pool: just fire its On Receive Damage event (notify-only, never dies).
+            recordDamage(o.id, blast.dmg);
+          }
         }
       }
 

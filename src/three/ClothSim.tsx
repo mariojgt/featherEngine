@@ -8,6 +8,7 @@ import { capsuleParams, colliderKindFor, halfScale, sphereRadius } from '../runt
 import { useResolvedMaterial } from './resolveMaterial';
 import { useAssetTexture, useAssetUrl } from './ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
+import { blastsSince, latestBlastId } from '../runtime/explosionBus';
 
 const clampRes = (r: number) => Math.min(Math.max(Math.round(r), 4), 32);
 
@@ -311,6 +312,7 @@ function ClothBody({ object, topo, selected }: { object: SceneObject; topo: Clot
     broken: [],
     seeded: false,
   });
+  const lastBlastId = useRef(0); // highest explosion-bus id already applied to this cloth
   useEffect(() => {
     sim.current = {
       pos: new Float32Array(topo.particleCount * 3),
@@ -372,6 +374,30 @@ function ClothBody({ object, topo, selected }: { object: SceneObject; topo: Clot
         s.prev[k + a] = cur;
         s.pos[k + a] = cur + vel + (a === 0 ? windX : a === 1 ? g + windY : windZ);
       }
+    }
+
+    // Explosion blasts: shove free particles within range outward (a flag billows when a grenade goes off).
+    const blasts = blastsSince(lastBlastId.current);
+    if (blasts.length) {
+      for (const b of blasts) {
+        for (let i = 0; i < count; i++) {
+          if (topo.pinned[i]) continue;
+          const k = i * 3;
+          const dx = s.pos[k] - b.center[0];
+          const dy = s.pos[k + 1] - b.center[1];
+          const dz = s.pos[k + 2] - b.center[2];
+          const d = Math.hypot(dx, dy, dz);
+          if (d > b.radius) continue;
+          const falloff = 1 - d / b.radius;
+          const inv = d > 1e-3 ? 1 / d : 0;
+          // Move position only (not prev) so the shove also adds velocity → the cloth keeps billowing.
+          const push = b.strength * falloff * 0.02;
+          s.pos[k] += dx * inv * push;
+          s.pos[k + 1] += (d > 1e-3 ? dy * inv : 1) * push + push * 0.5;
+          s.pos[k + 2] += dz * inv * push;
+        }
+      }
+      lastBlastId.current = latestBlastId();
     }
 
     // Satisfy distance constraints.

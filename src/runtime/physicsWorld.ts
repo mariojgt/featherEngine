@@ -898,6 +898,38 @@ class PhysicsRuntime {
     entry.body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
   }
 
+  /**
+   * Explosion blast: shove every DYNAMIC body within `radius` of `center` outward (impulse falls off with
+   * distance) plus an upward kick and a little random spin so props/debris/ragdoll-less chunks fly and
+   * tumble — the satisfying part of an explosion that pure damage doesn't give. Mass-independent direction;
+   * heavier bodies still move less (Rapier divides the impulse by mass).
+   */
+  applyRadialImpulse(center: Vector3Tuple, radius: number, strength: number, up = 0.4) {
+    if (!(radius > 0) || !(strength > 0)) return;
+    for (const [, entry] of this.entries) {
+      const body = entry.body;
+      if (body.bodyType() !== RAPIER.RigidBodyType.Dynamic) continue;
+      const t = body.translation();
+      const dx = t.x - center[0];
+      const dy = t.y - center[1];
+      const dz = t.z - center[2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d > radius) continue;
+      const falloff = 1 - d / radius; // linear falloff to the blast edge
+      const k = strength * falloff;
+      const inv = d > 1e-3 ? 1 / d : 0;
+      body.applyImpulse(
+        { x: dx * inv * k, y: (d > 1e-3 ? dy * inv : 1) * k + k * up, z: dz * inv * k },
+        true,
+      );
+      const spin = k * 0.18;
+      body.applyTorqueImpulse(
+        { x: (Math.random() - 0.5) * spin, y: (Math.random() - 0.5) * spin, z: (Math.random() - 0.5) * spin },
+        true,
+      );
+    }
+  }
+
   dispose() {
     this.events.free();
     this.world.free();

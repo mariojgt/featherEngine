@@ -253,6 +253,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set Particles Emitting': 'action.setParticlesEmitting',
   'Spawn Particle System': 'action.spawnParticleSystem',
   'Camera Shake': 'action.cameraShake',
+  Explode: 'action.explode',
   'Move To': 'action.moveTo',
   Fracture: 'action.fractureObject',
   'Apply Damage': 'action.applyDamage',
@@ -280,7 +281,8 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
     nodeKind === 'action.setPhysics' ||
     nodeKind === 'action.setVelocity' ||
     nodeKind === 'query.velocity' ||
-    nodeKind === 'action.fractureObject'
+    nodeKind === 'action.fractureObject' ||
+    nodeKind === 'action.explode'
   )
     return 'Physics';
   if (nodeKind === 'action.playSound') return 'Audio';
@@ -348,7 +350,7 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return {
         label: 'On Receive Damage',
         description:
-          "Fires on this object the frame after its `health` instance variable is reduced — by an Apply Damage node, a projectile, a melee swing, enemy contact, or an explosion. The Damage value-out carries how much HP was lost this hit (wire it into a damage number, hit reaction, or low-health check). Unreal-style \"AnyDamage\" event. The object needs a `health` instance variable.",
+          "Fires on this object when it's hit — by an Apply Damage node, a projectile, a melee swing, enemy contact, or an explosion (the frame after). Just having THIS event makes the object damageable AUTOMATICALLY — no `health` variable required (it fires notify-only and the object never dies). To make it actually have HP and DIE at 0 (ragdoll/shatter/despawn), set this node's Health (HP) field > 0 — no need to add a `health` variable by hand. The Damage value-out carries how much was dealt this hit. Unreal-style \"AnyDamage\".",
       };
     case 'action.fireEvent':
       return { label: `Fire: ${eventName}`, description: 'Triggers matching custom event entry nodes.' };
@@ -515,6 +517,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description:
           'Shakes the player camera (trauma 0..1, fades automatically) — explosions, big hits, impacts. The player firing/taking damage already adds shake; use this node for scripted punch.',
       };
+    case 'action.explode':
+      return {
+        label: `Explode r${Number(data.explodeRadius ?? 5)}`,
+        description:
+          'Detonate a blast at a Location (wired), else the Target object, else self: flings nearby DYNAMIC bodies/debris outward (radial force) and billows cloth, deals radial damage, spawns the burst FX + camera shake. Damage fires each hit object\'s "On Receive Damage" event AUTOMATICALLY (any object with that event is damageable — no health var needed); objects WITH a health var lose HP and die/fracture/ragdoll at 0, chaining explosives. Fields: radius, force (outward impulse), damage.',
+      };
     case 'action.loadScene':
       return {
         label: 'Load Scene',
@@ -657,7 +665,7 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return {
         label: `Apply Damage ${Number(data.damageAmount ?? 10)}`,
         description:
-          "Subtracts HP from a target's `health` instance variable (owner by default; set Target to $player/$trigger/$cast or wire a Target reference). When health hits 0 the target dies — rigged actors ragdoll, destructibles shatter, explosives blast, props despawn — and it fires the target's On Receive Damage event. Spawns a floating damage number. The target needs a `health` instance variable (add the 'health' gameplay kit).",
+          "Subtracts HP from a target's `health` instance variable (owner by default; set Target to $player/$trigger/$cast or wire a Target reference). When health hits 0 the target dies — rigged actors ragdoll, destructibles shatter, explosives blast, props despawn. It fires the target's On Receive Damage event; if the target has that event but NO `health` var it's still notified (notify-only, never dies). Add a `health` var when you want real HP/death. Spawns a floating damage number.",
       };
     case 'action.setQuality':
       return {
@@ -803,6 +811,12 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
+  }
+
+  if (nodeKind === 'action.explode') {
+    if (typeof normalized.explodeRadius !== 'number') normalized.explodeRadius = 5;
+    if (typeof normalized.explodeForce !== 'number') normalized.explodeForce = 16;
+    if (typeof normalized.explodeDamage !== 'number') normalized.explodeDamage = 50;
   }
 
   if (nodeKind === 'action.applyTorque') {

@@ -69,7 +69,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Set Environment', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -535,6 +535,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesLoop = node.data.nodeKind === 'logic.forLoop';
   const updatesLoadScene = node.data.nodeKind === 'action.loadScene';
   const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
+  const updatesExplode = node.data.nodeKind === 'action.explode';
+  const isReceiveDamage = node.data.nodeKind === 'event.receiveDamage';
   const updatesQuality = node.data.nodeKind === 'action.setQuality';
   const updatesEnvironment = node.data.nodeKind === 'action.setEnvironment';
   const updatesPhysics = node.data.nodeKind === 'action.setPhysics';
@@ -784,6 +786,60 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
             />
             <small className="node-hint">Trauma 0–1 added to the camera (fades automatically). 0.6 ≈ a solid hit; 1 = a big explosion.</small>
           </label>
+        )}
+
+        {isReceiveDamage && (
+          <label className="node-field">
+            <span>Health (HP)</span>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              value={node.data.startingHealth ?? 0}
+              onChange={(event) => updateGraphNodeData(node.id, { startingHealth: Math.max(0, Number(event.target.value)) })}
+            />
+            <small className="node-hint">
+              Gives this object an HP pool so damage reduces it and it DIES at 0 (ragdoll/shatter/despawn) — no need to add a <code>health</code> variable by hand. Leave 0 to just react to hits without dying. An explicit <code>health</code> instance var (or a gameplay kit) overrides this.
+            </small>
+          </label>
+        )}
+
+        {updatesExplode && (
+          <>
+            <label className="node-field">
+              <span>At (Target)</span>
+              <select
+                value={node.data.targetObjectId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}
+              >
+                <option value="">Self (this object)</option>
+                <option value="$player">Player</option>
+                <option value="$trigger">Trigger toucher ($trigger)</option>
+                <option value="$cast">Cast result ($cast)</option>
+                {sceneObjects.map((object) => (
+                  <option key={object.id} value={object.id}>{object.name}</option>
+                ))}
+              </select>
+              <small className="node-hint">Blast origin. Or wire a Vector3 into the Location input (e.g. a hit point).</small>
+            </label>
+            <label className="node-field">
+              <span>Radius</span>
+              <input type="number" step="0.5" min="0.1" value={node.data.explodeRadius ?? 5}
+                onChange={(event) => updateGraphNodeData(node.id, { explodeRadius: Math.max(0.1, Number(event.target.value)) })} />
+            </label>
+            <label className="node-field">
+              <span>Force</span>
+              <input type="number" step="1" min="0" value={node.data.explodeForce ?? 16}
+                onChange={(event) => updateGraphNodeData(node.id, { explodeForce: Math.max(0, Number(event.target.value)) })} />
+              <small className="node-hint">Outward physics impulse that flings nearby dynamic bodies. 0 = damage/FX only.</small>
+            </label>
+            <label className="node-field">
+              <span>Damage</span>
+              <input type="number" step="1" min="0" value={node.data.explodeDamage ?? 50}
+                onChange={(event) => updateGraphNodeData(node.id, { explodeDamage: Math.max(0, Number(event.target.value)) })} />
+              <small className="node-hint">HP dealt (flat) to objects with a <code>health</code> var in range. Fires their <strong>On Receive Damage</strong> event, and kills/fractures/ragdolls them at 0 HP. 0 = a push-only blast.</small>
+            </label>
+          </>
         )}
 
         {appliesDamage && (
