@@ -604,6 +604,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const selectedUIDoc = uiDocuments.find((doc) => doc.id === node.data.documentId);
   const eventName = node.data.eventName || 'CustomEvent';
   const selectedVariable = variables.find((variable) => variable.id === node.data.variableId);
+  // Get/Set Variable can also target THIS blueprint's instance variables (resolved on self at runtime),
+  // so the obvious node shows them too — not just globals.
+  const ownBlueprintVars = blueprints.find((b) => b.id === activeBlueprintId)?.variables ?? [];
+  const selectedInstanceVar = node.data.objectKey ? ownBlueprintVars.find((v) => v.name === node.data.objectKey) : undefined;
+  const selectedVarType = selectedVariable?.type ?? selectedInstanceVar?.type;
   const selectedTable = dataAssets.find((table) => table.id === node.data.tableId);
   const selectedColumn =
     selectedTable?.columns.find((column) => column.id === node.data.columnId) ?? selectedTable?.columns[0];
@@ -1032,24 +1037,51 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
             <label className="node-field">
               <span>Variable</span>
               <select
-                value={node.data.variableId ?? ''}
-                onChange={(event) => updateGraphNodeData(node.id, { variableId: event.target.value || undefined })}
+                value={node.data.variableId ? `g:${node.data.variableId}` : node.data.objectKey ? `i:${node.data.objectKey}` : ''}
+                onChange={(event) => {
+                  const v = event.target.value;
+                  if (v.startsWith('g:')) {
+                    const variable = variables.find((vr) => vr.id === v.slice(2));
+                    updateGraphNodeData(node.id, { variableId: v.slice(2), objectKey: undefined, valueType: variable?.type });
+                  } else if (v.startsWith('i:')) {
+                    const iv = ownBlueprintVars.find((vr) => vr.name === v.slice(2));
+                    updateGraphNodeData(node.id, { objectKey: v.slice(2), variableId: undefined, valueType: iv?.type });
+                  } else {
+                    updateGraphNodeData(node.id, { variableId: undefined, objectKey: undefined });
+                  }
+                }}
               >
-                <option value="">{variables.length ? 'Select variable' : 'Create a variable below'}</option>
-                {variables.map((variable) => (
-                  <option key={variable.id} value={variable.id}>
-                    {variable.name} · {variable.type}
-                  </option>
-                ))}
+                <option value="">{variables.length || ownBlueprintVars.length ? 'Select variable' : 'Create a variable below'}</option>
+                {ownBlueprintVars.length > 0 && (
+                  <optgroup label="This blueprint (instance · per-object)">
+                    {ownBlueprintVars.map((variable) => (
+                      <option key={variable.id} value={`i:${variable.name}`}>
+                        {variable.name} · {variable.type}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {variables.length > 0 && (
+                  <optgroup label="Global (shared)">
+                    {variables.map((variable) => (
+                      <option key={variable.id} value={`g:${variable.id}`}>
+                        {variable.name} · {variable.type}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
+              {selectedInstanceVar && (
+                <small className="node-hint">Instance variable on THIS object (self). For another object's instance var, use Get/Set Object Var with a Target.</small>
+              )}
             </label>
-            {node.data.nodeKind === 'variable.set' && selectedVariable && (
+            {node.data.nodeKind === 'variable.set' && selectedVarType && (
               <label className="node-field">
                 <span>Fallback value</span>
                 <ValueEditor
-                  type={selectedVariable.type}
-                  value={graphValueFromNode(node, selectedVariable.type)}
-                  onChange={(value) => updateGraphNodeData(node.id, graphValuePatch(selectedVariable.type, value))}
+                  type={selectedVarType}
+                  value={graphValueFromNode(node, selectedVarType)}
+                  onChange={(value) => updateGraphNodeData(node.id, graphValuePatch(selectedVarType, value))}
                 />
               </label>
             )}

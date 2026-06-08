@@ -5815,9 +5815,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             if (node.data.nodeKind === 'variable.get') {
-              const variable = node.data.variableId ? variableById.get(node.data.variableId) : undefined;
-              if (!variable) return undefined;
-              return cloneGraphValue(nextVariableValues[variable.id] ?? variable.defaultValue);
+              if (node.data.variableId) {
+                const variable = variableById.get(node.data.variableId);
+                return variable ? cloneGraphValue(nextVariableValues[variable.id] ?? variable.defaultValue) : undefined;
+              }
+              // Instance variable picked in the Get Variable dropdown → read THIS object's (self) value.
+              if (node.data.objectKey) {
+                return cloneGraphValue(
+                  nextObjectVariables[object.id]?.[node.data.objectKey] ?? object.variables?.[node.data.objectKey] ?? 0,
+                );
+              }
+              return undefined;
             }
 
             if (node.data.nodeKind === 'variable.getObject') {
@@ -6340,6 +6348,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   valueInput(node, 'value', literalValueForType(node.data, variable.type)),
                   variable.type,
                 );
+              } else if (node.data.objectKey) {
+                // Instance variable picked in the Set Variable dropdown → write THIS object's (self) value.
+                const declType = declaredObjectVarType(object, node.data.objectKey);
+                const raw = valueInput(node, 'value', declType ? literalValueForType(node.data, declType) : (node.data.numberValue ?? 0));
+                mutableObjectVars(object.id, object.variables)[node.data.objectKey] = coerceGraphValue(raw, declType ?? inferGraphType(raw));
               }
             }
 
