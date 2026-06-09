@@ -90,7 +90,7 @@ import {
   type UIPresetKind,
   type WaterVolumeComponent,
 } from '../types';
-import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent } from '../runtime/physicsWorld';
+import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent, type VehicleWheelState } from '../runtime/physicsWorld';
 import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
@@ -5289,6 +5289,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const physicsAngularImpulses: Record<string, Vector3Tuple> = {};
       // Hard velocity sets requested by action.setVelocity this frame (dynamic bodies), applied in physics.frame.
       const setVelocities: Record<string, Vector3Tuple> = {};
+      // Driver input for raycast-sim cars (physicsModel === 'raycast'), resolved in the vehicle pass and handed
+      // to the Rapier vehicle controller inside physics.frame. Keyed by chassis object id.
+      const vehicleInputs: Record<string, { throttle: number; steer: number; handbrake: boolean; engineScale?: number }> = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
       // Self writes still mutate the owner's tuples directly; these are merged into the object list before
       // the character/physics passes, so a teleported kinematic/fixed body follows (physics.frame reads the
@@ -7202,6 +7205,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           : drivingActive
             ? Boolean(currentKeys[veh.keyHandbrake])
             : false;
+        // RAYCAST SIM: a real Rapier DynamicRayCastVehicleController owns the chassis dynamics. We only resolve
+        // driver input here and hand it to physics.frame; the chassis transform + wheel poses come BACK from the
+        // physics result (handled in the post-step writeback below). Skip the entire arcade tire model.
+        if (veh.physicsModel === 'raycast') {
+          // In-game speed menu: a "SpeedLevel" project var scales engine force at runtime (buttons inc/dec it).
+          const slVar = variableByName.get('SpeedLevel');
+          const speedLevel = slVar ? toNumber(nextVariableValues[slVar.id] ?? slVar.defaultValue) : 0;
+          const engineScale = Math.max(0.5, Math.min(3, 1 + 0.18 * speedLevel));
+          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerRaw, handbrake, engineScale };
+          continue;
+        }
         const braking = throttleSig < -0.05;
         // Integrate longitudinal speed. Throttle tapers near the limiter, reverse first brakes a forward roll,
         // and coasting keeps real momentum while drag gradually bleeds it off.
@@ -8046,6 +8060,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           physicsAngularImpulses,
           sceneWind,
           sceneEnv?.windTurbulence ?? 0,
+          vehicleInputs,
         );
         collisions = result.collisions;
         triggers = result.triggers;
@@ -8102,6 +8117,120 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             transform: { position, rotation: next.rotation, scale: object.transform.scale },
           };
         });
+        // Raycast-sim vehicles: the Rapier vehicle controller is authoritative — write the chassis transform and
+        // wheel poses from the physics result. Wheels use a steering-ANCHOR rig (anchor child = steer + suspension
+        // bob, wheel mesh under it = spin) so steer and spin compose correctly instead of skewing the wheel.
+        if (result.vehicles.size) {
+          const wheelStates = new Map<string, VehicleWheelState>();
+          for (const [, st] of result.vehicles) for (const w of st.wheels) wheelStates.set(w.objectId, w);
+          // Each wheel mesh's PARENT is its steering anchor — map anchorId → wheel state so the anchor carries
+          // steer + the suspension bob. (A wheel parented directly to the car has no anchor → handled inline.)
+          const byIdNow = new Map(resolvedObjects.map((o) => [o.id, o]));
+          const anchorStates = new Map<string, VehicleWheelState>();
+          for (const ws of wheelStates.values()) {
+            const parentId = byIdNow.get(ws.objectId)?.parentId;
+            if (parentId && !result.vehicles.has(parentId)) anchorStates.set(parentId, ws);
+          }
+          // Brake-light glow + speedometer mirror (raycast cars skip the arcade pass that normally does this).
+          const brakeLightGlow = new Map<string, number>();
+          const speedVarMirror = variableByName.get('Speed');
+          for (const [carId, st] of result.vehicles) {
+            const veh = { ...defaultVehicle(), ...byIdNow.get(carId)?.vehicle };
+            const input = vehicleInputs[carId];
+            const braking = Boolean(input && (input.throttle < -0.05 || input.handbrake));
+            for (const lid of veh.brakeLightIds ?? []) brakeLightGlow.set(lid, braking ? 4 : 0.2);
+            if (speedVarMirror && carId === vehiclePlayerId) nextVariableValues[speedVarMirror.id] = Math.round(Math.abs(st.speed) * 3.6);
+          }
+          resolvedObjects = resolvedObjects.map((object) => {
+            const cs = result.vehicles.get(object.id);
+            if (cs) {
+              const mutable = mutableObjectVars(object.id, object.variables);
+              const prevSpeed = toNumber(mutable.__vehicleSpeed ?? 0);
+              mutable.__vehicleYaw = cs.chassis.rotation[1];
+              mutable.__vehicleSpeed = cs.speed;
+              const veh = { ...defaultVehicle(), ...object.vehicle };
+              const input = vehicleInputs[object.id];
+              // SKID SOUND only on a real slide — moving sideways, or handbrake locking the rears at speed.
+              // (Keying it off raw tire side-impulse made it screech on every normal grippy turn.)
+              const handbrake = Boolean(input?.handbrake);
+              const braking = Boolean(input && input.throttle < -0.1);
+              const skidding = Math.abs(cs.speed) > 3 && (Math.abs(cs.lateralSpeed) > 3.5 || (handbrake && Math.abs(cs.speed) > 5));
+              // TIRE MARKS are more lenient than the screech: lay rubber on any slide, the handbrake, OR hard
+              // braking from speed — so you actually see marks "when you brake and stuff", not just big drifts.
+              const leavingMarks = Math.abs(cs.speed) > 2 && (Math.abs(cs.lateralSpeed) > 1.6 || handbrake || (braking && Math.abs(cs.speed) > 7));
+              if (object.id === vehiclePlayerId) {
+                nextVehicleSound = {
+                  engineId: veh.engineSoundId,
+                  skidId: veh.skidSoundId,
+                  rpm: Math.min(1, Math.abs(cs.speed) / Math.max(0.001, veh.maxSpeed)),
+                  slip: skidding ? Math.min(1, Math.abs(cs.lateralSpeed) / 10) : 0,
+                };
+              }
+              for (const id of veh.tireMarkIds) sendParticleCommand(id, { type: 'emit', on: leavingMarks });
+              // One-shots: raycast cars skip the arcade audio block, so fire them here.
+              const pos = cs.chassis.position;
+              if (veh.collisionSoundId && Math.abs(cs.speed) > 4 && result.collisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id)) {
+                const key = `${object.id}:hitSfx`;
+                if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.collisionSoundId, pos); nextCooldowns[key] = 0.4; }
+              }
+              if (veh.brakeSoundId && input && input.throttle < -0.1 && cs.speed > 8) {
+                const key = `${object.id}:brakeSfx`;
+                if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.brakeSoundId, pos); nextCooldowns[key] = 0.9; }
+              }
+              if (veh.hornSoundId && currentKeys[veh.keyHorn]) {
+                const key = `${object.id}:hornSfx`;
+                if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.hornSoundId, pos); nextCooldowns[key] = 0.5; }
+              }
+              return { ...object, transform: { ...object.transform, position: cs.chassis.position, rotation: cs.chassis.rotation } };
+            }
+            // Steering anchor: steer (Y) + suspension bob (Y position = connectionY − suspensionLength).
+            const as = anchorStates.get(object.id);
+            if (as) {
+              const pos = object.transform.position;
+              return {
+                ...object,
+                transform: {
+                  ...object.transform,
+                  position: [pos[0], as.connectionY - as.suspension, pos[2]] as Vector3Tuple,
+                  rotation: [0, as.steer, 0] as Vector3Tuple,
+                },
+              };
+            }
+            const ws = wheelStates.get(object.id);
+            if (ws) {
+              const pos = object.transform.position;
+              // Wheel mesh UNDER an anchor: only spin (X) — the anchor already applied steer + bob.
+              if (anchorStates.has(object.parentId ?? '')) {
+                return { ...object, transform: { ...object.transform, rotation: [ws.rotation, 0, 0] as Vector3Tuple } };
+              }
+              // Direct-child fallback (no anchor): combine spin + steer and bob here.
+              return {
+                ...object,
+                transform: {
+                  ...object.transform,
+                  position: [pos[0], ws.connectionY - ws.suspension, pos[2]] as Vector3Tuple,
+                  rotation: [ws.rotation, ws.steer, 0] as Vector3Tuple,
+                },
+              };
+            }
+            // Brake lights: brighten the emissive while braking/handbraking.
+            const glow = brakeLightGlow.get(object.id);
+            if (glow !== undefined && object.renderer) {
+              return {
+                ...object,
+                renderer: {
+                  ...object.renderer,
+                  materialOverrides: {
+                    ...object.renderer.materialOverrides,
+                    emissiveColor: object.renderer.materialOverrides?.emissiveColor ?? '#ff2a2a',
+                    emissiveIntensity: glow,
+                  },
+                },
+              };
+            }
+            return object;
+          });
+        }
         groundedIds = [...groundedSet];
       }
       recordRuntimeSection('physics', performance.now() - physicsStart);

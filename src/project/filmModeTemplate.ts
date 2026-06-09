@@ -627,6 +627,7 @@ export async function createFilmModeTemplate(): Promise<string | undefined> {
     anamorphic: 0.6, // horizontal neon streaks — the signature filmic look for a neon corridor
     chromaticAberration: 0.45, // subtle edge fringing
     lightLeak: 0.14, // faint warm film burn drifting across the frame
+    lensDirt: 0.5, // grime on the lens that glows where the neon bloom hits it
   });
 
   // Open from black.

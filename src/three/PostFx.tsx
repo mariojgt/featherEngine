@@ -5,6 +5,7 @@ import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorSto
 import { ColorGrade, resolveGrade } from './ColorGrade';
 import { MotionBlur } from './MotionBlurEffect';
 import { Anamorphic } from './AnamorphicEffect';
+import { LensDirt } from './LensDirtEffect';
 import { VolumetricFog, resolveVolumetric } from './VolumetricFog';
 import { qualityProfile } from './quality';
 
@@ -95,6 +96,11 @@ export function PostFx() {
   // streaks already-bloomed highlights. Driven by the cinematic look (runtime or scrub preview).
   if (look?.anamorphic && look.anamorphic > 0.001) {
     children.push(<Anamorphic key="anamorphic" strength={look.anamorphic} />);
+  }
+  // Lens dirt: procedural grime that lights up where the frame is bright. After bloom/anamorphic so it
+  // catches the bloomed highlights.
+  if (look?.lensDirt && look.lensDirt > 0.001) {
+    children.push(<LensDirt key="lensdirt" strength={look.lensDirt} />);
   }
   // Cinematic camera motion blur (shutter smear along camera moves). Only while a cinematic with a
   // motionBlur look is live (runtime or scrub preview) — never in normal gameplay.

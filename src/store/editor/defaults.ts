@@ -129,6 +129,8 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
 /** A factory for a fresh default arcade vehicle (car) controller. Tuned for a fun, always-controllable feel. */
 export const defaultVehicle = (): VehicleComponent => ({
   enabled: false,
+  // Default to the arcade tire model; flip to 'raycast' for the real Rapier vehicle sim (fields below).
+  physicsModel: 'arcade',
   // Tuned for a punchy-but-weighty arcade feel: brisk top speed, accel that pins you back, strong brakes,
   // and a touch of coast drag so letting off carries momentum into the next corner instead of gliding forever.
   maxSpeed: 34,
@@ -179,6 +181,24 @@ export const defaultVehicle = (): VehicleComponent => ({
   cameraMaxPitch: 1.0,
   mouseLook: true,
   mouseSensitivity: 0.0025,
+  // --- Raycast sim defaults (used when physicsModel === 'raycast') — a stable, grippy hatchback. ---
+  engineForce: 1800,
+  brakeForce: 2200,
+  handbrakeForce: 1400,
+  drivetrain: 'rwd',
+  brakeBias: 0.55,
+  chassisMass: 1100,
+  centerOfMassY: -0.4,
+  linearDamping: 0.15,
+  angularDamping: 0.6,
+  wheelFrictionSlip: 1.4,
+  sideFrictionStiffness: 0.9,
+  suspensionRestLength: 0.35,
+  suspensionStiffnessSim: 24,
+  suspensionCompression: 0.82,
+  suspensionRelaxation: 0.88,
+  maxSuspensionForce: 30000,
+  maxSuspensionTravelSim: 0.3,
 });
 
 /** Default ragdoll tuning — the same conservative values RagdollRig was hardcoded with. */

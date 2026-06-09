@@ -10,7 +10,14 @@
 // events without touching the Viewport / player rendering at all.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import type { Collider, ImpulseJoint, KinematicCharacterController, RigidBody, World } from '@dimforge/rapier3d-compat';
+import type {
+  Collider,
+  DynamicRayCastVehicleController,
+  ImpulseJoint,
+  KinematicCharacterController,
+  RigidBody,
+  World,
+} from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
 import { clearRagdolls } from './ragdollState';
@@ -162,6 +169,11 @@ function colliderDescFor(object: SceneObject) {
   return desc;
 }
 
+/** A car running the real Rapier raycast-vehicle sim (vs the arcade tire model in editorStore). */
+function isRaycastVehicle(object: SceneObject): boolean {
+  return Boolean(object.vehicle?.enabled && object.vehicle.physicsModel === 'raycast');
+}
+
 function bodyDescFor(object: SceneObject) {
   const type = object.physics?.bodyType ?? 'dynamic';
   if (type === 'fixed') return RAPIER.RigidBodyDesc.fixed();
@@ -225,6 +237,49 @@ export interface PhysicsFrameResult {
   grounded: string[];
   /** Post-step linear velocity of each DYNAMIC body, keyed by object id (drives the Get Velocity node). */
   velocities: Map<string, Vector3Tuple>;
+  /** Post-step state of each raycast-sim vehicle, keyed by chassis object id (drives the sim-car writeback). */
+  vehicles: Map<string, VehicleFrameState>;
+}
+
+/** Per-frame driver input for one raycast-sim vehicle, supplied by the tick (keys or the Drive node). */
+export interface VehicleInput {
+  /** Throttle, -1 (full reverse) .. +1 (full throttle). */
+  throttle: number;
+  /** Steering, -1 (full left) .. +1 (full right). Scaled by the component's steerAngle. */
+  steer: number;
+  /** Handbrake held this frame (locks the rear wheels). */
+  handbrake: boolean;
+  /** Runtime multiplier on engine force (the in-game speed menu drives this). Default 1. */
+  engineScale?: number;
+}
+
+/** Per-wheel + chassis readback for one raycast-sim vehicle after a physics step. */
+export interface VehicleFrameState {
+  /** Chassis world transform straight from the dynamic body. */
+  chassis: { position: Vector3Tuple; rotation: Vector3Tuple };
+  /** Signed forward speed (units/sec) — engine pitch / HUD. */
+  speed: number;
+  /** Sideways velocity component (units/sec) — how much the car is actually SLIDING (drift/skid detection). */
+  lateralSpeed: number;
+  /** Per wheel, IN THE SAME ORDER as the vehicle's `wheelObjectIds`. */
+  wheels: VehicleWheelState[];
+}
+
+export interface VehicleWheelState {
+  /** This wheel's object id (matches a `wheelObjectIds` entry). */
+  objectId: string;
+  /** Steering angle applied this frame (radians). */
+  steer: number;
+  /** Accumulated spin angle (radians) — for rolling the wheel mesh. */
+  rotation: number;
+  /** Current suspension length (world units) — drives visible per-wheel bob. */
+  suspension: number;
+  /** Suspension connection point local Y on the chassis — visual wheel local Y = connectionY − suspension. */
+  connectionY: number;
+  /** Whether the wheel's ray found ground this frame. */
+  inContact: boolean;
+  /** Lateral (side) impulse magnitude — proxy for tire slip → skid audio / marks. */
+  sideImpulse: number;
 }
 
 export interface PhysicsContactEvent {
@@ -281,6 +336,41 @@ function jointSignature(object: SceneObject, body1Present: boolean, body2Present
   ].join('|');
 }
 
+interface VehicleEntry {
+  body: RigidBody;
+  collider: Collider;
+  controller: DynamicRayCastVehicleController;
+  /** Wheel object ids, in addWheel order (= the component's `wheelObjectIds` order). */
+  wheelIds: string[];
+  /** Each wheel's suspension connection point local Y (so the visual wheel = connectionY − suspensionLength). */
+  connectionY: number[];
+  /** Whether each wheel steers (resolved at build: the wheel — or its anchor parent — is in steeredWheelIds). */
+  steered: boolean[];
+  signature: string;
+}
+
+/** Everything that, if changed, requires rebuilding the chassis body + wheels. */
+function vehicleSignature(object: SceneObject): string {
+  const v = object.vehicle;
+  const [sx, sy, sz] = halfScale(object);
+  // Fold in the chassis model + whether its geometry has loaded, so the chassis box (sized from the model's
+  // bounds) rebuilds the moment the GLB finishes loading instead of staying a unit-cube fallback.
+  const modelToken = `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`;
+  return [
+    v?.physicsModel,
+    (v?.wheelObjectIds ?? []).join(','),
+    (v?.steeredWheelIds ?? []).join(','),
+    v?.wheelRadius,
+    v?.chassisMass,
+    v?.centerOfMassY,
+    v?.suspensionRestLength,
+    modelToken,
+    sx.toFixed(3),
+    sy.toFixed(3),
+    sz.toFixed(3),
+  ].join('|');
+}
+
 class PhysicsRuntime {
   private world: World;
   private events = new RAPIER.EventQueue(true);
@@ -290,6 +380,7 @@ class PhysicsRuntime {
   private charEntries = new Map<string, CharacterEntry>();
   private terrainEntries = new Map<string, TerrainEntry>();
   private jointEntries = new Map<string, JointEntry>();
+  private vehicleEntries = new Map<string, VehicleEntry>();
   /** All active objects this frame, keyed by id — lets body creation resolve parent-chain world transforms. */
   private frameById = new Map<string, SceneObject>();
   constructor() {
@@ -436,11 +527,169 @@ class PhysicsRuntime {
     }
   }
 
+  private createVehicle(object: SceneObject) {
+    const v = object.vehicle;
+    if (!v) return;
+    const world = object.parentId ? worldPosRot(this.frameById, object.id) : object.transform;
+    const p = world.position;
+    // Chassis box: derive it from the car MODEL's bounding box when the object renders a GLB (so the collision
+    // hull actually matches the imported car, not a unit cube), else fall back to the object's scale box.
+    let hx: number;
+    let hy: number;
+    let hz: number;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    const mesh = scaledMeshVertices(object);
+    if (mesh && mesh.vertices.length >= 3) {
+      let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (let i = 0; i < mesh.vertices.length; i += 3) {
+        minX = Math.min(minX, mesh.vertices[i]); maxX = Math.max(maxX, mesh.vertices[i]);
+        minY = Math.min(minY, mesh.vertices[i + 1]); maxY = Math.max(maxY, mesh.vertices[i + 1]);
+        minZ = Math.min(minZ, mesh.vertices[i + 2]); maxZ = Math.max(maxZ, mesh.vertices[i + 2]);
+      }
+      hx = Math.max((maxX - minX) / 2, 0.05);
+      hy = Math.max((maxY - minY) / 2, 0.05);
+      hz = Math.max((maxZ - minZ) / 2, 0.05);
+      cx = (maxX + minX) / 2; cy = (maxY + minY) / 2; cz = (maxZ + minZ) / 2;
+    } else {
+      const [sx, sy, sz] = halfScale(object);
+      hx = 0.5 * sx; hy = 0.5 * sy; hz = 0.5 * sz;
+    }
+    const mass = Math.max(v.chassisMass ?? 1100, 1);
+    // Box inertia about each axis (m/12·(a²+b²)); low center of mass keeps the car from tipping easily.
+    const fx = 2 * hx;
+    const fy = 2 * hy;
+    const fz = 2 * hz;
+    const ix = (mass / 12) * (fy * fy + fz * fz);
+    const iy = (mass / 12) * (fx * fx + fz * fz);
+    const iz = (mass / 12) * (fx * fx + fy * fy);
+    const desc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(p[0], p[1], p[2])
+      .setRotation(quatFromEuler(world.rotation))
+      .setLinearDamping(v.linearDamping ?? 0.15)
+      .setAngularDamping(v.angularDamping ?? 0.6)
+      .setAdditionalMassProperties(
+        mass,
+        // CoM at the body's center, dropped by centerOfMassY for anti-rollover stability.
+        { x: cx, y: cy + (v.centerOfMassY ?? -0.4), z: cz },
+        { x: ix, y: iy, z: iz },
+        { x: 0, y: 0, z: 0, w: 1 },
+      )
+      // Sweep the chassis so a fast car can't tunnel through a wall/barrier in one step.
+      .setCcdEnabled(true);
+    const body = this.world.createRigidBody(desc);
+    const groups = collisionGroups(object.physics?.collisionLayer, object.physics?.collisionMask);
+    const collider = this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(hx, hy, hz)
+        // Offset so the box wraps the model (whose origin is usually at the wheels, not the body center).
+        .setTranslation(cx, cy, cz)
+        .setFriction(object.physics?.friction ?? 0.5)
+        .setRestitution(object.physics?.restitution ?? 0.05)
+        .setCollisionGroups(groups)
+        .setSolverGroups(groups)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
+        .setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL),
+      body,
+    );
+
+    const controller = this.world.createVehicleController(body);
+    controller.indexUpAxis = 1; // +Y up
+    controller.setIndexForwardAxis = 2; // +Z forward (engine convention: car faces +Z)
+
+    const restLength = v.suspensionRestLength ?? 0.35;
+    const radius = Math.max(v.wheelRadius ?? 0.4, 0.05);
+    const wheelIds = v.wheelObjectIds ?? [];
+    const steeredSet = new Set(v.steeredWheelIds ?? []);
+    const connectionY: number[] = [];
+    const steered: boolean[] = [];
+    wheelIds.forEach((wid) => {
+      const wheel = this.frameById.get(wid);
+      // The suspension CONNECTION point must be the wheel's position in CHASSIS-local space. Wheels are
+      // authored under a steering ANCHOR (anchor = child of car, wheel mesh = child of anchor at [0,0,0]); the
+      // anchor holds the corner position. So the connection = the anchor's position (+ the mesh's local offset).
+      // Falls back to the wheel's own position for a direct-child (no-anchor) setup.
+      const anchor = wheel?.parentId && wheel.parentId !== object.id ? this.frameById.get(wheel.parentId) : undefined;
+      const ap = anchor?.transform.position ?? [0, 0, 0];
+      const lp = wheel?.transform.position ?? [0, 0, 0];
+      const cxw = (anchor ? ap[0] : 0) + lp[0];
+      const cyw = (anchor ? ap[1] : 0) + lp[1];
+      const czw = (anchor ? ap[2] : 0) + lp[2];
+      // The connection sits restLength ABOVE the rest wheel center so the ray casts down through it to ground.
+      const connY = cyw + restLength;
+      connectionY.push(connY);
+      // Steered if the wheel id OR its anchor's id is listed in steeredWheelIds.
+      steered.push(steeredSet.has(wid) || (anchor ? steeredSet.has(anchor.id) : false));
+      controller.addWheel({ x: cxw, y: connY, z: czw }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, restLength, radius);
+    });
+    for (let i = 0; i < wheelIds.length; i++) {
+      controller.setWheelSuspensionRestLength(i, restLength);
+      controller.setWheelSuspensionStiffness(i, v.suspensionStiffnessSim ?? 24);
+      controller.setWheelSuspensionCompression(i, v.suspensionCompression ?? 0.82);
+      controller.setWheelSuspensionRelaxation(i, v.suspensionRelaxation ?? 0.88);
+      controller.setWheelMaxSuspensionForce(i, v.maxSuspensionForce ?? 30000);
+      controller.setWheelMaxSuspensionTravel(i, v.maxSuspensionTravelSim ?? 0.3);
+      controller.setWheelFrictionSlip(i, v.wheelFrictionSlip ?? 1.4);
+      controller.setWheelSideFrictionStiffness(i, v.sideFrictionStiffness ?? 0.9);
+      controller.setWheelRadius(i, radius);
+    }
+
+    this.vehicleEntries.set(object.id, {
+      body,
+      collider,
+      controller,
+      wheelIds: [...wheelIds],
+      connectionY,
+      steered,
+      signature: vehicleSignature(object),
+    });
+    this.handleToId.set(collider.handle, object.id);
+    this.handleToTrigger.set(collider.handle, false);
+  }
+
+  private removeVehicle(id: string) {
+    const entry = this.vehicleEntries.get(id);
+    if (!entry) return;
+    this.handleToId.delete(entry.collider.handle);
+    this.handleToTrigger.delete(entry.collider.handle);
+    this.world.removeVehicleController(entry.controller);
+    this.world.removeRigidBody(entry.body); // also removes the attached chassis collider
+    this.vehicleEntries.delete(id);
+  }
+
+  /** Build/rebuild/drop the Rapier raycast vehicles (physicsModel === 'raycast'). */
+  private syncVehicles(objects: SceneObject[]) {
+    const present = new Set<string>();
+    for (const object of objects) {
+      if (!isRaycastVehicle(object)) continue;
+      // Rebuilds need the wheel children resolvable; if a wheel isn't in the world yet, retry next frame.
+      const wheelsReady = (object.vehicle?.wheelObjectIds ?? []).every((wid) => this.frameById.has(wid));
+      // If the chassis renders a GLB, wait for its geometry to load before building — otherwise we'd build a
+      // unit-cube fallback now and REBUILD when the model loads, and that rebuild would read the wheel positions
+      // the per-frame suspension writeback has since moved (drift). Build ONCE, from the authored wheel rest poses.
+      const modelId = object.renderer?.modelAssetId;
+      const modelReady = !modelId || Boolean(getModelGeometry(modelId));
+      if (!wheelsReady || !modelReady) continue;
+      present.add(object.id);
+      const entry = this.vehicleEntries.get(object.id);
+      if (!entry) this.createVehicle(object);
+      else if (entry.signature !== vehicleSignature(object)) {
+        this.removeVehicle(object.id);
+        this.createVehicle(object);
+      }
+    }
+    for (const id of [...this.vehicleEntries.keys()]) {
+      if (!present.has(id)) this.removeVehicle(id);
+    }
+  }
+
   /** Create/rebuild/drop bodies so the world matches the current physics-enabled objects. */
   private syncBodies(objects: SceneObject[]) {
     const present = new Set<string>();
     for (const object of objects) {
       if (object.terrain?.enabled) continue;
+      // Raycast-sim cars own a dedicated dynamic chassis built by syncVehicles — never double-create here.
+      if (isRaycastVehicle(object)) continue;
       if (!object.physics?.enabled) continue;
       present.add(object.id);
       const entry = this.entries.get(object.id);
@@ -650,12 +899,15 @@ class PhysicsRuntime {
     angularImpulses: Record<string, Vector3Tuple> = {},
     wind: Vector3Tuple = [0, 0, 0],
     windTurbulence = 0,
+    vehicleInputs: Record<string, VehicleInput> = {},
   ): PhysicsFrameResult {
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     // Per-frame gust factor for wind (shared by every wind-affected body this step).
     const hasWind = wind[0] !== 0 || wind[1] !== 0 || wind[2] !== 0;
     const gust = 1 + (Math.random() - 0.5) * 2 * Math.min(Math.max(windTurbulence, 0), 1);
-    this.world.timestep = dt;
+    // NOTE: world.timestep is set per-substep below (fixed-timestep substepping). A long frame is advanced in
+    // <=1/60 chunks instead of one giant step, so a fast body (e.g. a speeding car) can't lurch on a hitch —
+    // which previously read as a camera freeze/stutter at speed.
     // Resolve parent chains in WORLD space: bodies are simulated in world coordinates, but objects
     // store LOCAL transforms. `byId` powers world-transform composition for parented bodies; `prevById`
     // does the same for last frame's transforms so the scripted-motion delta is also world-space.
@@ -680,6 +932,7 @@ class PhysicsRuntime {
     this.syncTerrainChunks(objects);
     this.syncBodies(objects);
     this.syncCharacters(objects);
+    this.syncVehicles(objects);
     this.syncJoints(objects);
 
     const movedFixedBodies = new Set<string>();
@@ -781,7 +1034,60 @@ class PhysicsRuntime {
       entry.body.setNextKinematicTranslation({ x: base[0] + move.x, y: base[1] + move.y, z: base[2] + move.z });
     }
 
-    this.world.step(this.events);
+    // Raycast vehicles: translate driver input into per-wheel engine force / brake / steering, then let the
+    // controller update the chassis velocity. MUST run before world.step (it writes the chassis velocity that
+    // the step then integrates). Order: set wheels → updateVehicle(dt) → step.
+    for (const [id, entry] of this.vehicleEntries) {
+      const object = byId.get(id);
+      const v = object?.vehicle;
+      if (!v) continue;
+      const input = vehicleInputs[id] ?? { throttle: 0, steer: 0, handbrake: false };
+      const n = entry.wheelIds.length;
+      const half = n / 2;
+      const engineForce = (v.engineForce ?? 1800) * (input.engineScale ?? 1);
+      const brakeForce = v.brakeForce ?? 2200;
+      const handbrakeForce = v.handbrakeForce ?? 1400;
+      const drivetrain = v.drivetrain ?? 'rwd';
+      const brakeBias = Math.min(Math.max(v.brakeBias ?? 0.55, 0), 1);
+      const steerAngle = v.steerAngle ?? 0.6;
+      // Throttle drives forward; braking input (negative throttle while rolling forward) becomes brake, not reverse,
+      // so a sim car decelerates with the brakes. A near-stopped car uses reverse engine force to back up.
+      const speed = entry.controller.currentVehicleSpeed();
+      const braking = input.throttle < -0.01 && speed > 1;
+      for (let i = 0; i < n; i++) {
+        const isFront = i < half;
+        const driven = drivetrain === 'awd' || (drivetrain === 'fwd' ? isFront : !isFront);
+        const drivenCount = drivetrain === 'awd' ? n : Math.max(1, n - half);
+        // Engine force only when not using the brakes; split across driven wheels.
+        const engine = !braking && driven ? (input.throttle * engineForce) / drivenCount : 0;
+        entry.controller.setWheelEngineForce(i, engine);
+        // Brake = service brake (biased front/rear) + handbrake on the rear wheels.
+        let brake = 0;
+        if (braking) brake += brakeForce * (isFront ? brakeBias : 1 - brakeBias);
+        if (input.handbrake && !isFront) brake += handbrakeForce;
+        entry.controller.setWheelBrake(i, brake);
+        entry.controller.setWheelSteering(i, entry.steered[i] ? input.steer * steerAngle : 0);
+      }
+    }
+
+    // Fixed-timestep substepping: advance the full frame time `dt` in chunks of at most 1/60s. Wheel forces
+    // were set once above (they persist on the controller); each substep re-runs the vehicle raycast update
+    // then steps the world. Capped at 6 substeps to avoid a spiral of death on a very long hitch.
+    const FIXED_STEP = 1 / 60;
+    let remaining = dt;
+    let substeps = 0;
+    do {
+      const h = Math.min(FIXED_STEP, remaining);
+      this.world.timestep = h;
+      for (const [, entry] of this.vehicleEntries) {
+        // Exclude sensors + the chassis's own collider from the wheel suspension rays (else a wheel ray can hit
+        // the chassis box and the suspension never finds the ground).
+        entry.controller.updateVehicle(h, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, (collider) => collider.handle !== entry.collider.handle);
+      }
+      this.world.step(this.events);
+      remaining -= h;
+      substeps++;
+    } while (remaining > 1e-4 && substeps < 6);
 
     const collisions: PhysicsContactEvent[] = [];
     const triggers: PhysicsContactEvent[] = [];
@@ -845,7 +1151,36 @@ class PhysicsRuntime {
       if (t) t.rotation = object.transform.rotation;
     }
 
-    return { transforms, collisions, triggers, triggersExit, collisionsExit, grounded: [...grounded], velocities };
+    // Raycast vehicles: read the chassis transform + per-wheel state straight from the controller. The chassis
+    // is a dynamic body, so its post-step transform is authoritative (no scripted writeback fights it).
+    const vehicles = new Map<string, VehicleFrameState>();
+    for (const [id, entry] of this.vehicleEntries) {
+      const object = byId.get(id);
+      const t = entry.body.translation();
+      const q = entry.body.rotation();
+      reuseQuat.set(q.x, q.y, q.z, q.w);
+      reuseEuler.setFromQuaternion(reuseQuat, 'XYZ');
+      const position: Vector3Tuple = [t.x, t.y, t.z];
+      const rotation: Vector3Tuple = [reuseEuler.x, reuseEuler.y, reuseEuler.z];
+      const chassis = object?.parentId ? worldToLocalUnder(byId, object.parentId, position, rotation) : { position, rotation };
+      const wheels: VehicleWheelState[] = entry.wheelIds.map((wid, i) => ({
+        objectId: wid,
+        steer: entry.controller.wheelSteering(i) ?? 0,
+        // Rapier maintains the accumulated wheel spin angle from wheel angular velocity.
+        rotation: entry.controller.wheelRotation(i) ?? 0,
+        suspension: entry.controller.wheelSuspensionLength(i) ?? (object?.vehicle?.suspensionRestLength ?? 0.35),
+        connectionY: entry.connectionY[i] ?? 0,
+        inContact: entry.controller.wheelIsInContact(i),
+        sideImpulse: Math.abs(entry.controller.wheelSideImpulse(i) ?? 0),
+      }));
+      // Sideways slide speed: project the chassis velocity onto its local right axis (from yaw).
+      const lv = entry.body.linvel();
+      const yaw = rotation[1];
+      const lateralSpeed = lv.x * Math.cos(yaw) - lv.z * Math.sin(yaw);
+      vehicles.set(id, { chassis, speed: entry.controller.currentVehicleSpeed(), lateralSpeed, wheels });
+    }
+
+    return { transforms, collisions, triggers, triggersExit, collisionsExit, grounded: [...grounded], velocities, vehicles };
   }
 
   /**

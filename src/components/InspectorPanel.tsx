@@ -872,50 +872,108 @@ function VehicleSection({
       </label>
       {v && v.enabled && (
         <>
-          <p className="field-hint">W accelerate · S brake/reverse · A/D steer · Space handbrake (drift) · H horn · Mouse look. The body should be a dynamic, convex-collider Rapier body.</p>
+          <p className="field-hint">W accelerate · S brake/reverse · A/D steer · Space handbrake (drift) · H horn · Mouse look.</p>
 
-          <h4 className="inspector-subhead">Drivetrain</h4>
-          {num('Max Speed', 'maxSpeed', 1, 26)}
-          {num('Max Reverse', 'maxReverseSpeed', 1, 9)}
-          {num('Acceleration', 'acceleration', 1, 16)}
-          {num('Braking', 'braking', 1, 34)}
-          {num('Drag', 'drag', 1, 9)}
-
-          <h4 className="inspector-subhead">Steering</h4>
-          {num('Steer Angle', 'steerAngle', 0.02, 0.55)}
-          {num('Turn Rate', 'turnRate', 0.05, 2)}
-          {num('Grip', 'gripFactor', 0.05, 0.9)}
-          {num('Handbrake Grip', 'handbrakeGrip', 0.02, 0.28)}
-          {num('Weight Transfer', 'weightTransfer', 0.05, 0.42)}
-          {num('Traction Control', 'tractionControl', 0.05, 0.35)}
-          {num('Downforce', 'downforce', 0.05, 0.18)}
-
-          <h4 className="inspector-subhead">Suspension (feel)</h4>
-          {num('Body Roll', 'bodyRoll', 0.01, 0.05)}
-          {num('Body Pitch', 'bodyPitch', 0.01, 0.04)}
-          {num('Stiffness', 'suspensionStiffness', 0.02, 0.18)}
-          {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
-          <p className="field-hint">
-            Weight Transfer lowers grip under hard load; Traction Control trims throttle during wheelspin; Downforce plants fast cars.
-            Body Roll = lean into turns; Body Pitch = squat/dive under accel/brake; Stiffness = how fast it settles.
-            Wheel Radius sets how fast the wheels spin. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length} · tire marks: {v.tireMarkIds.length}.
-          </p>
-
-          <h4 className="inspector-subhead">Crash Physics</h4>
           <label className="field-row">
-            <span>Damage</span>
-            <input type="checkbox" checked={v.crashDamageEnabled ?? true} onChange={(event) => onChange({ crashDamageEnabled: event.target.checked })} />
+            <span>Physics Model</span>
+            <select
+              value={v.physicsModel ?? 'arcade'}
+              onChange={(event) => onChange({ physicsModel: event.target.value as 'arcade' | 'raycast' })}
+            >
+              <option value="arcade">Arcade (tire model)</option>
+              <option value="raycast">Raycast Sim (real physics)</option>
+            </select>
           </label>
-          {num('Damage Speed', 'crashDamageThreshold', 0.5, 9)}
-          {num('Rollover Speed', 'crashRolloverThreshold', 0.5, 16)}
-          {num('Rollover Force', 'crashRolloverStrength', 0.05, 0.42)}
-          {num('Visual Crush', 'crashDeformation', 0.05, 0.45)}
-          {num('Wheel Break', 'crashWheelBreakThreshold', 0.1, 1.6)}
-          <label className="field-row">
-            <span>Debris</span>
-            <input type="checkbox" checked={v.crashDebris ?? true} onChange={(event) => onChange({ crashDebris: event.target.checked })} />
-          </label>
-          <p className="field-hint">Hard fixed-object impacts add damage, kick the body with torque, allow real rollovers, bend wheels out of alignment, and can throw small debris.</p>
+
+          {v.physicsModel === 'raycast' ? (
+            <>
+              <p className="field-hint">
+                Real Rapier ray-cast vehicle: per-wheel suspension, weight transfer, tire friction and genuine
+                rollovers. Wire the 4 wheel CHILD objects into Wheels (front pair into Steered) — the sim builds its
+                own dynamic chassis, so the car needs no Rapier body of its own. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length}.
+              </p>
+              <h4 className="inspector-subhead">Engine &amp; Brakes</h4>
+              {num('Engine Force', 'engineForce', 50, 1800)}
+              {num('Brake Force', 'brakeForce', 50, 2200)}
+              {num('Handbrake Force', 'handbrakeForce', 50, 1400)}
+              {num('Brake Bias (front)', 'brakeBias', 0.05, 0.55)}
+              <label className="field-row">
+                <span>Drivetrain</span>
+                <select
+                  value={v.drivetrain ?? 'rwd'}
+                  onChange={(event) => onChange({ drivetrain: event.target.value as 'fwd' | 'rwd' | 'awd' })}
+                >
+                  <option value="fwd">Front-wheel drive</option>
+                  <option value="rwd">Rear-wheel drive</option>
+                  <option value="awd">All-wheel drive</option>
+                </select>
+              </label>
+              {num('Steer Angle', 'steerAngle', 0.02, 0.6)}
+
+              <h4 className="inspector-subhead">Chassis</h4>
+              {num('Mass (kg)', 'chassisMass', 25, 1100)}
+              {num('Center of Mass Y', 'centerOfMassY', 0.05, -0.4)}
+              {num('Linear Damping', 'linearDamping', 0.02, 0.15)}
+              {num('Angular Damping', 'angularDamping', 0.05, 0.6)}
+              <p className="field-hint">A lower (more negative) Center of Mass Y makes the car far harder to roll; heavier mass = more planted.</p>
+
+              <h4 className="inspector-subhead">Tires &amp; Suspension</h4>
+              {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
+              {num('Friction Slip (grip)', 'wheelFrictionSlip', 0.05, 1.4)}
+              {num('Side Friction', 'sideFrictionStiffness', 0.05, 0.9)}
+              {num('Susp. Rest Length', 'suspensionRestLength', 0.02, 0.35)}
+              {num('Susp. Stiffness', 'suspensionStiffnessSim', 1, 24)}
+              {num('Compression Damping', 'suspensionCompression', 0.02, 0.82)}
+              {num('Relax Damping', 'suspensionRelaxation', 0.02, 0.88)}
+              {num('Max Susp. Travel', 'maxSuspensionTravelSim', 0.02, 0.3)}
+              {num('Max Susp. Force', 'maxSuspensionForce', 500, 30000)}
+            </>
+          ) : (
+            <>
+              <h4 className="inspector-subhead">Drivetrain</h4>
+              {num('Max Speed', 'maxSpeed', 1, 26)}
+              {num('Max Reverse', 'maxReverseSpeed', 1, 9)}
+              {num('Acceleration', 'acceleration', 1, 16)}
+              {num('Braking', 'braking', 1, 34)}
+              {num('Drag', 'drag', 1, 9)}
+
+              <h4 className="inspector-subhead">Steering</h4>
+              {num('Steer Angle', 'steerAngle', 0.02, 0.55)}
+              {num('Turn Rate', 'turnRate', 0.05, 2)}
+              {num('Grip', 'gripFactor', 0.05, 0.9)}
+              {num('Handbrake Grip', 'handbrakeGrip', 0.02, 0.28)}
+              {num('Weight Transfer', 'weightTransfer', 0.05, 0.42)}
+              {num('Traction Control', 'tractionControl', 0.05, 0.35)}
+              {num('Downforce', 'downforce', 0.05, 0.18)}
+
+              <h4 className="inspector-subhead">Suspension (feel)</h4>
+              {num('Body Roll', 'bodyRoll', 0.01, 0.05)}
+              {num('Body Pitch', 'bodyPitch', 0.01, 0.04)}
+              {num('Stiffness', 'suspensionStiffness', 0.02, 0.18)}
+              {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
+              <p className="field-hint">
+                Weight Transfer lowers grip under hard load; Traction Control trims throttle during wheelspin; Downforce plants fast cars.
+                Body Roll = lean into turns; Body Pitch = squat/dive under accel/brake; Stiffness = how fast it settles.
+                Wheel Radius sets how fast the wheels spin. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length} · tire marks: {v.tireMarkIds.length}.
+              </p>
+
+              <h4 className="inspector-subhead">Crash Physics</h4>
+              <label className="field-row">
+                <span>Damage</span>
+                <input type="checkbox" checked={v.crashDamageEnabled ?? true} onChange={(event) => onChange({ crashDamageEnabled: event.target.checked })} />
+              </label>
+              {num('Damage Speed', 'crashDamageThreshold', 0.5, 9)}
+              {num('Rollover Speed', 'crashRolloverThreshold', 0.5, 16)}
+              {num('Rollover Force', 'crashRolloverStrength', 0.05, 0.42)}
+              {num('Visual Crush', 'crashDeformation', 0.05, 0.45)}
+              {num('Wheel Break', 'crashWheelBreakThreshold', 0.1, 1.6)}
+              <label className="field-row">
+                <span>Debris</span>
+                <input type="checkbox" checked={v.crashDebris ?? true} onChange={(event) => onChange({ crashDebris: event.target.checked })} />
+              </label>
+              <p className="field-hint">Hard fixed-object impacts add damage, kick the body with torque, allow real rollovers, bend wheels out of alignment, and can throw small debris.</p>
+            </>
+          )}
 
           <h4 className="inspector-subhead">Camera</h4>
           <label className="field-row">

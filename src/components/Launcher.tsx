@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { AlertTriangle, Car, Clapperboard, Crosshair, FolderOpen, Gamepad2, PersonStanding, Plus, Sparkles } from 'lucide-react';
+import { AlertTriangle, Car, Clapperboard, Crosshair, FolderOpen, Gamepad2, Gauge, PersonStanding, Plus, Sparkles } from 'lucide-react';
 import { isDesktop } from '../platform';
 import { useProjectStore } from '../store/projectStore';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
+import { createSimRacingTemplate } from '../project/simRacingTemplate';
 
 export function Launcher() {
   const [name, setName] = useState('My Game');
@@ -78,6 +79,15 @@ export function Launcher() {
         >
           <Car size={16} aria-hidden />
           <span>New Driving template</span>
+        </button>
+
+        <button
+          className="launcher-primary template-button"
+          disabled={busy || !name.trim()}
+          onClick={() => void createTemplateProject(createSimRacingTemplate)}
+        >
+          <Gauge size={16} aria-hidden />
+          <span>New Sim Racing template</span>
         </button>
 
         <button

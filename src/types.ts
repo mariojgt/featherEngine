@@ -1282,6 +1282,10 @@ export interface ViewModelComponent {
  */
 export interface VehicleComponent {
   enabled: boolean;
+  /** Which simulation drives the car. `'arcade'` (default/absent) = the hand-rolled tire model below.
+   *  `'raycast'` = a real Rapier `DynamicRayCastVehicleController` (per-wheel ray-cast suspension, weight
+   *  transfer, tire friction, genuine rollovers) — see the "--- Raycast sim ---" fields. */
+  physicsModel?: 'arcade' | 'raycast';
   // --- Drivetrain ---
   /** Top forward speed (units/sec). */
   maxSpeed: number;
@@ -1381,6 +1385,44 @@ export interface VehicleComponent {
   hornSoundId?: string;
   /** One-shot impact fired when the car collides with something while moving. */
   collisionSoundId?: string;
+  // --- Raycast sim (physicsModel === 'raycast' only) ---
+  // These map ~1:1 onto Rapier's DynamicRayCastVehicleController. Ignored in arcade mode. All optional so
+  // existing saved cars (no sim block) load unchanged; defaultVehicle() supplies tuned values.
+  /** Max engine force (newtons) applied at full throttle, split across the driven wheels. */
+  engineForce?: number;
+  /** Max braking force (newtons) at full brake, split across all wheels (biased by brakeBias). */
+  brakeForce?: number;
+  /** Extra braking force (newtons) the handbrake adds to the rear wheels (for handbrake turns). */
+  handbrakeForce?: number;
+  /** Which wheels receive engine force: front / rear / all-wheel drive. */
+  drivetrain?: 'fwd' | 'rwd' | 'awd';
+  /** Brake distribution, 0..1: 0 = all rear, 0.5 = even, 1 = all front. */
+  brakeBias?: number;
+  /** Chassis mass (kg) — heavier = more planted, slower to change direction. */
+  chassisMass?: number;
+  /** Center-of-mass offset on local Y (world units). Negative drops it below the chassis origin → far less
+   *  prone to rolling over (the single biggest stability lever for a sim car). */
+  centerOfMassY?: number;
+  /** Chassis linear damping (air/rolling drag). */
+  linearDamping?: number;
+  /** Chassis angular damping (settles spin/wobble). */
+  angularDamping?: number;
+  /** Tire longitudinal/forward friction coefficient — higher = more grip, less wheelspin. */
+  wheelFrictionSlip?: number;
+  /** Lateral grip stiffness — how hard tires resist sliding sideways (cornering bite). */
+  sideFrictionStiffness?: number;
+  /** Suspension rest length (world units) — natural extension of the spring with no load. */
+  suspensionRestLength?: number;
+  /** Suspension spring stiffness (real Rapier units; distinct from the arcade visual `suspensionStiffness`). */
+  suspensionStiffnessSim?: number;
+  /** Suspension damping while compressing. */
+  suspensionCompression?: number;
+  /** Suspension damping while relaxing/extending. */
+  suspensionRelaxation?: number;
+  /** Clamp on suspension force (newtons) so a hard landing can't fling the chassis. */
+  maxSuspensionForce?: number;
+  /** Max suspension travel (world units) before it bottoms out. */
+  maxSuspensionTravelSim?: number;
 }
 
 export interface SceneObject {
@@ -1819,6 +1861,9 @@ export interface CinematicLook {
   /** Light-leak / film-burn overlay, 0–1: warm drifting streaks of light bleeding across the frame
    *  (analog projector feel). 0/omitted = none. Rendered as a DOM overlay over the frame. */
   lightLeak?: number;
+  /** Lens dirt, 0–1: procedural smudges/specks on the "lens" that light up where bright neon/highlights
+   *  hit them (grime catching the bloom). 0/omitted = clean. Post pass on the cinematic camera. */
+  lensDirt?: number;
 }
 
 export interface CinematicSequence {

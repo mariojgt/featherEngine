@@ -32,6 +32,7 @@ import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
+import { createSimRacingTemplate } from '../project/simRacingTemplate';
 import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, lightingPresetIds, materialPresetIds } from '../three/presets';
@@ -1996,13 +1997,26 @@ export const engineTools = {
     },
   }),
 
+  create_sim_racing_template: tool({
+    description:
+      'Build a minimal SIM-RACING showcase for the REAL (raycast) vehicle physics: a Rapier DynamicRayCastVehicleController car with genuine per-wheel suspension, weight transfer, tire friction and true rollovers — on a flat asphalt pad with a launch ramp, a glowing curb, and a ring of barriers to feel the suspension, jumps and tip-overs you cannot get from the arcade model. The car is a low RWD hatchback (chassis cube + 4 wheel child cubes, front pair steered, physicsModel "raycast"). No scripts/HUD — just spawn and drive (W/S/A/D, Space handbrake, mouse-orbit follow cam). Use this when the user wants realistic/BeamNG-style/sim car physics. Returns the car objectId.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createSimRacingTemplate();
+      return id
+        ? `Built the Sim Racing template — raycast-sim car objectId ${id}. Press Play: W/S throttle+brake, A/D steer, Space handbrake. Real suspension compresses over the ramp, the car dives/squats and leans under braking/cornering, and a curb or hard hit can roll it. Tune it in the Inspector (Physics Model = Raycast Sim) or via set_vehicle.`
+        : `Couldn't build the sim racing template.`;
+    },
+  }),
+
   set_vehicle: tool({
     description:
-      'Add/configure the built-in VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn), the body should be a dynamic Rapier convex body (vertical/contact owned by physics), and handling uses a physical-feeling bicycle model: forward speed, lateral tire slip, weightTransfer, tractionControl, and downforce are separate tunables. Raise turnRate for snappier arcade turning; raise weightTransfer/lower handbrakeGrip for heavier drift-prone cars; raise tractionControl/downforce for planted racers. Dynamic cars can use crashDamageEnabled with crashDamageThreshold/crashRolloverThreshold/crashRolloverStrength/crashWheelBreakThreshold/crashDeformation/crashDebris so hard impacts accumulate damage, briefly kick the body into rollovers, bend wheels, squash the body, and throw small debris; after the crash window, assisted control resumes. For stable wheel visuals, use wheelObjectIds for spinning tire meshes and steeredWheelIds for front wheel anchor empties. tireMarkIds are world-space particle emitters toggled only while the tires slip/handbrake. Wire headlightIds/brakeLightIds to child objects and the engine/skid/brake/horn/collision audio asset ids. Pass enabled:false to remove control. All fields optional.',
+      'Add/configure the built-in VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn). TWO physics models via physicsModel: (1) "arcade" (default) = a hand-rolled tire/bicycle model with the tunables below (weightTransfer/tractionControl/downforce/grip etc.) on a dynamic Rapier convex body; raise turnRate for snappier turning, weightTransfer/lower handbrakeGrip for drift, tractionControl/downforce for planted racers; supports crashDamageEnabled (rollovers/wheel-break/crush/debris). (2) "raycast" = a REAL Rapier DynamicRayCastVehicleController sim (BeamNG/sim-racing style): genuine per-wheel ray-cast suspension, weight transfer, tire friction and true rollovers. In raycast mode the car needs NO Rapier body of its own (the sim builds a dynamic chassis from the object scale), the 4 wheel CHILD objects go in wheelObjectIds in [FL,FR,RL,RR] order, and the FRONT pair (the actual wheel ids, NOT anchors) go in steeredWheelIds. Tune raycast cars with engineForce/brakeForce/handbrakeForce/drivetrain/brakeBias, chassisMass/centerOfMassY (lower = harder to roll)/linearDamping/angularDamping, and wheelFrictionSlip/sideFrictionStiffness/suspensionRestLength/suspensionStiffnessSim/suspensionCompression/suspensionRelaxation/maxSuspensionForce/maxSuspensionTravelSim. tireMarkIds, headlightIds/brakeLightIds and the engine/skid/brake/horn/collision audio ids work in both. Pass enabled:false to remove control. All fields optional.',
     inputSchema: z.object({
       objectId: z.string(),
       enabled: z.boolean().optional(),
-      maxSpeed: z.number().optional().describe('Top forward speed (u/s). Default 34.'),
+      physicsModel: z.enum(['arcade', 'raycast']).optional().describe('"arcade" (default) tire model, or "raycast" for the real Rapier sim vehicle (per-wheel suspension/weight-transfer/rollovers). Use raycast for sim-racing / realistic cars.'),
+      maxSpeed: z.number().optional().describe('Top forward speed (u/s). Default 34. (arcade)'),
       maxReverseSpeed: z.number().optional().describe('Top reverse speed (u/s). Default 10.'),
       acceleration: z.number().optional().describe('Throttle accel (u/s²). Default 25.'),
       braking: z.number().optional().describe('Brake decel (u/s²). Default 42.'),
@@ -2024,9 +2038,27 @@ export const engineTools = {
       crashDeformation: z.number().optional().describe('Visual crush amount 0..1 from accumulated damage. Default 0.45.'),
       crashWheelBreakThreshold: z.number().optional().describe('Accumulated damage at which wheels start hanging crooked. Default 1.6.'),
       crashDebris: z.boolean().optional().describe('Throw small dynamic debris chunks on heavy impacts. Default true.'),
-      wheelRadius: z.number().optional().describe('Wheel radius (u) — sets spin rate. Default 0.4.'),
-      wheelObjectIds: z.array(z.string()).optional().describe('The 4 spinning tire mesh ids [FL,FR,RL,RR]. If using anchors, these are child meshes at [0,0,0].'),
-      steeredWheelIds: z.array(z.string()).optional().describe('Front steering ids. Prefer wheel-anchor empty ids; direct wheel ids still work as a fallback.'),
+      wheelRadius: z.number().optional().describe('Wheel radius (u) — sets spin rate (and the raycast wheel ray length). Default 0.4.'),
+      // --- Raycast sim tuning (physicsModel: "raycast" only) ---
+      engineForce: z.number().optional().describe('(raycast) Max engine force N at full throttle, split across driven wheels. Default 1800.'),
+      brakeForce: z.number().optional().describe('(raycast) Max service-brake force N, split by brakeBias. Default 2200.'),
+      handbrakeForce: z.number().optional().describe('(raycast) Extra rear-wheel brake force N from the handbrake. Default 1400.'),
+      drivetrain: z.enum(['fwd', 'rwd', 'awd']).optional().describe('(raycast) Which wheels get engine force. Default rwd.'),
+      brakeBias: z.number().optional().describe('(raycast) Brake split 0..1: 0 all-rear, 0.5 even, 1 all-front. Default 0.55.'),
+      chassisMass: z.number().optional().describe('(raycast) Chassis mass kg. Default 1100.'),
+      centerOfMassY: z.number().optional().describe('(raycast) Center-of-mass Y offset; negative = lower = far harder to roll. Default -0.4.'),
+      linearDamping: z.number().optional().describe('(raycast) Chassis linear damping. Default 0.15.'),
+      angularDamping: z.number().optional().describe('(raycast) Chassis angular damping. Default 0.6.'),
+      wheelFrictionSlip: z.number().optional().describe('(raycast) Forward tire grip; higher = less wheelspin. Default 1.4.'),
+      sideFrictionStiffness: z.number().optional().describe('(raycast) Lateral cornering grip. Default 0.9.'),
+      suspensionRestLength: z.number().optional().describe('(raycast) Suspension rest length (u). Default 0.35.'),
+      suspensionStiffnessSim: z.number().optional().describe('(raycast) Suspension spring stiffness. Default 24.'),
+      suspensionCompression: z.number().optional().describe('(raycast) Damping while compressing. Default 0.82.'),
+      suspensionRelaxation: z.number().optional().describe('(raycast) Damping while extending. Default 0.88.'),
+      maxSuspensionForce: z.number().optional().describe('(raycast) Suspension force clamp N. Default 30000.'),
+      maxSuspensionTravelSim: z.number().optional().describe('(raycast) Max suspension travel (u). Default 0.3.'),
+      wheelObjectIds: z.array(z.string()).optional().describe('The 4 spinning tire mesh ids [FL,FR,RL,RR]. Arcade: child meshes at [0,0,0]. Raycast: direct wheel CHILD objects of the car.'),
+      steeredWheelIds: z.array(z.string()).optional().describe('Front steering ids. Arcade: prefer wheel-anchor empty ids (direct wheel ids also work). Raycast: MUST be the front wheel ids that appear in wheelObjectIds.'),
       tireMarkIds: z.array(z.string()).optional().describe('Particle emitter object ids near tire contact patches; runtime emits only while slipping/handbraking.'),
       headlightIds: z.array(z.string()).optional(),
       brakeLightIds: z.array(z.string()).optional(),
@@ -2251,10 +2283,11 @@ export const engineTools = {
       anamorphic: z.number().min(0).max(1).optional().describe('Anamorphic bloom streak, 0–1: bright neon/highlights smear into a blue-tinted horizontal lens flare. The signature neon-cinema look.'),
       chromaticAberration: z.number().min(0).max(1).optional().describe('Chromatic aberration, 0–1: RGB color fringing toward the frame edges (lens / sci-fi look).'),
       lightLeak: z.number().min(0).max(1).optional().describe('Light-leak / film-burn overlay, 0–1: warm streaks of light drifting across the frame (analog projector feel).'),
+      lensDirt: z.number().min(0).max(1).optional().describe('Lens dirt, 0–1: procedural smudges/specks on the lens that light up where bright neon/highlights hit them (grime catching the bloom).'),
     }),
-    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur, anamorphic, chromaticAberration, lightLeak }) => {
+    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur, anamorphic, chromaticAberration, lightLeak, lensDirt }) => {
       if (!store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
-      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur, anamorphic, chromaticAberration, lightLeak });
+      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur, anamorphic, chromaticAberration, lightLeak, lensDirt });
       return `Updated film look for cinematic ${cinematicId}.`;
     },
   }),
