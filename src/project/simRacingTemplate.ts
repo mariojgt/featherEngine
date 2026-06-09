@@ -204,9 +204,14 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
   const carId = makeId('obj');
   const bodyAsset = await importAsset(CAR_BODY, 'model');
   const wheelAsset = await importAsset(CAR_WHEEL, 'model');
-  // Pre-import the OTHER bundled car bodies + wheel sets so they're ready to swap from the Inspector "Customize"
-  // pickers or the customize_vehicle AI tool ("change the car body to the van") — no manual import needed.
-  for (const f of ['CarModel1_body.glb', 'CarModel3_body.glb', 'Ban_body.glb', 'Furgon1_body.glb', 'CarModel1_wheel.glb', 'CarModel3_wheel.glb', 'Ban_wheel.glb', 'Furgon1_wheel.glb']) {
+  // Pre-import the OTHER bundled car bodies + wheel sets so they're ready to swap (Inspector Customize picker,
+  // the customize_vehicle AI tool, AND the in-game GARAGE). garageBodyIds is the ordered carousel for the garage.
+  const garageBodyIds: string[] = bodyAsset ? [bodyAsset.id] : [];
+  for (const f of ['CarModel1_body.glb', 'CarModel3_body.glb', 'Ban_body.glb', 'Furgon1_body.glb']) {
+    const a = await importAsset(f, 'model');
+    if (a) garageBodyIds.push(a.id);
+  }
+  for (const f of ['CarModel1_wheel.glb', 'CarModel3_wheel.glb', 'Ban_wheel.glb', 'Furgon1_wheel.glb']) {
     await importAsset(f, 'model');
   }
   const engineSound = await importAsset('engine_loop.mp3', 'audio', AUDIO_DIR);
@@ -412,25 +417,27 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     steeredWheelIds: steeredIds,
     tireMarkIds,
     boostFlameIds,
+    garageBodyIds,
+    deformable: true,
     headlightIds,
     brakeLightIds,
     // A fast, planted, grippy RWD car. Strong engine + low drag for a high top speed; low CoM so it leans
     // without flipping on flat ground, but a curb/ramp can still roll it.
-    engineForce: 5400,
-    brakeForce: 3400,
-    handbrakeForce: 1800,
-    drivetrain: 'rwd',
+    engineForce: 5600,
+    brakeForce: 3600,
+    handbrakeForce: 1700,
+    drivetrain: 'awd',
     chassisMass: 1000,
-    centerOfMassY: -0.55,
+    centerOfMassY: -0.6,
     linearDamping: 0.04,
-    angularDamping: 0.7,
-    wheelFrictionSlip: 2.1,
-    sideFrictionStiffness: 1.35,
+    angularDamping: 1.1,
+    wheelFrictionSlip: 2.3,
+    sideFrictionStiffness: 1.5,
     suspensionRestLength: 0.42,
-    suspensionStiffnessSim: 34,
-    suspensionCompression: 0.88,
-    suspensionRelaxation: 0.92,
-    maxSuspensionForce: 36000,
+    suspensionStiffnessSim: 36,
+    suspensionCompression: 0.9,
+    suspensionRelaxation: 0.94,
+    maxSuspensionForce: 38000,
     steerAngle: 0.55,
     engineSoundId: engineSound?.id,
     skidSoundId: skidSound?.id,
@@ -525,7 +532,7 @@ function buildSpeedMenu(): {
     style: { width: '130px', height: '5px', background: '#ffffff14', borderRadius: '3px', custom: { marginTop: '5px', border: '1px solid #ff8a3d55' } },
     bindings: [{ target: 'fill', expression: 'Nitro' }, { target: 'color', expression: `'#ff8a3d'` }], children: [],
   };
-  const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P  SETUP  ·  SHIFT  NITRO');
+  const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P SETUP · G GARAGE · SHIFT NITRO');
   const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [speedo, nitroBar, hint]);
 
   // Toggled setup chip (hidden until MenuOpen) with the −/+ stepper.
@@ -561,11 +568,66 @@ function buildBoostBlueprint(nitroVarId: string): { blueprint: ScriptBlueprint; 
   return { blueprint, graph };
 }
 
+/** In-game GARAGE: a top-center panel (toggle with G) whose ◀/▶ cycle a "CarBody" var (0..4); the vehicle's
+ *  garageBodyIds list maps that index to a body model the runtime swaps onto the chassis live. */
+function buildGarage(): { carBodyVar: ProjectVariable; garageOpenVar: ProjectVariable; blueprint: ScriptBlueprint; graph: ProjectGraph; hud: UIDocument } {
+  const now = Date.now();
+  const carBodyVar: ProjectVariable = { id: makeId('var'), name: 'CarBody', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const garageOpenVar: ProjectVariable = { id: makeId('var'), name: 'GarageOpen', type: 'boolean', defaultValue: false, persistent: false, createdAt: now };
+  const graphId = makeId('graph');
+  const bpId = makeId('bp');
+  const mk = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>) => graphNode(makeId('node'), label, cat, x, y, data);
+  const nextEv = mk('On Car Next', 'Events', 40, 40, { nodeKind: 'event.custom', eventName: 'car_next', hasInput: false });
+  const getN = mk('Get CarBody', 'Variables', 300, 170, { nodeKind: 'variable.get', variableId: carBodyVar.id, valueType: 'number', hasInput: false });
+  const addN = mk('+ 1', 'Math', 540, 170, { nodeKind: 'math.add', amount: 1, hasInput: false });
+  const clN = mk('Clamp 0..4', 'Math', 780, 170, { nodeKind: 'math.clamp', amount: 4, hasInput: false });
+  const setN = mk('Set CarBody', 'Variables', 540, 40, { nodeKind: 'variable.set', variableId: carBodyVar.id, valueType: 'number' });
+  const prevEv = mk('On Car Prev', 'Events', 40, 360, { nodeKind: 'event.custom', eventName: 'car_prev', hasInput: false });
+  const getP = mk('Get CarBody', 'Variables', 300, 490, { nodeKind: 'variable.get', variableId: carBodyVar.id, valueType: 'number', hasInput: false });
+  const addP = mk('- 1', 'Math', 540, 490, { nodeKind: 'math.add', amount: -1, hasInput: false });
+  const clP = mk('Clamp 0..4', 'Math', 780, 490, { nodeKind: 'math.clamp', amount: 4, hasInput: false });
+  const setP = mk('Set CarBody', 'Variables', 540, 360, { nodeKind: 'variable.set', variableId: carBodyVar.id, valueType: 'number' });
+  const keyG = mk('Key Down: G', 'Events', 40, 680, { nodeKind: 'event.keyDown', keyCode: 'KeyG', hasInput: false });
+  const cdG = mk('Debounce', 'Logic', 300, 680, { nodeKind: 'logic.cooldown', numberValue: 0.35 });
+  const getG = mk('Get GarageOpen', 'Variables', 300, 820, { nodeKind: 'variable.get', variableId: garageOpenVar.id, valueType: 'boolean', hasInput: false });
+  const notG = mk('Toggle', 'Logic', 560, 820, { nodeKind: 'logic.not', hasInput: false });
+  const setG = mk('Set GarageOpen', 'Variables', 560, 680, { nodeKind: 'variable.set', variableId: garageOpenVar.id, valueType: 'boolean' });
+  const graph: ProjectGraph = {
+    id: graphId, name: 'Garage',
+    nodes: [nextEv, getN, addN, clN, setN, prevEv, getP, addP, clP, setP, keyG, cdG, getG, notG, setG],
+    edges: [
+      execEdge(nextEv.id, setN.id), valueEdge(getN.id, addN.id, 'a'), valueEdge(addN.id, clN.id, 'value'), valueEdge(clN.id, setN.id, 'value'),
+      execEdge(prevEv.id, setP.id), valueEdge(getP.id, addP.id, 'a'), valueEdge(addP.id, clP.id, 'value'), valueEdge(clP.id, setP.id, 'value'),
+      execEdge(keyG.id, cdG.id), execEdge(cdG.id, setG.id), valueEdge(getG.id, notG.id, 'value'), valueEdge(notG.id, setG.id, 'value'),
+    ],
+  };
+  const blueprint: ScriptBlueprint = { id: bpId, name: 'Garage', description: 'G toggles the garage; ◀/▶ cycle CarBody (the body model the chassis shows).', graphId, color: '#9b7bff', createdAt: now };
+
+  const btnStyle: UIElement['style'] = {
+    width: '38px', height: '38px', background: '#9b7bff22', color: '#eadfff', fontSize: '18px', fontWeight: '800', borderRadius: '8px', textAlign: 'center',
+    custom: { border: '1px solid #9b7bff99', cursor: 'pointer', boxShadow: '0 0 10px #9b7bff44', lineHeight: '1' },
+  };
+  const title = uiText('Garage Title', { color: '#c8b6ff', fontSize: '10px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '4px', marginBottom: '4px' } }, 'GARAGE');
+  const name = uiText('Car Name', { color: '#ffffff', fontSize: '16px', fontWeight: '800', textAlign: 'center', custom: { minWidth: '110px', letterSpacing: '2px' } }, 'SPORT', [{ target: 'text', expression: `(CarBody == 0 ? 'SPORT' : CarBody == 1 ? 'COUPE' : CarBody == 2 ? 'MUSCLE' : CarBody == 3 ? 'BANGER' : 'VAN')` }]);
+  const prevB = uiButton('Car Prev', '◀', 'car_prev', btnStyle); prevB.className = 'sim-car-prev';
+  const nextB = uiButton('Car Next', '▶', 'car_next', btnStyle); nextB.className = 'sim-car-next';
+  const row = uiPanel('Garage Row', { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: '12px' }, [prevB, name, nextB]);
+  const panel = uiPanel('Garage Panel', {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(14,10,24,0.66)', borderRadius: '12px',
+    custom: { padding: '10px 18px', border: '1px solid #9b7bff66', backdropFilter: 'blur(6px)', boxShadow: '0 0 20px #9b7bff33' },
+  }, [title, row]);
+  panel.bindings = [{ target: 'visible', expression: 'GarageOpen' }];
+  const root = uiPanel('Garage Root', { position: 'absolute', left: '50%', display: 'flex', flexDirection: 'column', alignItems: 'center', custom: { top: '20px', transform: 'translateX(-50%)' } }, [panel]);
+  const hud: UIDocument = { id: makeId('ui'), name: 'Garage HUD', surface: 'screen', root, visibleOnStart: true, logicBlueprintId: bpId, createdAt: now };
+  return { carBodyVar, garageOpenVar, blueprint, graph, hud };
+}
+
 /** Build the SIM-RACING "Proving Ground" into the (already-created) active project. */
 export async function createSimRacingTemplate(): Promise<string> {
   const { carId, objects: carObjects } = await buildSimCar();
   const menu = buildSpeedMenu();
   const boost = buildBoostBlueprint(menu.nitroVar.id);
+  const garage = buildGarage();
   const objects: SceneObject[] = [];
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
@@ -676,6 +738,21 @@ export async function createSimRacingTemplate(): Promise<string> {
   // A big launch ramp off to the side for jumps.
   objects.push(staticBox('Big Ramp', [-26, 1.4, -30], [12, 0.6, 16], '#2a2e38', { rotation: [-0.42, 0, 0] }));
 
+  // Bowling stack — a pyramid of dynamic boxes to smash through (no fracture, just scatter).
+  [[-0.8, 0.4, -0.8], [0, 0.4, -0.8], [0.8, 0.4, -0.8], [-0.4, 1.2, -0.8], [0.4, 1.2, -0.8], [0, 2.0, -0.8]].forEach((p, i) => {
+    objects.push(prop(`Block ${i}`, [30 + p[0], p[1], 44 + p[2]], [0.7, 0.7, 0.7], '#caa23a', 6));
+  });
+  // Quarter-pipe wall to ride up / launch off.
+  objects.push(staticBox('Quarter Pipe', [-28, 3, 22], [14, 8, 2], '#343a46', { rotation: [0.6, 0, 0] }));
+  // Skid-pad cone ring (slalom / donut practice).
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    objects.push(prop(`Ring Cone ${i}`, [40 + Math.cos(a) * 12, 0.5, -36 + Math.sin(a) * 12], [0.5, 1, 0.5], '#ff7a18', 6, '#ff7a18'));
+  }
+  // A high platform reached by a ramp (a destination to aim for).
+  objects.push(staticBox('Platform Ramp', [44, 1.6, 8], [8, 0.6, 14], '#2a2e38', { rotation: [-0.5, 0, 0] }));
+  objects.push(staticBox('Platform', [44, 3.1, 20], [12, 0.6, 10], '#2b3340', { emissive: '#22e0ff', emissiveIntensity: 0.12 }));
+
   // A blueprint only RUNS if a scene object references it via `script` — add a holder so the HUD's −/+ button
   // events are actually handled (logicBlueprintId alone only wires the editor's UI Logic tab).
   objects.push({
@@ -685,12 +762,19 @@ export async function createSimRacingTemplate(): Promise<string> {
     transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
     script: { blueprintId: menu.blueprint.id, graphId: menu.graph.id, enabled: true },
   });
+  objects.push({
+    id: makeId('obj'),
+    name: 'Garage Logic',
+    kind: 'empty',
+    transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    script: { blueprintId: garage.blueprint.id, graphId: garage.graph.id, enabled: true },
+  });
 
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar],
-    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint],
-    graphs: [...draft.graphs, menu.graph, boost.graph],
-    uiDocuments: [...draft.uiDocuments, menu.hud],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, garage.carBodyVar, garage.garageOpenVar],
+    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint],
+    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph],
+    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId

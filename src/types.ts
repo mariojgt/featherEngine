@@ -1354,6 +1354,12 @@ export interface VehicleComponent {
   tireMarkIds: string[];
   /** Optional particle emitters (exhaust flames) switched ON while the "Nitro" var is active (boost VFX). */
   boostFlameIds?: string[];
+  /** In-game GARAGE: ordered list of body model asset ids. A "CarBody" project var picks which one the chassis
+   *  shows at runtime (the runtime swaps renderer.modelAssetId → the raycast chassis re-sizes to it). */
+  garageBodyIds?: string[];
+  /** Soft-body crash damage: when true, the body MESH plastically dents/crumples on hard impacts during Play
+   *  (the runtime records dents from collision direction + force; the model renderer displaces the vertices). */
+  deformable?: boolean;
   /** Headlight child objects (kind 'light') — informational; lit via the light component. */
   headlightIds: string[];
   /** Brake-light child objects — their emissive intensity is raised while braking/reversing. */

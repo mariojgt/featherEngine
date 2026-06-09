@@ -2016,6 +2016,7 @@ export const engineTools = {
       objectId: z.string(),
       enabled: z.boolean().optional(),
       physicsModel: z.enum(['arcade', 'raycast']).optional().describe('"arcade" (default) tire model, or "raycast" for the real Rapier sim vehicle (per-wheel suspension/weight-transfer/rollovers). Use raycast for sim-racing / realistic cars.'),
+      deformable: z.boolean().optional().describe('(raycast) Soft-body crash damage: the body MESH plastically dents/crumples on hard impacts during Play (direction + force based). Great for BeamNG-style destruction.'),
       maxSpeed: z.number().optional().describe('Top forward speed (u/s). Default 34. (arcade)'),
       maxReverseSpeed: z.number().optional().describe('Top reverse speed (u/s). Default 10.'),
       acceleration: z.number().optional().describe('Throttle accel (u/s²). Default 25.'),

@@ -281,6 +281,7 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
           geometryKey={renderer?.modelAssetId}
           material={modelMaterial}
           slotMaterials={slotMaterials}
+          deformObjectId={object.vehicle?.deformable ? object.id : undefined}
         />
       </Suspense>
     );

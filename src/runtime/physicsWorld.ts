@@ -274,8 +274,11 @@ export interface VehicleWheelState {
   rotation: number;
   /** Current suspension length (world units) — drives visible per-wheel bob. */
   suspension: number;
-  /** Suspension connection point local Y on the chassis — visual wheel local Y = connectionY − suspension. */
+  /** Suspension connection point in chassis-local space — the visual wheel anchor is placed here (X/Z) and
+   *  bobs in Y (connectionY − suspension), so it auto-fits whatever body is on the car. */
+  connectionX: number;
   connectionY: number;
+  connectionZ: number;
   /** Whether the wheel's ray found ground this frame. */
   inContact: boolean;
   /** Lateral (side) impulse magnitude — proxy for tire slip → skid audio / marks. */
@@ -342,8 +345,10 @@ interface VehicleEntry {
   controller: DynamicRayCastVehicleController;
   /** Wheel object ids, in addWheel order (= the component's `wheelObjectIds` order). */
   wheelIds: string[];
-  /** Each wheel's suspension connection point local Y (so the visual wheel = connectionY − suspensionLength). */
+  /** Each wheel's suspension connection point in chassis-local space (so the visual wheel auto-fits the body). */
+  connectionX: number[];
   connectionY: number[];
+  connectionZ: number[];
   /** Whether each wheel steers (resolved at build: the wheel — or its anchor parent — is in steeredWheelIds). */
   steered: boolean[];
   signature: string;
@@ -601,23 +606,41 @@ class PhysicsRuntime {
     const radius = Math.max(v.wheelRadius ?? 0.4, 0.05);
     const wheelIds = v.wheelObjectIds ?? [];
     const steeredSet = new Set(v.steeredWheelIds ?? []);
+    const hasModel = Boolean(mesh && mesh.vertices.length >= 3);
+    const bodyBottomY = cy - hy; // the body's lowest point — wheels rest here
+    const half = Math.max(1, wheelIds.length / 2);
+    const connectionX: number[] = [];
     const connectionY: number[] = [];
+    const connectionZ: number[] = [];
     const steered: boolean[] = [];
-    wheelIds.forEach((wid) => {
+    wheelIds.forEach((wid, i) => {
       const wheel = this.frameById.get(wid);
-      // The suspension CONNECTION point must be the wheel's position in CHASSIS-local space. Wheels are
-      // authored under a steering ANCHOR (anchor = child of car, wheel mesh = child of anchor at [0,0,0]); the
-      // anchor holds the corner position. So the connection = the anchor's position (+ the mesh's local offset).
-      // Falls back to the wheel's own position for a direct-child (no-anchor) setup.
       const anchor = wheel?.parentId && wheel.parentId !== object.id ? this.frameById.get(wheel.parentId) : undefined;
-      const ap = anchor?.transform.position ?? [0, 0, 0];
-      const lp = wheel?.transform.position ?? [0, 0, 0];
-      const cxw = (anchor ? ap[0] : 0) + lp[0];
-      const cyw = (anchor ? ap[1] : 0) + lp[1];
-      const czw = (anchor ? ap[2] : 0) + lp[2];
+      let cxw: number;
+      let cyw: number;
+      let czw: number;
+      if (hasModel) {
+        // AUTO-FIT: place each wheel at the BODY's bottom corner (derived from its bounding box) so the car
+        // sits on its wheels for ANY body — swapping the frame in the garage re-fits the wheels + suspension.
+        // [FL,FR,RL,RR] convention: even index = left, first half = front (+Z forward).
+        const left = i % 2 === 0;
+        const front = i < half;
+        cxw = cx + (left ? -1 : 1) * hx * 0.9;
+        czw = cz + (front ? 1 : -1) * hz * 0.74;
+        cyw = bodyBottomY; // rest wheel center at the body's bottom
+      } else {
+        // Primitive car (no model): honor the authored anchor/wheel child positions.
+        const ap = anchor?.transform.position ?? [0, 0, 0];
+        const lp = wheel?.transform.position ?? [0, 0, 0];
+        cxw = (anchor ? ap[0] : 0) + lp[0];
+        cyw = (anchor ? ap[1] : 0) + lp[1];
+        czw = (anchor ? ap[2] : 0) + lp[2];
+      }
       // The connection sits restLength ABOVE the rest wheel center so the ray casts down through it to ground.
       const connY = cyw + restLength;
+      connectionX.push(cxw);
       connectionY.push(connY);
+      connectionZ.push(czw);
       // Steered if the wheel id OR its anchor's id is listed in steeredWheelIds.
       steered.push(steeredSet.has(wid) || (anchor ? steeredSet.has(anchor.id) : false));
       controller.addWheel({ x: cxw, y: connY, z: czw }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, restLength, radius);
@@ -639,7 +662,9 @@ class PhysicsRuntime {
       collider,
       controller,
       wheelIds: [...wheelIds],
+      connectionX,
       connectionY,
+      connectionZ,
       steered,
       signature: vehicleSignature(object),
     });
@@ -1176,7 +1201,9 @@ class PhysicsRuntime {
         // Rapier maintains the accumulated wheel spin angle from wheel angular velocity.
         rotation: entry.controller.wheelRotation(i) ?? 0,
         suspension: entry.controller.wheelSuspensionLength(i) ?? (object?.vehicle?.suspensionRestLength ?? 0.35),
+        connectionX: entry.connectionX[i] ?? 0,
         connectionY: entry.connectionY[i] ?? 0,
+        connectionZ: entry.connectionZ[i] ?? 0,
         inContact: entry.controller.wheelIsInContact(i),
         sideImpulse: Math.abs(entry.controller.wheelSideImpulse(i) ?? 0),
       }));

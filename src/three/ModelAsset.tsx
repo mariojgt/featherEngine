@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
+import { useFrame } from '@react-three/fiber';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
@@ -7,6 +8,7 @@ import { useProjectStore } from '../store/projectStore';
 import { isDesktop } from '../platform';
 import type { AssetItem } from '../types';
 import { registerModelGeometry } from '../runtime/meshGeometryCache';
+import { getVehicleDents } from '../runtime/vehicleDamageBus';
 import { qualityProfile } from './quality';
 import { applyAnisotropy } from './textureQuality';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
@@ -167,6 +169,7 @@ export function ModelAsset({
   material,
   slotMaterials,
   geometryKey,
+  deformObjectId,
 }: {
   url: string;
   /** Whole-model override; the fallback for any slot without a per-slot material. */
@@ -174,6 +177,9 @@ export function ModelAsset({
   /** Per-material-slot overrides, indexed by the model's slot order (see useResolvedMaterialSlots). */
   slotMaterials?: (ModelMaterial | undefined)[];
   geometryKey?: string;
+  /** When set, this model is a DEFORMABLE vehicle body: its geometry is cloned and plastically crumpled from
+   *  the dents recorded for this object id (vehicleDamageBus). Soft-body crash damage. */
+  deformObjectId?: string;
 }) {
   const { scene } = useGLTF(url, DRACO_DECODER_PATH, true, extendGLTFLoader);
 
@@ -306,6 +312,74 @@ export function ModelAsset({
       textures.clear();
     };
   }, []);
+
+  // --- Soft-body crash damage -------------------------------------------------------------------------------
+  // For a deformable vehicle body, clone each mesh's geometry (so we never mutate the shared cache), keep a
+  // pristine copy of its vertices, and precompute the quaternion that maps a CAR-LOCAL impact direction into
+  // each mesh's own local space. The actual crumple is applied in useFrame whenever the dent set changes.
+  const deformMeshes = useMemo(() => {
+    if (!deformObjectId) return null;
+    clone.updateWorldMatrix(true, true);
+    const rootQuat = new THREE.Quaternion();
+    clone.getWorldQuaternion(rootQuat);
+    const out: { geom: THREE.BufferGeometry; orig: Float32Array; center: THREE.Vector3; toMesh: THREE.Quaternion }[] = [];
+    clone.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const geom = (mesh.geometry as THREE.BufferGeometry).clone();
+      mesh.geometry = geom;
+      const pos = geom.getAttribute('position') as THREE.BufferAttribute;
+      const orig = new Float32Array(pos.array as Float32Array);
+      geom.computeBoundingBox();
+      const center = geom.boundingBox!.getCenter(new THREE.Vector3());
+      const meshQuat = new THREE.Quaternion();
+      mesh.getWorldQuaternion(meshQuat);
+      // car-local dir → mesh-local dir  =  meshWorldQuat⁻¹ · rootWorldQuat
+      const toMesh = meshQuat.clone().invert().multiply(rootQuat);
+      out.push({ geom, orig, center, toMesh });
+    });
+    return out;
+  }, [clone, deformObjectId]);
+
+  const lastDentVersion = useRef(-1);
+  useFrame(() => {
+    if (!deformObjectId || !deformMeshes) return;
+    const state = getVehicleDents(deformObjectId);
+    const version = state?.version ?? 0;
+    if (version === lastDentVersion.current) return; // only re-deform when the damage actually changed
+    lastDentVersion.current = version;
+    const dents = state?.dents ?? [];
+    const v = new THREE.Vector3();
+    for (const m of deformMeshes) {
+      const pos = m.geom.getAttribute('position') as THREE.BufferAttribute;
+      const arr = pos.array as Float32Array;
+      arr.set(m.orig); // always crumple from the PRISTINE shape (no float drift across hits)
+      if (dents.length) {
+        const local = dents.map((d) => ({
+          dir: new THREE.Vector3(d.dir[0], d.dir[1], d.dir[2]).applyQuaternion(m.toMesh).normalize(),
+          depth: d.depth,
+        }));
+        for (let i = 0; i < arr.length; i += 3) {
+          v.set(arr[i] - m.center.x, arr[i + 1] - m.center.y, arr[i + 2] - m.center.z);
+          const r = v.length() || 1e-4;
+          const nx = v.x / r, ny = v.y / r, nz = v.z / r;
+          for (const d of local) {
+            const dot = nx * d.dir.x + ny * d.dir.y + nz * d.dir.z;
+            if (dot > 0.25) {
+              // Push the impacted face inward; outer panels (bigger r) crush a touch more for a crumpled look.
+              const push = d.depth * Math.pow((dot - 0.25) / 0.75, 1.5) * (0.55 + 0.45 * Math.min(1, r));
+              arr[i] -= d.dir.x * push;
+              arr[i + 1] -= d.dir.y * push;
+              arr[i + 2] -= d.dir.z * push;
+            }
+          }
+        }
+      }
+      pos.needsUpdate = true;
+      m.geom.computeVertexNormals();
+      m.geom.computeBoundingSphere();
+    }
+  });
 
   return <primitive object={clone} />;
 }

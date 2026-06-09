@@ -95,6 +95,7 @@ import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
+import { addVehicleDent, clearVehicleDents } from '../runtime/vehicleDamageBus';
 import { publishTransforms, clearTransformBuffer } from '../runtime/transformBuffer';
 import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSight } from '../runtime/aiPerception';
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
@@ -4977,6 +4978,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         startPhysics();
         clearTransformBuffer();
         clearPerception();
+        clearVehicleDents(); // start each run with a pristine (undented) car
         return {
           isPlaying,
           runtimeTime: 0,
@@ -5077,6 +5079,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       clearExplosions();
       clearTransformBuffer();
       clearPerception();
+      clearVehicleDents();
       return {
         isPlaying,
         runtimeTime: 0,
@@ -7226,13 +7229,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost));
           // DRIVE FEEL: ease the steering in/out instead of snapping (twitchy) AND reduce the lock at speed so
           // the car is stable on the straights but still turns sharply when slow. Smoothed per-car.
-          const refSpeed = 38;
+          const refSpeed = 42;
           const spd = Math.abs(toNumber(vehicleVars.__vehicleSpeed ?? 0));
-          const steerLimit = 1 - 0.5 * Math.min(1, spd / refSpeed);
+          // Keep more steering authority at speed (0.62 floor) so it stays fun/responsive, not numb.
+          const steerLimit = 1 - 0.38 * Math.min(1, spd / refSpeed);
           const targetSteer = steerRaw * steerLimit;
           const prevSteerState = toNumber(vehicleVars.__vehicleSteerState ?? 0);
-          // Return to center faster than you turn in (crisp recovery, smooth turn-in).
-          const steerRate = (steerRaw === 0 ? 6 : 3.5) * delta;
+          // Snappy turn-in, even snappier return to center (crisp, arcade-sim feel).
+          const steerRate = (steerRaw === 0 ? 9 : 6) * delta;
           const steerState = approach(prevSteerState, targetSteer, steerRate);
           vehicleVars.__vehicleSteerState = steerState;
           vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale };
@@ -8197,9 +8201,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
               // One-shots: raycast cars skip the arcade audio block, so fire them here.
               const pos = cs.chassis.position;
-              if (veh.collisionSoundId && Math.abs(cs.speed) > 4 && result.collisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id)) {
+              const carHit = Math.abs(cs.speed) > 4 && result.collisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id);
+              if (veh.collisionSoundId && carHit) {
                 const key = `${object.id}:hitSfx`;
                 if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.collisionSoundId, pos); nextCooldowns[key] = 0.4; }
+              }
+              // SOFT-BODY DAMAGE: record a plastic dent from the car's travel direction (car-local) on a hard hit.
+              if (veh.deformable && carHit) {
+                const key = `${object.id}:dent`;
+                if ((nextCooldowns[key] ?? 0) <= 0) {
+                  const depth = Math.min(0.4, Math.max(0.08, (Math.abs(cs.speed) - 3) * 0.05));
+                  addVehicleDent(object.id, [cs.lateralSpeed, -0.15, cs.speed], depth);
+                  nextCooldowns[key] = 0.22;
+                }
               }
               if (veh.brakeSoundId && input && input.throttle < -0.1 && cs.speed > 8) {
                 const key = `${object.id}:brakeSfx`;
@@ -8209,34 +8223,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 const key = `${object.id}:hornSfx`;
                 if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.hornSoundId, pos); nextCooldowns[key] = 0.5; }
               }
-              return { ...object, transform: { ...object.transform, position: cs.chassis.position, rotation: cs.chassis.rotation } };
+              // GARAGE: a "CarBody" var picks which body model the chassis shows; swap renderer.modelAssetId when
+              // it changes (the raycast chassis re-sizes to the new body via its signature rebuild).
+              let nextRenderer = object.renderer;
+              if (veh.garageBodyIds?.length && object.renderer) {
+                const cbVar = variableByName.get('CarBody');
+                if (cbVar) {
+                  const n = veh.garageBodyIds.length;
+                  const idx = ((Math.round(toNumber(nextVariableValues[cbVar.id] ?? cbVar.defaultValue)) % n) + n) % n;
+                  const want = veh.garageBodyIds[idx];
+                  if (want && object.renderer.modelAssetId !== want) nextRenderer = { ...object.renderer, modelAssetId: want };
+                }
+              }
+              return { ...object, renderer: nextRenderer, transform: { ...object.transform, position: cs.chassis.position, rotation: cs.chassis.rotation } };
             }
-            // Steering anchor: steer (Y) + suspension bob (Y position = connectionY − suspensionLength).
+            // Steering anchor: placed at the auto-fit connection point (X/Z), bobs in Y (connectionY − suspension),
+            // and steers (Y rot). Positioning X/Z here is what re-fits the wheels when the body model changes.
             const as = anchorStates.get(object.id);
             if (as) {
-              const pos = object.transform.position;
               return {
                 ...object,
                 transform: {
                   ...object.transform,
-                  position: [pos[0], as.connectionY - as.suspension, pos[2]] as Vector3Tuple,
+                  position: [as.connectionX, as.connectionY - as.suspension, as.connectionZ] as Vector3Tuple,
                   rotation: [0, as.steer, 0] as Vector3Tuple,
                 },
               };
             }
             const ws = wheelStates.get(object.id);
             if (ws) {
-              const pos = object.transform.position;
-              // Wheel mesh UNDER an anchor: only spin (X) — the anchor already applied steer + bob.
+              // Wheel mesh UNDER an anchor: only spin (X) — the anchor already applied position + steer + bob.
               if (anchorStates.has(object.parentId ?? '')) {
                 return { ...object, transform: { ...object.transform, rotation: [ws.rotation, 0, 0] as Vector3Tuple } };
               }
-              // Direct-child fallback (no anchor): combine spin + steer and bob here.
+              // Direct-child fallback (no anchor): position + combined spin/steer.
               return {
                 ...object,
                 transform: {
                   ...object.transform,
-                  position: [pos[0], ws.connectionY - ws.suspension, pos[2]] as Vector3Tuple,
+                  position: [ws.connectionX, ws.connectionY - ws.suspension, ws.connectionZ] as Vector3Tuple,
                   rotation: [ws.rotation, ws.steer, 0] as Vector3Tuple,
                 },
               };

@@ -964,6 +964,13 @@ function VehicleSection({
               {num('Relax Damping', 'suspensionRelaxation', 0.02, 0.88)}
               {num('Max Susp. Travel', 'maxSuspensionTravelSim', 0.02, 0.3)}
               {num('Max Susp. Force', 'maxSuspensionForce', 500, 30000)}
+
+              <h4 className="inspector-subhead">Crash Damage</h4>
+              <label className="field-row">
+                <span>Soft-body dents</span>
+                <input type="checkbox" checked={v.deformable ?? false} onChange={(event) => onChange({ deformable: event.target.checked })} />
+              </label>
+              <p className="field-hint">When on, the car body MESH plastically dents/crumples where it takes hard hits during Play (BeamNG-style).</p>
             </>
           ) : (
             <>
