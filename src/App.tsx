@@ -12,6 +12,7 @@ import { useEditorPrefs } from './store/editorPrefsStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 import { recordFrame } from './runtime/perfStats';
 import { PerfOverlay } from './components/PerfOverlay';
+import { initHistory } from './store/history';
 
 /**
  * Mirror the user's appearance preferences onto <html> so the global CSS variables
@@ -90,6 +91,11 @@ function RuntimePreviewLoop() {
 
 export default function App() {
   const hasProject = useProjectStore((state) => state.hasProject);
+
+  // Attach the undo/redo capture subscription once, for the lifetime of the editor.
+  useEffect(() => {
+    initHistory();
+  }, []);
 
   if (!hasProject) {
     return (

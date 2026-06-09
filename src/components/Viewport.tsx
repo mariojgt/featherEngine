@@ -5,11 +5,13 @@ import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { effectiveSelection, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
 import { recordRender } from '../runtime/perfStats';
 import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { FragmentMesh } from '../three/FragmentMesh';
+import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
@@ -1265,6 +1267,18 @@ export function ViewportPanel() {
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
 
       const key = event.key.toLowerCase();
+      // Undo / redo (Ctrl/Cmd+Z, Shift+Z or Ctrl+Y to redo).
+      if ((event.metaKey || event.ctrlKey) && key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && key === 'y') {
+        event.preventDefault();
+        redo();
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && key === 'd') {
         if (store.selectedObjectId) {
           event.preventDefault();
@@ -1606,6 +1620,7 @@ export function ViewportPanel() {
             >
               <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
               <CompressedTextureSupport />
+              <AudioListenerSync />
               <RenderStatsProbe />
               <LightBudget />
               <ShadowLOD />

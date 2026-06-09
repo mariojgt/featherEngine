@@ -11,6 +11,7 @@ import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
+import { AudioListenerSync } from '../three/AudioListenerSync';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
@@ -438,6 +439,7 @@ export function GameView() {
     >
       <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
       <CompressedTextureSupport />
+      <AudioListenerSync />
       <ShadowLOD />
       <MeshLOD />
       <GameScene />

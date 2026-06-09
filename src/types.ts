@@ -2,6 +2,10 @@ import type { Edge, Node } from '@xyflow/react';
 
 export type Vector3Tuple = [number, number, number];
 
+/** A one-shot sound queued during a runtime tick. `position` (world space) makes it spatial; omit for 2D
+ *  (UI/menu) sounds. Drained + cleared each frame by the audio runtime. */
+export type RuntimeSoundEvent = { assetId: string; position?: Vector3Tuple; volume?: number };
+
 export type SceneObjectKind = 'empty' | 'cube' | 'sphere' | 'capsule' | 'plane' | 'terrain' | 'light' | 'camera';
 
 export type RigidBodyType = 'dynamic' | 'fixed' | 'kinematic';

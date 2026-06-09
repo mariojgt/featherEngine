@@ -930,6 +930,19 @@ class PhysicsRuntime {
     }
   }
 
+  /** Live body counts for the profiler. `sleeping` bodies are at rest (Rapier deactivates them — near-zero CPU). */
+  getStats(): { bodies: number; sleeping: number; characters: number; terrain: number; joints: number } {
+    let sleeping = 0;
+    for (const entry of this.entries.values()) if (entry.body.isSleeping()) sleeping += 1;
+    return {
+      bodies: this.entries.size,
+      sleeping,
+      characters: this.charEntries.size,
+      terrain: this.terrainEntries.size,
+      joints: this.jointEntries.size,
+    };
+  }
+
   dispose() {
     this.events.free();
     this.world.free();

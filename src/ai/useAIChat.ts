@@ -230,6 +230,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
         : 'Updated post-processing';
     case 'rename_object':
       return `Renamed to "${String(input.name ?? '')}"`;
+    case 'undo':
+      return 'Undid edit';
+    case 'redo':
+      return 'Redid edit';
     case 'select_object':
       return 'Selected object';
     case 'delete_object':

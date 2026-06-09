@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { undo as undoHistory, redo as redoHistory } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
 import type {
   ColliderType,
@@ -3228,6 +3229,27 @@ export const engineTools = {
       if (!findObject(id)) return `No object with id ${id}.`;
       store().selectObject(id);
       return `Selected ${id}.`;
+    },
+  }),
+
+  undo: tool({
+    description:
+      'Undo the last scene edit (reverts object create/delete/move/property changes — a continuous drag counts as one step). Use this to reverse a change you or the user just made. Does nothing during Play.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      if (useEditorStore.getState().undoDepth <= 0) return 'Nothing to undo.';
+      undoHistory();
+      return 'Undid the last edit.';
+    },
+  }),
+
+  redo: tool({
+    description: 'Redo the edit that was just undone.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      if (useEditorStore.getState().redoDepth <= 0) return 'Nothing to redo.';
+      redoHistory();
+      return 'Redid the last edit.';
     },
   }),
 

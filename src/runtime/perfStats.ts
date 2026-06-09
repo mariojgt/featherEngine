@@ -47,6 +47,16 @@ class Ring {
     const copy = Array.from(this.buf.subarray(0, this.len)).sort((a, b) => a - b);
     return copy[Math.min(copy.length - 1, Math.floor(copy.length * 0.95))];
   }
+
+  /** Samples in chronological order (oldest → newest) for drawing a history graph. */
+  ordered(): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < this.len; i += 1) {
+      const idx = (this.head - this.len + i + SAMPLE_CAP * 2) % SAMPLE_CAP;
+      out.push(this.buf[idx]);
+    }
+    return out;
+  }
 }
 
 export interface RenderStats {
@@ -93,6 +103,9 @@ export const recordFrame = (frameMs: number, tickMs: number) => {
 export const recordRuntimeSection = (section: RuntimeSection, ms: number) => {
   sectionRings[section].push(ms);
 };
+
+/** Chronological frame-time samples (ms, oldest → newest) for the profiler's history graph. */
+export const getFrameHistory = (): number[] => frameRing.ordered();
 
 /** Called from inside the Canvas (after a render) with `gl.info` counters. */
 export const recordRender = (stats: RenderStats) => {

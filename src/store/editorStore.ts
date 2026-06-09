@@ -78,6 +78,7 @@ import {
   type TerrainBrushSettings,
   type TerrainMaterialLayer,
   type TerrainSculptOperation,
+  type RuntimeSoundEvent,
   type TransformComponent,
   type Vector3Tuple,
   type UIDocument,
@@ -319,6 +320,10 @@ interface EditorState {
   selectedObjectId: string;
   /** Full multi-selection set. Empty means "use selectedObjectId alone" (see effectiveSelection). */
   selectedObjectIds: string[];
+  /** Undo/redo stack depths, mirrored from the history module (src/store/history.ts) so the toolbar can
+   *  reflect canUndo/canRedo reactively. The snapshots themselves live outside the store. */
+  undoDepth: number;
+  redoDepth: number;
   /** In-memory copy/paste buffer: one entry per copied top-level object, holding its subtree. */
   objectClipboard: Array<{ rootId: string; objects: SceneObject[] }> | null;
   /** Editor-only active terrain brush. Durable sculpt/paint results live on each TerrainComponent. */
@@ -455,8 +460,9 @@ interface EditorState {
   /** HP lost per object during the previous tick (any source: Apply Damage node, projectile, melee, contact,
    *  explosion); drives event.receiveDamage (one-frame delayed, like collisions) + its Damage value-out. */
   runtimeDamageEvents: Record<string, number>;
-  /** Audio asset ids queued by action.playSound this frame; drained + cleared by the audio runtime. */
-  runtimeSoundQueue: string[];
+  /** Sounds queued this frame (asset id + optional world position for spatial playback); drained + cleared by
+   *  the audio runtime. */
+  runtimeSoundQueue: RuntimeSoundEvent[];
   /** Live audio state for the driven (camera-follow) vehicle, set each tick by the vehicle pass. Drives the
    *  looping engine (playbackRate ∝ rpm) + skid (volume ∝ slip) beds in useRuntimeAudio. Null when no car drives. */
   runtimeVehicleSound: { engineId?: string; skidId?: string; rpm: number; slip: number } | null;
@@ -1085,6 +1091,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeSceneId: starterSceneId,
   selectedObjectId: 'obj-player',
   selectedObjectIds: [],
+  undoDepth: 0,
+  redoDepth: 0,
   objectClipboard: null,
   terrainBrush: defaultTerrainBrush(),
   isDirty: false,
@@ -2530,7 +2538,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           playing && slot.equipAnimId
             ? { ...state.runtimeMontageRequests, [objectId]: { animationId: slot.equipAnimId, speed: 1 } }
             : state.runtimeMontageRequests,
-        runtimeSoundQueue: playing && inv.switchSoundId ? [...state.runtimeSoundQueue, inv.switchSoundId] : state.runtimeSoundQueue,
+        runtimeSoundQueue: playing && inv.switchSoundId ? [...state.runtimeSoundQueue, { assetId: inv.switchSoundId }] : state.runtimeSoundQueue,
         isDirty: playing ? state.isDirty : true,
       };
     });
@@ -5235,7 +5243,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const nextActorEvents: Record<string, string[]> = {};
       const incomingActorEvents = state.runtimeActorEvents ?? {};
       // Side effects collected while executing graphs this frame.
-      const sounds: string[] = [];
+      const sounds: RuntimeSoundEvent[] = [];
+      // Queue a sound; a world `position` makes it spatial (heard from where it happened), omitted = 2D.
+      const pushSound = (assetId: string, position?: Vector3Tuple) => sounds.push({ assetId, position });
       const spawned: SceneObject[] = [];
       const destroyedIds = new Set<string>();
       const prints: string[] = [];
@@ -6432,7 +6442,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             if (node.data.nodeKind === 'action.playSound' && node.data.assetId) {
-              sounds.push(node.data.assetId);
+              pushSound(node.data.assetId, [...object.transform.position] as Vector3Tuple);
             }
 
             if (node.data.nodeKind === 'action.playCinematic' && node.data.cinematicId) {
@@ -6560,7 +6570,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                     recordDamage(targetId, amount);
                     spawned.push(makeDamageNumber(targetObj.transform.position, amount));
                     if (targetId === playerId) hurt += 1;
-                    if (next > 0 && targetObj.character?.hurtSoundId) sounds.push(targetObj.character.hurtSoundId);
+                    if (next > 0 && targetObj.character?.hurtSoundId) pushSound(targetObj.character.hurtSoundId, [...targetObj.transform.position] as Vector3Tuple);
                     if (next <= 0) killTarget(targetObj, targetId, targetObj.transform.position);
                   }
                 } else {
@@ -6905,7 +6915,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                       const next = Math.max(0, cur - damage);
                       mutableObjectVars(hit.objectId, target.variables).health = next;
                       recordDamage(hit.objectId, cur - next);
-                      if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+                      if (next > 0 && target.character?.hurtSoundId) pushSound(target.character.hurtSoundId, [...target.transform.position] as Vector3Tuple);
                       if (next <= 0) killTarget(target, hit.objectId, hitPoint);
                       spawned.push(makeDamageNumber(hitPoint, damage));
                       if (object.id === playerId) hitMarker += 1;
@@ -7418,7 +7428,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (veh.brakeSoundId && Math.abs(prevSpeed) > 6 && (braking || handbrake) && accelSig < -8) {
           const key = `${object.id}:brakeSfx`;
           if ((nextCooldowns[key] ?? 0) <= 0) {
-            sounds.push(veh.brakeSoundId);
+            pushSound(veh.brakeSoundId, [...object.transform.position] as Vector3Tuple);
             nextCooldowns[key] = 0.9;
           }
         }
@@ -7426,7 +7436,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (veh.hornSoundId && drivingActive && currentKeys[veh.keyHorn]) {
           const key = `${object.id}:hornSfx`;
           if ((nextCooldowns[key] ?? 0) <= 0) {
-            sounds.push(veh.hornSoundId);
+            pushSound(veh.hornSoundId, [...object.transform.position] as Vector3Tuple);
             nextCooldowns[key] = 0.5;
           }
         }
@@ -7436,7 +7446,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (hit) {
             const key = `${object.id}:hitSfx`;
             if ((nextCooldowns[key] ?? 0) <= 0) {
-              sounds.push(veh.collisionSoundId);
+              pushSound(veh.collisionSoundId, [...object.transform.position] as Vector3Tuple);
               nextCooldowns[key] = 0.35;
             }
           }
@@ -7718,7 +7728,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         let attackRemaining = state.runtimeAttack[object.id] ?? 0;
         if (attackRemaining <= 0 && currentKeys[cc.keyAttack]) {
           attackRemaining = 0.18;
-          if (cc.attackSoundId) sounds.push(cc.attackSoundId); // swing/whoosh on the swing's first frame
+          if (cc.attackSoundId) pushSound(cc.attackSoundId, [...object.transform.position] as Vector3Tuple); // swing/whoosh on the swing's first frame
           meleeSwings.add(object.id); // melee hit-test this frame (skipped later if a ranged weapon is out)
         } else if (attackRemaining > 0) attackRemaining = Math.max(0, attackRemaining - delta);
         if (attackRemaining > 0) nextAttack[object.id] = attackRemaining;
@@ -7773,7 +7783,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (wantsJump && (grounded || coyote > 0) && verticalVelocity <= 0.0001) {
             verticalVelocity = cc.jumpStrength;
             coyote = 0; // consume the grace so one press = one jump
-            if (cc.jumpSoundId) sounds.push(cc.jumpSoundId);
+            if (cc.jumpSoundId) pushSound(cc.jumpSoundId, [...object.transform.position] as Vector3Tuple);
           }
           // Launch (jump pad / blast): a one-shot velocity from action.applyForce. Works mid-air and overrides a
           // fall, so the pad always pops you up; horizontal displaces the capsule (collide-and-slide via physics).
@@ -7815,7 +7825,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           let acc = (nextFootstep[object.id] ?? 0) + stepped;
           const stride = 2.1; // world units between footstep sounds
           if (grounded && acc >= stride) {
-            sounds.push(stepSound);
+            pushSound(stepSound, [position[0], position[1], position[2]]);
             acc = 0;
           }
           nextFootstep[object.id] = grounded ? acc : 0; // reset mid-air so landing doesn't dump a step
@@ -8114,7 +8124,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         spawned.push(makeSplashObject(obj.transform.position));
         newWaterImpacts.push({ id: nextWaterImpactId(), x: obj.transform.position[0], z: obj.transform.position[2] });
         const splashSound = obj.character?.swimSoundId;
-        if (splashSound) sounds.push(splashSound);
+        if (splashSound) pushSound(splashSound, [...obj.transform.position] as Vector3Tuple);
       }
 
       // Landing sound: a character that became grounded this frame after falling (downward velocity last
@@ -8123,8 +8133,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (runtimeGroundedSet.has(id)) continue;
         const wasFalling = (state.runtimeVelocities[id]?.[1] ?? 0) < -1;
         if (!wasFalling) continue;
-        const landSound = resolvedObjectById.get(id)?.character?.landSoundId;
-        if (landSound) sounds.push(landSound);
+        const landObj = resolvedObjectById.get(id);
+        const landSound = landObj?.character?.landSoundId;
+        if (landSound) pushSound(landSound, [...landObj!.transform.position] as Vector3Tuple);
       }
 
       // While a cinematic plays the player is locked in the cutscene (no input/camera control), so it must be
@@ -8147,7 +8158,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Detonate an explosive projectile (grenade/rocket) on impact OR when its fuse (life) runs out.
         const detonate = () => {
           explodeQueue.push({ pos: [...obj.transform.position] as Vector3Tuple, dmg: proj.blastDamage ?? 60, radius: proj.blastRadius ?? 4.5, force: 13 });
-          if (proj.blastSound) sounds.push(proj.blastSound);
+          if (proj.blastSound) pushSound(proj.blastSound, [...obj.transform.position] as Vector3Tuple);
         };
         if (proj.life <= 0) {
           if (proj.explosive) detonate();
@@ -8185,7 +8196,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           mutableObjectVars(other, target.variables).health = next;
           recordDamage(other, cur - next);
           // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
-          if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+          if (next > 0 && target.character?.hurtSoundId) pushSound(target.character.hurtSoundId, [...target.transform.position] as Vector3Tuple);
           if (next <= 0) killTarget(target, other, obj.transform.position); // explosive → blast; rig → ragdoll; destructible → shatter from hit; prop → despawn
           // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
           // hurt vignette if the LOCAL player was the one hit.
@@ -8247,7 +8258,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               mutableObjectVars(playerId, player.variables).health = Math.max(0, cur - dmg);
               recordDamage(playerId, Math.min(dmg, cur));
               hurt += 1;
-              if (player.character?.hurtSoundId) sounds.push(player.character.hurtSoundId);
+              if (player.character?.hurtSoundId) pushSound(player.character.hurtSoundId, [...player.transform.position] as Vector3Tuple);
               cd = 1;
             }
             if (cd > 0) nextEnemyCd[e.id] = cd;
@@ -8300,7 +8311,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           spawned.push(makeImpactObject(target.transform.position, '#ffd27f'));
           if (attackerId === playerId) hitMarker += 1;
           if (target.id === playerId) hurt += 1;
-          if (next > 0 && target.character?.hurtSoundId) sounds.push(target.character.hurtSoundId);
+          if (next > 0 && target.character?.hurtSoundId) pushSound(target.character.hurtSoundId, [...target.transform.position] as Vector3Tuple);
           if (next <= 0) killTarget(target, target.id); // explosive → blast; rig → ragdoll; prop → despawn
         }
       }
@@ -8400,11 +8411,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               lapTime = 0;
               nextIdx = maxIdx > 0 ? 1 : 0;
               const chime = assetByName.get('lap_complete.mp3');
-              if (chime) sounds.push(chime.id);
+              if (chime) pushSound(chime.id);
             } else {
               nextIdx = target.idx >= maxIdx ? 0 : target.idx + 1;
               const blip = assetByName.get('checkpoint.mp3');
-              if (blip) sounds.push(blip.id);
+              if (blip) pushSound(blip.id);
             }
           }
           nextVariableValues[nextIdxVar.id] = nextIdx;
@@ -8521,7 +8532,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             } else if (action.type === 'animation' && action.objectId && action.animationId) {
               animMontages[action.objectId] = { animationId: action.animationId, speed: action.animationSpeed ?? 1 };
             } else if (action.type === 'sound' && action.soundId) {
-              sounds.push(action.soundId);
+              pushSound(action.soundId); // cinematic beats are 2D (cutscene-wide, not world-positioned)
             } else if (action.type === 'event' && action.eventName) {
               cinematicEvents.push(action.eventName);
             }

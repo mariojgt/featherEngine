@@ -13,6 +13,7 @@ import {
 } from '../project/package';
 import type { AssetItem } from '../types';
 import { useEditorStore } from './editorStore';
+import { clearHistory } from './history';
 
 /** Caller-supplied package metadata; the rest (id, createdAt, engineVersion) is filled in. */
 export type PackageMetaInput = Partial<Omit<PackageMeta, 'engineVersion' | 'createdAt'>>;
@@ -122,6 +123,7 @@ export const useProjectStore = create<ProjectState>()(
             const opened = await platform.createProject(name, blankProject(name));
             if (!opened) return;
             useEditorStore.getState().loadProject(opened.project);
+            clearHistory(); // a fresh project starts with an empty undo history
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
           } catch (error) {
@@ -138,6 +140,7 @@ export const useProjectStore = create<ProjectState>()(
             const opened = await platform.openProject();
             if (!opened) return;
             useEditorStore.getState().loadProject(opened.project);
+            clearHistory(); // a fresh project starts with an empty undo history
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
           } catch (error) {
@@ -154,6 +157,7 @@ export const useProjectStore = create<ProjectState>()(
             const opened = await platform.openProjectAt(dir);
             if (!opened) return;
             useEditorStore.getState().loadProject(opened.project);
+            clearHistory(); // a fresh project starts with an empty undo history
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
           } catch (error) {

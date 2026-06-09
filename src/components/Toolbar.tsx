@@ -16,16 +16,19 @@ import {
   Pause,
   Play,
   Plus,
+  Redo2,
   Rocket,
   Save,
   Settings,
   Square,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { PREFAB_EDIT_SCENE_ID } from '../types';
 import { useEditorStore } from '../store/editorStore';
+import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
 import { useEditorPrefs } from '../store/editorPrefsStore';
 import { applyCustomLayout, applyWorkspaceLayout, resetWorkspaceLayout, WORKSPACE_LAYOUTS } from './Workspace';
@@ -271,6 +274,8 @@ export function Toolbar() {
   const deleteSelectedObject = useEditorStore((state) => state.deleteSelectedObject);
   const createPrefabFromObject = useEditorStore((state) => state.createPrefabFromObject);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const canUndo = useEditorStore((state) => state.undoDepth > 0);
+  const canRedo = useEditorStore((state) => state.redoDepth > 0);
   const editingPrefab = useEditorStore((state) => state.editingPrefabId !== null);
   const setPlaying = useEditorStore((state) => state.setPlaying);
   // Subscribe to the selected object's id+name as primitives, not the object itself: the runtime
@@ -320,6 +325,15 @@ export function Toolbar() {
         ))}
         <button className="icon-button" title="Create empty object" onClick={() => createObject('empty')}>
           <FilePlus2 size={17} aria-hidden />
+        </button>
+      </div>
+
+      <div className="tool-group" aria-label="History">
+        <button className="icon-button" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
+          <Undo2 size={17} aria-hidden />
+        </button>
+        <button className="icon-button" title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
+          <Redo2 size={17} aria-hidden />
         </button>
       </div>
 
