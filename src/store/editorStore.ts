@@ -8247,7 +8247,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 if (airtime > 0.45) { scoreAdd += Math.round(airtime * 140); stuntKind = 2; stuntTimer = 1.4; } // BIG AIR on landing
                 airtime = 0;
               }
-              if (grounded && Math.abs(cs.lateralSpeed) > 4 && Math.abs(cs.speed) > 6) {
+              const drifting = grounded && Math.abs(cs.lateralSpeed) > 4 && Math.abs(cs.speed) > 6;
+              if (drifting) {
                 scoreAdd += Math.abs(cs.lateralSpeed) * delta * 4; // drift points while sliding
                 if (stuntKind !== 2) { stuntKind = 1; stuntTimer = Math.max(stuntTimer, 0.25); }
               }
@@ -8259,6 +8260,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 if (scoreVar && scoreAdd > 0) nextVariableValues[scoreVar.id] = Math.round(toNumber(nextVariableValues[scoreVar.id] ?? scoreVar.defaultValue) + scoreAdd);
                 const stuntVar = variableByName.get('Stunt');
                 if (stuntVar) nextVariableValues[stuntVar.id] = stuntKind;
+                // BURNOUT-STYLE LOOP: drifting + big air CHARGE the Nitro bar (so style → boost → more style).
+                const nitroV = variableByName.get('Nitro');
+                if (nitroV && (drifting || stuntKind === 2)) {
+                  nextVariableValues[nitroV.id] = Math.min(1, toNumber(nextVariableValues[nitroV.id] ?? nitroV.defaultValue) + delta * 0.35);
+                }
               }
               // GARAGE: a "CarBody" var picks which body model the chassis shows; swap renderer.modelAssetId when
               // it changes (the raycast chassis re-sizes to the new body via its signature rebuild).

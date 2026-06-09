@@ -1116,6 +1116,7 @@ class PhysicsRuntime {
       const drivetrain = v.drivetrain ?? 'rwd';
       const brakeBias = Math.min(Math.max(v.brakeBias ?? 0.55, 0), 1);
       const steerAngle = v.steerAngle ?? 0.6;
+      const baseSideFriction = v.sideFrictionStiffness ?? 0.9;
       // Throttle drives forward; braking input (negative throttle while rolling forward) becomes brake, not reverse,
       // so a sim car decelerates with the brakes. A near-stopped car uses reverse engine force to back up.
       const speed = entry.controller.currentVehicleSpeed();
@@ -1133,6 +1134,11 @@ class PhysicsRuntime {
         if (input.handbrake && !isFront) brake += handbrakeForce;
         entry.controller.setWheelBrake(i, brake);
         entry.controller.setWheelSteering(i, entry.steered[i] ? input.steer * steerAngle : 0);
+        // ARCADE DRIFT (NFS/Burnout feel): holding the handbrake breaks the REAR tires loose (low side grip) so
+        // the back end slides into a controllable power-slide; the front keeps grip so you still steer the drift.
+        // Releasing snaps grip back and the slide recovers. Front wheels always keep full grip.
+        const sideFric = input.handbrake && !isFront ? baseSideFriction * 0.16 : baseSideFriction;
+        entry.controller.setWheelSideFrictionStiffness(i, sideFric);
       }
     }
 
