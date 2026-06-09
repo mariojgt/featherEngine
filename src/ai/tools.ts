@@ -2097,6 +2097,31 @@ export const engineTools = {
     },
   }),
 
+  customize_vehicle: tool({
+    description:
+      "Re-skin a vehicle in one call — the easy way to change a car's FRAME (body model), WHEELS, and PAINT without touching each object. bodyModelAssetId swaps the chassis mesh; wheelModelAssetId swaps EVERY wheel mesh (all of the vehicle's wheelObjectIds at once); paintColor recolours the body (hex, applied with overrideMaterial so it tints even an imported model). For a raycast-sim car the chassis collision box auto-resizes to the new body's bounds. All args optional — pass only what you want to change. Use list_assets to find model asset ids (e.g. the bundled CarModel1/2/3/Ban/Furgon bodies + their wheels).",
+    inputSchema: z.object({
+      objectId: z.string().describe('The vehicle (chassis) object id.'),
+      bodyModelAssetId: z.string().optional().describe('Model asset id for the new car BODY/frame.'),
+      wheelModelAssetId: z.string().optional().describe('Model asset id applied to ALL wheel meshes.'),
+      paintColor: z.string().optional().describe('Body paint hex colour, e.g. "#e23b2e" (applied with overrideMaterial).'),
+    }),
+    execute: async ({ objectId, bodyModelAssetId, wheelModelAssetId, paintColor }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (!object.vehicle?.enabled) return `${object.name} has no vehicle controller — add one with set_vehicle first.`;
+      const changed: string[] = [];
+      if (bodyModelAssetId) { store().updateRenderer(objectId, { modelAssetId: bodyModelAssetId }); changed.push('body'); }
+      if (paintColor) { store().updateRenderer(objectId, { color: paintColor, overrideMaterial: true }); changed.push('paint'); }
+      if (wheelModelAssetId) {
+        for (const wid of object.vehicle.wheelObjectIds ?? []) store().updateRenderer(wid, { modelAssetId: wheelModelAssetId });
+        changed.push(`${object.vehicle.wheelObjectIds?.length ?? 0} wheels`);
+      }
+      if (!changed.length) return 'Nothing to change — pass bodyModelAssetId, wheelModelAssetId and/or paintColor.';
+      return `Customised ${object.name}: updated ${changed.join(', ')}.`;
+    },
+  }),
+
   create_cinematic: tool({
     description:
       'Create a Film Mode cinematic timeline in the active scene. Use this for AI-authored cutscenes: camera cuts, object transform tracks, temporary spawns, animation montages, sounds, custom events, visibility, and fades.',

@@ -843,15 +843,31 @@ function KeyBinding({ label, value, onChange }: { label: string; value: string; 
 }
 
 function VehicleSection({
+  objectId,
   vehicle,
   onToggle,
   onChange,
 }: {
+  objectId: string;
   vehicle: VehicleComponent | undefined;
   onToggle: () => void;
   onChange: (patch: Partial<VehicleComponent>) => void;
 }) {
   const v = vehicle ? { ...defaultVehicle(), ...vehicle } : undefined;
+  // Car customization: swap the body/wheel models + paint without hand-editing each child object.
+  const assets = useEditorStore((state) => state.assets);
+  const updateRenderer = useEditorStore((state) => state.updateRenderer);
+  const modelAssets = useMemo(() => assets.filter((a) => a.type === 'model'), [assets]);
+  const objects = useEditorStore(selectActiveObjects);
+  const carObject = objects.find((o) => o.id === objectId);
+  const bodyModelId = carObject?.renderer?.modelAssetId ?? '';
+  const firstWheelId = v?.wheelObjectIds?.[0];
+  const wheelModelId = objects.find((o) => o.id === firstWheelId)?.renderer?.modelAssetId ?? '';
+  const swapBody = (assetId: string) => updateRenderer(objectId, { modelAssetId: assetId || undefined });
+  const swapWheels = (assetId: string) => {
+    for (const wid of v?.wheelObjectIds ?? []) updateRenderer(wid, { modelAssetId: assetId || undefined });
+  };
+  const paintBody = (color: string) => updateRenderer(objectId, { color, overrideMaterial: true });
   const num = (label: string, key: keyof VehicleComponent, step = 0.1, fallback = 0) => (
     <label className="field-row">
       <span>{label}</span>
@@ -873,6 +889,27 @@ function VehicleSection({
       {v && v.enabled && (
         <>
           <p className="field-hint">W accelerate · S brake/reverse · A/D steer · Space handbrake (drift) · H horn · Mouse look.</p>
+
+          <h4 className="inspector-subhead">Customize (frame · wheels · paint)</h4>
+          <label className="field-row">
+            <span>Body</span>
+            <select value={bodyModelId} onChange={(event) => swapBody(event.target.value)}>
+              <option value="">— primitive —</option>
+              {modelAssets.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Wheels</span>
+            <select value={wheelModelId} onChange={(event) => swapWheels(event.target.value)} disabled={!v.wheelObjectIds.length}>
+              <option value="">— primitive —</option>
+              {modelAssets.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Paint</span>
+            <input type="color" value={(carObject?.renderer?.color ?? '#d24b3c')} onChange={(event) => paintBody(event.target.value)} />
+          </label>
+          <p className="field-hint">Swap the car frame + wheels to any imported model, and pick a paint colour — applies live. (The AI can do this too: "change the car body to the truck".)</p>
 
           <label className="field-row">
             <span>Physics Model</span>
@@ -2344,6 +2381,7 @@ export function InspectorPanel() {
           />
 
           <VehicleSection
+            objectId={object.id}
             vehicle={object.vehicle}
             onToggle={() => setVehicleEnabled(object.id)}
             onChange={(patch) => updateVehicle(object.id, patch)}

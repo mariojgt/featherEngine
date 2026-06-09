@@ -138,6 +138,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.enabled === false ? 'Removed character control' : 'Set character controller';
     case 'set_vehicle':
       return input.enabled === false ? 'Removed vehicle control' : 'Set vehicle controller';
+    case 'customize_vehicle':
+      return 'Customized vehicle';
     case 'create_driving_template':
       return 'Built driving template';
     case 'create_sim_racing_template':

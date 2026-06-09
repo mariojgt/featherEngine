@@ -1083,6 +1083,13 @@ class PhysicsRuntime {
         // Exclude sensors + the chassis's own collider from the wheel suspension rays (else a wheel ray can hit
         // the chassis box and the suspension never finds the ground).
         entry.controller.updateVehicle(h, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, (collider) => collider.handle !== entry.collider.handle);
+        // DOWNFORCE (drive feel): a downward push that grows with speed² keeps a fast car planted into the road
+        // and through turns instead of getting light/skittish at the top end. Only while the wheels are gripping.
+        const spd = entry.controller.currentVehicleSpeed();
+        if (Math.abs(spd) > 4) {
+          const grounded = entry.wheelIds.some((_, i) => entry.controller.wheelIsInContact(i));
+          if (grounded) entry.body.applyImpulse({ x: 0, y: -1.1 * spd * spd * h, z: 0 }, true);
+        }
       }
       this.world.step(this.events);
       remaining -= h;

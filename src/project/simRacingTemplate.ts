@@ -66,6 +66,20 @@ const fixedBox = (friction = 1): PhysicsComponent => ({
   angularDamping: 0.05,
 });
 
+const triggerBox = (): PhysicsComponent => ({
+  enabled: true,
+  bodyType: 'fixed',
+  collider: 'box',
+  isTrigger: true,
+  collisionLayer: 0,
+  collisionMask: 0xffff,
+  mass: 1,
+  gravityScale: 0,
+  friction: 0.5,
+  linearDamping: 0,
+  angularDamping: 0.05,
+});
+
 const dynamicBox = (mass: number): PhysicsComponent => ({
   enabled: true,
   bodyType: 'dynamic',
@@ -190,6 +204,11 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
   const carId = makeId('obj');
   const bodyAsset = await importAsset(CAR_BODY, 'model');
   const wheelAsset = await importAsset(CAR_WHEEL, 'model');
+  // Pre-import the OTHER bundled car bodies + wheel sets so they're ready to swap from the Inspector "Customize"
+  // pickers or the customize_vehicle AI tool ("change the car body to the van") — no manual import needed.
+  for (const f of ['CarModel1_body.glb', 'CarModel3_body.glb', 'Ban_body.glb', 'Furgon1_body.glb', 'CarModel1_wheel.glb', 'CarModel3_wheel.glb', 'Ban_wheel.glb', 'Furgon1_wheel.glb']) {
+    await importAsset(f, 'model');
+  }
   const engineSound = await importAsset('engine_loop.mp3', 'audio', AUDIO_DIR);
   const skidSound = await importAsset('skid_loop.mp3', 'audio', AUDIO_DIR);
   const brakeSound = await importAsset('brake.mp3', 'audio', AUDIO_DIR);
@@ -290,6 +309,7 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
   const vfx: SceneObject[] = [];
   const headlightIds: string[] = [];
   const brakeLightIds: string[] = [];
+  const boostFlameIds: string[] = [];
 
   // Exhaust puffs out the back (worldSpace so they trail behind the car).
   ([-1, 1] as const).forEach((s, i) => {
@@ -304,6 +324,25 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
         coneAngle: 18, speed: 0.7, speedJitter: 0.5, direction: [0, 0.4, -1] as Vector3Tuple, gravity: -0.2, drag: 1.4,
         lifetime: 1.1, lifetimeJitter: 0.4, startSize: 0.18, endSize: 0.7, startColor: '#3a3a3a', endColor: '#101010',
         startOpacity: 0.5, endOpacity: 0, worldSpace: true, blend: 'normal', light: false,
+      },
+    });
+  });
+
+  // Nitro exhaust FLAMES (off until the Nitro var burns — toggled by the runtime). Bright additive jets.
+  ([-1, 1] as const).forEach((s, i) => {
+    const id = makeId('obj');
+    boostFlameIds.push(id);
+    vfx.push({
+      id,
+      name: `Boost Flame ${i ? 'R' : 'L'}`,
+      kind: 'empty',
+      parentId: carId,
+      transform: { position: [cx + s * halfW * 0.35, min[1] + 0.18, min[2] * 1.02], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      particles: {
+        enabled: false, looping: true, rate: 90, burst: 0, maxParticles: 260, shape: 'disc', shapeRadius: 0.05,
+        coneAngle: 12, speed: 5, speedJitter: 0.4, direction: [0, 0.15, -1] as Vector3Tuple, gravity: 0, drag: 2.4,
+        lifetime: 0.32, lifetimeJitter: 0.3, startSize: 0.34, endSize: 0.05, startColor: '#9fe8ff', endColor: '#ff7a18',
+        startOpacity: 0.95, endOpacity: 0, worldSpace: false, blend: 'additive', light: true,
       },
     });
   });
@@ -372,23 +411,26 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     wheelObjectIds: wheelIds,
     steeredWheelIds: steeredIds,
     tireMarkIds,
+    boostFlameIds,
     headlightIds,
     brakeLightIds,
     // A fast, planted, grippy RWD car. Strong engine + low drag for a high top speed; low CoM so it leans
     // without flipping on flat ground, but a curb/ramp can still roll it.
-    engineForce: 5200,
-    brakeForce: 3200,
+    engineForce: 5400,
+    brakeForce: 3400,
     handbrakeForce: 1800,
     drivetrain: 'rwd',
     chassisMass: 1000,
-    centerOfMassY: -0.5,
-    linearDamping: 0.05,
-    wheelFrictionSlip: 1.7,
-    sideFrictionStiffness: 1.0,
-    suspensionRestLength: 0.45,
-    suspensionStiffnessSim: 30,
-    suspensionCompression: 0.85,
-    suspensionRelaxation: 0.9,
+    centerOfMassY: -0.55,
+    linearDamping: 0.04,
+    angularDamping: 0.7,
+    wheelFrictionSlip: 2.1,
+    sideFrictionStiffness: 1.35,
+    suspensionRestLength: 0.42,
+    suspensionStiffnessSim: 34,
+    suspensionCompression: 0.88,
+    suspensionRelaxation: 0.92,
+    maxSuspensionForce: 36000,
     steerAngle: 0.55,
     engineSoundId: engineSound?.id,
     skidSoundId: skidSound?.id,
@@ -420,6 +462,7 @@ function buildSpeedMenu(): {
   speedLevelVar: ProjectVariable;
   speedVar: ProjectVariable;
   menuOpenVar: ProjectVariable;
+  nitroVar: ProjectVariable;
   blueprint: ScriptBlueprint;
   graph: ProjectGraph;
   hud: UIDocument;
@@ -429,6 +472,8 @@ function buildSpeedMenu(): {
   const speedVar: ProjectVariable = { id: makeId('var'), name: 'Speed', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   // The speed-setup panel is hidden until this is flipped true (by pressing P) — its `visible` binding reads it.
   const menuOpenVar: ProjectVariable = { id: makeId('var'), name: 'MenuOpen', type: 'boolean', defaultValue: false, persistent: false, createdAt: now };
+  // Hold SHIFT → Nitro = 1 (sustained while held); the raycast pass surges engine force and drains it back to 0.
+  const nitroVar: ProjectVariable = { id: makeId('var'), name: 'Nitro', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
 
   const graphId = makeId('graph');
   const bpId = makeId('bp');
@@ -451,14 +496,18 @@ function buildSpeedMenu(): {
   const getO = mk('Get MenuOpen', 'Variables', 300, 820, { nodeKind: 'variable.get', variableId: menuOpenVar.id, valueType: 'boolean', hasInput: false });
   const notO = mk('Toggle', 'Logic', 560, 820, { nodeKind: 'logic.not', hasInput: false });
   const setO = mk('Set MenuOpen', 'Variables', 560, 680, { nodeKind: 'variable.set', variableId: menuOpenVar.id, valueType: 'boolean' });
+  // Nitro: hold Shift → Nitro = 1 (level-triggered keyDown sustains it while held; the runtime drains it on release).
+  const shiftEv = mk('Key Down: Shift', 'Events', 40, 980, { nodeKind: 'event.keyDown', keyCode: 'ShiftLeft', hasInput: false });
+  const setN = mk('Set Nitro = 1', 'Variables', 300, 980, { nodeKind: 'variable.set', variableId: nitroVar.id, valueType: 'number', numberValue: 1 });
   const graph: ProjectGraph = {
     id: graphId,
     name: 'Speed Menu',
-    nodes: [upEv, getU, addU, clU, setU, dnEv, getD, addD, clD, setD, keyP, cdO, getO, notO, setO],
+    nodes: [upEv, getU, addU, clU, setU, dnEv, getD, addD, clD, setD, keyP, cdO, getO, notO, setO, shiftEv, setN],
     edges: [
       execEdge(upEv.id, setU.id), valueEdge(getU.id, addU.id, 'a'), valueEdge(addU.id, clU.id, 'value'), valueEdge(clU.id, setU.id, 'value'),
       execEdge(dnEv.id, setD.id), valueEdge(getD.id, addD.id, 'a'), valueEdge(addD.id, clD.id, 'value'), valueEdge(clD.id, setD.id, 'value'),
       execEdge(keyP.id, cdO.id), execEdge(cdO.id, setO.id), valueEdge(getO.id, notO.id, 'value'), valueEdge(notO.id, setO.id, 'value'),
+      execEdge(shiftEv.id, setN.id),
     ],
   };
   const blueprint: ScriptBlueprint = { id: bpId, name: 'Speed Menu', description: 'P toggles the speed setup; its −/+ buttons adjust SpeedLevel (engine power), clamped 0..6.', graphId, color: '#22e0ff', createdAt: now };
@@ -470,8 +519,14 @@ function buildSpeedMenu(): {
   };
   // Always-on speedometer chip (small, bottom-center) + a hint to press P.
   const speedo = uiText('Speedometer', { color: '#ffffff', fontSize: '22px', fontWeight: '800', textAlign: 'center', custom: { lineHeight: '1', fontVariantNumeric: 'tabular-nums', textShadow: '0 0 10px #22e0ff88' } }, '0 KM/H', [{ target: 'text', expression: `Speed + ' KM/H'` }]);
-  const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '3px', marginTop: '2px' } }, 'PRESS  P  ·  TOP SPEED');
-  const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [speedo, hint]);
+  // Nitro charge bar (fill bound to the Nitro var, orange).
+  const nitroBar: UIElement = {
+    id: makeId('uiel'), kind: 'bar', name: 'Nitro Bar',
+    style: { width: '130px', height: '5px', background: '#ffffff14', borderRadius: '3px', custom: { marginTop: '5px', border: '1px solid #ff8a3d55' } },
+    bindings: [{ target: 'fill', expression: 'Nitro' }, { target: 'color', expression: `'#ff8a3d'` }], children: [],
+  };
+  const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P  SETUP  ·  SHIFT  NITRO');
+  const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [speedo, nitroBar, hint]);
 
   // Toggled setup chip (hidden until MenuOpen) with the −/+ stepper.
   const level = uiText('Speed Level', { color: '#ffeacc', fontSize: '13px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '1px', minWidth: '120px' } }, 'TOP SPEED  Lv 2', [{ target: 'text', expression: `'TOP SPEED  Lv ' + SpeedLevel` }]);
@@ -492,12 +547,25 @@ function buildSpeedMenu(): {
   }, [setupChip, speedoChip]);
   const hud: UIDocument = { id: makeId('ui'), name: 'Sim Racing HUD', surface: 'screen', root, visibleOnStart: true, logicBlueprintId: bpId, createdAt: now };
 
-  return { speedLevelVar, speedVar, menuOpenVar, blueprint, graph, hud };
+  return { speedLevelVar, speedVar, menuOpenVar, nitroVar, blueprint, graph, hud };
+}
+
+/** A shared blueprint for boost pads: drive over the trigger → Nitro = 1 (the runtime surges + drains it). */
+function buildBoostBlueprint(nitroVarId: string): { blueprint: ScriptBlueprint; graph: ProjectGraph } {
+  const graphId = makeId('graph');
+  const bpId = makeId('bp');
+  const ev = graphNode(makeId('node'), 'On Drive Over', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', hasInput: false });
+  const set = graphNode(makeId('node'), 'Set Nitro = 1', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: nitroVarId, valueType: 'number', numberValue: 1 });
+  const graph: ProjectGraph = { id: graphId, name: 'Boost Pad', nodes: [ev, set], edges: [execEdge(ev.id, set.id)] };
+  const blueprint: ScriptBlueprint = { id: bpId, name: 'Boost Pad', description: 'Drive over → Nitro = 1 (engine-force surge that drains over ~2s).', graphId, color: '#ff8a3d', createdAt: Date.now() };
+  return { blueprint, graph };
 }
 
 /** Build the SIM-RACING "Proving Ground" into the (already-created) active project. */
 export async function createSimRacingTemplate(): Promise<string> {
   const { carId, objects: carObjects } = await buildSimCar();
+  const menu = buildSpeedMenu();
+  const boost = buildBoostBlueprint(menu.nitroVar.id);
   const objects: SceneObject[] = [];
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
@@ -581,7 +649,33 @@ export async function createSimRacingTemplate(): Promise<string> {
     objects.push(staticBox(`Grandstand ${i}`, [-40, 1 + i * 1.2, -10 + i * 1.6], [3, 1, 40], '#2b2f38', { roughness: 0.95 }));
   }
 
-  const menu = buildSpeedMenu();
+  // --- SANDBOX TOYS ------------------------------------------------------------------------------------------
+  // Boost pads: glowing trigger pads that fire the Boost Pad blueprint (drive over → Nitro = 1).
+  ([[-3, 4], [3, 36], [0, -12]] as Array<[number, number]>).forEach(([px, pz], i) => {
+    objects.push({
+      id: makeId('obj'),
+      name: `Boost Pad ${i}`,
+      kind: 'cube',
+      transform: { position: [px, 0.06, pz], rotation: [0, 0, 0], scale: [4, 0.12, 4] },
+      renderer: renderer('#ff8a3d', { materialOverrides: { emissiveColor: '#ff8a3d', emissiveIntensity: 1.4 } }),
+      physics: triggerBox(),
+      script: { blueprintId: boost.blueprint.id, graphId: boost.graph.id, enabled: true },
+    });
+  });
+  // Knock-around balls — dynamic spheres to bat across the pad (great with the CCD chassis).
+  for (let i = 0; i < 7; i++) {
+    objects.push({
+      id: makeId('obj'),
+      name: `Ball ${i}`,
+      kind: 'sphere',
+      transform: { position: [-18 + i * 6, 0.7, 40], rotation: [0, 0, 0], scale: [1.4, 1.4, 1.4] },
+      renderer: renderer(['#e23b2e', '#2ecf6f', '#3f7fae', '#f2c53d'][i % 4], { roughness: 0.5, metalness: 0.1 }),
+      physics: { ...dynamicBox(5), collider: 'sphere' },
+    });
+  }
+  // A big launch ramp off to the side for jumps.
+  objects.push(staticBox('Big Ramp', [-26, 1.4, -30], [12, 0.6, 16], '#2a2e38', { rotation: [-0.42, 0, 0] }));
+
   // A blueprint only RUNS if a scene object references it via `script` — add a holder so the HUD's −/+ button
   // events are actually handled (logicBlueprintId alone only wires the editor's UI Logic tab).
   objects.push({
@@ -593,9 +687,9 @@ export async function createSimRacingTemplate(): Promise<string> {
   });
 
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar],
-    blueprints: [...draft.blueprints, menu.blueprint],
-    graphs: [...draft.graphs, menu.graph],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar],
+    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint],
+    graphs: [...draft.graphs, menu.graph, boost.graph],
     uiDocuments: [...draft.uiDocuments, menu.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>

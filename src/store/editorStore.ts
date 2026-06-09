@@ -7212,8 +7212,30 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // In-game speed menu: a "SpeedLevel" project var scales engine force at runtime (buttons inc/dec it).
           const slVar = variableByName.get('SpeedLevel');
           const speedLevel = slVar ? toNumber(nextVariableValues[slVar.id] ?? slVar.defaultValue) : 0;
-          const engineScale = Math.max(0.5, Math.min(3, 1 + 0.18 * speedLevel));
-          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerRaw, handbrake, engineScale };
+          // NITRO boost (opt-in, same hook as arcade): a "Nitro" var set to 1 (e.g. a Shift key / boost pad)
+          // gives a big engine-force surge that drains back to 0 over ~2s. Bind a HUD bar's fill to "Nitro".
+          const nitroVar = variableByName.get('Nitro');
+          let nitroBoost = 1;
+          if (nitroVar) {
+            const nitro = Math.max(0, Math.min(1, toNumber(nextVariableValues[nitroVar.id] ?? nitroVar.defaultValue)));
+            if (nitro > 0) {
+              nitroBoost = 1 + 1.4 * nitro;
+              nextVariableValues[nitroVar.id] = Math.max(0, nitro - delta * 0.5);
+            }
+          }
+          const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost));
+          // DRIVE FEEL: ease the steering in/out instead of snapping (twitchy) AND reduce the lock at speed so
+          // the car is stable on the straights but still turns sharply when slow. Smoothed per-car.
+          const refSpeed = 38;
+          const spd = Math.abs(toNumber(vehicleVars.__vehicleSpeed ?? 0));
+          const steerLimit = 1 - 0.5 * Math.min(1, spd / refSpeed);
+          const targetSteer = steerRaw * steerLimit;
+          const prevSteerState = toNumber(vehicleVars.__vehicleSteerState ?? 0);
+          // Return to center faster than you turn in (crisp recovery, smooth turn-in).
+          const steerRate = (steerRaw === 0 ? 6 : 3.5) * delta;
+          const steerState = approach(prevSteerState, targetSteer, steerRate);
+          vehicleVars.__vehicleSteerState = steerState;
+          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale };
           continue;
         }
         const braking = throttleSig < -0.05;
@@ -8167,6 +8189,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 };
               }
               for (const id of veh.tireMarkIds) sendParticleCommand(id, { type: 'emit', on: leavingMarks });
+              // Nitro exhaust flames: on while the Nitro var is burning.
+              if (veh.boostFlameIds?.length) {
+                const nv = variableByName.get('Nitro');
+                const flaming = nv ? toNumber(nextVariableValues[nv.id] ?? nv.defaultValue) > 0.05 : false;
+                for (const id of veh.boostFlameIds) sendParticleCommand(id, { type: 'emit', on: flaming });
+              }
               // One-shots: raycast cars skip the arcade audio block, so fire them here.
               const pos = cs.chassis.position;
               if (veh.collisionSoundId && Math.abs(cs.speed) > 4 && result.collisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id)) {

@@ -1352,6 +1352,8 @@ export interface VehicleComponent {
   steeredWheelIds: string[];
   /** Optional world-space particle emitters enabled by tire slip / handbrake for dust or fading tire marks. */
   tireMarkIds: string[];
+  /** Optional particle emitters (exhaust flames) switched ON while the "Nitro" var is active (boost VFX). */
+  boostFlameIds?: string[];
   /** Headlight child objects (kind 'light') — informational; lit via the light component. */
   headlightIds: string[];
   /** Brake-light child objects — their emissive intensity is raised while braking/reversing. */
