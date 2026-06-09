@@ -470,6 +470,7 @@ function buildSpeedMenu(): {
   speedVar: ProjectVariable;
   menuOpenVar: ProjectVariable;
   nitroVar: ProjectVariable;
+  damageVar: ProjectVariable;
   blueprint: ScriptBlueprint;
   graph: ProjectGraph;
   hud: UIDocument;
@@ -481,6 +482,8 @@ function buildSpeedMenu(): {
   const menuOpenVar: ProjectVariable = { id: makeId('var'), name: 'MenuOpen', type: 'boolean', defaultValue: false, persistent: false, createdAt: now };
   // Hold SHIFT → Nitro = 1 (sustained while held); the raycast pass surges engine force and drains it back to 0.
   const nitroVar: ProjectVariable = { id: makeId('var'), name: 'Nitro', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  // Bumped by the runtime on each crash dent — drives a HUD readout (and confirms damage detection is firing).
+  const damageVar: ProjectVariable = { id: makeId('var'), name: 'Damage', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
 
   const graphId = makeId('graph');
   const bpId = makeId('bp');
@@ -532,8 +535,10 @@ function buildSpeedMenu(): {
     style: { width: '130px', height: '5px', background: '#ffffff14', borderRadius: '3px', custom: { marginTop: '5px', border: '1px solid #ff8a3d55' } },
     bindings: [{ target: 'fill', expression: 'Nitro' }, { target: 'color', expression: `'#ff8a3d'` }], children: [],
   };
+  // Damage readout — rises on each crash dent (confirms damage is registering + a wreck meter).
+  const damage = uiText('Damage', { color: '#ff7a6a', fontSize: '10px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'DMG 0', [{ target: 'text', expression: `'DMG ' + Damage` }]);
   const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P SETUP · G GARAGE · SHIFT NITRO');
-  const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [speedo, nitroBar, hint]);
+  const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [speedo, nitroBar, damage, hint]);
 
   // Toggled setup chip (hidden until MenuOpen) with the −/+ stepper.
   const level = uiText('Speed Level', { color: '#ffeacc', fontSize: '13px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '1px', minWidth: '120px' } }, 'TOP SPEED  Lv 2', [{ target: 'text', expression: `'TOP SPEED  Lv ' + SpeedLevel` }]);
@@ -554,7 +559,7 @@ function buildSpeedMenu(): {
   }, [setupChip, speedoChip]);
   const hud: UIDocument = { id: makeId('ui'), name: 'Sim Racing HUD', surface: 'screen', root, visibleOnStart: true, logicBlueprintId: bpId, createdAt: now };
 
-  return { speedLevelVar, speedVar, menuOpenVar, nitroVar, blueprint, graph, hud };
+  return { speedLevelVar, speedVar, menuOpenVar, nitroVar, damageVar, blueprint, graph, hud };
 }
 
 /** A shared blueprint for boost pads: drive over the trigger → Nitro = 1 (the runtime surges + drains it). */
@@ -622,12 +627,35 @@ function buildGarage(): { carBodyVar: ProjectVariable; garageOpenVar: ProjectVar
   return { carBodyVar, garageOpenVar, blueprint, graph, hud };
 }
 
+/** Score HUD: a top-right SCORE readout + a center DRIFT!/BIG AIR! banner. The runtime writes the Score/Stunt
+ *  vars (drift slip + airtime), so no blueprint is needed — the HUD just binds to them. */
+function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable; hud: UIDocument } {
+  const now = Date.now();
+  const scoreVar: ProjectVariable = { id: makeId('var'), name: 'Score', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const stuntVar: ProjectVariable = { id: makeId('var'), name: 'Stunt', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const score = uiText('Score', {
+    color: '#ffe08a', fontSize: '22px', fontWeight: '800', textAlign: 'right',
+    position: 'absolute', custom: { top: '16px', right: '18px', letterSpacing: '1px', textShadow: '0 0 12px #ffb24788', fontVariantNumeric: 'tabular-nums' },
+  }, 'SCORE 0', [{ target: 'text', expression: `'SCORE ' + Score` }]);
+  const banner = uiText('Stunt Banner', {
+    color: '#ff8a3d', fontSize: '40px', fontWeight: '800', textAlign: 'center',
+    position: 'absolute', custom: { top: '74px', left: '50%', transform: 'translateX(-50%)', letterSpacing: '4px', textShadow: '0 0 18px #ff8a3daa' },
+  }, '', [
+    { target: 'text', expression: `(Stunt == 1 ? 'DRIFT!' : Stunt == 2 ? 'BIG AIR!' : '')` },
+    { target: 'visible', expression: `Stunt > 0` },
+  ]);
+  const root = uiPanel('Score Root', { width: '100%', height: '100%', position: 'relative' }, [score, banner]);
+  const hud: UIDocument = { id: makeId('ui'), name: 'Score HUD', surface: 'screen', root, visibleOnStart: true, createdAt: now };
+  return { scoreVar, stuntVar, hud };
+}
+
 /** Build the SIM-RACING "Proving Ground" into the (already-created) active project. */
 export async function createSimRacingTemplate(): Promise<string> {
   const { carId, objects: carObjects } = await buildSimCar();
   const menu = buildSpeedMenu();
   const boost = buildBoostBlueprint(menu.nitroVar.id);
   const garage = buildGarage();
+  const score = buildScoreHud();
   const objects: SceneObject[] = [];
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
@@ -771,10 +799,10 @@ export async function createSimRacingTemplate(): Promise<string> {
   });
 
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, garage.carBodyVar, garage.garageOpenVar],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar],
     blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint],
     graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph],
-    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud],
+    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId

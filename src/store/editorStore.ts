@@ -5294,7 +5294,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const setVelocities: Record<string, Vector3Tuple> = {};
       // Driver input for raycast-sim cars (physicsModel === 'raycast'), resolved in the vehicle pass and handed
       // to the Rapier vehicle controller inside physics.frame. Keyed by chassis object id.
-      const vehicleInputs: Record<string, { throttle: number; steer: number; handbrake: boolean; engineScale?: number }> = {};
+      const vehicleInputs: Record<string, { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean }> = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
       // Self writes still mutate the owner's tuples directly; these are merged into the object list before
       // the character/physics passes, so a teleported kinematic/fixed body follows (physics.frame reads the
@@ -7227,6 +7227,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
           const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost));
+          // Respawn on a fresh R press (edge): teleports the car back to spawn (auto flip-recover is automatic).
+          const respawn = Boolean(currentKeys['KeyR'] && !previousKeys['KeyR']);
           // DRIVE FEEL: ease the steering in/out instead of snapping (twitchy) AND reduce the lock at speed so
           // the car is stable on the straights but still turns sharply when slow. Smoothed per-car.
           const refSpeed = 42;
@@ -7239,7 +7241,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const steerRate = (steerRaw === 0 ? 9 : 6) * delta;
           const steerState = approach(prevSteerState, targetSteer, steerRate);
           vehicleVars.__vehicleSteerState = steerState;
-          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale };
+          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn };
           continue;
         }
         const braking = throttleSig < -0.05;
@@ -8201,18 +8203,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
               // One-shots: raycast cars skip the arcade audio block, so fire them here.
               const pos = cs.chassis.position;
-              const carHit = Math.abs(cs.speed) > 4 && result.collisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id);
-              if (veh.collisionSoundId && carHit) {
+              const inCollision = result.collisions.some((c) => c.objectId === object.id || c.otherObjectId === object.id);
+              if (veh.collisionSoundId && Math.abs(cs.speed) > 4 && inCollision) {
                 const key = `${object.id}:hitSfx`;
                 if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.collisionSoundId, pos); nextCooldowns[key] = 0.4; }
               }
-              // SOFT-BODY DAMAGE: record a plastic dent from the car's travel direction (car-local) on a hard hit.
-              if (veh.deformable && carHit) {
+              // SOFT-BODY DAMAGE: a hard hit is EITHER a fresh contact while moving, OR a sudden speed drop (the
+              // car slammed into something) — the decel test catches impacts even when the contact-event timing
+              // is missed. Record a plastic dent from the car's travel direction (car-local). Bumps "Damage".
+              const decel = Math.abs(prevSpeed) - Math.abs(cs.speed);
+              const hardImpact = (inCollision && Math.abs(cs.speed) > 2) || decel > 4;
+              if (veh.deformable && hardImpact) {
                 const key = `${object.id}:dent`;
                 if ((nextCooldowns[key] ?? 0) <= 0) {
-                  const depth = Math.min(0.4, Math.max(0.08, (Math.abs(cs.speed) - 3) * 0.05));
-                  addVehicleDent(object.id, [cs.lateralSpeed, -0.15, cs.speed], depth);
-                  nextCooldowns[key] = 0.22;
+                  // Impact severity = whichever is bigger: the decel spike or current speed.
+                  const sev = Math.max(decel, Math.abs(prevSpeed));
+                  const depth = Math.min(0.55, Math.max(0.14, sev * 0.05));
+                  // Direction: prefer the pre-impact travel direction (prevSpeed) so the leading face crumples.
+                  addVehicleDent(object.id, [cs.lateralSpeed, -0.15, prevSpeed !== 0 ? prevSpeed : cs.speed], depth);
+                  nextCooldowns[key] = 0.15;
+                  const dmgVar = variableByName.get('Damage');
+                  if (dmgVar) nextVariableValues[dmgVar.id] = toNumber(nextVariableValues[dmgVar.id] ?? dmgVar.defaultValue) + 1;
                 }
               }
               if (veh.brakeSoundId && input && input.throttle < -0.1 && cs.speed > 8) {
@@ -8222,6 +8233,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if (veh.hornSoundId && currentKeys[veh.keyHorn]) {
                 const key = `${object.id}:hornSfx`;
                 if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.hornSoundId, pos); nextCooldowns[key] = 0.5; }
+              }
+              // DRIFT & STUNT SCORING: points for sliding (lateral slip) + big air (airtime), into a "Score" var;
+              // a "Stunt" var (0/1/2) flashes a DRIFT!/BIG AIR! banner. Engine-level — any car with those vars scores.
+              const grounded = cs.wheels.some((w) => w.inContact);
+              let airtime = toNumber(mutable.__airtime ?? 0);
+              let stuntTimer = Math.max(0, toNumber(mutable.__stuntTimer ?? 0) - delta);
+              let stuntKind = stuntTimer > 0 ? toNumber(mutable.__stuntKind ?? 0) : 0;
+              let scoreAdd = 0;
+              if (!grounded) {
+                if (Math.abs(cs.speed) > 2) airtime += delta;
+              } else {
+                if (airtime > 0.45) { scoreAdd += Math.round(airtime * 140); stuntKind = 2; stuntTimer = 1.4; } // BIG AIR on landing
+                airtime = 0;
+              }
+              if (grounded && Math.abs(cs.lateralSpeed) > 4 && Math.abs(cs.speed) > 6) {
+                scoreAdd += Math.abs(cs.lateralSpeed) * delta * 4; // drift points while sliding
+                if (stuntKind !== 2) { stuntKind = 1; stuntTimer = Math.max(stuntTimer, 0.25); }
+              }
+              mutable.__airtime = airtime;
+              mutable.__stuntTimer = stuntTimer;
+              mutable.__stuntKind = stuntKind;
+              if (object.id === vehiclePlayerId) {
+                const scoreVar = variableByName.get('Score');
+                if (scoreVar && scoreAdd > 0) nextVariableValues[scoreVar.id] = Math.round(toNumber(nextVariableValues[scoreVar.id] ?? scoreVar.defaultValue) + scoreAdd);
+                const stuntVar = variableByName.get('Stunt');
+                if (stuntVar) nextVariableValues[stuntVar.id] = stuntKind;
               }
               // GARAGE: a "CarBody" var picks which body model the chassis shows; swap renderer.modelAssetId when
               // it changes (the raycast chassis re-sizes to the new body via its signature rebuild).

@@ -23,7 +23,7 @@ const byId = new Map<string, DentState>();
 
 const MAX_DENTS = 10;
 const MERGE_DOT = 0.82; // impacts within this cone deepen the same dent instead of adding a new one
-const MAX_DEPTH = 0.55; // per-dent crush cap (world units), so a wall-spammed car doesn't implode
+const MAX_DEPTH = 0.85; // per-dent crush cap (world units), so a wall-spammed car doesn't implode
 
 /** Current dents for a vehicle (or undefined). The renderer reads `version` to decide when to re-deform. */
 export function getVehicleDents(id: string): DentState | undefined {

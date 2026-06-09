@@ -346,12 +346,15 @@ export function ModelAsset({
     if (!deformObjectId || !deformMeshes) return;
     const state = getVehicleDents(deformObjectId);
     const version = state?.version ?? 0;
-    if (version === lastDentVersion.current) return; // only re-deform when the damage actually changed
-    lastDentVersion.current = version;
     const dents = state?.dents ?? [];
+    // Recompute when the damage changes; while dented, keep re-applying every frame (cheap for one body, and
+    // robust against any version/remount edge case). Only skip when undamaged AND nothing changed.
+    if (version === lastDentVersion.current && dents.length === 0) return;
+    lastDentVersion.current = version;
     const v = new THREE.Vector3();
     for (const m of deformMeshes) {
-      const pos = m.geom.getAttribute('position') as THREE.BufferAttribute;
+      const pos = m.geom.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!pos) continue;
       const arr = pos.array as Float32Array;
       arr.set(m.orig); // always crumple from the PRISTINE shape (no float drift across hits)
       if (dents.length) {
@@ -365,9 +368,9 @@ export function ModelAsset({
           const nx = v.x / r, ny = v.y / r, nz = v.z / r;
           for (const d of local) {
             const dot = nx * d.dir.x + ny * d.dir.y + nz * d.dir.z;
-            if (dot > 0.25) {
-              // Push the impacted face inward; outer panels (bigger r) crush a touch more for a crumpled look.
-              const push = d.depth * Math.pow((dot - 0.25) / 0.75, 1.5) * (0.55 + 0.45 * Math.min(1, r));
+            if (dot > 0.1) {
+              // Push the impacted face inward; outer panels (bigger r) crush more for a crumpled look.
+              const push = d.depth * Math.pow((dot - 0.1) / 0.9, 1.3) * (0.7 + 0.6 * Math.min(1.4, r));
               arr[i] -= d.dir.x * push;
               arr[i + 1] -= d.dir.y * push;
               arr[i + 2] -= d.dir.z * push;

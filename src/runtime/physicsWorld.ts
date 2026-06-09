@@ -251,6 +251,8 @@ export interface VehicleInput {
   handbrake: boolean;
   /** Runtime multiplier on engine force (the in-game speed menu drives this). Default 1. */
   engineScale?: number;
+  /** Set this frame to teleport the car back to its spawn (R key / respawn). */
+  respawn?: boolean;
 }
 
 /** Per-wheel + chassis readback for one raycast-sim vehicle after a physics step. */
@@ -351,6 +353,11 @@ interface VehicleEntry {
   connectionZ: number[];
   /** Whether each wheel steers (resolved at build: the wheel — or its anchor parent — is in steeredWheelIds). */
   steered: boolean[];
+  /** Spawn transform (for R-respawn) + last upright yaw + how long it's been upside-down (auto flip-recover). */
+  spawnPos: Vector3Tuple;
+  spawnRot: Vector3Tuple;
+  lastYaw: number;
+  flipTimer: number;
   signature: string;
 }
 
@@ -666,6 +673,10 @@ class PhysicsRuntime {
       connectionY,
       connectionZ,
       steered,
+      spawnPos: [p[0], p[1], p[2]],
+      spawnRot: [world.rotation[0], world.rotation[1], world.rotation[2]],
+      lastYaw: world.rotation[1],
+      flipTimer: 0,
       signature: vehicleSignature(object),
     });
     this.handleToId.set(collider.handle, object.id);
@@ -1067,6 +1078,36 @@ class PhysicsRuntime {
       const v = object?.vehicle;
       if (!v) continue;
       const input = vehicleInputs[id] ?? { throttle: 0, steer: 0, handbrake: false };
+
+      // RESPAWN (R) + auto FLIP-RECOVER. Compute the chassis up vector; track the last upright yaw, and how long
+      // it's been on its roof. R teleports to spawn; sitting upside-down ~2.5s auto-rights the car in place.
+      const q = entry.body.rotation();
+      reuseQuat.set(q.x, q.y, q.z, q.w);
+      reuseEuler.setFromQuaternion(reuseQuat, 'XYZ');
+      const upY = 1 - 2 * (q.x * q.x + q.z * q.z); // y-component of (rot · up)
+      if (upY > 0.7) {
+        entry.lastYaw = reuseEuler.y;
+        entry.flipTimer = 0;
+      } else {
+        entry.flipTimer += dt;
+      }
+      const flipping = entry.flipTimer > 2.5;
+      if (input.respawn || flipping) {
+        const t = entry.body.translation();
+        const pos = input.respawn ? { x: entry.spawnPos[0], y: entry.spawnPos[1], z: entry.spawnPos[2] } : { x: t.x, y: t.y + 1.4, z: t.z };
+        const rot = input.respawn ? quatFromEuler(entry.spawnRot) : quatFromEuler([0, entry.lastYaw, 0]);
+        entry.body.setTranslation(pos, true);
+        entry.body.setRotation(rot, true);
+        entry.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        entry.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        entry.flipTimer = 0;
+        for (let i = 0; i < entry.wheelIds.length; i++) {
+          entry.controller.setWheelEngineForce(i, 0);
+          entry.controller.setWheelBrake(i, 0);
+        }
+        continue; // skip normal force application this frame
+      }
+
       const n = entry.wheelIds.length;
       const half = n / 2;
       const engineForce = (v.engineForce ?? 1800) * (input.engineScale ?? 1);
