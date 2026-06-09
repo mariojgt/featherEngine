@@ -713,6 +713,18 @@ interface EditorState {
   ) => string | undefined;
   deleteCinematic: (id: string) => void;
   setActiveCinematic: (id: string) => void;
+  /** One-click transition at `time`. cut/crossfade set the incoming camera shot's blend; fade/flash/wipe
+   *  drop a dip-fade overlay beat (returns the affected/created action id). */
+  addCinematicTransition: (
+    cinematicId: string,
+    opts: {
+      time?: number;
+      duration?: number;
+      style: 'cut' | 'crossfade' | 'fade' | 'flash' | 'wipe';
+      color?: string;
+      direction?: 'left' | 'right' | 'up' | 'down';
+    },
+  ) => string | undefined;
   addCinematicAction: (cinematicId: string, action: Omit<CinematicAction, 'id'>) => string | undefined;
   updateCinematicAction: (cinematicId: string, actionId: string, patch: Partial<Omit<CinematicAction, 'id'>>) => void;
   removeCinematicAction: (cinematicId: string, actionId: string) => void;
@@ -3547,6 +3559,35 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       aperture: shot.aperture,
     });
   },
+  addCinematicTransition: (cinematicId, opts) => {
+    const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+    if (!cinematic) return undefined;
+    const time = Math.max(0, opts.time ?? 0);
+    const duration = Math.max(0.05, opts.duration ?? 0.6);
+    // cut / crossfade are camera-blend operations on the INCOMING shot (the one at/after the playhead).
+    if (opts.style === 'cut' || opts.style === 'crossfade') {
+      const cams = cinematic.actions.filter((action) => action.type === 'camera').sort((a, b) => a.time - b.time);
+      if (!cams.length) return undefined;
+      const incoming = cams.find((cam) => cam.time >= time - 0.001) ?? cams[cams.length - 1];
+      get().updateCinematicAction(cinematicId, incoming.id, { blend: opts.style === 'crossfade' ? duration : 0 });
+      return incoming.id;
+    }
+    // fade / flash / wipe are full-frame dip overlays centered on the cut point.
+    const color = opts.style === 'flash' ? '#ffffff' : opts.color ?? '#000000';
+    const label = opts.style === 'wipe' ? 'Wipe' : opts.style === 'flash' ? 'Flash' : 'Fade transition';
+    return get().addCinematicAction(cinematicId, {
+      type: 'fade',
+      time: Math.max(0, time - duration / 2),
+      duration,
+      label,
+      fadeFrom: 0,
+      fadeTo: 1,
+      fadeColor: color,
+      fadeDip: true,
+      fadeWipe: opts.style === 'wipe' ? opts.direction ?? 'right' : undefined,
+      ease: 'smooth',
+    });
+  },
   addCinematicCameraKeyframe: (cinematicId, time, pose) => {
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
     if (!cinematic) return undefined;
@@ -3627,6 +3668,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // Pose the scene at this keyframe's time so editing it shows the right moment.
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
     const action = cinematic?.actions.find((item) => item.id === actionId);
+    // index -1 = a STATIC camera shot (no keyframes array); pose the scene at the shot's own start time.
+    if (cinematic && index === -1 && action) {
+      get().previewCinematic(cinematic.id, action.time);
+      return;
+    }
     const frame = action?.type === 'camera' ? action.keyframes?.[index] : action?.type === 'transform' ? action.transformKeyframes?.[index] : undefined;
     if (cinematic && frame) get().previewCinematic(cinematic.id, frame.time);
   },
@@ -3634,7 +3680,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
     const action = cinematic?.actions.find((item) => item.id === actionId);
     if (!cinematic || !action) return;
-    if (action.type === 'camera' && action.keyframes?.[index]) {
+    if (index === -1 && action.type === 'camera') {
+      // Static shot: move the shot's own framing position.
+      get().updateCinematicAction(cinematic.id, actionId, { position });
+    } else if (action.type === 'camera' && action.keyframes?.[index]) {
       const keyframes = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, position } : keyframe));
       get().updateCinematicAction(cinematic.id, actionId, { keyframes });
     } else if (action.type === 'transform' && action.transformKeyframes?.[index]) {
@@ -3649,7 +3698,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   aimCinematicKeyframe: (actionId, index, lookAt) => {
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
     const action = cinematic?.actions.find((item) => item.id === actionId);
-    if (!cinematic || action?.type !== 'camera' || !action.keyframes?.[index]) return;
+    if (!cinematic || action?.type !== 'camera') return;
+    if (index === -1) {
+      // Static shot: re-aim the shot's own framing.
+      get().updateCinematicAction(cinematic.id, actionId, { lookAt });
+      const preview = get().editorCinematicPreview;
+      if (preview?.sequenceId === cinematic.id) get().previewCinematic(cinematic.id, preview.time);
+      return;
+    }
+    if (!action.keyframes?.[index]) return;
     const keyframes = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, lookAt } : keyframe));
     get().updateCinematicAction(cinematic.id, actionId, { keyframes });
     const preview = get().editorCinematicPreview;

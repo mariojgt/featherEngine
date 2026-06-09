@@ -1727,6 +1727,12 @@ export interface CinematicAction {
   fadeFrom?: number;
   fadeTo?: number;
   fadeColor?: string;
+  /** `type: 'fade'`: dip transition — ramp fadeFrom→fadeTo over the first half, then back over the second
+   *  half (a "dip to colour and back" between two shots), instead of ramping once and holding. */
+  fadeDip?: boolean;
+  /** `type: 'fade'`: render the fade as a directional WIPE (a colour edge sweeping across the frame in
+   *  this direction) instead of a uniform opacity. Pairs with fadeDip for a wipe-on/wipe-off transition. */
+  fadeWipe?: 'left' | 'right' | 'up' | 'down';
   /** `type: 'material'`: start/end material overrides for color/metal/rough/glow tracks. */
   fromMaterial?: MaterialOverrides;
   toMaterial?: MaterialOverrides;
@@ -1804,6 +1810,15 @@ export interface CinematicLook {
    *  frame's camera to blur along screen-space camera motion — pans/dollies smear like real film.
    *  0/omitted = no blur. Applied as a post pass on the cinematic camera. */
   motionBlur?: number;
+  /** Chromatic aberration, 0–1: RGB channel separation toward the frame edges (lens fringing / sci-fi
+   *  look). 0/omitted = none. Post pass on the cinematic camera. */
+  chromaticAberration?: number;
+  /** Anamorphic bloom streak, 0–1: bright highlights smear into a horizontal lens flare streak (the
+   *  signature neon-cinema look), tinted faintly blue. 0/omitted = none. Post pass. */
+  anamorphic?: number;
+  /** Light-leak / film-burn overlay, 0–1: warm drifting streaks of light bleeding across the frame
+   *  (analog projector feel). 0/omitted = none. Rendered as a DOM overlay over the frame. */
+  lightLeak?: number;
 }
 
 export interface CinematicSequence {
@@ -1840,6 +1855,9 @@ export interface RuntimeCinematicCamera {
 export interface RuntimeCinematicFade {
   opacity: number;
   color: string;
+  /** When set, render the fade as a directional wipe (colour edge sweeping in) rather than uniform opacity;
+   *  `opacity` is then the wipe coverage (0 = uncovered, 1 = fully covered). */
+  wipe?: 'left' | 'right' | 'up' | 'down';
 }
 
 /** A text overlay (title/subtitle/lower-third/credit) currently on screen, with its faded-in opacity. */

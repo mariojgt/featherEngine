@@ -6,6 +6,7 @@ import { editorCameraPose } from '../three/EditorCamera';
 import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicLook, CinematicTransformKeyframe, MaterialOverrides, RuntimeCinematicFade, RuntimeCinematicText, SceneObjectKind, Vector3Tuple } from '../types';
 import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
 import { createStoryboardCinematic, type StoryboardPreset } from '../project/cinematicStoryboard';
+import { SHOT_LIBRARY, addLibraryShot, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { getPlatform } from '../platform';
 
 const easeOptions: { value: CinematicEase; label: string }[] = [
@@ -124,9 +125,18 @@ function drawCinematicFilmOverlay(
   if (texts && texts.length) texts.forEach((entry) => drawOverlayText(ctx, w, h, entry));
   if (fade && fade.opacity > 0.001) {
     ctx.save();
-    ctx.globalAlpha = Math.min(1, fade.opacity);
     ctx.fillStyle = fade.color || '#000000';
-    ctx.fillRect(0, 0, w, h);
+    if (fade.wipe) {
+      // Directional wipe: fill only the covered fraction of the frame from the entering edge.
+      const cov = Math.min(1, Math.max(0, fade.opacity));
+      if (fade.wipe === 'right') ctx.fillRect(0, 0, w * cov, h);
+      else if (fade.wipe === 'left') ctx.fillRect(w * (1 - cov), 0, w * cov, h);
+      else if (fade.wipe === 'down') ctx.fillRect(0, 0, w, h * cov);
+      else ctx.fillRect(0, h * (1 - cov), w, h * cov); // 'up'
+    } else {
+      ctx.globalAlpha = Math.min(1, fade.opacity);
+      ctx.fillRect(0, 0, w, h);
+    }
     ctx.restore();
   }
 }
@@ -351,6 +361,7 @@ export function CinematicPanel() {
   const addCinematicMarker = useEditorStore((state) => state.addCinematicMarker);
   const removeCinematicMarker = useEditorStore((state) => state.removeCinematicMarker);
   const addCinematicAction = useEditorStore((state) => state.addCinematicAction);
+  const addCinematicTransition = useEditorStore((state) => state.addCinematicTransition);
   const updateCinematicAction = useEditorStore((state) => state.updateCinematicAction);
   const removeCinematicAction = useEditorStore((state) => state.removeCinematicAction);
   const previewCinematic = useEditorStore((state) => state.previewCinematic);
@@ -581,6 +592,27 @@ export function CinematicPanel() {
     if (!active) return;
     addBeat({ type: 'fade', time: 0, duration: 1.2, label: 'Fade in', fadeFrom: 1, fadeTo: 0, fadeColor: '#000000' });
     addBeat({ type: 'fade', time: Math.max(0, active.duration - 1.2), duration: 1.2, label: 'Fade out', fadeFrom: 0, fadeTo: 1, fadeColor: '#000000' });
+  };
+
+  // One-click transition at the playhead. cut/crossfade retune the incoming camera shot's blend;
+  // fade/flash/wipe drop a dip overlay centered on the playhead.
+  const addTransition = (style: 'cut' | 'crossfade' | 'fade' | 'flash' | 'wipe') => {
+    if (!active) return;
+    const id = addCinematicTransition(active.id, { time: beatTime, duration: 0.6, style });
+    if (id) {
+      setSelectedActionId(id);
+      if (!running) previewCinematic(active.id, beatTime);
+    }
+  };
+
+  // Drag-in a prebuilt shot at the playhead, framed on the selected object (or the whole scene).
+  const addShotFromLibrary = (shotType: ShotLibraryType) => {
+    if (!active) return;
+    const id = addLibraryShot({ cinematicId: active.id, shotType, subjectObjectId: selected?.id, time: beatTime });
+    if (id) {
+      setSelectedActionId(id);
+      if (!running) previewCinematic(active.id, beatTime);
+    }
   };
 
   // Drop a single fade at the playhead so fades can be stacked anywhere (e.g. fade out before a
@@ -1425,15 +1457,26 @@ export function CinematicPanel() {
               </label>
               <label className="field-row">
                 <span>Shake</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={selectedAction.shake ?? 0}
-                  title="Handheld camera shake on this shot. 0 = locked-off tripod; higher = more living-camera wobble."
-                  onChange={(event) => updateSelectedAction({ shake: Number(event.target.value) || undefined })}
-                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    style={{ flex: 1 }}
+                    value={selectedAction.shake ?? 0}
+                    title="Handheld camera shake on this shot. 0 = locked-off tripod; higher = more living-camera wobble."
+                    onChange={(event) => updateSelectedAction({ shake: Number(event.target.value) || undefined })}
+                  />
+                  <button
+                    type="button"
+                    className={`chip-button${selectedAction.shake ? ' active' : ''}`}
+                    title="One-click handheld: a natural living-camera wobble. Click again to lock the camera off (tripod)."
+                    onClick={() => updateSelectedAction(selectedAction.shake ? { shake: undefined } : { shake: 0.4, shakeFrequency: selectedAction.shakeFrequency ?? 7 })}
+                  >
+                    Handheld
+                  </button>
+                </div>
               </label>
               {selectedAction.shake ? (
                 <label className="field-row">
@@ -1976,6 +2019,14 @@ export function CinematicPanel() {
                     <Play size={14} aria-hidden />
                     Gameplay handoff
                   </button>
+                  <button className="full-button" title="Create a new sequence: a low-angle hero hold that cranes up into a wide reveal" onClick={() => createStoryboard('dramatic-reveal')}>
+                    <Clapperboard size={14} aria-hidden />
+                    Dramatic reveal
+                  </button>
+                  <button className="full-button" title="Create a new sequence: a full 360° turntable orbit around the subject" onClick={() => createStoryboard('product-turntable')}>
+                    <Camera size={14} aria-hidden />
+                    Turntable
+                  </button>
                 </div>
               </section>
               <section className="inspector-section">
@@ -2255,6 +2306,31 @@ export function CinematicPanel() {
                   <p className="field-hint seq-hint">Click the ruler to scrub · drag clips/diamonds to retime · Record, then move the camera/objects to auto-key.</p>
                 </div>
               </section>
+
+              <div className="inspector-section cinematic-transition-bar">
+                <label className="cinematic-transition-title">Transition at playhead</label>
+                <div className="cinematic-transition-row">
+                  <button className="chip-button" title="Hard cut — the next shot snaps in instantly" onClick={() => addTransition('cut')}>Cut</button>
+                  <button className="chip-button" title="Crossfade — the camera smoothly blends from the previous shot into the next" onClick={() => addTransition('crossfade')}>Crossfade</button>
+                  <button className="chip-button" title="Dip to black and back between the two shots" onClick={() => addTransition('fade')}>Fade</button>
+                  <button className="chip-button" title="Flash to white and back (impact accent)" onClick={() => addTransition('flash')}>Flash</button>
+                  <button className="chip-button" title="Wipe — a colour edge sweeps across the frame and back" onClick={() => addTransition('wipe')}>Wipe ▸</button>
+                </div>
+              </div>
+
+              <details className="inspector-section seq-add-details" open>
+                <summary>Shot library 🎬</summary>
+                <p className="cinematic-hint">
+                  {selected ? `Framed on “${selected.name}”` : 'Framed on the whole scene — select an object to frame it'} · added at the playhead
+                </p>
+                <div className="cinematic-shot-grid">
+                  {SHOT_LIBRARY.map((shot) => (
+                    <button key={shot.id} className="chip-button" title={shot.description} onClick={() => addShotFromLibrary(shot.id)}>
+                      {shot.label}
+                    </button>
+                  ))}
+                </div>
+              </details>
 
               <details className="inspector-section seq-add-details">
                 <summary>Add beat ＋</summary>

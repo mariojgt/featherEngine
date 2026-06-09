@@ -617,7 +617,17 @@ export async function createFilmModeTemplate(): Promise<string | undefined> {
   // ============================================================================
   const cinematicId = store.createCinematic('Feather Engine Walkthrough', DURATION);
   store.updateCinematic(cinematicId, { autoplay: true, skippable: true, duration: DURATION });
-  store.setCinematicLook(cinematicId, { letterbox: 2.39, grade: 'cool', gradeIntensity: 0.75, grain: 0.08, vignette: 0.35 });
+  store.setCinematicLook(cinematicId, {
+    letterbox: 2.39,
+    grade: 'cool',
+    gradeIntensity: 0.75,
+    grain: 0.08,
+    vignette: 0.35,
+    motionBlur: 0.4,
+    anamorphic: 0.6, // horizontal neon streaks — the signature filmic look for a neon corridor
+    chromaticAberration: 0.45, // subtle edge fringing
+    lightLeak: 0.14, // faint warm film burn drifting across the frame
+  });
 
   // Open from black.
   store.addCinematicAction(cinematicId, {

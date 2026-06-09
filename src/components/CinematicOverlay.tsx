@@ -22,6 +22,17 @@ const textStyleLayout: Record<CinematicTextStyle, { position: React.CSSPropertie
   },
 };
 
+/** clip-path for a wipe that covers `cov` (0–1) of the frame, entering from the given direction. */
+const wipeClip = (dir: NonNullable<RuntimeCinematicFade['wipe']>, cov: number): string => {
+  const rest = `${((1 - cov) * 100).toFixed(2)}%`;
+  switch (dir) {
+    case 'right': return `inset(0 ${rest} 0 0)`; // colour grows from the left edge rightward
+    case 'left': return `inset(0 0 0 ${rest})`; // grows from the right edge leftward
+    case 'down': return `inset(0 0 ${rest} 0)`; // grows from the top downward
+    case 'up': return `inset(${rest} 0 0 0)`; // grows from the bottom upward
+  }
+};
+
 /**
  * The cinematic "film look" + fade layer rendered over the frame. Defaults to the live runtime
  * cinematic (player + editor Play); pass explicit `look`/`fade` to drive it from the editor scrub
@@ -65,11 +76,12 @@ export function CinematicOverlay({ look: lookProp, fade: fadeProp, text: textPro
   const hasText = Boolean(text && text.length);
   // Note: the color grade is rendered as a post-processing shader on the cinematic camera (PostFx),
   // not here — this DOM layer only owns letterbox bars, grain, vignette, text, and the fade.
-  const hasLook = Boolean(aspect > 0 || look?.grain || look?.vignette);
+  const hasLook = Boolean(aspect > 0 || look?.grain || look?.vignette || look?.lightLeak);
   if (!hasLook && !hasFade && !hasText) return null;
 
   return (
     <div ref={ref} className="cinematic-overlay">
+      {look?.lightLeak ? <div className="cinematic-light-leak" style={{ opacity: Math.min(0.9, look.lightLeak) }} /> : null}
       {look?.vignette ? <div className="cinematic-look-vignette" style={{ opacity: Math.min(1, look.vignette) }} /> : null}
       {look?.grain ? <div className="cinematic-grain" style={{ opacity: Math.min(0.85, look.grain) }} /> : null}
       {bars.y > 0 && (
@@ -106,7 +118,15 @@ export function CinematicOverlay({ look: lookProp, fade: fadeProp, text: textPro
           );
         })}
       {hasFade && (
-        <div className="cinematic-fade-overlay" style={{ background: fade!.color, opacity: Math.min(1, Math.max(0, fade!.opacity)) }} />
+        <div
+          className="cinematic-fade-overlay"
+          style={
+            fade!.wipe
+              ? // Directional wipe: a solid colour edge sweeps in; `opacity` is the coverage fraction.
+                { background: fade!.color, opacity: 1, clipPath: wipeClip(fade!.wipe, Math.min(1, Math.max(0, fade!.opacity))) }
+              : { background: fade!.color, opacity: Math.min(1, Math.max(0, fade!.opacity)) }
+          }
+        />
       )}
     </div>
   );

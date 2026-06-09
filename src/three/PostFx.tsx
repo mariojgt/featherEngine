@@ -1,8 +1,10 @@
-import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR } from '@react-three/postprocessing';
+import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR, ChromaticAberration } from '@react-three/postprocessing';
 import { SMAAPreset } from 'postprocessing';
+import { Vector2 } from 'three';
 import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
 import { MotionBlur } from './MotionBlurEffect';
+import { Anamorphic } from './AnamorphicEffect';
 import { VolumetricFog, resolveVolumetric } from './VolumetricFog';
 import { qualityProfile } from './quality';
 
@@ -89,6 +91,11 @@ export function PostFx() {
       <DepthOfField key="dof" target={target} focalLength={0.02} bokehScale={pose.aperture} />,
     );
   }
+  // Anamorphic bloom streak: bright neon/speculars smear into a horizontal lens flare. After bloom so it
+  // streaks already-bloomed highlights. Driven by the cinematic look (runtime or scrub preview).
+  if (look?.anamorphic && look.anamorphic > 0.001) {
+    children.push(<Anamorphic key="anamorphic" strength={look.anamorphic} />);
+  }
   // Cinematic camera motion blur (shutter smear along camera moves). Only while a cinematic with a
   // motionBlur look is live (runtime or scrub preview) — never in normal gameplay.
   if (pose && look?.motionBlur && look.motionBlur > 0.001) {
@@ -99,6 +106,14 @@ export function PostFx() {
   const grade = resolveGrade(look);
   if (grade) {
     children.push(<ColorGrade key="grade" {...grade} />);
+  }
+  // Chromatic aberration: RGB fringing toward the frame edges (lens / sci-fi look). After the grade so
+  // it fringes the final color. radialModulation keeps the center crisp and pushes the split to the edges.
+  if (look?.chromaticAberration && look.chromaticAberration > 0.001) {
+    const amt = Math.min(1, look.chromaticAberration) * 0.004;
+    children.push(
+      <ChromaticAberration key="chroma" offset={new Vector2(amt, amt)} radialModulation modulationOffset={0.15} />,
+    );
   }
   if (rs?.vignetteEnabled) {
     children.push(<Vignette key="vignette" offset={0.32} darkness={0.72} eskil={false} />);

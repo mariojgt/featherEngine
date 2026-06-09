@@ -1,7 +1,7 @@
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type { CinematicGrade, CinematicLook, RuntimeCinematicCamera, SceneObject, Vector3Tuple } from '../types';
 
-export const STORYBOARD_PRESETS = ['three-shot-intro', 'orbit-reveal', 'gameplay-handoff'] as const;
+export const STORYBOARD_PRESETS = ['three-shot-intro', 'orbit-reveal', 'gameplay-handoff', 'dramatic-reveal', 'product-turntable'] as const;
 export type StoryboardPreset = (typeof STORYBOARD_PRESETS)[number];
 
 export interface StoryboardCinematicOptions {
@@ -35,6 +35,8 @@ const PRESET_NAMES: Record<StoryboardPreset, string> = {
   'three-shot-intro': 'Three-Shot Intro',
   'orbit-reveal': 'Orbit Reveal',
   'gameplay-handoff': 'Gameplay Handoff',
+  'dramatic-reveal': 'Dramatic Reveal',
+  'product-turntable': 'Product Turntable',
 };
 
 const vec = (x: number, y: number, z: number): Vector3Tuple => [x, y, z];
@@ -49,7 +51,7 @@ function isRenderableSubject(object: SceneObject) {
   return object.kind !== 'camera' && object.kind !== 'light' && object.kind !== 'empty' && object.kind !== 'terrain';
 }
 
-function focusFromScene(objects: SceneObject[], subjectObjectId?: string, focusPoint?: Vector3Tuple) {
+export function focusFromScene(objects: SceneObject[], subjectObjectId?: string, focusPoint?: Vector3Tuple) {
   const subject = subjectObjectId ? objects.find((object) => object.id === subjectObjectId) : undefined;
   if (focusPoint) return { focus: focusPoint, radius: 3, subject };
   if (subject) {
@@ -80,9 +82,11 @@ function focusFromScene(objects: SceneObject[], subjectObjectId?: string, focusP
   return { focus, radius, subject: undefined };
 }
 
-function focusDistance(position: Vector3Tuple, focus: Vector3Tuple) {
+export function focusDistance(position: Vector3Tuple, focus: Vector3Tuple) {
   return Number(Math.max(0, length(sub(position, focus))).toFixed(2));
 }
+
+export { vec as storyboardVec, add as storyboardAdd, roundVec as storyboardRoundVec };
 
 function addFadeBookends(cinematicId: string, duration: number) {
   const store = useEditorStore.getState();
@@ -241,6 +245,77 @@ function addGameplayHandoff(cinematicId: string, focus: Vector3Tuple, radius: nu
   });
 }
 
+// A low-angle hero hold that cranes up into a wide reveal — the classic "big moment" intro.
+function addDramaticReveal(cinematicId: string, focus: Vector3Tuple, radius: number, duration: number) {
+  const store = useEditorStore.getState();
+  const r = Math.max(2.5, radius);
+  store.addCinematicShot(cinematicId, {
+    time: 0,
+    duration: Number((duration * 0.42).toFixed(3)),
+    label: 'Shot 1 · Low hero',
+    position: roundVec(add(focus, vec(r * 0.7, -r * 0.2, r * 1.3))),
+    lookAt: roundVec(add(focus, vec(0, r * 0.55, 0))),
+    fov: 38,
+    blend: 0,
+    aperture: 3,
+    focusDistance: focusDistance(add(focus, vec(r * 0.7, -r * 0.2, r * 1.3)), add(focus, vec(0, r * 0.55, 0))),
+  });
+  // Crane up + back into a wide reveal as a smooth keyframed move.
+  const poses: RuntimeCinematicCamera[] = [
+    { position: add(focus, vec(r * 0.7, r * 0.1, r * 1.4)), lookAt: add(focus, vec(0, r * 0.4, 0)), fov: 40, aperture: 2.5 },
+    { position: add(focus, vec(r * 1.4, r * 1.8, r * 2.6)), lookAt: focus, fov: 46, aperture: 1.5 },
+  ];
+  store.addCinematicAction(cinematicId, {
+    type: 'camera',
+    time: Number((duration * 0.42).toFixed(3)),
+    duration: Number((duration * 0.58).toFixed(3)),
+    label: 'Shot 2 · Crane reveal',
+    ease: 'smooth',
+    blend: 1.2,
+    keyframes: poses.map((pose, index) => ({
+      position: roundVec(pose.position),
+      lookAt: roundVec(pose.lookAt),
+      fov: pose.fov,
+      aperture: pose.aperture,
+      focusDistance: focusDistance(pose.position, pose.lookAt),
+      time: Number((duration * 0.42 + (duration * 0.58 * index) / Math.max(1, poses.length - 1)).toFixed(3)),
+    })),
+  });
+}
+
+// A full 360° turntable orbit — product/hero showcase.
+function addProductTurntable(cinematicId: string, focus: Vector3Tuple, radius: number, duration: number) {
+  const store = useEditorStore.getState();
+  const r = Math.max(2.5, radius * 1.5);
+  const height = Math.max(1.2, radius * 0.4);
+  const count = 9; // 8 segments around the circle + the closing duplicate for a seamless loop
+  const poses: RuntimeCinematicCamera[] = Array.from({ length: count }, (_, index) => {
+    const angle = (index / (count - 1)) * Math.PI * 2;
+    return {
+      position: add(focus, vec(Math.sin(angle) * r, height, Math.cos(angle) * r)),
+      lookAt: focus,
+      fov: 40,
+      aperture: 3,
+    };
+  });
+  store.addCinematicAction(cinematicId, {
+    type: 'camera',
+    time: 0,
+    duration,
+    label: 'Turntable orbit',
+    ease: 'linear',
+    interpolation: 'smooth',
+    keyframes: poses.map((pose, index) => ({
+      position: roundVec(pose.position),
+      lookAt: roundVec(pose.lookAt),
+      fov: pose.fov,
+      aperture: pose.aperture,
+      focusDistance: focusDistance(pose.position, pose.lookAt),
+      time: Number(((duration * index) / (count - 1)).toFixed(3)),
+    })),
+  });
+}
+
 export function createStoryboardCinematic(options: StoryboardCinematicOptions = {}): StoryboardCinematicResult | undefined {
   const store = useEditorStore.getState();
   const scene = store.activeScene();
@@ -260,6 +335,8 @@ export function createStoryboardCinematic(options: StoryboardCinematicOptions = 
   if (options.includeFades !== false) addFadeBookends(cinematicId, duration);
   if (preset === 'orbit-reveal') addOrbitReveal(cinematicId, focus, radius, duration);
   else if (preset === 'gameplay-handoff') addGameplayHandoff(cinematicId, focus, radius, duration);
+  else if (preset === 'dramatic-reveal') addDramaticReveal(cinematicId, focus, radius, duration);
+  else if (preset === 'product-turntable') addProductTurntable(cinematicId, focus, radius, duration);
   else addThreeShotIntro(cinematicId, focus, radius, duration);
   addEndEvent(cinematicId, duration, options.endEventName);
 

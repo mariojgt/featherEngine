@@ -33,6 +33,7 @@ import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
+import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, lightingPresetIds, materialPresetIds } from '../three/presets';
 import { applyPhysicsMaterialPreset, physicsMaterialPresetIds } from '../runtime/physicsMaterials';
 
@@ -2090,7 +2091,7 @@ export const engineTools = {
       'Create a complete Sequencer-style storyboard cinematic in one call: a new sequence with film look, fades, camera shots or a smooth camera path, optional autoplay, and an optional end event for gameplay handoff. Prefer this over many low-level add_cinematic_action calls when the user asks for an intro, reveal, boss arrival, vista flyover, or simple cutscene.',
     inputSchema: z.object({
       name: z.string().optional(),
-      preset: z.enum(STORYBOARD_PRESETS).optional().describe('three-shot-intro = establishing/push/reveal; orbit-reveal = one smooth camera path; gameplay-handoff = intro that ends near a gameplay camera angle.'),
+      preset: z.enum(STORYBOARD_PRESETS).optional().describe('three-shot-intro = establishing/push/reveal; orbit-reveal = one smooth camera path; gameplay-handoff = intro that ends near a gameplay camera angle; dramatic-reveal = low-angle hero hold that cranes up into a wide reveal; product-turntable = full 360° orbit around the subject.'),
       subjectObjectId: z.string().optional().describe('Optional object to frame. Omit to frame the active scene center.'),
       focusPoint: vec3.optional().describe('Optional explicit world focus point. Overrides subject framing when provided.'),
       duration: z.number().min(3).optional(),
@@ -2196,6 +2197,40 @@ export const engineTools = {
     },
   }),
 
+  add_cinematic_transition: tool({
+    description:
+      'Add a one-click transition at a time in a cinematic — the easy way to join two shots. `cut` snaps instantly; `crossfade` makes the camera smoothly blend from the previous shot into the next (sets the incoming shot\'s blend); `fade` dips to black and back; `flash` dips to white and back (impact accent); `wipe` sweeps a colour edge across the frame and back (set direction). fade/flash/wipe are centered on `time`; cut/crossfade retune the camera shot at/after `time`.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      time: z.number().min(0).describe('Seconds from cinematic start — the cut point the transition is centered on.'),
+      style: z.enum(['cut', 'crossfade', 'fade', 'flash', 'wipe']),
+      duration: z.number().min(0.05).max(10).optional().describe('Transition length in seconds. Default 0.6.'),
+      color: z.string().optional().describe('Dip colour (hex) for fade/wipe. Default black; flash is always white.'),
+      direction: z.enum(['left', 'right', 'up', 'down']).optional().describe('Wipe sweep direction. Default right.'),
+    }),
+    execute: async ({ cinematicId, time, style, duration, color, direction }) => {
+      const id = store().addCinematicTransition(cinematicId, { time, style, duration, color, direction });
+      return id ? `Added ${style} transition at ${time}s.` : `No cinematic with id ${cinematicId} (or no camera shot to ${style}).`;
+    },
+  }),
+
+  add_cinematic_library_shot: tool({
+    description:
+      `Drop a PREBUILT camera shot into a cinematic, auto-framed on a subject (or the whole scene) — the fast way to assemble a shot list. shotType: ${SHOT_LIBRARY.map((s) => s.id).join(' | ')}. wide=establishing, closeup=tight + shallow DoF, low-angle=heroic look-up, dolly-in=smooth push, crane-up=rise, whip-pan=fast lateral blur (pairs with motionBlur), orbit=arc around subject. Static shots cut in; dolly/crane/whip/orbit are short keyframed moves. Chain several to build a sequence quickly, then fine-tune.`,
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      shotType: z.enum(['wide', 'closeup', 'low-angle', 'dolly-in', 'crane-up', 'whip-pan', 'orbit']),
+      subjectObjectId: z.string().optional().describe('Object to frame on. Omit to frame the whole scene.'),
+      time: z.number().min(0).optional().describe('Seconds from cinematic start to place the shot. Default 0.'),
+      duration: z.number().min(0.3).max(30).optional(),
+    }),
+    execute: async ({ cinematicId, shotType, subjectObjectId, time, duration }) => {
+      if (subjectObjectId && !findObject(subjectObjectId)) return `No object with id ${subjectObjectId}.`;
+      const id = addLibraryShot({ cinematicId, shotType: shotType as ShotLibraryType, subjectObjectId, time: time ?? 0, duration });
+      return id ? `Added ${shotType} shot ${id}.` : `No cinematic with id ${cinematicId}.`;
+    },
+  }),
+
   set_cinematic_look: tool({
     description:
       'Set the film "look" of a cinematic: letterbox bars, film grain, an extra vignette, and a real color grade rendered on the cinematic camera. Use to make a cutscene read as a movie. The grade is a preset PLUS optional manual params (exposure/contrast/saturation/temperature/tint) scaled by gradeIntensity — pass a preset for a quick look, or the manual params (with grade:"custom") to dial it in.',
@@ -2213,10 +2248,13 @@ export const engineTools = {
       grain: z.number().min(0).max(1).optional().describe('Film-grain strength, 0–1.'),
       vignette: z.number().min(0).max(1).optional().describe('Darkened-edge vignette strength, 0–1.'),
       motionBlur: z.number().min(0).max(1).optional().describe('Camera motion blur (shutter) strength, 0–1. Pans/dollies smear like film. Only applies while the cinematic camera is live.'),
+      anamorphic: z.number().min(0).max(1).optional().describe('Anamorphic bloom streak, 0–1: bright neon/highlights smear into a blue-tinted horizontal lens flare. The signature neon-cinema look.'),
+      chromaticAberration: z.number().min(0).max(1).optional().describe('Chromatic aberration, 0–1: RGB color fringing toward the frame edges (lens / sci-fi look).'),
+      lightLeak: z.number().min(0).max(1).optional().describe('Light-leak / film-burn overlay, 0–1: warm streaks of light drifting across the frame (analog projector feel).'),
     }),
-    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur }) => {
+    execute: async ({ cinematicId, letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur, anamorphic, chromaticAberration, lightLeak }) => {
       if (!store().activeScene()?.cinematics?.some((cinematic) => cinematic.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
-      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur });
+      store().setCinematicLook(cinematicId, { letterbox, grade, gradeIntensity, exposure, contrast, saturation, temperature, tint, tintAmount, grain, vignette, motionBlur, anamorphic, chromaticAberration, lightLeak });
       return `Updated film look for cinematic ${cinematicId}.`;
     },
   }),

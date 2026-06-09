@@ -4816,6 +4816,87 @@ button {
   .cinematic-grain { animation: none; }
 }
 
+/* Light leak / film burn — warm streaks of light bleeding across the frame, slowly drifting (opacity set
+   inline from look.lightLeak). `screen` blend so it only ever brightens, like real film burn. */
+.cinematic-light-leak {
+  position: absolute;
+  inset: -30%;
+  z-index: 3;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background:
+    radial-gradient(40% 70% at 12% 30%, rgba(255, 138, 76, 0.55), transparent 60%),
+    radial-gradient(50% 60% at 90% 75%, rgba(255, 96, 140, 0.4), transparent 65%),
+    linear-gradient(115deg, transparent 40%, rgba(255, 196, 120, 0.28) 50%, transparent 60%);
+  background-repeat: no-repeat;
+  animation: cinematic-leak-drift 13s ease-in-out infinite alternate;
+}
+@keyframes cinematic-leak-drift {
+  0% { transform: translate(0, 0) scale(1); opacity: 0.85; }
+  50% { transform: translate(4%, -3%) scale(1.08); opacity: 1; }
+  100% { transform: translate(-3%, 4%) scale(1.02); opacity: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cinematic-light-leak { animation: none; }
+}
+
+/* One-click transition bar in the Cinematic panel. */
+.cinematic-transition-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cinematic-transition-title {
+  font-size: 11px;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cinematic-transition-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cinematic-transition-row .chip-button {
+  flex: 1 1 auto;
+}
+.chip-button {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text, #e6e9f0);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.chip-button:hover {
+  background: var(--accent, #5b8cff);
+  border-color: var(--accent, #5b8cff);
+  color: #fff;
+}
+.chip-button.active {
+  background: var(--accent, #5b8cff);
+  border-color: var(--accent, #5b8cff);
+  color: #fff;
+}
+
+/* Shot library grid in the Cinematic panel. */
+.cinematic-shot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  gap: 6px;
+}
+.cinematic-shot-grid .chip-button {
+  width: 100%;
+}
+.cinematic-hint {
+  margin: 2px 0 8px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
 .cinematic-panel {
   height: 100%;
   overflow: auto;

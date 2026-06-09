@@ -342,10 +342,23 @@ export const cinematicFadeAt = (
     .sort((a, b) => b.time - a.time)[0];
   if (!action) return undefined;
   const active = isCinematicActionActive(action, time);
-  const local = cinematicActionLocalTime(action, time);
+  const from = action.fadeFrom ?? fallback?.opacity ?? 0;
+  const to = action.fadeTo ?? 1;
+  let opacity: number;
+  if (action.fadeDip) {
+    // Dip transition: ramp up over the first half, back down over the second — resolves to `from` outside
+    // the window, so a dip-to-black between two shots cleanly returns to a clear frame on either side.
+    const dur = Math.max(action.duration ?? 0, 0.001);
+    const raw = (time - action.time) / dur;
+    const tri = !active ? 0 : raw < 0.5 ? applyCinematicEase(raw * 2, action.ease) : applyCinematicEase((1 - raw) * 2, action.ease);
+    opacity = mix(from, to, tri);
+  } else {
+    opacity = active ? mix(from, to, cinematicActionLocalTime(action, time)) : action.fadeTo ?? fallback?.opacity ?? 0;
+  }
   return {
-    opacity: active ? mix(action.fadeFrom ?? fallback?.opacity ?? 0, action.fadeTo ?? 1, local) : action.fadeTo ?? fallback?.opacity ?? 0,
+    opacity,
     color: action.fadeColor ?? fallback?.color ?? '#000000',
+    wipe: action.fadeWipe,
   };
 };
 

@@ -158,6 +158,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Updated cinematic action';
     case 'add_cinematic_shot':
       return 'Added camera shot';
+    case 'add_cinematic_transition':
+      return `Added ${typeof input.style === 'string' ? input.style : ''} transition`.replace('  ', ' ').trim();
+    case 'add_cinematic_library_shot':
+      return `Added ${typeof input.shotType === 'string' ? input.shotType : ''} shot`.replace('  ', ' ').trim();
     case 'set_cinematic_look':
       return 'Set film look';
     case 'animate_on_timeline':
