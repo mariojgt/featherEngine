@@ -15,6 +15,7 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
   const elapsed = useRef(0);
   const muzzle = effect.kind === 'muzzle';
   const splash = effect.kind === 'splash';
+  const dust = effect.kind === 'dust';
 
   const { positions, velocities, count } = useMemo(() => {
     const count = Math.max(1, effect.count);
@@ -31,6 +32,14 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
         velocities[i * 3 + 2] = Math.sin(theta) * r;
         continue;
       }
+      if (dust) {
+        // Dust/smoke: a lazy low hemisphere — billows drift outward and gently RISE (buoyant), never spray.
+        const r = 0.3 + Math.random() * 0.9;
+        velocities[i * 3] = Math.cos(theta) * r;
+        velocities[i * 3 + 1] = 0.5 + Math.random() * 0.9;
+        velocities[i * 3 + 2] = Math.sin(theta) * r;
+        continue;
+      }
       // Muzzle: tight forward cone of sparks; impact: omni-directional spray biased outward.
       const speed = (muzzle ? 1 + Math.random() * 2 : 1.6 + Math.random() * 3);
       velocities[i * 3] = Math.sin(phi) * Math.cos(theta) * speed * (muzzle ? 0.4 : 1);
@@ -38,7 +47,7 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
       velocities[i * 3 + 2] = muzzle ? -(0.5 + Math.random() * 2) : Math.sin(phi) * Math.sin(theta) * speed;
     }
     return { positions, velocities, count };
-  }, [effect.count, muzzle, splash]);
+  }, [effect.count, muzzle, splash, dust]);
 
   useFrame((_, delta) => {
     elapsed.current += delta;
@@ -47,8 +56,9 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
     const geom = geomRef.current;
     if (geom) {
       const arr = (geom.getAttribute('position') as THREE.BufferAttribute).array as Float32Array;
-      // Splash droplets fall faster (heavier) for a watery arc; impact sparks use a lighter gravity.
-      const gravity = splash ? 7 : muzzle ? 0 : 5;
+      // Splash droplets fall faster (heavier) for a watery arc; impact sparks use a lighter gravity;
+      // dust has none (it already carries a gentle buoyant rise in its velocity).
+      const gravity = splash ? 7 : muzzle || dust ? 0 : 5;
       for (let i = 0; i < count; i++) {
         arr[i * 3] = velocities[i * 3] * t;
         arr[i * 3 + 1] = velocities[i * 3 + 1] * t - gravity * t * t;
@@ -57,11 +67,13 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
       geom.getAttribute('position').needsUpdate = true;
     }
     if (matRef.current) {
-      matRef.current.opacity = 1 - progress;
-      matRef.current.size = (muzzle ? 0.14 : splash ? 0.16 : 0.1) * (1 - progress * 0.6);
+      // Dust billows GROW as they fade (smoke expanding) instead of shrinking like sparks, and start
+      // semi-transparent so they read soft, not glowing.
+      matRef.current.opacity = dust ? 0.5 * (1 - progress) : 1 - progress;
+      matRef.current.size = dust ? 0.34 + progress * 0.5 : (muzzle ? 0.14 : splash ? 0.16 : 0.1) * (1 - progress * 0.6);
     }
-    // Bright flash that decays fast (front-loaded) for a punchy pop. Splash gets only a soft glint.
-    if (lightRef.current) lightRef.current.intensity = (muzzle ? 9 : splash ? 1.5 : 5) * Math.max(0, 1 - progress) ** 2;
+    // Bright flash that decays fast (front-loaded) for a punchy pop. Splash gets only a soft glint; dust none.
+    if (lightRef.current) lightRef.current.intensity = (muzzle ? 9 : splash ? 1.5 : dust ? 0 : 5) * Math.max(0, 1 - progress) ** 2;
   });
 
   return (
@@ -74,13 +86,13 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
         <pointsMaterial
           ref={matRef}
           color={effect.color}
-          size={muzzle ? 0.14 : splash ? 0.16 : 0.1}
+          size={dust ? 0.34 : muzzle ? 0.14 : splash ? 0.16 : 0.1}
           transparent
-          opacity={1}
+          opacity={dust ? 0.5 : 1}
           depthWrite={false}
           sizeAttenuation
-          // Water droplets read as solid alpha; sparks/muzzle glow additively.
-          blending={splash ? THREE.NormalBlending : THREE.AdditiveBlending}
+          // Water droplets + dust read as solid alpha layers; sparks/muzzle glow additively.
+          blending={splash || dust ? THREE.NormalBlending : THREE.AdditiveBlending}
         />
       </points>
     </>

@@ -21,6 +21,7 @@ import type {
   UIDocument,
   UIElement,
   VehicleComponent,
+  VehicleWheelSetup,
   Vector3Tuple,
 } from '../types';
 
@@ -245,6 +246,9 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
   ];
   const wheelIds: string[] = [];
   const steeredIds: string[] = [];
+  // Modern explicit wheel rig: each wheel referenced WITH its role (axle/side/steered) — the physics
+  // reads these, never array order. The legacy lists above are kept for older tooling/display.
+  const wheelSetups: VehicleWheelSetup[] = [];
   const tireMarkIds: string[] = [];
   const wheelObjects: SceneObject[] = [];
   // Tire-mark emitters at the REAR contact patches — worldSpace dark specks that linger as skid marks on the
@@ -291,6 +295,12 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     const wheelId = makeId('obj');
     wheelIds.push(wheelId);
     if (spot.front) steeredIds.push(anchorId);
+    wheelSetups.push({
+      objectId: wheelId,
+      axle: spot.front ? 'front' : 'rear',
+      side: spot.x < cx ? 'left' : 'right',
+      steered: spot.front,
+    });
     wheelObjects.push({
       id: anchorId,
       name: `Wheel Anchor ${spot.tag}`,
@@ -415,6 +425,7 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     wheelRadius,
     wheelObjectIds: wheelIds,
     steeredWheelIds: steeredIds,
+    wheels: wheelSetups,
     tireMarkIds,
     boostFlameIds,
     garageBodyIds,
@@ -471,6 +482,8 @@ function buildSpeedMenu(): {
   menuOpenVar: ProjectVariable;
   nitroVar: ProjectVariable;
   damageVar: ProjectVariable;
+  rpmVar: ProjectVariable;
+  gearVar: ProjectVariable;
   blueprint: ScriptBlueprint;
   graph: ProjectGraph;
   hud: UIDocument;
@@ -484,6 +497,9 @@ function buildSpeedMenu(): {
   const nitroVar: ProjectVariable = { id: makeId('var'), name: 'Nitro', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   // Bumped by the runtime on each crash dent — drives a HUD readout (and confirms damage detection is firing).
   const damageVar: ProjectVariable = { id: makeId('var'), name: 'Damage', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  // Drivetrain sim mirrors (written every frame by the runtime): live engine RPM + current gear ('R', '1'..'6').
+  const rpmVar: ProjectVariable = { id: makeId('var'), name: 'RPM', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const gearVar: ProjectVariable = { id: makeId('var'), name: 'Gear', type: 'string', defaultValue: '1', persistent: false, createdAt: now };
 
   const graphId = makeId('graph');
   const bpId = makeId('bp');
@@ -529,6 +545,19 @@ function buildSpeedMenu(): {
   };
   // Always-on speedometer chip (small, bottom-center) + a hint to press P.
   const speedo = uiText('Speedometer', { color: '#ffffff', fontSize: '22px', fontWeight: '800', textAlign: 'center', custom: { lineHeight: '1', fontVariantNumeric: 'tabular-nums', textShadow: '0 0 10px #22e0ff88' } }, '0 KM/H', [{ target: 'text', expression: `Speed + ' KM/H'` }]);
+  // Gear digit + speed side by side, with a thin tachometer bar under them: the bar fills with RPM and
+  // flashes red near the limiter — you can SHORT-SHIFT off it in manual (E/Q or gamepad Y/LB).
+  const gearDigit = uiText('Gear', { color: '#ffd34d', fontSize: '22px', fontWeight: '900', textAlign: 'center', custom: { lineHeight: '1', minWidth: '22px', textShadow: '0 0 10px #ffd34d66' } }, '1', [{ target: 'text', expression: 'Gear' }]);
+  const dialRow = uiPanel('Dial Row', { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: '10px' }, [gearDigit, speedo]);
+  const rpmBar: UIElement = {
+    id: makeId('uiel'), kind: 'bar', name: 'Tachometer',
+    style: { width: '130px', height: '4px', background: '#ffffff14', borderRadius: '2px', custom: { marginTop: '5px', border: '1px solid #22e0ff33' } },
+    bindings: [
+      { target: 'fill', expression: 'RPM / 7200' },
+      { target: 'color', expression: `RPM > 6200 ? '#ff5d5d' : '#22e0ff'` },
+    ],
+    children: [],
+  };
   // Nitro charge bar (fill bound to the Nitro var, orange).
   const nitroBar: UIElement = {
     id: makeId('uiel'), kind: 'bar', name: 'Nitro Bar',
@@ -538,7 +567,7 @@ function buildSpeedMenu(): {
   // Damage readout — rises on each crash dent (confirms damage is registering + a wreck meter).
   const damage = uiText('Damage', { color: '#ff7a6a', fontSize: '10px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'DMG 0', [{ target: 'text', expression: `'DMG ' + Damage` }]);
   const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P SETUP · G GARAGE · SHIFT NITRO');
-  const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [speedo, nitroBar, damage, hint]);
+  const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [dialRow, rpmBar, nitroBar, damage, hint]);
 
   // Toggled setup chip (hidden until MenuOpen) with the −/+ stepper.
   const level = uiText('Speed Level', { color: '#ffeacc', fontSize: '13px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '1px', minWidth: '120px' } }, 'TOP SPEED  Lv 2', [{ target: 'text', expression: `'TOP SPEED  Lv ' + SpeedLevel` }]);
@@ -559,7 +588,7 @@ function buildSpeedMenu(): {
   }, [setupChip, speedoChip]);
   const hud: UIDocument = { id: makeId('ui'), name: 'Sim Racing HUD', surface: 'screen', root, visibleOnStart: true, logicBlueprintId: bpId, createdAt: now };
 
-  return { speedLevelVar, speedVar, menuOpenVar, nitroVar, damageVar, blueprint, graph, hud };
+  return { speedLevelVar, speedVar, menuOpenVar, nitroVar, damageVar, rpmVar, gearVar, blueprint, graph, hud };
 }
 
 /** A shared blueprint for boost pads: drive over the trigger → Nitro = 1 (the runtime surges + drains it). */
@@ -667,13 +696,28 @@ export async function createSimRacingTemplate(): Promise<string> {
     objects.push(staticBox(`Grid Stripe ${i}`, [i * 1.1, 0.03, -40], [0.9, 0.04, 2.2], i % 2 ? '#0a0a0a' : '#f2f2f2'));
   }
 
-  // --- Red/white curbs lining the main straight. ---
+  // --- Red/white curbs lining the main straight. Tagged `surface: curb` — the sim's per-wheel surface
+  //     grip reads the tag, so riding a curb costs a little bite (and grass/sand cost a LOT, below). ---
   for (let i = 0; i < 20; i++) {
     const z = -38 + i * 4;
     const c = i % 2 ? '#d92b2b' : '#f2f2f2';
-    objects.push(staticBox(`Curb L ${i}`, [-9, 0.12, z], [1, 0.24, 3.6], c, { emissive: c, emissiveIntensity: 0.25 }));
-    objects.push(staticBox(`Curb R ${i}`, [9, 0.12, z], [1, 0.24, 3.6], c, { emissive: c, emissiveIntensity: 0.25 }));
+    const curbL = staticBox(`Curb L ${i}`, [-9, 0.12, z], [1, 0.24, 3.6], c, { emissive: c, emissiveIntensity: 0.25 });
+    const curbR = staticBox(`Curb R ${i}`, [9, 0.12, z], [1, 0.24, 3.6], c, { emissive: c, emissiveIntensity: 0.25 });
+    curbL.variables = { surface: 'curb' };
+    curbR.variables = { surface: 'curb' };
+    objects.push(curbL, curbR);
   }
+
+  // --- Low-grip runoff surfaces (the sim's per-wheel surface grip): grass verges past the curbs along the
+  //     straight, and a sand trap past the slalom — run wide and the car washes out until you're back on
+  //     tarmac. Thin slabs sitting just on top of the pad. ---
+  const grassL = staticBox('Grass Verge L', [-16.5, 0.015, -4], [13, 0.03, 84], '#2c5a30', { roughness: 1 });
+  const grassR = staticBox('Grass Verge R', [16.5, 0.015, -4], [13, 0.03, 84], '#2c5a30', { roughness: 1 });
+  grassL.variables = { surface: 'grass' };
+  grassR.variables = { surface: 'grass' };
+  const sandTrap = staticBox('Sand Trap', [-22, 0.015, 30], [16, 0.03, 18], '#cfb377', { roughness: 1 });
+  sandTrap.variables = { surface: 'sand' };
+  objects.push(grassL, grassR, sandTrap);
 
   // --- Kicker ramp + landing ramp (a jump). ---
   objects.push(staticBox('Kicker Ramp', [0, 0.8, 44], [11, 0.5, 10], '#2a2e38', { rotation: [-0.36, 0, 0] }));
@@ -781,6 +825,212 @@ export async function createSimRacingTemplate(): Promise<string> {
   objects.push(staticBox('Platform Ramp', [44, 1.6, 8], [8, 0.6, 14], '#2a2e38', { rotation: [-0.5, 0, 0] }));
   objects.push(staticBox('Platform', [44, 3.1, 20], [12, 0.6, 10], '#2b3340', { emissive: '#22e0ff', emissiveIntensity: 0.12 }));
 
+  // --- REACTIVE TOYS: everything below DOES something back — explosive barrel chains, car football
+  //     with a scoring goal, a rotating sweeper hazard, a Tween-driven piston gate, an air ring worth
+  //     +100 through the jump, and a domino run. All ordinary blueprints — open + remix them. ---
+  const mkNode = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>) =>
+    graphNode(makeId('node'), label, cat, x, y, data);
+  /** Exec edge leaving a Tween's "Done" pin (fires when the animation completes). */
+  const doneEdge = (source: string, target: string): Edge => ({
+    id: makeId('edge'), source, target, sourceHandle: 'exec-done', targetHandle: 'exec-in', type: 'smoothstep', animated: true,
+  });
+
+  // 1) EXPLOSIVE BARRELS — ram one and it detonates; the blast damages its neighbours, which chain
+  //    via On Receive Damage (Explode notifies every damageable object in radius automatically).
+  const barrelGraphId = makeId('graph');
+  const barrelBp: ScriptBlueprint = {
+    id: makeId('bp'), name: 'Explosive Barrel', graphId: barrelGraphId, color: '#ff4d2e', createdAt: Date.now(),
+    description: 'Car contact OR splash damage → Explode (chain reactions) → Destroy. Do Once stops a double-fire.',
+  };
+  const barrelGraph: ProjectGraph = (() => {
+    const hitEv = mkNode('On Car Hit', 'Events', 40, 40, { nodeKind: 'event.collisionEnter', otherObjectId: carId, hasInput: false });
+    const dmgEv = mkNode('On Damaged', 'Events', 40, 220, { nodeKind: 'event.receiveDamage', hasInput: false });
+    const once = mkNode('Do Once', 'Logic', 300, 130, { nodeKind: 'logic.doOnce' });
+    const boom = mkNode('Explode', 'Physics', 540, 130, { nodeKind: 'action.explode', explodeRadius: 7, explodeForce: 22, explodeDamage: 45 });
+    const gone = mkNode('Destroy Self', 'Runtime', 780, 130, { nodeKind: 'action.destroyObject' });
+    return {
+      id: barrelGraphId, name: 'Explosive Barrel',
+      nodes: [hitEv, dmgEv, once, boom, gone],
+      edges: [execEdge(hitEv.id, once.id), execEdge(dmgEv.id, once.id), execEdge(once.id, boom.id), execEdge(boom.id, gone.id)],
+    };
+  })();
+  // Two clusters: a tight chain-reaction trio and a spread quartet along the east run.
+  [[-14, 52], [-12, 55], [-15.5, 56], [22, 0], [26, -6], [24, 8], [20, 14]].forEach(([bx, bz], i) => {
+    objects.push({
+      id: makeId('obj'),
+      name: `Boom Barrel ${i}`,
+      kind: 'capsule',
+      transform: { position: [bx, 1, bz], rotation: [0, 0, 0], scale: [0.9, 1.4, 0.9] },
+      renderer: renderer('#c92f1d', { metalness: 0.35, roughness: 0.5, materialOverrides: { emissiveColor: '#ff5a2e', emissiveIntensity: 0.5 } }),
+      physics: { ...dynamicBox(14), collider: 'capsule' },
+      script: { blueprintId: barrelBp.id, graphId: barrelGraphId, enabled: true },
+    });
+  });
+
+  // 2) CAR FOOTBALL — a giant ball and a goal that actually SCORES: +25, a teal burst, and the ball
+  //    teleports back to the spot for the next attack.
+  const ballId = makeId('obj');
+  const ballSpawn: Vector3Tuple = [10, 2.1, -18];
+  const goalBurstId = makeId('obj');
+  const goalGraphId = makeId('graph');
+  const goalBp: ScriptBlueprint = {
+    id: makeId('bp'), name: 'Football Goal', graphId: goalGraphId, color: '#22e0ff', createdAt: Date.now(),
+    description: 'Ball crosses the line → Score +25, celebration burst, ball respawns at the spot.',
+  };
+  const goalGraph: ProjectGraph = (() => {
+    const ev = mkNode('On Ball In', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: ballId, hasInput: false });
+    const getS = mkNode('Get Score', 'Variables', 40, 200, { nodeKind: 'variable.get', variableId: score.scoreVar.id, valueType: 'number', hasInput: false });
+    const addS = mkNode('+ 25', 'Math', 300, 200, { nodeKind: 'math.add', amount: 25, hasInput: false });
+    const setS = mkNode('Set Score', 'Variables', 300, 40, { nodeKind: 'variable.set', variableId: score.scoreVar.id, valueType: 'number' });
+    const spot = mkNode('Ball Spot', 'Values', 300, 360, { nodeKind: 'value.vector3', vectorValue: [...ballSpawn] as Vector3Tuple, hasInput: false });
+    const resetB = mkNode('Reset Ball', 'Runtime', 560, 40, { nodeKind: 'action.setPosition', targetObjectId: ballId });
+    const burst = mkNode('Celebrate', 'Runtime', 820, 40, { nodeKind: 'action.burstParticles', targetObjectId: goalBurstId, numberValue: 90 });
+    return {
+      id: goalGraphId, name: 'Football Goal',
+      nodes: [ev, getS, addS, setS, spot, resetB, burst],
+      edges: [
+        execEdge(ev.id, setS.id), valueEdge(getS.id, addS.id, 'a'), valueEdge(addS.id, setS.id, 'value'),
+        execEdge(setS.id, resetB.id), valueEdge(spot.id, resetB.id, 'position'), execEdge(resetB.id, burst.id),
+      ],
+    };
+  })();
+  objects.push({
+    id: ballId,
+    name: 'Football',
+    kind: 'sphere',
+    transform: { position: [...ballSpawn] as Vector3Tuple, rotation: [0, 0, 0], scale: [3, 3, 3] },
+    renderer: renderer('#f4f4f0', { roughness: 0.35, metalness: 0.05 }),
+    physics: { ...dynamicBox(3), collider: 'sphere', restitution: 0.55, friction: 0.4 },
+  });
+  // Goal frame (posts + crossbar) at the east edge of the pitch, mouth facing the spot.
+  objects.push(staticBox('Goal Post L', [30, 2.2, -25], [0.5, 4.4, 0.5], '#f2f2f2', { emissive: '#22e0ff', emissiveIntensity: 0.4 }));
+  objects.push(staticBox('Goal Post R', [30, 2.2, -11], [0.5, 4.4, 0.5], '#f2f2f2', { emissive: '#22e0ff', emissiveIntensity: 0.4 }));
+  objects.push(staticBox('Goal Crossbar', [30, 4.4, -18], [0.5, 0.5, 14.5], '#f2f2f2', { emissive: '#22e0ff', emissiveIntensity: 0.4 }));
+  objects.push({
+    id: makeId('obj'),
+    name: 'Goal Line',
+    kind: 'cube',
+    transform: { position: [31.4, 2, -18], rotation: [0, 0, 0], scale: [2, 4, 13.5] },
+    renderer: renderer('#22e0ff', { opacity: 0.12, materialOverrides: { emissiveColor: '#22e0ff', emissiveIntensity: 0.4 } }),
+    physics: triggerBox(),
+    script: { blueprintId: goalBp.id, graphId: goalGraphId, enabled: true },
+  });
+  objects.push({
+    id: goalBurstId,
+    name: 'Goal Burst',
+    kind: 'empty',
+    transform: { position: [30, 3, -18], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    particles: {
+      enabled: false, looping: false, rate: 0, burst: 0, maxParticles: 240, shape: 'sphere', shapeRadius: 0.6,
+      coneAngle: 60, speed: 7, speedJitter: 0.5, direction: [0, 1, 0] as Vector3Tuple, gravity: 4, drag: 0.4,
+      lifetime: 1.1, lifetimeJitter: 0.3, startSize: 0.22, endSize: 0.05, startColor: '#22e0ff', endColor: '#ffffff',
+      startOpacity: 1, endOpacity: 0, worldSpace: true, blend: 'additive', light: true,
+    },
+  });
+
+  // 3) SWEEPER — a rotating arm over the skid pad (kinematic, so it genuinely shoves the car):
+  //    dodge it while doing donuts around the cone ring.
+  const sweepGraphId = makeId('graph');
+  const sweepBp: ScriptBlueprint = {
+    id: makeId('bp'), name: 'Sweeper Arm', graphId: sweepGraphId, color: '#ffd34d', createdAt: Date.now(),
+    description: 'Update → Rotate Y: a constantly spinning kinematic arm that knocks cars around.',
+  };
+  const sweepGraph: ProjectGraph = (() => {
+    const upd = mkNode('Update', 'Events', 40, 40, { nodeKind: 'event.update', hasInput: false });
+    const rot = mkNode('Spin', 'Runtime', 300, 40, { nodeKind: 'action.rotate', axis: 'y', amount: 70 });
+    return { id: sweepGraphId, name: 'Sweeper Arm', nodes: [upd, rot], edges: [execEdge(upd.id, rot.id)] };
+  })();
+  objects.push(staticBox('Sweeper Pylon', [40, 1.5, -36], [1.2, 3, 1.2], '#15171c', { metalness: 0.6, roughness: 0.4 }));
+  objects.push({
+    id: makeId('obj'),
+    name: 'Sweeper Arm',
+    kind: 'cube',
+    transform: { position: [40, 1.05, -36], rotation: [0, 0, 0], scale: [21, 0.7, 0.7] },
+    renderer: renderer('#ffd34d', { materialOverrides: { emissiveColor: '#ffd34d', emissiveIntensity: 0.5 } }),
+    physics: { ...fixedBox(0.3), bodyType: 'kinematic' },
+    script: { blueprintId: sweepBp.id, graphId: sweepGraphId, enabled: true },
+  });
+
+  // 4) PISTON GATE — a kinematic block that slams across the racing strip on a timer, driven by the
+  //    Tween node (out on easeIn, Done → glide back). Time your pass.
+  const pistonGraphId = makeId('graph');
+  const pistonBp: ScriptBlueprint = {
+    id: makeId('bp'), name: 'Piston Gate', graphId: pistonGraphId, color: '#ff8a3d', createdAt: Date.now(),
+    description: 'Timer → Tween across the strip → Done → Tween home. A rhythm hazard built on the Tween node.',
+  };
+  const pistonGraph: ProjectGraph = (() => {
+    const tick = mkNode('Every 4s', 'Events', 40, 40, { nodeKind: 'event.timer', numberValue: 4 });
+    const out = mkNode('Slam Out', 'Runtime', 300, 40, {
+      nodeKind: 'action.tweenProperty', tweenProperty: 'position', vectorValue: [-4, 1, 16] as Vector3Tuple, numberValue: 0.7, easing: 'easeIn',
+    });
+    const back = mkNode('Glide Home', 'Runtime', 560, 40, {
+      nodeKind: 'action.tweenProperty', tweenProperty: 'position', vectorValue: [-13, 1, 16] as Vector3Tuple, numberValue: 1.6, easing: 'easeInOut',
+    });
+    return { id: pistonGraphId, name: 'Piston Gate', nodes: [tick, out, back], edges: [execEdge(tick.id, out.id), doneEdge(out.id, back.id)] };
+  })();
+  objects.push({
+    id: makeId('obj'),
+    name: 'Piston Gate',
+    kind: 'cube',
+    transform: { position: [-13, 1, 16], rotation: [0, 0, 0], scale: [3.2, 2, 4.6] },
+    renderer: renderer('#ff8a3d', { metalness: 0.5, roughness: 0.4, materialOverrides: { emissiveColor: '#ff8a3d', emissiveIntensity: 0.6 } }),
+    physics: { ...fixedBox(0.3), bodyType: 'kinematic' },
+    script: { blueprintId: pistonBp.id, graphId: pistonGraphId, enabled: true },
+  });
+  objects.push(staticBox('Piston Housing', [-16.4, 1.4, 16], [3.4, 2.8, 5.4], '#2b2f38', { roughness: 0.9 }));
+
+  // 5) AIR RING — fly through the glowing ring off the kicker for +100 (3s cooldown so a parked car
+  //    inside it can't farm points).
+  const ringBurstId = makeId('obj');
+  const ringGraphId = makeId('graph');
+  const ringBp: ScriptBlueprint = {
+    id: makeId('bp'), name: 'Air Ring', graphId: ringGraphId, color: '#c14df0', createdAt: Date.now(),
+    description: 'Fly through off the kicker → Score +100 + burst (cooldown-gated).',
+  };
+  const ringGraph: ProjectGraph = (() => {
+    const ev = mkNode('On Fly Through', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: carId, hasInput: false });
+    const gate = mkNode('Cooldown 3s', 'Logic', 280, 40, { nodeKind: 'logic.cooldown', numberValue: 3 });
+    const getS = mkNode('Get Score', 'Variables', 280, 200, { nodeKind: 'variable.get', variableId: score.scoreVar.id, valueType: 'number', hasInput: false });
+    const addS = mkNode('+ 100', 'Math', 520, 200, { nodeKind: 'math.add', amount: 100, hasInput: false });
+    const setS = mkNode('Set Score', 'Variables', 520, 40, { nodeKind: 'variable.set', variableId: score.scoreVar.id, valueType: 'number' });
+    const burst = mkNode('Ring Burst', 'Runtime', 780, 40, { nodeKind: 'action.burstParticles', targetObjectId: ringBurstId, numberValue: 120 });
+    return {
+      id: ringGraphId, name: 'Air Ring',
+      nodes: [ev, gate, getS, addS, setS, burst],
+      edges: [execEdge(ev.id, gate.id), execEdge(gate.id, setS.id), valueEdge(getS.id, addS.id, 'a'), valueEdge(addS.id, setS.id, 'value'), execEdge(setS.id, burst.id)],
+    };
+  })();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    objects.push(staticBox(`Ring Seg ${i}`, [Math.cos(a) * 3.6, 5.6 + Math.sin(a) * 3.6, 51.5], [0.5, 0.5, 0.4], '#c14df0', { emissive: '#c14df0', emissiveIntensity: 1.6 }));
+  }
+  objects.push({
+    id: makeId('obj'),
+    name: 'Air Ring Trigger',
+    kind: 'cube',
+    transform: { position: [0, 5.6, 51.5], rotation: [0, 0, 0], scale: [5.4, 5.4, 1.2] },
+    renderer: { ...renderer('#c14df0', { opacity: 0.06 }), hideInPlay: true },
+    physics: triggerBox(),
+    script: { blueprintId: ringBp.id, graphId: ringGraphId, enabled: true },
+  });
+  objects.push({
+    id: ringBurstId,
+    name: 'Ring Burst',
+    kind: 'empty',
+    transform: { position: [0, 5.6, 51.5], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    particles: {
+      enabled: false, looping: false, rate: 0, burst: 0, maxParticles: 260, shape: 'sphere', shapeRadius: 3.4,
+      coneAngle: 60, speed: 4, speedJitter: 0.6, direction: [0, 0, -1] as Vector3Tuple, gravity: 1, drag: 0.5,
+      lifetime: 1.2, lifetimeJitter: 0.3, startSize: 0.26, endSize: 0.06, startColor: '#c14df0', endColor: '#22e0ff',
+      startOpacity: 1, endOpacity: 0, worldSpace: true, blend: 'additive', light: true,
+    },
+  });
+
+  // 6) DOMINO RUN — a long row of slabs to topple at speed (pure physics, no blueprint needed).
+  for (let i = 0; i < 14; i++) {
+    objects.push(prop(`Domino ${i}`, [-38 + i * 2.6, 1.7, -52], [0.45, 3.4, 1.8], i % 2 ? '#e8e4da' : '#22e0ff', 8, i % 2 ? undefined : '#22e0ff'));
+  }
+
   // A blueprint only RUNS if a scene object references it via `script` — add a holder so the HUD's −/+ button
   // events are actually handled (logicBlueprintId alone only wires the editor's UI Logic tab).
   objects.push({
@@ -799,9 +1049,9 @@ export async function createSimRacingTemplate(): Promise<string> {
   });
 
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar],
-    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint],
-    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar],
+    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
+    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
     uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>

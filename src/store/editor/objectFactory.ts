@@ -251,6 +251,15 @@ export const makeDamageNumber = (position: Vector3Tuple, value: number, color = 
   effect: { kind: 'damage', life: 0.9, maxLife: 0.9, color, count: 1, value },
 });
 
+/** A soft dust/smoke puff (tire smoke, offroad dust, landings): slow billows that grow, rise and fade. */
+export const makeDustPuff = (position: Vector3Tuple, color = '#b9a37e', count = 14, life = 0.9): SceneObject => ({
+  id: makeId('fx'),
+  name: 'Dust',
+  kind: 'empty',
+  transform: { position: [...position] as Vector3Tuple, rotation: [0, 0, 0], scale: [1, 1, 1] },
+  effect: { kind: 'dust', life, maxLife: life, color, count },
+});
+
 /** A water-entry splash: a crown of droplets that fountain up and arc back down. */
 export const makeSplashObject = (position: Vector3Tuple, color = '#9fd8ff'): SceneObject => ({
   id: makeId('fx'),

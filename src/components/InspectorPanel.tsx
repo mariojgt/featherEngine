@@ -6,7 +6,8 @@ import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, ClothComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, WaterVolumeComponent } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, ClothComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, VehicleWheelSetup, WaterVolumeComponent } from '../types';
+import { resolveVehicleWheels } from '../runtime/vehicleWheels';
 import { particlePresetIds } from '../runtime/particlePresets';
 import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { WATER_STYLE_PRESETS } from '../three/presets';
@@ -926,11 +927,89 @@ function VehicleSection({
             <>
               <p className="field-hint">
                 Real Rapier ray-cast vehicle: per-wheel suspension, weight transfer, tire friction and genuine
-                rollovers. Wire the 4 wheel CHILD objects into Wheels (front pair into Steered) — the sim builds its
-                own dynamic chassis, so the car needs no Rapier body of its own. Wheels: {v.wheelObjectIds.length} · steered: {v.steeredWheelIds.length}.
+                rollovers. The sim builds its own dynamic chassis, so the car needs no Rapier body of its own.
               </p>
+
+              <h4 className="inspector-subhead">Wheel Rig</h4>
+              <p className="field-hint">
+                Each wheel is referenced WITH its role — axle drives the drivetrain split, brake bias and anti-roll
+                pairing; side drives placement; steered turns with input. Order never matters. Legacy cars (ordered
+                wheel lists) keep working; any edit here upgrades them to explicit roles.
+              </p>
+              {(() => {
+                const rig = resolveVehicleWheels(v);
+                const writeRig = (next: VehicleWheelSetup[]) => onChange({ wheels: next });
+                const patchWheel = (index: number, patch: Partial<VehicleWheelSetup>) =>
+                  writeRig(rig.map((w, i) => (i === index ? { ...w, ...patch } : w)));
+                // Candidates: the car's children + grandchildren (wheels usually sit under steering anchors).
+                const childIds = new Set(objects.filter((o) => o.parentId === objectId).map((o) => o.id));
+                const candidates = objects.filter(
+                  (o) => (childIds.has(o.parentId ?? '') || o.parentId === objectId) && o.id !== objectId && !o.particles,
+                );
+                const inRig = new Set(rig.map((w) => w.objectId));
+                const nameOf = (id: string) => objects.find((o) => o.id === id)?.name ?? '(missing object)';
+                return (
+                  <>
+                    {rig.map((w, index) => (
+                      <div className="field-row" key={`${w.objectId}-${index}`}>
+                        <span title={nameOf(w.objectId)}>{nameOf(w.objectId).slice(0, 12)}</span>
+                        <div className="library-row">
+                          <select value={w.axle} onChange={(event) => patchWheel(index, { axle: event.target.value as 'front' | 'rear' })}>
+                            <option value="front">Front</option>
+                            <option value="rear">Rear</option>
+                          </select>
+                          <select value={w.side} onChange={(event) => patchWheel(index, { side: event.target.value as 'left' | 'right' })}>
+                            <option value="left">Left</option>
+                            <option value="right">Right</option>
+                          </select>
+                          <label title="Steered: this wheel turns with steering input">
+                            <input type="checkbox" checked={w.steered} onChange={(event) => patchWheel(index, { steered: event.target.checked })} />
+                          </label>
+                          <button title="Remove wheel" onClick={() => writeRig(rig.filter((_, i) => i !== index))}>✕</button>
+                        </div>
+                      </div>
+                    ))}
+                    <label className="field-row">
+                      <span>Add wheel</span>
+                      <select
+                        value=""
+                        onChange={(event) => {
+                          if (!event.target.value) return;
+                          writeRig([...rig, { objectId: event.target.value, axle: 'rear', side: 'left', steered: false }]);
+                        }}
+                      >
+                        <option value="">— pick a child object —</option>
+                        {candidates.filter((o) => !inRig.has(o.id)).map((o) => (
+                          <option key={o.id} value={o.id}>{o.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {rig.length > 0 && (
+                      <button
+                        className="full-button"
+                        title="Set each wheel's axle/side from its position on the car (front = +Z, left = −X); fronts become steered."
+                        onClick={() => {
+                          writeRig(
+                            rig.map((w) => {
+                              const wheel = objects.find((o) => o.id === w.objectId);
+                              const anchor = wheel?.parentId && wheel.parentId !== objectId ? objects.find((o) => o.id === wheel.parentId) : undefined;
+                              const x = (anchor?.transform.position[0] ?? 0) + (wheel?.transform.position[0] ?? 0);
+                              const z = (anchor?.transform.position[2] ?? 0) + (wheel?.transform.position[2] ?? 0);
+                              const axle = z >= 0 ? ('front' as const) : ('rear' as const);
+                              return { objectId: w.objectId, axle, side: x < 0 ? ('left' as const) : ('right' as const), steered: axle === 'front' };
+                            }),
+                          );
+                        }}
+                      >
+                        Auto-assign roles from positions
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
+
               <h4 className="inspector-subhead">Engine &amp; Brakes</h4>
-              {num('Engine Force', 'engineForce', 50, 1800)}
+              {num('Engine Force', 'engineForce', 50, 2600)}
               {num('Brake Force', 'brakeForce', 50, 2200)}
               {num('Handbrake Force', 'handbrakeForce', 50, 1400)}
               {num('Brake Bias (front)', 'brakeBias', 0.05, 0.55)}
@@ -947,10 +1026,58 @@ function VehicleSection({
               </label>
               {num('Steer Angle', 'steerAngle', 0.02, 0.6)}
 
+              <h4 className="inspector-subhead">Gearbox &amp; Engine</h4>
+              <label className="field-row">
+                <span>Transmission</span>
+                <select
+                  value={v.transmission ?? 'auto'}
+                  onChange={(event) => onChange({ transmission: event.target.value as 'auto' | 'manual' })}
+                >
+                  <option value="auto">Automatic</option>
+                  <option value="manual">Manual (E/Q · gamepad Y/LB)</option>
+                </select>
+              </label>
+              {num('Final Drive', 'finalDrive', 0.1, 3.6)}
+              {num('Idle RPM', 'idleRpm', 50, 900)}
+              {num('Redline RPM', 'maxRpm', 100, 7200)}
+              {num('Upshift RPM (auto)', 'shiftUpRpm', 100, 6500)}
+              {num('Downshift RPM (auto)', 'shiftDownRpm', 100, 2400)}
+              {num('Shift Time (s)', 'shiftTime', 0.02, 0.22)}
+              <p className="field-hint">
+                The engine runs a torque curve through {(v.gearRatios ?? [3.1, 2.05, 1.55, 1.2, 0.97, 0.8]).length} gears — engine
+                pitch climbs each gear and drops on the shift. Bind HUD text to the <code>RPM</code> and <code>Gear</code> project
+                variables for a tachometer.
+              </p>
+
+              <h4 className="inspector-subhead">Aero &amp; Balance</h4>
+              {num('Aero Drag', 'aeroDrag', 0.05, 0.35)}
+              {num('Downforce', 'downforceSim', 0.1, 1.1)}
+              {num('Anti-roll Front', 'antiRollFront', 250, 6000)}
+              {num('Anti-roll Rear', 'antiRollRear', 250, 4200)}
+              <p className="field-hint">Anti-roll bars flatten cornering. Stiffer REAR = more oversteer (rotates), stiffer FRONT = more understeer (stable).</p>
+
+              <h4 className="inspector-subhead">Assists &amp; Surfaces</h4>
+              <label className="field-row">
+                <span>ABS</span>
+                <input type="checkbox" checked={v.absEnabled ?? true} onChange={(event) => onChange({ absEnabled: event.target.checked })} />
+              </label>
+              <label className="field-row">
+                <span>Traction Control</span>
+                <input type="checkbox" checked={v.tcsEnabled ?? true} onChange={(event) => onChange({ tcsEnabled: event.target.checked })} />
+              </label>
+              <label className="field-row">
+                <span>Surface Grip</span>
+                <input type="checkbox" checked={v.surfaceGripEnabled ?? true} onChange={(event) => onChange({ surfaceGripEnabled: event.target.checked })} />
+              </label>
+              <p className="field-hint">
+                With Surface Grip on, each wheel reads the <code>surface</code> instance variable of whatever it rolls over
+                (tarmac/curb/dirt/grass/gravel/sand/snow/ice) — running wide onto tagged grass costs real grip. Untagged ground = tarmac.
+              </p>
+
               <h4 className="inspector-subhead">Chassis</h4>
               {num('Mass (kg)', 'chassisMass', 25, 1100)}
               {num('Center of Mass Y', 'centerOfMassY', 0.05, -0.4)}
-              {num('Linear Damping', 'linearDamping', 0.02, 0.15)}
+              {num('Linear Damping', 'linearDamping', 0.02, 0.04)}
               {num('Angular Damping', 'angularDamping', 0.05, 0.6)}
               <p className="field-hint">A lower (more negative) Center of Mass Y makes the car far harder to roll; heavier mass = more planted.</p>
 
@@ -971,6 +1098,61 @@ function VehicleSection({
                 <input type="checkbox" checked={v.deformable ?? false} onChange={(event) => onChange({ deformable: event.target.checked })} />
               </label>
               <p className="field-hint">When on, the car body MESH plastically dents/crumples where it takes hard hits during Play (BeamNG-style).</p>
+
+              <h4 className="inspector-subhead">Garage (body swap)</h4>
+              <p className="field-hint">
+                The ordered body list for an in-game garage. At runtime a <code>CarBody</code> project variable (0, 1, 2…)
+                picks which body model the chassis wears — wire garage UI buttons to bump it (the sim template's G menu
+                does exactly this). Any imported model can be a body; the physics chassis re-fits automatically.
+              </p>
+              {(v.garageBodyIds ?? []).map((assetId, index) => {
+                const list = v.garageBodyIds ?? [];
+                const move = (dir: -1 | 1) => {
+                  const next = [...list];
+                  const swapIdx = index + dir;
+                  if (swapIdx < 0 || swapIdx >= next.length) return;
+                  [next[index], next[swapIdx]] = [next[swapIdx], next[index]];
+                  onChange({ garageBodyIds: next });
+                };
+                return (
+                  <div className="field-row" key={`${assetId}-${index}`}>
+                    <span>#{index}</span>
+                    <div className="library-row">
+                      <select
+                        value={assetId}
+                        onChange={(event) => {
+                          const next = [...list];
+                          next[index] = event.target.value;
+                          onChange({ garageBodyIds: next });
+                        }}
+                      >
+                        {modelAssets.map((a) => (
+                          <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
+                        {!modelAssets.some((a) => a.id === assetId) && <option value={assetId}>(missing asset)</option>}
+                      </select>
+                      <button title="Move up" onClick={() => move(-1)} disabled={index === 0}>↑</button>
+                      <button title="Move down" onClick={() => move(1)} disabled={index === list.length - 1}>↓</button>
+                      <button title="Remove from garage" onClick={() => onChange({ garageBodyIds: list.filter((_, i) => i !== index) })}>✕</button>
+                    </div>
+                  </div>
+                );
+              })}
+              <label className="field-row">
+                <span>Add body</span>
+                <select
+                  value=""
+                  onChange={(event) => {
+                    if (!event.target.value) return;
+                    onChange({ garageBodyIds: [...(v.garageBodyIds ?? []), event.target.value] });
+                  }}
+                >
+                  <option value="">— pick a model asset —</option>
+                  {modelAssets.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </label>
             </>
           ) : (
             <>

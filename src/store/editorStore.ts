@@ -95,6 +95,7 @@ import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { gamepadInput } from '../runtime/gamepadInput';
 import { markExec } from '../runtime/execTrace';
+import { addSkidMark } from '../runtime/skidMarks';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
 import { addVehicleDent, clearVehicleDents } from '../runtime/vehicleDamageBus';
@@ -190,6 +191,7 @@ import {
   makeFractureChunks,
   makeDamageNumber,
   makeExplosion,
+  makeDustPuff,
   makeImpactObject,
   makeMuzzleFlash,
   makeProjectileObject,
@@ -5379,7 +5381,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const setVelocities: Record<string, Vector3Tuple> = {};
       // Driver input for raycast-sim cars (physicsModel === 'raycast'), resolved in the vehicle pass and handed
       // to the Rapier vehicle controller inside physics.frame. Keyed by chassis object id.
-      const vehicleInputs: Record<string, { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean }> = {};
+      const vehicleInputs: Record<
+        string,
+        { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean; shiftUp?: boolean; shiftDown?: boolean }
+      > = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
       // Self writes still mutate the owner's tuples directly; these are merged into the object list before
       // the character/physics passes, so a teleported kinematic/fixed body follows (physics.frame reads the
@@ -7467,7 +7472,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const steerRate = (steerRaw === 0 ? 9 : 6) * delta;
           const steerState = approach(prevSteerState, targetSteer, steerRate);
           vehicleVars.__vehicleSteerState = steerState;
-          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn };
+          // Manual gearbox paddles (level-style; the sim edge-detects): E/Q by default, which the gamepad
+          // Y / LB buttons hit through the default key aliases.
+          const shiftUp = Boolean(currentKeys[veh.keyShiftUp ?? 'KeyE']);
+          const shiftDown = Boolean(currentKeys[veh.keyShiftDown ?? 'KeyQ']);
+          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn, shiftUp, shiftDown };
           continue;
         }
         const braking = throttleSig < -0.05;
@@ -8390,15 +8399,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const parentId = byIdNow.get(ws.objectId)?.parentId;
             if (parentId && !result.vehicles.has(parentId)) anchorStates.set(parentId, ws);
           }
-          // Brake-light glow + speedometer mirror (raycast cars skip the arcade pass that normally does this).
+          // Brake-light glow + speedometer/tach mirrors (raycast cars skip the arcade pass that normally does this).
           const brakeLightGlow = new Map<string, number>();
           const speedVarMirror = variableByName.get('Speed');
+          const rpmVarMirror = variableByName.get('RPM');
+          const gearVarMirror = variableByName.get('Gear');
           for (const [carId, st] of result.vehicles) {
             const veh = { ...defaultVehicle(), ...byIdNow.get(carId)?.vehicle };
             const input = vehicleInputs[carId];
             const braking = Boolean(input && (input.throttle < -0.05 || input.handbrake));
             for (const lid of veh.brakeLightIds ?? []) brakeLightGlow.set(lid, braking ? 4 : 0.2);
-            if (speedVarMirror && carId === vehiclePlayerId) nextVariableValues[speedVarMirror.id] = Math.round(Math.abs(st.speed) * 3.6);
+            if (carId === vehiclePlayerId) {
+              if (speedVarMirror) nextVariableValues[speedVarMirror.id] = Math.round(Math.abs(st.speed) * 3.6);
+              // Drivetrain HUD: bind UI text/bars to "RPM" and "Gear" project vars (created by the template,
+              // or by hand) — mirrored every frame from the sim.
+              if (rpmVarMirror) nextVariableValues[rpmVarMirror.id] = Math.round(st.rpm);
+              if (gearVarMirror) nextVariableValues[gearVarMirror.id] = st.gear === -1 ? 'R' : String(st.gear);
+            }
           }
           resolvedObjects = resolvedObjects.map((object) => {
             const cs = result.vehicles.get(object.id);
@@ -8418,10 +8435,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               // braking from speed — so you actually see marks "when you brake and stuff", not just big drifts.
               const leavingMarks = Math.abs(cs.speed) > 2 && (Math.abs(cs.lateralSpeed) > 1.6 || handbrake || (braking && Math.abs(cs.speed) > 7));
               if (object.id === vehiclePlayerId) {
+                // Engine pitch from the SIM'S RPM, not road speed — so the note climbs through each gear and
+                // drops on the shift, exactly what sells "this car has a real gearbox".
+                const idle = veh.idleRpm ?? 900;
                 nextVehicleSound = {
                   engineId: veh.engineSoundId,
                   skidId: veh.skidSoundId,
-                  rpm: Math.min(1, Math.abs(cs.speed) / Math.max(0.001, veh.maxSpeed)),
+                  rpm: Math.min(1, Math.max(0, (cs.rpm - idle) / Math.max(1, (veh.maxRpm ?? 7200) - idle))),
                   slip: skidding ? Math.min(1, Math.abs(cs.lateralSpeed) / 10) : 0,
                 };
               }
@@ -8456,6 +8476,93 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   const dmgVar = variableByName.get('Damage');
                   if (dmgVar) nextVariableValues[dmgVar.id] = toNumber(nextVariableValues[dmgVar.id] ?? dmgVar.defaultValue) + 1;
                 }
+              }
+              // CRASH VFX: every hard hit throws a spark burst from the leading edge (where the dent lands);
+              // a violent one (high decel/speed) goes up in a fiery burst instead, and the player's camera
+              // gets a jolt scaled to the impact. Self-despawning effect objects — no emitter setup needed.
+              if (hardImpact) {
+                const key = `${object.id}:crashFx`;
+                if ((nextCooldowns[key] ?? 0) <= 0) {
+                  nextCooldowns[key] = 0.25;
+                  const sev = Math.max(decel, Math.abs(prevSpeed));
+                  const yaw = cs.chassis.rotation[1];
+                  const dir = prevSpeed >= 0 ? 1 : -1;
+                  const nose: Vector3Tuple = [pos[0] + Math.sin(yaw) * dir * 1.1, pos[1] + 0.35, pos[2] + Math.cos(yaw) * dir * 1.1];
+                  spawned.push(sev > 14 ? makeExplosion(nose, '#ff9a3d') : makeImpactObject(nose, '#ffd27f'));
+                  if (object.id === vehiclePlayerId) cameraShake = Math.min(1, cameraShake + Math.min(0.55, 0.1 + sev * 0.025));
+                }
+              }
+              // --- Per-wheel VFX: smoke/dust spawn at each tire's CONTACT PATCH (chassis-local connection
+              //     point rotated by the car's yaw), not the car's center — a four-wheel slide smokes at all
+              //     four corners, a clipped curb puffs only at the wheel that clipped it. ---
+              const carYaw = cs.chassis.rotation[1];
+              const yawSin = Math.sin(carYaw);
+              const yawCos = Math.cos(carYaw);
+              const wheelRadius = Math.max(veh.wheelRadius ?? 0.4, 0.05);
+              const wheelGround = (w: (typeof cs.wheels)[number]): Vector3Tuple => [
+                pos[0] + w.connectionX * yawCos + w.connectionZ * yawSin,
+                pos[1] + w.connectionY - w.suspension - wheelRadius + 0.06,
+                pos[2] - w.connectionX * yawSin + w.connectionZ * yawCos,
+              ];
+              // Travel heading from the position delta (robust on slides, where facing ≠ direction of travel).
+              const prevPX = toNumber(mutable.__vehiclePX ?? pos[0]);
+              const prevPZ = toNumber(mutable.__vehiclePZ ?? pos[2]);
+              const moveDX = pos[0] - prevPX;
+              const moveDZ = pos[2] - prevPZ;
+              mutable.__vehiclePX = pos[0];
+              mutable.__vehiclePZ = pos[2];
+              const travelYaw = Math.hypot(moveDX, moveDZ) > 0.02 ? Math.atan2(moveDX, moveDZ) : carYaw;
+
+              // LANDING DUST: stomp a puff under EACH wheel as it touches down off a real jump.
+              const groundedNow = cs.wheels.some((w) => w.inContact);
+              const wasAirborne = toNumber(mutable.__airtime ?? 0) > 0.35;
+              if (groundedNow && wasAirborne) {
+                for (const w of cs.wheels) if (w.inContact) spawned.push(makeDustPuff(wheelGround(w), '#b9a37e', 12, 0.8));
+              }
+              // DRIFT SMOKE: while genuinely sliding, shed grey billows from each REAR contact patch — tire
+              // smoke trailing the slide (the looped skid audio keys off the same signal).
+              if (skidding) {
+                const key = `${object.id}:driftFx`;
+                if ((nextCooldowns[key] ?? 0) <= 0) {
+                  nextCooldowns[key] = 0.16;
+                  for (const w of cs.wheels) {
+                    if (w.axle === 'rear' && w.inContact) spawned.push(makeDustPuff(wheelGround(w), '#c9ccd2', 10, 1.1));
+                  }
+                }
+              }
+              // OFFROAD DUST: each wheel on a loose surface (published per-wheel grip < 0.8) kicks up
+              // surface-coloured dust at speed — sandy tan when very loose, earthier on grass/dirt.
+              if (Math.abs(cs.speed) > 6) {
+                const key = `${object.id}:dustFx`;
+                if ((nextCooldowns[key] ?? 0) <= 0) {
+                  let any = false;
+                  for (const w of cs.wheels) {
+                    if (!w.inContact || (w.grip ?? 1) >= 0.8) continue;
+                    spawned.push(makeDustPuff(wheelGround(w), (w.grip ?? 1) < 0.5 ? '#d8c08a' : '#9a8d6b', 9, 0.9));
+                    any = true;
+                  }
+                  if (any) nextCooldowns[key] = 0.2;
+                }
+              }
+              // PERSISTENT SKID MARKS: braking hard, sliding, or handbraking lays real rubber on the track
+              // at each working wheel's contact patch (rendered by the SkidMarks instanced layer; spaced by
+              // distance + capped in runtime/skidMarks). Loose surfaces dust instead of marking.
+              if (leavingMarks) {
+                const strength = Math.min(1, Math.abs(cs.lateralSpeed) / 7 + (handbrake ? 0.45 : 0) + (braking ? 0.3 : 0));
+                cs.wheels.forEach((w, i) => {
+                  if (!w.inContact || (w.grip ?? 1) < 0.8) return;
+                  // Rears always mark; fronts only under service braking (locked-front feel).
+                  if (w.axle === 'front' && !braking) return;
+                  const g = wheelGround(w);
+                  addSkidMark(`${object.id}:${i}`, g[0], g[1] - 0.03, g[2], travelYaw, strength);
+                });
+              }
+              // SHIFT BACKFIRE: an upshift pops a quick flame burst from the exhaust/boost emitters — pairs
+              // with the RPM drop in the engine audio so the gear change reads visually too.
+              const prevGear = toNumber(mutable.__vehicleGear ?? 1);
+              mutable.__vehicleGear = cs.gear;
+              if (cs.gear > prevGear && prevGear >= 1 && veh.boostFlameIds?.length) {
+                for (const id of veh.boostFlameIds) sendParticleCommand(id, { type: 'burst', count: 12 });
               }
               if (veh.brakeSoundId && input && input.throttle < -0.1 && cs.speed > 8) {
                 const key = `${object.id}:brakeSfx`;

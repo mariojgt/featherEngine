@@ -2017,7 +2017,7 @@ const rawEngineTools = {
 
   set_vehicle: tool({
     description:
-      'Add/configure the built-in VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn). TWO physics models via physicsModel: (1) "arcade" (default) = a hand-rolled tire/bicycle model with the tunables below (weightTransfer/tractionControl/downforce/grip etc.) on a dynamic Rapier convex body; raise turnRate for snappier turning, weightTransfer/lower handbrakeGrip for drift, tractionControl/downforce for planted racers; supports crashDamageEnabled (rollovers/wheel-break/crush/debris). (2) "raycast" = a REAL Rapier DynamicRayCastVehicleController sim (BeamNG/sim-racing style): genuine per-wheel ray-cast suspension, weight transfer, tire friction and true rollovers. In raycast mode the car needs NO Rapier body of its own (the sim builds a dynamic chassis from the object scale), the 4 wheel CHILD objects go in wheelObjectIds in [FL,FR,RL,RR] order, and the FRONT pair (the actual wheel ids, NOT anchors) go in steeredWheelIds. Tune raycast cars with engineForce/brakeForce/handbrakeForce/drivetrain/brakeBias, chassisMass/centerOfMassY (lower = harder to roll)/linearDamping/angularDamping, and wheelFrictionSlip/sideFrictionStiffness/suspensionRestLength/suspensionStiffnessSim/suspensionCompression/suspensionRelaxation/maxSuspensionForce/maxSuspensionTravelSim. tireMarkIds, headlightIds/brakeLightIds and the engine/skid/brake/horn/collision audio ids work in both. Pass enabled:false to remove control. All fields optional.',
+      'Add/configure the built-in VEHICLE (car) controller on an object — the driving peer of set_character_controller. WASD drives (W throttle, S brake/reverse, A/D steer, Space handbrake to drift, H horn). TWO physics models via physicsModel: (1) "arcade" (default) = a hand-rolled tire/bicycle model with the tunables below (weightTransfer/tractionControl/downforce/grip etc.) on a dynamic Rapier convex body; raise turnRate for snappier turning, weightTransfer/lower handbrakeGrip for drift, tractionControl/downforce for planted racers; supports crashDamageEnabled (rollovers/wheel-break/crush/debris). (2) "raycast" = a REAL Rapier DynamicRayCastVehicleController sim (BeamNG/sim-racing style): genuine per-wheel ray-cast suspension, weight transfer, tire friction, true rollovers, PLUS a full drivetrain sim — engine torque curve + RPM + a gearbox (auto or manual paddle shifting; engine audio pitch follows RPM through the gears; the runtime mirrors live values into "RPM"/"Gear"/"Speed" project vars for HUD binding), aero drag + downforce, front/rear anti-roll bars, ABS + traction-control assists, and per-wheel SURFACE grip (wheels read the `surface` instance variable — tarmac/curb/dirt/grass/gravel/sand/snow/ice — of whatever they roll over; tag runoff areas to punish corner-cutting). In raycast mode the car needs NO Rapier body of its own (the sim builds a dynamic chassis from the object scale), the 4 wheel CHILD objects go in wheelObjectIds in [FL,FR,RL,RR] order, and the FRONT pair (the actual wheel ids, NOT anchors) go in steeredWheelIds. Tune with engineForce/brakeForce/handbrakeForce/drivetrain/brakeBias, chassisMass/centerOfMassY (lower = harder to roll), wheelFrictionSlip/sideFrictionStiffness + the suspension fields, the gearbox fields (transmission/gearRatios/finalDrive/idleRpm/maxRpm/shiftUpRpm/shiftDownRpm/shiftTime), aeroDrag/downforceSim/antiRollFront/antiRollRear, and absEnabled/tcsEnabled/surfaceGripEnabled. tireMarkIds, headlightIds/brakeLightIds and the engine/skid/brake/horn/collision audio ids work in both. Pass enabled:false to remove control. All fields optional.',
     inputSchema: z.object({
       objectId: z.string(),
       enabled: z.boolean().optional(),
@@ -2064,9 +2064,39 @@ const rawEngineTools = {
       suspensionRelaxation: z.number().optional().describe('(raycast) Damping while extending. Default 0.88.'),
       maxSuspensionForce: z.number().optional().describe('(raycast) Suspension force clamp N. Default 30000.'),
       maxSuspensionTravelSim: z.number().optional().describe('(raycast) Max suspension travel (u). Default 0.3.'),
-      wheelObjectIds: z.array(z.string()).optional().describe('The 4 spinning tire mesh ids [FL,FR,RL,RR]. Arcade: child meshes at [0,0,0]. Raycast: direct wheel CHILD objects of the car.'),
-      steeredWheelIds: z.array(z.string()).optional().describe('Front steering ids. Arcade: prefer wheel-anchor empty ids (direct wheel ids also work). Raycast: MUST be the front wheel ids that appear in wheelObjectIds.'),
+      // --- Raycast drivetrain sim (engine + gearbox) + aero/anti-roll/assists ---
+      transmission: z.enum(['auto', 'manual']).optional().describe('(raycast) auto self-shifts on RPM; manual shifts on keyShiftUp/keyShiftDown (E/Q default; gamepad Y/LB). Default auto.'),
+      gearRatios: z.array(z.number()).optional().describe('(raycast) Forward gear ratios 1st→top. Default [3.1,2.05,1.55,1.2,0.97,0.8].'),
+      finalDrive: z.number().optional().describe('(raycast) Final-drive ratio multiplied into every gear. Default 3.6.'),
+      idleRpm: z.number().optional().describe('(raycast) Idle RPM. Default 900.'),
+      maxRpm: z.number().optional().describe('(raycast) Redline; the limiter cuts power past it. Default 7200.'),
+      shiftUpRpm: z.number().optional().describe('(raycast, auto box) Upshift RPM. Default 6500.'),
+      shiftDownRpm: z.number().optional().describe('(raycast, auto box) Downshift RPM. Default 2400.'),
+      shiftTime: z.number().optional().describe('(raycast) Torque-cut seconds per shift. Default 0.22.'),
+      keyShiftUp: z.string().optional().describe('(raycast manual) Shift-up key code. Default KeyE.'),
+      keyShiftDown: z.string().optional().describe('(raycast manual) Shift-down key code. Default KeyQ.'),
+      aeroDrag: z.number().optional().describe('(raycast) Quadratic air drag — shapes top speed. Default 0.5.'),
+      downforceSim: z.number().optional().describe('(raycast) Speed² downforce while grounded. Default 1.1.'),
+      antiRollFront: z.number().optional().describe('(raycast) Front anti-roll bar stiffness (flatter cornering; stiffer front = understeer). Default 6000.'),
+      antiRollRear: z.number().optional().describe('(raycast) Rear anti-roll bar stiffness (stiffer rear = oversteer/rotation). Default 4200.'),
+      absEnabled: z.boolean().optional().describe('(raycast) ABS assist: keeps the fronts steering under hard braking. Default true.'),
+      tcsEnabled: z.boolean().optional().describe('(raycast) Traction control: tames wheelspin launches + power-oversteer. Turn OFF for a raw drift car. Default true.'),
+      surfaceGripEnabled: z.boolean().optional().describe('(raycast) Per-wheel surface grip from the `surface` instance variable of whatever a wheel rolls over (tarmac/curb/dirt/grass/gravel/sand/snow/ice). Default true.'),
+      wheels: z
+        .array(
+          z.object({
+            objectId: z.string(),
+            axle: z.enum(['front', 'rear']),
+            side: z.enum(['left', 'right']),
+            steered: z.boolean().optional().describe('Turns with steering input. Defaults true on the front axle.'),
+          }),
+        )
+        .optional()
+        .describe('(raycast, PREFERRED) Explicit wheel rig: each wheel object with its declared role — order never matters. Drives drivetrain split, brake bias, handbrake and anti-roll pairing. Replaces the whole rig; wins over the legacy wheelObjectIds/steeredWheelIds convention.'),
+      wheelObjectIds: z.array(z.string()).optional().describe('LEGACY (prefer `wheels`): the 4 spinning tire mesh ids in [FL,FR,RL,RR] order. Arcade: child meshes at [0,0,0]. Raycast: direct wheel CHILD objects of the car.'),
+      steeredWheelIds: z.array(z.string()).optional().describe('LEGACY (prefer `wheels`): front steering ids. Arcade: prefer wheel-anchor empty ids (direct wheel ids also work). Raycast: MUST be the front wheel ids that appear in wheelObjectIds.'),
       tireMarkIds: z.array(z.string()).optional().describe('Particle emitter object ids near tire contact patches; runtime emits only while slipping/handbraking.'),
+      garageBodyIds: z.array(z.string()).optional().describe('(raycast) Ordered MODEL ASSET ids for the in-game garage: a "CarBody" project variable (0,1,2…) picks which body the chassis wears at runtime (chassis re-fits automatically). Replaces the whole list. Also editable in the Inspector Garage section.'),
       headlightIds: z.array(z.string()).optional(),
       brakeLightIds: z.array(z.string()).optional(),
       keyThrottle: z.string().optional(),
@@ -3182,6 +3212,12 @@ const rawEngineTools = {
       minimapEnabled: z.boolean().optional().describe('Show the GTA-style radar minimap overlay.'),
       minimapRotate: z.boolean().optional().describe('Rotate the radar with the player heading (true, GTA-style) or keep north-up (false).'),
       minimapRange: z.number().optional().describe('World-units half-extent the radar shows around the player (~40–100).'),
+      autoQuality: z
+        .boolean()
+        .optional()
+        .describe(
+          'Adaptive quality (default on): sustained low FPS during Play steps the quality preset down (and back up with headroom) — never above the user\'s chosen preset; the editor restores it on Stop. The first thing to suggest when a game "runs choppy on slower machines".',
+        ),
       compressTextures: z
         .boolean()
         .optional()
@@ -3189,8 +3225,8 @@ const rawEngineTools = {
           'Texture compression for FUTURE model imports. On (default) transcodes imported model textures to GPU-compressed KTX2 — cuts GPU memory ~6–8x and shrinks the exported game (the biggest browser perf/size lever). Off keeps textures lossless. Affects models imported AFTER this is set, not ones already in the project.',
         ),
     }),
-    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, compressTextures }) => {
-      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, compressTextures });
+    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, autoQuality, compressTextures }) => {
+      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, autoQuality, compressTextures });
       return 'Updated render/post-processing settings.';
     },
   }),

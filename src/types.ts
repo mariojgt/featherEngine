@@ -1158,6 +1158,9 @@ export interface RenderSettings {
    *  count + map size, post-FX MSAA, and bloom mip blur via the profiles in `src/three/quality.ts`.
    *  Changeable on the viewport, by the AI, and from the "Set Quality" Blueprint node. */
   quality?: QualityLevel;
+  /** When on (default), sustained low framerate during Play auto-steps `quality` down (and back up as
+   *  headroom returns) — never above the user's chosen preset; the editor restores it on Stop. */
+  autoQuality?: boolean;
   /** When on (default), imported model textures are transcoded to GPU-compressed KTX2 on import —
    *  cuts VRAM ~6–8× and shrinks the exported game. Turn off to keep textures byte-for-byte
    *  (lossless) at the cost of more GPU memory. See `src/three/compressTextures.ts`. */
@@ -1289,6 +1292,19 @@ export interface ViewModelComponent {
  * leans into turns (bodyRoll), and the wheel child objects spin (∝ speed) + the front pair steers. A
  * follow camera (shared with the character follow camera) trails the car with mouse orbit.
  */
+/** One explicit wheel reference on a vehicle (Unreal-style wheel setup): the wheel object plus its ROLE,
+ *  so the physics never has to infer front/rear/left/right from array position. */
+export interface VehicleWheelSetup {
+  /** The spinning wheel mesh object (a child of the car, or of a steering-anchor empty under the car). */
+  objectId: string;
+  /** Which end of the car — drives the drivetrain split (fwd/rwd), brake bias, and anti-roll pairing. */
+  axle: 'front' | 'rear';
+  /** Which side — drives auto-fit placement and anti-roll left↔right pairing. */
+  side: 'left' | 'right';
+  /** Whether this wheel turns with steering input. Defaults to true on the front axle. */
+  steered?: boolean;
+}
+
 export interface VehicleComponent {
   enabled: boolean;
   /** Which simulation drives the car. `'arcade'` (default/absent) = the hand-rolled tire model below.
@@ -1366,6 +1382,10 @@ export interface VehicleComponent {
   /** In-game GARAGE: ordered list of body model asset ids. A "CarBody" project var picks which one the chassis
    *  shows at runtime (the runtime swaps renderer.modelAssetId → the raycast chassis re-sizes to it). */
   garageBodyIds?: string[];
+  /** Explicit wheel rig (PREFERRED, Unreal-style): each wheel object referenced WITH its role, so nothing
+   *  depends on array order. When present this wins over the legacy positional convention
+   *  (wheelObjectIds in [FL,FR,RL,RR] order + steeredWheelIds). */
+  wheels?: VehicleWheelSetup[];
   /** Soft-body crash damage: when true, the body MESH plastically dents/crumples on hard impacts during Play
    *  (the runtime records dents from collision direction + force; the model renderer displaces the vertices). */
   deformable?: boolean;
@@ -1440,6 +1460,42 @@ export interface VehicleComponent {
   maxSuspensionForce?: number;
   /** Max suspension travel (world units) before it bottoms out. */
   maxSuspensionTravelSim?: number;
+  // --- Raycast sim: drivetrain simulation (engine + gearbox) ---
+  /** 'auto' shifts itself on RPM thresholds; 'manual' shifts only on keyShiftUp/keyShiftDown. */
+  transmission?: 'auto' | 'manual';
+  /** Forward gear ratios, 1st → top (e.g. [3.1, 2.05, 1.55, 1.2, 0.97, 0.8]). Reverse reuses 1st. */
+  gearRatios?: number[];
+  /** Final-drive (differential) ratio multiplied into every gear. */
+  finalDrive?: number;
+  /** Engine idle RPM (the tachometer floor). */
+  idleRpm?: number;
+  /** Redline RPM — the rev limiter cuts engine force just past this. */
+  maxRpm?: number;
+  /** Auto gearbox: upshift when engine RPM exceeds this (under throttle). */
+  shiftUpRpm?: number;
+  /** Auto gearbox: downshift when engine RPM falls below this. */
+  shiftDownRpm?: number;
+  /** Seconds of torque cut while a shift completes (the "shift kick" feel). */
+  shiftTime?: number;
+  /** Manual transmission: shift up / shift down key codes (gamepad Y/LB hit these via the default aliases). */
+  keyShiftUp?: string;
+  keyShiftDown?: string;
+  // --- Raycast sim: aero + anti-roll + assists + surfaces ---
+  /** Quadratic air drag coefficient — shapes top speed (force = aeroDrag · speed², against travel). */
+  aeroDrag?: number;
+  /** Downforce coefficient (speed² downward push while grounded). Replaces the old hardcoded 1.1. */
+  downforceSim?: number;
+  /** Front/rear anti-roll bar stiffness (N per metre of left↔right suspension difference). Less body roll,
+   *  flatter cornering; a stiffer REAR bar adds oversteer, stiffer FRONT adds understeer (real tuning lever). */
+  antiRollFront?: number;
+  antiRollRear?: number;
+  /** ABS assist: while braking hard the brakes ease off enough to keep the front tires steering. */
+  absEnabled?: boolean;
+  /** Traction control assist: cuts engine power during wheelspin launches and power-oversteer slides. */
+  tcsEnabled?: boolean;
+  /** Per-wheel surface grip: each wheel reads the `surface` instance variable of whatever it's rolling on
+   *  (tarmac/curb/dirt/grass/gravel/sand/mud/snow/ice) and scales its grip — going wide costs lap time. */
+  surfaceGripEnabled?: boolean;
 }
 
 export interface SceneObject {
@@ -1567,9 +1623,10 @@ export interface ProjectileComponent {
 
 /** A runtime-spawned, self-despawning particle burst (bullet impacts, muzzle flashes). THREE.Points + a flash light. */
 export interface EffectComponent {
-  /** 'impact' = omni spark burst; 'muzzle' = brief forward flash; 'splash' = water droplets; 'damage' = a
-   *  floating combat damage number (uses `value`). */
-  kind: 'impact' | 'muzzle' | 'splash' | 'damage';
+  /** 'impact' = omni spark burst; 'muzzle' = brief forward flash; 'splash' = water droplets; 'dust' = soft
+   *  drifting smoke/dust billows (tire smoke, offroad dust, landings); 'damage' = a floating combat damage
+   *  number (uses `value`). */
+  kind: 'impact' | 'muzzle' | 'splash' | 'dust' | 'damage';
   /** For kind 'damage': the number to display (the hit-point amount). */
   value?: number;
   /** Seconds remaining before it despawns. */

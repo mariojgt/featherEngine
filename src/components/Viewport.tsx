@@ -12,6 +12,7 @@ import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { FragmentMesh } from '../three/FragmentMesh';
 import { AudioListenerSync } from '../three/AudioListenerSync';
+import { SkidMarks } from '../three/SkidMarks';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
@@ -48,6 +49,7 @@ import {
   InstancedIdsContext,
 } from '../three/modelInstancing';
 import { qualityProfile, QUALITY_LEVELS } from '../three/quality';
+import { autoQualityStep, resetAutoQuality } from '../runtime/autoQuality';
 import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
 import { WaterSurface } from '../three/WaterSurface';
@@ -1223,6 +1225,10 @@ export function ViewportPanel() {
   const [dpr, setDpr] = useState(1.5);
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  // Adaptive quality only degrades DURING Play — give the user back their authored preset on Stop.
+  useEffect(() => {
+    if (!isPlaying) resetAutoQuality();
+  }, [isPlaying]);
   const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
   const cinematicPreviewFade = useEditorStore((state) => state.editorCinematicPreviewFade);
   const cinematicPreviewLook = useEditorStore((state) => state.editorCinematicPreviewLook);
@@ -1233,6 +1239,7 @@ export function ViewportPanel() {
   const closePrefabEditor = useEditorStore((state) => state.closePrefabEditor);
   // Game quality (scalability) preset — drives render resolution, shadows, and post-FX MSAA.
   const quality = useEditorStore((state) => state.renderSettings.quality);
+  const autoQuality = useEditorStore((state) => state.renderSettings.autoQuality !== false);
   const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
   const qProfile = qualityProfile(quality);
   const followTargetMeta = useEditorStore((state) => {
@@ -1595,6 +1602,14 @@ export function ViewportPanel() {
               </option>
             ))}
           </select>
+          <button
+            className={`snap-step ${autoQuality ? 'active' : ''}`}
+            title="Auto quality: while playing, sustained low framerate steps the preset down (and back up) — never above your chosen preset. Restored on Stop."
+            style={{ opacity: autoQuality ? 1 : 0.55 }}
+            onClick={() => updateRenderSettings({ autoQuality: !autoQuality })}
+          >
+            Auto
+          </button>
         </div>
       </div>
       <div
@@ -1619,9 +1634,19 @@ export function ViewportPanel() {
               performance={{ min: 0.5 }}
               camera={{ position: [6, 4.2, 7], fov: 46 }}
             >
-              <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+              <PerformanceMonitor
+                onDecline={() => {
+                  setDpr(1);
+                  autoQualityStep(-1);
+                }}
+                onIncline={() => {
+                  setDpr(1.5);
+                  autoQualityStep(1);
+                }}
+              />
               <CompressedTextureSupport />
               <AudioListenerSync />
+              <SkidMarks />
               <RenderStatsProbe />
               <LightBudget />
               <ShadowLOD />

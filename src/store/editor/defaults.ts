@@ -57,6 +57,7 @@ export const defaultRenderSettings = (): RenderSettings => ({
   bloomRadius: 0.6,
   vignetteEnabled: true,
   quality: 'High',
+  autoQuality: true,
   compressTextures: true,
 });
 
@@ -182,14 +183,17 @@ export const defaultVehicle = (): VehicleComponent => ({
   mouseLook: true,
   mouseSensitivity: 0.0025,
   // --- Raycast sim defaults (used when physicsModel === 'raycast') — a stable, grippy hatchback. ---
-  engineForce: 1800,
+  // Peak 1st-gear drive force; higher gears scale it down through the ratios (was a constant 1800 before
+  // the drivetrain sim — raised so the geared car still launches hard and aero drag sets the top speed).
+  engineForce: 2600,
   brakeForce: 2200,
   handbrakeForce: 1400,
   drivetrain: 'rwd',
   brakeBias: 0.55,
   chassisMass: 1100,
   centerOfMassY: -0.4,
-  linearDamping: 0.15,
+  // Low now that aero drag is simulated explicitly (a high value here double-counts air resistance).
+  linearDamping: 0.04,
   angularDamping: 0.6,
   wheelFrictionSlip: 1.4,
   sideFrictionStiffness: 0.9,
@@ -199,6 +203,27 @@ export const defaultVehicle = (): VehicleComponent => ({
   suspensionRelaxation: 0.88,
   maxSuspensionForce: 30000,
   maxSuspensionTravelSim: 0.3,
+  // Drivetrain sim: a 6-speed with a midrange-torque engine; auto box shifts itself, manual uses E/Q
+  // (gamepad Y / LB through the default key aliases). Ratios are tuned to the 0.4u wheel so the shifts
+  // land at ~45/70/100/130 km/h and the aero-limited top speed revs out 5th (6th is an overdrive).
+  transmission: 'auto',
+  gearRatios: [5.8, 3.8, 2.7, 2.0, 1.65, 1.35],
+  finalDrive: 3.6,
+  idleRpm: 900,
+  maxRpm: 7200,
+  shiftUpRpm: 6500,
+  shiftDownRpm: 2400,
+  shiftTime: 0.22,
+  keyShiftUp: 'KeyE',
+  keyShiftDown: 'KeyQ',
+  // Aero + anti-roll + assists: planted at speed, flat in corners, forgiving to drive (assists on).
+  aeroDrag: 0.35,
+  downforceSim: 1.1,
+  antiRollFront: 6000,
+  antiRollRear: 4200,
+  absEnabled: true,
+  tcsEnabled: true,
+  surfaceGripEnabled: true,
 });
 
 /** Default ragdoll tuning — the same conservative values RagdollRig was hardcoded with. */

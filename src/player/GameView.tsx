@@ -12,6 +12,8 @@ import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { AudioListenerSync } from '../three/AudioListenerSync';
+import { SkidMarks } from '../three/SkidMarks';
+import { autoQualityStep } from '../runtime/autoQuality';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial } from '../three/resolveMaterial';
@@ -437,9 +439,10 @@ export function GameView() {
       performance={{ min: 0.5 }}
       camera={{ position: [6, 4.2, 7], fov: 50 }}
     >
-      <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+      <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => { setDpr(1.5); autoQualityStep(1); }} />
       <CompressedTextureSupport />
       <AudioListenerSync />
+      <SkidMarks />
       <ShadowLOD />
       <MeshLOD />
       <GameScene />

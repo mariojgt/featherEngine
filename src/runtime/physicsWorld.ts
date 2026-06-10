@@ -20,6 +20,7 @@ import type {
 } from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
+import { resolveVehicleWheels, type ResolvedVehicleWheel } from './vehicleWheels';
 import { clearRagdolls } from './ragdollState';
 import {
   capsuleParams,
@@ -54,6 +55,54 @@ const DEFAULT_COLLISION_MASK = 0xffff;
 
 const reuseEuler = new THREE.Euler();
 const reuseQuat = new THREE.Quaternion();
+const reuseVec = new THREE.Vector3();
+
+// Reusable Ray objects for the per-frame queries (wheel surface probes run 4×/car/frame; castRay backs
+// combat line-of-sight + the Raycast node) — allocating a fresh Ray per query churned the GC for nothing.
+// Single-threaded and never re-entrant, so one shared instance per call site is safe.
+let sharedSurfaceRay: InstanceType<typeof RAPIER.Ray> | null = null;
+let sharedCastRay: InstanceType<typeof RAPIER.Ray> | null = null;
+
+function setRay(ray: InstanceType<typeof RAPIER.Ray> | null, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number) {
+  if (!ray) return new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
+  ray.origin.x = ox;
+  ray.origin.y = oy;
+  ray.origin.z = oz;
+  ray.dir.x = dx;
+  ray.dir.y = dy;
+  ray.dir.z = dz;
+  return ray;
+}
+
+/** Grip multiplier per surface tag (the `surface` instance variable on whatever a wheel rolls over).
+ *  Untagged geometry counts as tarmac — only off-line surfaces need tagging. */
+const SURFACE_GRIP: Record<string, number> = {
+  tarmac: 1,
+  road: 1,
+  asphalt: 1,
+  curb: 0.92,
+  kerb: 0.92,
+  dirt: 0.7,
+  gravel: 0.6,
+  grass: 0.55,
+  mud: 0.45,
+  sand: 0.4,
+  snow: 0.3,
+  ice: 0.15,
+};
+
+/**
+ * Normalized engine torque vs RPM — the classic road-car shape: soft off idle, peak torque in the
+ * midrange (~65% of redline), tapering toward the top, hard cut past the rev limiter. Multiplied
+ * into engineForce so holding a gear matters: short-shifting or banging the limiter both lose drive.
+ */
+function engineTorqueCurve(rpm: number, idleRpm: number, maxRpm: number): number {
+  if (rpm >= maxRpm * 1.02) return 0; // rev limiter
+  const n = Math.min(Math.max((rpm - idleRpm) / Math.max(1, maxRpm - idleRpm), 0), 1);
+  if (n < 0.55) return 0.6 + 0.4 * (n / 0.55); // climb to peak torque
+  if (n < 0.85) return 1; // flat peak through the midrange
+  return 1 - 0.3 * ((n - 0.85) / 0.15); // falls off approaching redline
+}
 
 function quatFromEuler(rotation: Vector3Tuple) {
   reuseEuler.set(rotation[0], rotation[1], rotation[2], 'XYZ');
@@ -253,6 +302,9 @@ export interface VehicleInput {
   engineScale?: number;
   /** Set this frame to teleport the car back to its spawn (R key / respawn). */
   respawn?: boolean;
+  /** Manual transmission: shift request held this frame (the sim edge-detects internally). */
+  shiftUp?: boolean;
+  shiftDown?: boolean;
 }
 
 /** Per-wheel + chassis readback for one raycast-sim vehicle after a physics step. */
@@ -263,6 +315,11 @@ export interface VehicleFrameState {
   speed: number;
   /** Sideways velocity component (units/sec) — how much the car is actually SLIDING (drift/skid detection). */
   lateralSpeed: number;
+  /** Drivetrain sim readback: live engine RPM, redline (for tach normalization), and the current gear
+   *  (1..N forward, -1 = reverse) — drives the engine audio pitch + RPM/Gear HUD vars. */
+  rpm: number;
+  maxRpm: number;
+  gear: number;
   /** Per wheel, IN THE SAME ORDER as the vehicle's `wheelObjectIds`. */
   wheels: VehicleWheelState[];
 }
@@ -281,6 +338,10 @@ export interface VehicleWheelState {
   connectionX: number;
   connectionY: number;
   connectionZ: number;
+  /** Smoothed surface-grip multiplier under this wheel (1 = tarmac, lower = loose/slick) — drives offroad VFX. */
+  grip: number;
+  /** This wheel's declared axle — gameplay/VFX target "the rears" by ROLE, not by array position. */
+  axle: 'front' | 'rear';
   /** Whether the wheel's ray found ground this frame. */
   inContact: boolean;
   /** Lateral (side) impulse magnitude — proxy for tire slip → skid audio / marks. */
@@ -345,19 +406,33 @@ interface VehicleEntry {
   body: RigidBody;
   collider: Collider;
   controller: DynamicRayCastVehicleController;
-  /** Wheel object ids, in addWheel order (= the component's `wheelObjectIds` order). */
+  /** Wheel object ids, in addWheel order (= the resolved rig order). */
   wheelIds: string[];
   /** Each wheel's suspension connection point in chassis-local space (so the visual wheel auto-fits the body). */
   connectionX: number[];
   connectionY: number[];
   connectionZ: number[];
-  /** Whether each wheel steers (resolved at build: the wheel — or its anchor parent — is in steeredWheelIds). */
-  steered: boolean[];
+  /** The resolved per-wheel roles (axle/side/steered), same order as wheelIds — drivetrain split, brake
+   *  bias, handbrake and anti-roll pairing all read THESE, never array position. */
+  rig: ResolvedVehicleWheel[];
+  /** Precomputed from the rig (it's immutable per build) so the per-frame loops never re-scan it. */
+  frontWheelCount: number;
+  arbPairs: Array<{ left: number; right: number; front: boolean }>;
   /** Spawn transform (for R-respawn) + last upright yaw + how long it's been upside-down (auto flip-recover). */
   spawnPos: Vector3Tuple;
   spawnRot: Vector3Tuple;
   lastYaw: number;
   flipTimer: number;
+  /** Drivetrain sim state: current gear (1..N forward, -1 reverse), live engine RPM, and the remaining
+   *  torque-cut time of an in-progress shift. */
+  gear: number;
+  rpm: number;
+  shiftTimer: number;
+  /** Edge-detect latches for manual shifting (input flags arrive level-style each frame). */
+  shiftUpHeld: boolean;
+  shiftDownHeld: boolean;
+  /** Per-wheel surface grip multiplier (1 = tarmac), smoothed so crossing a curb doesn't snap the grip. */
+  surfaceGrip: number[];
   signature: string;
 }
 
@@ -372,6 +447,8 @@ function vehicleSignature(object: SceneObject): string {
     v?.physicsModel,
     (v?.wheelObjectIds ?? []).join(','),
     (v?.steeredWheelIds ?? []).join(','),
+    // Explicit wheel rig: any role edit (axle/side/steered) rebuilds the controller with the new layout.
+    (v?.wheels ?? []).map((w) => `${w.objectId}:${w.axle}:${w.side}:${w.steered ?? ''}`).join(','),
     v?.wheelRadius,
     v?.chassisMass,
     v?.centerOfMassY,
@@ -611,17 +688,19 @@ class PhysicsRuntime {
 
     const restLength = v.suspensionRestLength ?? 0.35;
     const radius = Math.max(v.wheelRadius ?? 0.4, 0.05);
-    const wheelIds = v.wheelObjectIds ?? [];
+    // Explicit per-wheel roles (axle/side/steered) — from the modern `wheels` rig when present, else
+    // derived from the legacy positional convention. NOTHING below depends on array order anymore.
+    const rig = resolveVehicleWheels(v);
+    const explicitRig = Boolean(v.wheels?.length);
+    const wheelIds = rig.map((w) => w.objectId);
     const steeredSet = new Set(v.steeredWheelIds ?? []);
     const hasModel = Boolean(mesh && mesh.vertices.length >= 3);
     const bodyBottomY = cy - hy; // the body's lowest point — wheels rest here
-    const half = Math.max(1, wheelIds.length / 2);
     const connectionX: number[] = [];
     const connectionY: number[] = [];
     const connectionZ: number[] = [];
-    const steered: boolean[] = [];
-    wheelIds.forEach((wid, i) => {
-      const wheel = this.frameById.get(wid);
+    rig.forEach((w, i) => {
+      const wheel = this.frameById.get(w.objectId);
       const anchor = wheel?.parentId && wheel.parentId !== object.id ? this.frameById.get(wheel.parentId) : undefined;
       let cxw: number;
       let cyw: number;
@@ -629,11 +708,9 @@ class PhysicsRuntime {
       if (hasModel) {
         // AUTO-FIT: place each wheel at the BODY's bottom corner (derived from its bounding box) so the car
         // sits on its wheels for ANY body — swapping the frame in the garage re-fits the wheels + suspension.
-        // [FL,FR,RL,RR] convention: even index = left, first half = front (+Z forward).
-        const left = i % 2 === 0;
-        const front = i < half;
-        cxw = cx + (left ? -1 : 1) * hx * 0.9;
-        czw = cz + (front ? 1 : -1) * hz * 0.74;
+        // Corner chosen by the wheel's DECLARED role (+Z forward, left = −X).
+        cxw = cx + (w.side === 'left' ? -1 : 1) * hx * 0.9;
+        czw = cz + (w.axle === 'front' ? 1 : -1) * hz * 0.74;
         cyw = bodyBottomY; // rest wheel center at the body's bottom
       } else {
         // Primitive car (no model): honor the authored anchor/wheel child positions.
@@ -648,8 +725,9 @@ class PhysicsRuntime {
       connectionX.push(cxw);
       connectionY.push(connY);
       connectionZ.push(czw);
-      // Steered if the wheel id OR its anchor's id is listed in steeredWheelIds.
-      steered.push(steeredSet.has(wid) || (anchor ? steeredSet.has(anchor.id) : false));
+      // Legacy rigs may declare steering via the wheel's ANCHOR parent id — resolve that here (the rig
+      // resolver can't see the scene); an explicit rig is authoritative as-is.
+      if (!explicitRig && anchor && steeredSet.has(anchor.id)) rig[i] = { ...w, steered: true };
       controller.addWheel({ x: cxw, y: connY, z: czw }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, restLength, radius);
     });
     for (let i = 0; i < wheelIds.length; i++) {
@@ -664,6 +742,12 @@ class PhysicsRuntime {
       controller.setWheelRadius(i, radius);
     }
 
+    // Precompute the role lookups the per-frame loops need (the rig is fixed until the next rebuild).
+    const wheelIdx = (axle: 'front' | 'rear', side: 'left' | 'right') =>
+      rig.findIndex((w) => w.axle === axle && w.side === side);
+    const arbPairs = (['front', 'rear'] as const)
+      .map((axle) => ({ left: wheelIdx(axle, 'left'), right: wheelIdx(axle, 'right'), front: axle === 'front' }))
+      .filter((pair) => pair.left >= 0 && pair.right >= 0);
     this.vehicleEntries.set(object.id, {
       body,
       collider,
@@ -672,11 +756,19 @@ class PhysicsRuntime {
       connectionX,
       connectionY,
       connectionZ,
-      steered,
+      rig,
+      frontWheelCount: rig.filter((w) => w.axle === 'front').length,
+      arbPairs,
       spawnPos: [p[0], p[1], p[2]],
       spawnRot: [world.rotation[0], world.rotation[1], world.rotation[2]],
       lastYaw: world.rotation[1],
       flipTimer: 0,
+      gear: 1,
+      rpm: v.idleRpm ?? 900,
+      shiftTimer: 0,
+      shiftUpHeld: false,
+      shiftDownHeld: false,
+      surfaceGrip: wheelIds.map(() => 1),
       signature: vehicleSignature(object),
     });
     this.handleToId.set(collider.handle, object.id);
@@ -1101,6 +1193,10 @@ class PhysicsRuntime {
         entry.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
         entry.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         entry.flipTimer = 0;
+        // Fresh drivetrain after a respawn: back in 1st at idle, no half-finished shift.
+        entry.gear = 1;
+        entry.rpm = v.idleRpm ?? 900;
+        entry.shiftTimer = 0;
         for (let i = 0; i < entry.wheelIds.length; i++) {
           entry.controller.setWheelEngineForce(i, 0);
           entry.controller.setWheelBrake(i, 0);
@@ -1109,36 +1205,123 @@ class PhysicsRuntime {
       }
 
       const n = entry.wheelIds.length;
-      const half = n / 2;
-      const engineForce = (v.engineForce ?? 1800) * (input.engineScale ?? 1);
       const brakeForce = v.brakeForce ?? 2200;
       const handbrakeForce = v.handbrakeForce ?? 1400;
       const drivetrain = v.drivetrain ?? 'rwd';
       const brakeBias = Math.min(Math.max(v.brakeBias ?? 0.55, 0), 1);
       const steerAngle = v.steerAngle ?? 0.6;
       const baseSideFriction = v.sideFrictionStiffness ?? 0.9;
+      const baseFrictionSlip = v.wheelFrictionSlip ?? 1.4;
+      const radius = Math.max(v.wheelRadius ?? 0.4, 0.05);
       // Throttle drives forward; braking input (negative throttle while rolling forward) becomes brake, not reverse,
       // so a sim car decelerates with the brakes. A near-stopped car uses reverse engine force to back up.
       const speed = entry.controller.currentVehicleSpeed();
       const braking = input.throttle < -0.01 && speed > 1;
+      // Sideways slide speed (drives the TC/ABS assists): chassis velocity onto the local right axis.
+      const lv = entry.body.linvel();
+      const lateralSpeed = lv.x * Math.cos(reuseEuler.y) - lv.z * Math.sin(reuseEuler.y);
+
+      // --- DRIVETRAIN SIM: gear + RPM + torque curve --------------------------------------------------
+      // RPM follows the driven wheels through the gearing (wheel rps · gear · final drive); a near-stopped
+      // car under throttle flares toward the limiter instead of reading idle (clutch-slip launch feel).
+      const ratios = v.gearRatios?.length ? v.gearRatios : [3.1, 2.05, 1.55, 1.2, 0.97, 0.8];
+      const finalDrive = v.finalDrive ?? 3.6;
+      const idleRpm = v.idleRpm ?? 900;
+      const maxRpm = v.maxRpm ?? 7200;
+      const reversing = input.throttle < -0.01 && speed <= 1;
+      if (reversing) entry.gear = -1;
+      else if (entry.gear === -1 && input.throttle > 0.01) entry.gear = 1;
+      const ratio = (entry.gear === -1 ? ratios[0] : ratios[Math.min(entry.gear, ratios.length) - 1]) * finalDrive;
+      const wheelRps = Math.abs(speed) / (2 * Math.PI * radius);
+      let rpm = wheelRps * 60 * ratio;
+      if (Math.abs(speed) < 3) rpm = Math.max(rpm, idleRpm + (maxRpm - idleRpm) * 0.3 * Math.abs(input.throttle));
+      rpm = Math.min(Math.max(rpm, idleRpm), maxRpm * 1.02);
+      // Shifting: auto box moves on RPM thresholds; manual moves on key edges (level inputs, latched here).
+      entry.shiftTimer = Math.max(0, entry.shiftTimer - dt);
+      const shiftTime = v.shiftTime ?? 0.22;
+      if (entry.gear >= 1 && entry.shiftTimer <= 0) {
+        if ((v.transmission ?? 'auto') === 'manual') {
+          if (input.shiftUp && !entry.shiftUpHeld && entry.gear < ratios.length) {
+            entry.gear += 1;
+            entry.shiftTimer = shiftTime;
+          }
+          if (input.shiftDown && !entry.shiftDownHeld && entry.gear > 1) {
+            entry.gear -= 1;
+            entry.shiftTimer = shiftTime * 0.7;
+          }
+        } else if (input.throttle > 0.05 && rpm > (v.shiftUpRpm ?? 6500) && entry.gear < ratios.length) {
+          entry.gear += 1;
+          entry.shiftTimer = shiftTime;
+        } else if (rpm < (v.shiftDownRpm ?? 2400) && entry.gear > 1) {
+          entry.gear -= 1;
+          entry.shiftTimer = shiftTime * 0.7;
+        }
+      }
+      entry.shiftUpHeld = Boolean(input.shiftUp);
+      entry.shiftDownHeld = Boolean(input.shiftDown);
+      entry.rpm = rpm;
+      // Drive force at the wheels: engineForce is the PEAK 1st-gear force; the torque curve and the gear's
+      // ratio shape it from there (strong launch, tapering pull, top speed where aero drag wins). Torque is
+      // cut while a shift completes — the rhythm you feel and hear as the box works through the gears.
+      const torque = engineTorqueCurve(rpm, idleRpm, maxRpm);
+      const gearScale = ratio / (ratios[0] * finalDrive);
+      const torqueCut = entry.shiftTimer > 0 ? 0 : 1;
+      let driveForce = (v.engineForce ?? 1800) * (input.engineScale ?? 1) * torque * gearScale * torqueCut;
+      // TRACTION CONTROL (assist): tame wheelspin launches and catch power-oversteer — cut power while the
+      // rear steps out so the throttle can't spin you, and ramp the launch in over the first few meters.
+      if (v.tcsEnabled ?? true) {
+        if (Math.abs(lateralSpeed) > 3.5) driveForce *= 0.55;
+        if (Math.abs(speed) < 6 && entry.gear !== -1) driveForce *= 0.55 + 0.45 * (Math.abs(speed) / 6);
+      }
+      // ABS (assist): braking hard while steering/sliding eases the brakes enough that the front tires keep
+      // steering authority instead of locking and ploughing straight on.
+      const absActive = (v.absEnabled ?? true) && braking && (Math.abs(input.steer) > 0.25 || Math.abs(lateralSpeed) > 2);
+
+      // Drivetrain split / brake bias / handbrake all read each wheel's DECLARED axle, never array position.
+      const frontWheels = entry.frontWheelCount;
+      const rearWheels = Math.max(1, n - frontWheels);
       for (let i = 0; i < n; i++) {
-        const isFront = i < half;
+        const isFront = entry.rig[i]?.axle !== 'rear';
         const driven = drivetrain === 'awd' || (drivetrain === 'fwd' ? isFront : !isFront);
-        const drivenCount = drivetrain === 'awd' ? n : Math.max(1, n - half);
-        // Engine force only when not using the brakes; split across driven wheels.
-        const engine = !braking && driven ? (input.throttle * engineForce) / drivenCount : 0;
+        const drivenCount = drivetrain === 'awd' ? n : drivetrain === 'fwd' ? Math.max(1, frontWheels) : rearWheels;
+
+        // --- SURFACE GRIP: each wheel reads what it's rolling on. Cast straight down from the suspension
+        // connection point (chassis-local → world) and look up the hit object's `surface` instance variable;
+        // untagged geometry is tarmac. Smoothed so clipping a curb doesn't snap the grip for one frame.
+        let targetGrip = 1;
+        if (v.surfaceGripEnabled ?? true) {
+          reuseVec.set(entry.connectionX[i] ?? 0, entry.connectionY[i] ?? 0, entry.connectionZ[i] ?? 0).applyQuaternion(reuseQuat);
+          const t = entry.body.translation();
+          const rayLen = (v.suspensionRestLength ?? 0.35) + radius + 0.6;
+          const ray = (sharedSurfaceRay = setRay(sharedSurfaceRay, t.x + reuseVec.x, t.y + reuseVec.y, t.z + reuseVec.z, 0, -1, 0));
+          const hit = this.world.castRay(ray, rayLen, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, entry.collider);
+          if (hit) {
+            const hitId = this.handleToId.get(hit.collider.handle);
+            const surface = hitId ? String(byId.get(hitId)?.variables?.surface ?? '') : '';
+            targetGrip = SURFACE_GRIP[surface.toLowerCase()] ?? 1;
+          }
+        }
+        const prevGrip = entry.surfaceGrip[i] ?? 1;
+        const grip = prevGrip + (targetGrip - prevGrip) * Math.min(1, 8 * dt);
+        entry.surfaceGrip[i] = grip;
+
+        // Engine force only when not using the brakes; split across driven wheels. Low grip also bleeds
+        // drive (wheelspin on grass/sand goes nowhere).
+        const engine = !braking && driven ? (input.throttle * driveForce * (0.55 + 0.45 * grip)) / drivenCount : 0;
         entry.controller.setWheelEngineForce(i, engine);
-        // Brake = service brake (biased front/rear) + handbrake on the rear wheels.
+        // Brake = service brake (biased front/rear, eased by ABS) + handbrake on the rear wheels.
         let brake = 0;
-        if (braking) brake += brakeForce * (isFront ? brakeBias : 1 - brakeBias);
+        if (braking) brake += brakeForce * (isFront ? brakeBias : 1 - brakeBias) * (absActive ? 0.62 : 1);
         if (input.handbrake && !isFront) brake += handbrakeForce;
         entry.controller.setWheelBrake(i, brake);
-        entry.controller.setWheelSteering(i, entry.steered[i] ? input.steer * steerAngle : 0);
+        entry.controller.setWheelSteering(i, entry.rig[i]?.steered ? input.steer * steerAngle : 0);
         // ARCADE DRIFT (NFS/Burnout feel): holding the handbrake breaks the REAR tires loose (low side grip) so
         // the back end slides into a controllable power-slide; the front keeps grip so you still steer the drift.
-        // Releasing snaps grip back and the slide recovers. Front wheels always keep full grip.
-        const sideFric = input.handbrake && !isFront ? baseSideFriction * 0.16 : baseSideFriction;
-        entry.controller.setWheelSideFrictionStiffness(i, sideFric);
+        // Releasing snaps grip back and the slide recovers. Front wheels always keep full grip. Surface grip
+        // scales BOTH friction channels, so grass/sand corners wash wide the way they should.
+        const handbrakeFactor = input.handbrake && !isFront ? 0.16 : 1;
+        entry.controller.setWheelSideFrictionStiffness(i, baseSideFriction * handbrakeFactor * grip);
+        entry.controller.setWheelFrictionSlip(i, baseFrictionSlip * grip);
       }
     }
 
@@ -1151,16 +1334,57 @@ class PhysicsRuntime {
     do {
       const h = Math.min(FIXED_STEP, remaining);
       this.world.timestep = h;
-      for (const [, entry] of this.vehicleEntries) {
+      for (const [vid, entry] of this.vehicleEntries) {
+        const veh = byId.get(vid)?.vehicle;
         // Exclude sensors + the chassis's own collider from the wheel suspension rays (else a wheel ray can hit
         // the chassis box and the suspension never finds the ground).
         entry.controller.updateVehicle(h, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, (collider) => collider.handle !== entry.collider.handle);
-        // DOWNFORCE (drive feel): a downward push that grows with speed² keeps a fast car planted into the road
-        // and through turns instead of getting light/skittish at the top end. Only while the wheels are gripping.
         const spd = entry.controller.currentVehicleSpeed();
+        const grounded = entry.wheelIds.some((_, i) => entry.controller.wheelIsInContact(i));
         if (Math.abs(spd) > 4) {
-          const grounded = entry.wheelIds.some((_, i) => entry.controller.wheelIsInContact(i));
-          if (grounded) entry.body.applyImpulse({ x: 0, y: -1.1 * spd * spd * h, z: 0 }, true);
+          // DOWNFORCE (drive feel): a downward push that grows with speed² keeps a fast car planted into the road
+          // and through turns instead of getting light/skittish at the top end. Only while the wheels are gripping.
+          if (grounded) entry.body.applyImpulse({ x: 0, y: -(veh?.downforceSim ?? 1.1) * spd * spd * h, z: 0 }, true);
+          // AERO DRAG: quadratic air resistance against the travel direction — together with the gearing this is
+          // what SETS the top speed (drive force tapers up the gears until drag balances it) and what makes
+          // lifting off actually slow the car at speed.
+          const cd = veh?.aeroDrag ?? 0.5;
+          if (cd > 0) {
+            const lvD = entry.body.linvel();
+            const hSpeed = Math.hypot(lvD.x, lvD.z);
+            if (hSpeed > 2) {
+              const f = cd * hSpeed; // F = cd·|v|² along -v̂ ⇒ per-axis cd·|v|·v
+              entry.body.applyImpulse({ x: -f * lvD.x * h, y: 0, z: -f * lvD.z * h }, true);
+            }
+          }
+        }
+        // ANTI-ROLL BARS: couple each axle's left/right suspension. When the body rolls in a corner the outside
+        // spring compresses and the inside extends; the bar pushes the extended corner down and lifts the
+        // compressed one, flattening the car. Tuned per axle — a stiffer REAR bar trades toward oversteer,
+        // a stiffer FRONT bar toward understeer (the classic balance lever).
+        if (grounded && entry.wheelIds.length >= 4) {
+          const t = entry.body.translation();
+          const q = entry.body.rotation();
+          reuseQuat.set(q.x, q.y, q.z, q.w);
+          // Axle left↔right pairs were resolved from the declared roles at build time (entry.arbPairs).
+          for (const pair of entry.arbPairs) {
+            const li = pair.left;
+            const ri = pair.right;
+            const stiffness = pair.front ? veh?.antiRollFront ?? 6000 : veh?.antiRollRear ?? 4200;
+            if (stiffness <= 0) continue;
+            if (!entry.controller.wheelIsInContact(li) || !entry.controller.wheelIsInContact(ri)) continue;
+            const rest = entry.controller.wheelSuspensionRestLength(li) ?? 0.35;
+            const lenL = entry.controller.wheelSuspensionLength(li) ?? rest;
+            const lenR = entry.controller.wheelSuspensionLength(ri) ?? rest;
+            const roll = lenL - lenR; // >0 = left extended (body rolling right)
+            if (Math.abs(roll) < 0.005) continue;
+            const impulse = stiffness * roll * h;
+            // Down on the extended side, up on the compressed side — a pure couple (no net lift).
+            reuseVec.set(entry.connectionX[li], entry.connectionY[li], entry.connectionZ[li]).applyQuaternion(reuseQuat);
+            entry.body.applyImpulseAtPoint({ x: 0, y: -impulse, z: 0 }, { x: t.x + reuseVec.x, y: t.y + reuseVec.y, z: t.z + reuseVec.z }, true);
+            reuseVec.set(entry.connectionX[ri], entry.connectionY[ri], entry.connectionZ[ri]).applyQuaternion(reuseQuat);
+            entry.body.applyImpulseAtPoint({ x: 0, y: impulse, z: 0 }, { x: t.x + reuseVec.x, y: t.y + reuseVec.y, z: t.z + reuseVec.z }, true);
+          }
         }
       }
       this.world.step(this.events);
@@ -1251,6 +1475,8 @@ class PhysicsRuntime {
         connectionX: entry.connectionX[i] ?? 0,
         connectionY: entry.connectionY[i] ?? 0,
         connectionZ: entry.connectionZ[i] ?? 0,
+        grip: entry.surfaceGrip[i] ?? 1,
+        axle: entry.rig[i]?.axle ?? 'rear',
         inContact: entry.controller.wheelIsInContact(i),
         sideImpulse: Math.abs(entry.controller.wheelSideImpulse(i) ?? 0),
       }));
@@ -1258,7 +1484,15 @@ class PhysicsRuntime {
       const lv = entry.body.linvel();
       const yaw = rotation[1];
       const lateralSpeed = lv.x * Math.cos(yaw) - lv.z * Math.sin(yaw);
-      vehicles.set(id, { chassis, speed: entry.controller.currentVehicleSpeed(), lateralSpeed, wheels });
+      vehicles.set(id, {
+        chassis,
+        speed: entry.controller.currentVehicleSpeed(),
+        lateralSpeed,
+        rpm: entry.rpm,
+        maxRpm: object?.vehicle?.maxRpm ?? 7200,
+        gear: entry.gear,
+        wheels,
+      });
     }
 
     return { transforms, collisions, triggers, triggersExit, collisionsExit, grounded: [...grounded], velocities, vehicles };
@@ -1280,10 +1514,7 @@ class PhysicsRuntime {
   ): { objectId: string; distance: number } | null {
     const len = Math.hypot(dir[0], dir[1], dir[2]);
     if (!(len > 1e-6) || !(maxDistance > 0)) return null;
-    const ray = new RAPIER.Ray(
-      { x: origin[0], y: origin[1], z: origin[2] },
-      { x: dir[0] / len, y: dir[1] / len, z: dir[2] / len },
-    );
+    const ray = (sharedCastRay = setRay(sharedCastRay, origin[0], origin[1], origin[2], dir[0] / len, dir[1] / len, dir[2] / len));
     const hit = this.world.castRay(
       ray,
       maxDistance,
