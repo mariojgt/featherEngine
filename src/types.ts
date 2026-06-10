@@ -1417,6 +1417,10 @@ export interface VehicleComponent {
   /** Brake DISC child objects — their emissive glows with accumulated brake HEAT (sustained hard braking
    *  from speed heats them orange; they cool back down when released). Raycast sim only. */
   brakeDiscIds?: string[];
+  /** LOOSE cosmetic child parts (bumpers / spoiler / side skirts): on a hard enough impact, the part
+   *  facing the hit TEARS OFF — it becomes a real dynamic prop that tumbles away with the car's momentum.
+   *  R-respawn (repair) bolts everything back on. Raycast sim only. */
+  loosePartIds?: string[];
   /** Onboard camera positions (car-local [side, up, forward]); the Play camera cycles chase → hood →
    *  cockpit on the C key. Defaults fit a typical sedan when absent. */
   hoodCameraOffset?: Vector3Tuple;

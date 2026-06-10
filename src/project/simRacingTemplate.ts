@@ -437,6 +437,29 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
     renderer: renderer('#ff2eea', { materialOverrides: { emissiveColor: '#ff2eea', emissiveIntensity: 1.8 } }),
   });
 
+  // --- LOOSE crash parts: bumpers, a rear wing and side skirts that TEAR OFF on hard impacts (the part
+  //     facing the hit goes first) and tumble away as real dynamic props. R-respawn bolts them back on. ---
+  const loosePartIds: string[] = [];
+  const loosePart = (name: string, position: Vector3Tuple, scale: Vector3Tuple, color = '#15171c') => {
+    const id = makeId('obj');
+    loosePartIds.push(id);
+    vfx.push({
+      id,
+      name,
+      kind: 'cube',
+      parentId: carId,
+      transform: { position, rotation: [0, 0, 0], scale },
+      renderer: renderer(color, { metalness: 0.55, roughness: 0.45 }),
+    });
+  };
+  const bumperY = min[1] + 0.24;
+  loosePart('Front Bumper', [cx, bumperY, max[2] * 1.02], [halfW * 1.85, 0.16, 0.16]);
+  loosePart('Rear Bumper', [cx, bumperY, min[2] * 1.02], [halfW * 1.85, 0.16, 0.16]);
+  loosePart('Side Skirt L', [cx - halfW * 1.0, min[1] + 0.14, cz], [0.09, 0.12, halfL * 1.25]);
+  loosePart('Side Skirt R', [cx + halfW * 1.0, min[1] + 0.14, cz], [0.09, 0.12, halfL * 1.25]);
+  // Rear wing: a low spoiler plate riding the trunk lip — satisfying to lose on a rear-ender.
+  loosePart('Rear Wing', [cx, max[1] * 0.92, min[2] * 0.9], [halfW * 1.35, 0.05, 0.3], '#1d2026');
+
   const vehicle: VehicleComponent = {
     ...defaultVehicle(),
     enabled: true,
@@ -453,6 +476,7 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
     headlightIds,
     brakeLightIds,
     brakeDiscIds,
+    loosePartIds,
     // Onboard camera mounts (C cycles chase → hood → cockpit): measured from the body model so they sit
     // at the windshield base / driver's eye whatever body the garage swaps in later.
     hoodCameraOffset: [0, max[1] * 0.96, cz + halfL * 0.42] as Vector3Tuple,

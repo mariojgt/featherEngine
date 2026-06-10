@@ -2128,6 +2128,7 @@ const rawEngineTools = {
       headlightIds: z.array(z.string()).optional(),
       brakeLightIds: z.array(z.string()).optional(),
       brakeDiscIds: z.array(z.string()).optional().describe('(raycast) Brake DISC child object ids — their emissive glows orange with accumulated brake heat (sustained hard braking from speed) and cools when released.'),
+      loosePartIds: z.array(z.string()).optional().describe('(raycast) LOOSE cosmetic child part ids (bumpers/spoiler/skirts): a hard impact tears off the part facing the hit — it becomes a free dynamic prop tumbling away with the car momentum; R-respawn bolts everything back on.'),
       hoodCameraOffset: vec3.optional().describe('(raycast) Car-local [side, up, forward] hood camera position — the Play camera cycles chase → hood → cockpit on C (hold V to look back).'),
       cockpitCameraOffset: vec3.optional().describe("(raycast) Car-local [side, up, forward] cockpit (driver's eye) camera position for the C-key view cycle."),
       keyThrottle: z.string().optional(),

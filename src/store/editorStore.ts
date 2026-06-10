@@ -1001,6 +1001,19 @@ const cloneObjectTree = (
 const effectLife = new Map<string, number>();
 
 /**
+ * LOOSE car parts (vehicle.loosePartIds): bookkeeping for parts torn off by crashes, all module-level
+ * so per-frame bookkeeping never touches store identities.
+ * - detachedParts: part id → its original attachment (parent + LOCAL transform), so R-repair can bolt
+ *   it back on exactly where it was.
+ * - pendingPartKicks: momentum/tumble queued at detach time, handed to the physics world on the NEXT
+ *   tick (the part's dynamic body is created during that frame's sync).
+ * - pendingPartRestores: parts queued for re-attachment by a respawn/repair this frame.
+ */
+const detachedParts = new Map<string, { parentId: string; transform: TransformComponent }>();
+const pendingPartKicks = new Map<string, { vel: Vector3Tuple; spin: Vector3Tuple }>();
+const pendingPartRestores = new Map<string, { parentId: string; transform: TransformComponent }>();
+
+/**
  * True if stamping prefab `candidateId` inside prefab `hostId` would create a containment cycle —
  * i.e. the candidate's stored objects (transitively, through nested-instance `prefabSourceId` tags)
  * contain an instance of the host. A then contains A, which corrupts every future restamp/merge.
@@ -5160,6 +5173,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         clearPerception();
         clearVehicleDents(); // start each run with a pristine (undented) car
         effectLife.clear(); // drop any stale burst-lifetime entries from the previous run
+        detachedParts.clear();
+        pendingPartKicks.clear();
+        pendingPartRestores.clear();
         return {
           isPlaying,
           runtimeTime: 0,
@@ -5478,6 +5494,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const physicsAngularImpulses: Record<string, Vector3Tuple> = {};
       // Hard velocity sets requested by action.setVelocity this frame (dynamic bodies), applied in physics.frame.
       const setVelocities: Record<string, Vector3Tuple> = {};
+      // Momentum hand-off for freshly torn-off car parts: their dynamic body is created during THIS
+      // frame's physics sync, so the inherited velocity + tumble queued at detach time applies now.
+      if (pendingPartKicks.size) {
+        for (const [pid, kick] of pendingPartKicks) {
+          setVelocities[pid] = kick.vel;
+          physicsAngularImpulses[pid] = kick.spin;
+        }
+        pendingPartKicks.clear();
+      }
       // Driver input for raycast-sim cars (physicsModel === 'raycast'), resolved in the vehicle pass and handed
       // to the Rapier vehicle controller inside physics.frame. Keyed by chassis object id.
       const vehicleInputs: Record<
@@ -7709,6 +7734,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             clearVehicleDentsFor(object.id);
             if (dmgVarIn) nextVariableValues[dmgVarIn.id] = 0;
             vehicleVars.__brakeHeat = 0;
+            // …and every torn-off loose part bolts back onto its original spot (post-physics pass).
+            for (const [pid, info] of detachedParts) {
+              if (info.parentId === object.id) {
+                pendingPartRestores.set(pid, info);
+                detachedParts.delete(pid);
+                pendingPartKicks.delete(pid);
+              }
+            }
           }
           // DRIVE FEEL: ease the steering in/out instead of snapping (twitchy) AND reduce the lock at speed so
           // the car is stable on the straights but still turns sharply when slow. Smoothed per-car.
@@ -8670,6 +8703,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
           // Brake-light glow + speedometer/tach mirrors (raycast cars skip the arcade pass that normally does this).
           const brakeLightGlow = new Map<string, number>();
+          // Loose parts torn off by THIS frame's crashes — converted into free dynamic props after the pass.
+          const partDetachQueue: Array<{ partId: string; vel: Vector3Tuple; spin: Vector3Tuple }> = [];
           const speedVarMirror = variableByName.get('Speed');
           const rpmVarMirror = variableByName.get('RPM');
           const gearVarMirror = variableByName.get('Gear');
@@ -8778,6 +8813,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   const nose: Vector3Tuple = [pos[0] + Math.sin(yaw) * dir * 1.1, pos[1] + 0.35, pos[2] + Math.cos(yaw) * dir * 1.1];
                   spawned.push(sev > 14 ? makeExplosion(nose, '#ff9a3d') : makeImpactObject(nose, '#ffd27f'));
                   if (object.id === vehiclePlayerId) cameraShake = Math.min(1, cameraShake + Math.min(0.55, 0.1 + sev * 0.025));
+                }
+              }
+              // LOOSE PARTS: a hard enough hit TEARS OFF the cosmetic part facing the impact — the bumper
+              // on a head-on, a skirt on a side swipe, two parts on a violent crash. Queued here; after
+              // this pass the part becomes a free dynamic prop that tumbles away with the car's momentum.
+              if (veh.loosePartIds?.length && hardImpact) {
+                const sevP = Math.max(decel, Math.abs(prevSpeed));
+                const key = `${object.id}:partDetach`;
+                if (sevP > 7 && (nextCooldowns[key] ?? 0) <= 0) {
+                  nextCooldowns[key] = 0.35;
+                  const attached = veh.loosePartIds.filter(
+                    (pid) => byIdNow.get(pid)?.parentId === object.id && !detachedParts.has(pid),
+                  );
+                  // Impact direction in car-local space (same convention as the dent): lateral + travel.
+                  const dLat = cs.lateralSpeed;
+                  const dLong = prevSpeed !== 0 ? prevSpeed : cs.speed;
+                  const dLen = Math.hypot(dLat, dLong) || 1;
+                  const scored = attached
+                    .map((pid) => {
+                      const p = byIdNow.get(pid)!.transform.position;
+                      const pLen = Math.hypot(p[0], p[2]) || 1;
+                      return { pid, score: (p[0] * dLat + p[2] * dLong) / (pLen * dLen) };
+                    })
+                    .sort((a, b) => b.score - a.score);
+                  const yawD = cs.chassis.rotation[1];
+                  const fwd = prevSpeed >= 0 ? 1 : -1;
+                  for (const { pid, score } of scored.slice(0, sevP > 15 ? 2 : 1)) {
+                    if (score < 0.2) break; // nothing mounted on that side — the body just dents
+                    partDetachQueue.push({
+                      partId: pid,
+                      // Inherit most of the pre-impact momentum + an upward/outward scatter kick.
+                      vel: [
+                        Math.sin(yawD) * fwd * Math.abs(prevSpeed) * 0.55 + (Math.random() - 0.5) * 3,
+                        2.2 + Math.random() * 1.6,
+                        Math.cos(yawD) * fwd * Math.abs(prevSpeed) * 0.55 + (Math.random() - 0.5) * 3,
+                      ],
+                      spin: [(Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4],
+                    });
+                  }
                 }
               }
               // --- Per-wheel VFX: smoke/dust spawn at each tire's CONTACT PATCH (chassis-local connection
@@ -8967,6 +9041,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
             return object;
           });
+          // LOOSE PARTS, rare path (only on the frame a part comes off / a repair bolts it back on):
+          // detaching = freeze the part's current WORLD pose, drop the parent link, give it a dynamic
+          // body (its momentum kick applies next tick, once the body exists); restoring = re-parent at
+          // the original LOCAL transform and remove the body.
+          if (partDetachQueue.length || pendingPartRestores.size) {
+            const worldSource = resolvedObjects;
+            resolvedObjects = resolvedObjects.map((object) => {
+              const det = partDetachQueue.find((d) => d.partId === object.id);
+              if (det && object.parentId) {
+                detachedParts.set(object.id, { parentId: object.parentId, transform: object.transform });
+                pendingPartKicks.set(object.id, { vel: det.vel, spin: det.spin });
+                return {
+                  ...object,
+                  parentId: undefined,
+                  transform: worldTransformOf(worldSource, object.id),
+                  physics: withPhysicsDefaults({ ...defaultPhysics(), enabled: true, bodyType: 'dynamic', collider: 'box' }),
+                };
+              }
+              const restore = pendingPartRestores.get(object.id);
+              if (restore) {
+                return { ...object, parentId: restore.parentId, transform: structuredClone(restore.transform), physics: undefined };
+              }
+              return object;
+            });
+            pendingPartRestores.clear();
+          }
         }
         groundedIds = [...groundedSet];
       }

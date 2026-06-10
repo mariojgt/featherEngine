@@ -450,6 +450,7 @@ export function remapPackageForImport(
       v.brakeLightIds = v.brakeLightIds.map((id) => remap(maps.object, id)!);
       v.boostFlameIds = (v.boostFlameIds ?? []).map((id) => remap(maps.object, id)!);
       v.brakeDiscIds = (v.brakeDiscIds ?? []).map((id) => remap(maps.object, id)!);
+      v.loosePartIds = (v.loosePartIds ?? []).map((id) => remap(maps.object, id)!);
       v.garageBodyIds = (v.garageBodyIds ?? []).map((id) => remap(maps.asset, id)!);
       v.wheels = (v.wheels ?? []).map((wheel) => ({ ...wheel, objectId: remap(maps.object, wheel.objectId)! }));
       v.engineSoundId = remap(maps.asset, v.engineSoundId);
