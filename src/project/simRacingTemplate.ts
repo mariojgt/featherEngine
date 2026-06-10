@@ -148,6 +148,8 @@ const graphNode = (id: string, label: string, category: GraphNodeCategory, x: nu
   id, type: 'nodeforge', position: { x, y }, data: nodeData(label, category, data),
 });
 const execEdge = (source: string, target: string): Edge => ({ id: makeId('edge'), source, target, sourceHandle: 'exec-out', targetHandle: 'exec-in', type: 'smoothstep', animated: true });
+// Exec edge from a NAMED source pin (Flip Flop's 'flip-a'/'flip-b', Sequence's 'then-0', …).
+const execEdgeFrom = (source: string, sourceHandle: string, target: string): Edge => ({ id: makeId('edge'), source, target, sourceHandle, targetHandle: 'exec-in', type: 'smoothstep', animated: true });
 const valueEdge = (source: string, target: string, targetHandle: string): Edge => ({ id: makeId('edge'), source, target, sourceHandle: 'value-out', targetHandle, type: 'smoothstep', style: { stroke: '#ff8a3d', strokeWidth: 2 } });
 const uiText = (name: string, style: UIElement['style'], text: string, bindings: UIElement['bindings'] = []): UIElement => ({
   id: makeId('uiel'), kind: 'text', name, text, style, bindings, children: [],
@@ -201,7 +203,7 @@ async function measureModel(file: string): Promise<ModelBounds | undefined> {
 }
 
 /** Build the raycast-sim car from the bundled GLBs, with a steering-anchor wheel rig. */
-async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }> {
+async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; objects: SceneObject[] }> {
   const carId = makeId('obj');
   const bodyAsset = await importAsset(CAR_BODY, 'model');
   const wheelAsset = await importAsset(CAR_WHEEL, 'model');
@@ -290,6 +292,7 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
       },
     });
   });
+  const brakeDiscIds: string[] = [];
   spots.forEach((spot) => {
     const anchorId = makeId('obj');
     const wheelId = makeId('obj');
@@ -315,6 +318,23 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
       parentId: anchorId,
       transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
       renderer: renderer('#14161b', { modelAssetId: wheelAsset?.id, metalness: 0.4, roughness: 0.6 }),
+    });
+    // Brake DISC: a thin dark plate inside the wheel, parented to the ANCHOR (steers + bobs, never spins).
+    // The runtime drives its emissive with accumulated brake heat — hard stops from speed glow it orange.
+    const discId = makeId('obj');
+    brakeDiscIds.push(discId);
+    wheelObjects.push({
+      id: discId,
+      name: `Brake Disc ${spot.tag}`,
+      kind: 'cube',
+      parentId: anchorId,
+      // Tucked slightly inboard (toward the chassis center) so it peeks through the rim.
+      transform: {
+        position: [spot.x < cx ? 0.06 : -0.06, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [0.05, wheelRadius * 1.1, wheelRadius * 1.1],
+      },
+      renderer: renderer('#1b1d22', { metalness: 0.8, roughness: 0.35, materialOverrides: { emissiveColor: '#ff5a1f', emissiveIntensity: 0 } }),
     });
   });
 
@@ -432,6 +452,11 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     deformable: true,
     headlightIds,
     brakeLightIds,
+    brakeDiscIds,
+    // Onboard camera mounts (C cycles chase → hood → cockpit): measured from the body model so they sit
+    // at the windshield base / driver's eye whatever body the garage swaps in later.
+    hoodCameraOffset: [0, max[1] * 0.96, cz + halfL * 0.42] as Vector3Tuple,
+    cockpitCameraOffset: [0, max[1] * 0.88, cz + halfL * 0.02] as Vector3Tuple,
     // ARCADE (NFS/Burnout) tune: punchy pickup + high top speed, planted on flat ground, AWD so it hooks up out
     // of corners — but holding Space breaks the rear loose for a controllable power-slide (engine drift assist).
     engineForce: 7200,
@@ -458,6 +483,44 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     cameraOffset: [0, 2.6 + (max[1] - min[1]), -(halfL * 2 + 6)] as Vector3Tuple,
   };
 
+  // RAIN: a wide overhead streak emitter that travels WITH the car (parented), off until the in-game
+  // weather toggle (M) switches it on via a Set Particles Emitting node. Streaks fall fast + die on the
+  // ground so the sheet of rain always surrounds the player without flooding the whole map with particles.
+  const rainEmitterId = makeId('obj');
+  vfx.push({
+    id: rainEmitterId,
+    name: 'Rain',
+    kind: 'empty',
+    parentId: carId,
+    transform: { position: [cx, max[1] + 9, cz], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    particles: {
+      enabled: false,
+      looping: true,
+      rate: 420,
+      burst: 0,
+      maxParticles: 800,
+      shape: 'disc',
+      shapeRadius: 16,
+      coneAngle: 2,
+      speed: 17,
+      speedJitter: 0.15,
+      direction: [0, -1, 0] as Vector3Tuple,
+      gravity: 0,
+      drag: 0,
+      lifetime: 0.62,
+      lifetimeJitter: 0.1,
+      startSize: 0.045,
+      endSize: 0.035,
+      startColor: '#a9c3da',
+      endColor: '#7d93a8',
+      startOpacity: 0.55,
+      endOpacity: 0.25,
+      worldSpace: true,
+      blend: 'normal',
+      light: false,
+    },
+  });
+
   // Spawn so the wheel bottoms rest on the ground (y=0): wheel center wants to be radius above the floor, and
   // wheel center world = spawnY + wheelY, so spawnY = radius − wheelY (+ a small drop to settle into contact).
   const spawnY = wheelRadius - wheelY + 0.1;
@@ -471,7 +534,7 @@ async function buildSimCar(): Promise<{ carId: string; objects: SceneObject[] }>
     vehicle,
   };
 
-  return { carId, objects: [car, ...wheelObjects, ...vfx] };
+  return { carId, rainEmitterId, objects: [car, ...wheelObjects, ...vfx] };
 }
 
 /** Build the in-game SPEED MENU: a HUD speedometer + −/+ buttons that adjust a "SpeedLevel" var (which the
@@ -566,7 +629,7 @@ function buildSpeedMenu(): {
   };
   // Damage readout — rises on each crash dent (confirms damage is registering + a wreck meter).
   const damage = uiText('Damage', { color: '#ff7a6a', fontSize: '10px', fontWeight: '800', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'DMG 0', [{ target: 'text', expression: `'DMG ' + Damage` }]);
-  const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P SETUP · G GARAGE · SHIFT NITRO');
+  const hint = uiText('Hint', { color: '#22e0ffcc', fontSize: '9px', fontWeight: '700', textAlign: 'center', custom: { letterSpacing: '2px', marginTop: '3px' } }, 'P SETUP · G GARAGE · SHIFT NITRO · C CAMERA · V LOOK BACK · N NIGHT · M RAIN · R RESET');
   const speedoChip = uiPanel('Speedo', { display: 'flex', flexDirection: 'column', alignItems: 'center', background: 'rgba(8,12,20,0.5)', borderRadius: '10px', custom: { padding: '5px 14px', border: '1px solid #22e0ff44', backdropFilter: 'blur(5px)' } }, [dialRow, rpmBar, nitroBar, damage, hint]);
 
   // Toggled setup chip (hidden until MenuOpen) with the −/+ stepper.
@@ -656,6 +719,63 @@ function buildGarage(): { carBodyVar: ProjectVariable; garageOpenVar: ProjectVar
   return { carBodyVar, garageOpenVar, blueprint, graph, hud };
 }
 
+/** NIGHT + RAIN toggles: N flips the dusk sky to deep night (suddenly the headlights/neon matter); M toggles
+ *  a rainstorm — an overhead streak emitter that travels with the car, a soaked grey sky, AND a "Wet" project
+ *  var the raycast sim reads as a GLOBAL grip multiplier (everything brakes longer and slides earlier). Both
+ *  are Flip Flops so the same key toggles back, restoring the authored dusk. */
+function buildTrackConditions(rainEmitterId: string): { wetVar: ProjectVariable; blueprint: ScriptBlueprint; graph: ProjectGraph } {
+  const now = Date.now();
+  const wetVar: ProjectVariable = { id: makeId('var'), name: 'Wet', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const graphId = makeId('graph');
+  const bpId = makeId('bp');
+  const mk = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>) => graphNode(makeId('node'), label, cat, x, y, data);
+  // The authored golden-hour dusk (must mirror the scene environment literal below) — both Flip Flop "off"
+  // branches restore it, so toggling night/rain off always lands back on the original look.
+  const DUSK = { skyTopColor: '#243b6b', skyHorizonColor: '#ffb066', skyGroundColor: '#1a1c22', sunColor: '#ffd9a0', sunIntensity: 2.4, fogColor: '#caa9a7', fogNear: 60, fogFar: 320 };
+  const NIGHT = { skyTopColor: '#070b18', skyHorizonColor: '#16233f', skyGroundColor: '#04060a', sunColor: '#9db5ff', sunIntensity: 0.35, fogColor: '#0a1020', fogNear: 40, fogFar: 230 };
+  const RAIN = { skyTopColor: '#2a323c', skyHorizonColor: '#5c6873', skyGroundColor: '#14181d', sunColor: '#cfd8e2', sunIntensity: 0.9, fogColor: '#5b6670', fogNear: 35, fogFar: 200 };
+
+  // NIGHT: N → debounce → Flip Flop → A = night sky, B = dusk restore.
+  const keyN = mk('Key Down: N', 'Events', 40, 40, { nodeKind: 'event.keyDown', keyCode: 'KeyN', hasInput: false });
+  const cdN = mk('Debounce', 'Logic', 280, 40, { nodeKind: 'logic.cooldown', numberValue: 0.4 });
+  const ffN = mk('Night / Dusk', 'Logic', 520, 40, { nodeKind: 'logic.flipFlop' });
+  const envNight = mk('Set Night Sky', 'Runtime', 780, 20, { nodeKind: 'action.setEnvironment', envPatch: NIGHT });
+  const envDuskN = mk('Restore Dusk', 'Runtime', 780, 170, { nodeKind: 'action.setEnvironment', envPatch: DUSK });
+
+  // RAIN: M → debounce → Flip Flop → A = Wet 1 → rain sky → emitter on; B = Wet 0 → dusk → emitter off.
+  const keyM = mk('Key Down: M', 'Events', 40, 360, { nodeKind: 'event.keyDown', keyCode: 'KeyM', hasInput: false });
+  const cdM = mk('Debounce', 'Logic', 280, 360, { nodeKind: 'logic.cooldown', numberValue: 0.4 });
+  const ffM = mk('Rain / Dry', 'Logic', 520, 360, { nodeKind: 'logic.flipFlop' });
+  const wetOn = mk('Set Wet = 1', 'Variables', 780, 340, { nodeKind: 'variable.set', variableId: wetVar.id, valueType: 'number', numberValue: 1 });
+  const envRain = mk('Set Rain Sky', 'Runtime', 1020, 340, { nodeKind: 'action.setEnvironment', envPatch: RAIN });
+  const rainOn = mk('Rain On', 'Runtime', 1260, 340, { nodeKind: 'action.setParticlesEmitting', targetObjectId: rainEmitterId, booleanValue: true });
+  const wetOff = mk('Set Wet = 0', 'Variables', 780, 500, { nodeKind: 'variable.set', variableId: wetVar.id, valueType: 'number', numberValue: 0 });
+  const envDuskM = mk('Restore Dusk', 'Runtime', 1020, 500, { nodeKind: 'action.setEnvironment', envPatch: DUSK });
+  const rainOff = mk('Rain Off', 'Runtime', 1260, 500, { nodeKind: 'action.setParticlesEmitting', targetObjectId: rainEmitterId, booleanValue: false });
+
+  const graph: ProjectGraph = {
+    id: graphId,
+    name: 'Track Conditions',
+    nodes: [keyN, cdN, ffN, envNight, envDuskN, keyM, cdM, ffM, wetOn, envRain, rainOn, wetOff, envDuskM, rainOff],
+    edges: [
+      execEdge(keyN.id, cdN.id), execEdge(cdN.id, ffN.id),
+      execEdgeFrom(ffN.id, 'flip-a', envNight.id), execEdgeFrom(ffN.id, 'flip-b', envDuskN.id),
+      execEdge(keyM.id, cdM.id), execEdge(cdM.id, ffM.id),
+      execEdgeFrom(ffM.id, 'flip-a', wetOn.id), execEdge(wetOn.id, envRain.id), execEdge(envRain.id, rainOn.id),
+      execEdgeFrom(ffM.id, 'flip-b', wetOff.id), execEdge(wetOff.id, envDuskM.id), execEdge(envDuskM.id, rainOff.id),
+    ],
+  };
+  const blueprint: ScriptBlueprint = {
+    id: bpId,
+    name: 'Track Conditions',
+    description: 'N toggles night, M toggles rain (rain sets the Wet var — the sim slicks every wheel’s grip).',
+    graphId,
+    color: '#7da9ff',
+    createdAt: now,
+  };
+  return { wetVar, blueprint, graph };
+}
+
 /** Score HUD: a top-right SCORE readout + a center DRIFT!/BIG AIR! banner. The runtime writes the Score/Stunt
  *  vars (drift slip + airtime), so no blueprint is needed — the HUD just binds to them. */
 function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable; hud: UIDocument } {
@@ -680,11 +800,12 @@ function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable
 
 /** Build the SIM-RACING "Proving Ground" into the (already-created) active project. */
 export async function createSimRacingTemplate(): Promise<string> {
-  const { carId, objects: carObjects } = await buildSimCar();
+  const { carId, rainEmitterId, objects: carObjects } = await buildSimCar();
   const menu = buildSpeedMenu();
   const boost = buildBoostBlueprint(menu.nitroVar.id);
   const garage = buildGarage();
   const score = buildScoreHud();
+  const conditions = buildTrackConditions(rainEmitterId);
   const objects: SceneObject[] = [];
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
@@ -1048,10 +1169,19 @@ export async function createSimRacingTemplate(): Promise<string> {
     script: { blueprintId: garage.blueprint.id, graphId: garage.graph.id, enabled: true },
   });
 
+  // Track-conditions controller: listens for the N (night) / M (rain) toggles.
+  objects.push({
+    id: makeId('obj'),
+    name: 'Track Conditions',
+    kind: 'empty',
+    transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    script: { blueprintId: conditions.blueprint.id, graphId: conditions.graph.id, enabled: true },
+  });
+
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar],
-    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
-    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, conditions.wetVar],
+    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
+    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, conditions.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
     uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>

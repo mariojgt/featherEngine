@@ -52,3 +52,12 @@ export function addVehicleDent(id: string, dir: Vector3Tuple, depth: number): vo
 export function clearVehicleDents(): void {
   byId.clear();
 }
+
+/** Repair ONE vehicle (R-key respawn): empty its dent list but keep the version monotonic so the
+ *  deform renderer sees the change and restores the pristine mesh. */
+export function clearVehicleDentsFor(id: string): void {
+  const state = byId.get(id);
+  if (!state || state.dents.length === 0) return;
+  state.dents = [];
+  state.version += 1;
+}

@@ -305,6 +305,8 @@ export interface VehicleInput {
   /** Manual transmission: shift request held this frame (the sim edge-detects internally). */
   shiftUp?: boolean;
   shiftDown?: boolean;
+  /** Global grip multiplier on every wheel's surface grip (weather): 1 = dry, ~0.6 = rain-slick. */
+  gripScale?: number;
 }
 
 /** Per-wheel + chassis readback for one raycast-sim vehicle after a physics step. */
@@ -1301,6 +1303,9 @@ class PhysicsRuntime {
             targetGrip = SURFACE_GRIP[surface.toLowerCase()] ?? 1;
           }
         }
+        // Weather: a global grip multiplier (the "Wet" project var) slicks EVERY surface — rain-soaked
+        // tarmac brakes long and slides early, and already-loose surfaces get treacherous.
+        targetGrip *= Math.min(1, Math.max(0.25, input.gripScale ?? 1));
         const prevGrip = entry.surfaceGrip[i] ?? 1;
         const grip = prevGrip + (targetGrip - prevGrip) * Math.min(1, 8 * dt);
         entry.surfaceGrip[i] = grip;

@@ -59,10 +59,19 @@ export function useRuntimeAudio() {
     let engineRate = 0.85;
     let engineVol = 0.3;
     let skidVol = 0;
+    let lastPop: number | undefined;
     const teardown = (handle: LoopHandle | null) => {
       if (handle) audioEngine.stopLoop(handle);
     };
-    const apply = (vs: { engineId?: string; skidId?: string; rpm: number; slip: number } | null) => {
+    const apply = (vs: { engineId?: string; skidId?: string; rpm: number; slip: number; pop?: number } | null) => {
+      // Exhaust backfire: the runtime advances `pop` on every upshift — fire one synthesized pop per step,
+      // louder near the redline (where a real wastegate crackles hardest).
+      if (vs?.pop !== undefined) {
+        if (lastPop !== undefined && vs.pop > lastPop) audioEngine.playBackfirePop(0.35 + vs.rpm * 0.45);
+        lastPop = vs.pop;
+      } else {
+        lastPop = undefined;
+      }
       const assets = useEditorStore.getState().assets;
       const urlFor = (id?: string) => (id ? assets.find((asset) => asset.id === id)?.url : undefined);
       // Engine loop.

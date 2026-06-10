@@ -258,6 +258,12 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   const lastMouseDx = useRef(0);
   const lastMouseDy = useRef(0);
   const mouseIdle = useRef(0);
+  // Vehicle onboard camera: 0 = chase, 1 = hood, 2 = cockpit (the C key cycles during Play); holding V
+  // looks back. Rigid mounts — glued to the chassis with full roll/pitch, so they feel properly "sim".
+  const vehicleView = useRef(0);
+  const prevCamKey = useRef(false);
+  const onboardQuat = useRef(new THREE.Quaternion());
+  const onboardEuler = useRef(new THREE.Euler());
 
   // Normalize so a controller created before `mouseLook` existed still enables the camera.
   // In `preview` mode (editor, not playing) we deliberately ignore mouse-look so tuning the camera
@@ -349,6 +355,48 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     adsBlend.current = THREE.MathUtils.lerp(adsBlend.current, aiming ? 1 : 0, smooth(14));
     const ads = adsBlend.current;
 
+    // --- Vehicle camera views: C cycles chase → hood → cockpit; HOLDING V looks back (chase: swings the
+    // camera to the nose looking at the car; onboard: a rear view). Play only — the editor preview always
+    // shows the authored chase framing.
+    let lookBack = false;
+    if (liveTarget.vehicle?.enabled && !preview) {
+      const camKey = Boolean(state.runtimeKeys['KeyC']);
+      if (camKey && !prevCamKey.current) vehicleView.current = (vehicleView.current + 1) % 3;
+      prevCamKey.current = camKey;
+      lookBack = Boolean(state.runtimeKeys['KeyV']);
+      if (vehicleView.current !== 0) {
+        // Rigid onboard mount: car-local offset rotated by the FULL chassis orientation (roll + pitch come
+        // through — that's what makes hood/cockpit feel bolted on), no smoothing, no spring arm.
+        const v = liveTarget.vehicle;
+        const off = vehicleView.current === 1 ? v.hoodCameraOffset ?? [0, 1.25, 0.5] : v.cockpitCameraOffset ?? [0, 1.05, -0.2];
+        onboardEuler.current.set(liveTransform.rotation[0], liveTransform.rotation[1], liveTransform.rotation[2]);
+        onboardQuat.current.setFromEuler(onboardEuler.current);
+        desired.current.set(off[0], off[1], off[2]).applyQuaternion(onboardQuat.current);
+        camera.position.set(rawX + desired.current.x, rawY + desired.current.y, rawZ + desired.current.z);
+        lookTarget.current.set(0, -0.04, lookBack ? -1 : 1).applyQuaternion(onboardQuat.current);
+        camera.lookAt(
+          camera.position.x + lookTarget.current.x * 10,
+          camera.position.y + lookTarget.current.y * 10,
+          camera.position.z + lookTarget.current.z * 10,
+        );
+        // The speed-FOV rush still applies onboard — stronger, since the windscreen amplifies it.
+        const rvv = state.runtimeVelocities[liveTarget.id];
+        const onboardSpeed = rvv ? Math.hypot(rvv[0], rvv[2]) : 0;
+        speedFovBlend.current = THREE.MathUtils.lerp(
+          speedFovBlend.current,
+          Math.min(1, onboardSpeed / Math.max(0.001, cc.moveSpeed)),
+          smooth(3),
+        );
+        const onboardFov = (vehicleView.current === 1 ? 56 : 60) + speedFovBlend.current * 12;
+        if (Math.abs(camera.fov - onboardFov) > 0.05) {
+          camera.fov = onboardFov;
+          camera.updateProjectionMatrix();
+        }
+        applyShake();
+        return;
+      }
+    }
+
     if (cc.cameraMode === 'firstPerson') {
       const yaw = cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : liveTransform.rotation[1] - cc.modelYawOffset;
       const pitch = cc.mouseLook && useMouse ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
@@ -422,7 +470,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     lastMouseDy.current = mouseLook.dy;
     mouseIdle.current = mouseMoved ? 0 : mouseIdle.current + delta;
     const speed = Math.hypot(smoothedVelocity.current.x, smoothedVelocity.current.z);
-    if (cc.mouseLook && useMouse && !aiming && speed > 0.6 && mouseIdle.current > 0.35) {
+    if (cc.mouseLook && useMouse && !aiming && !lookBack && speed > 0.6 && mouseIdle.current > 0.35) {
       const heading = Math.atan2(smoothedVelocity.current.x, smoothedVelocity.current.z);
       const curYaw = -mouseLook.dx * cc.mouseSensitivity;
       const diff = Math.atan2(Math.sin(heading - curYaw), Math.cos(heading - curYaw));
@@ -449,8 +497,9 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const feedFwd = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(liveTarget.vehicle?.enabled ? 1 / followK : 0);
 
     // Horizontal radius + base azimuth from the offset, then add mouse yaw; pitch raises/pulls in.
+    // A held look-back (V, vehicles) mirrors the azimuth — the camera swings to the nose looking back.
     const radius = Math.hypot(side, back) || 0.001;
-    const azimuth = Math.atan2(side, back) + (cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : 0);
+    const azimuth = Math.atan2(side, back) + (cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : 0) + (lookBack ? Math.PI : 0);
     const pitch = cc.mouseLook && useMouse ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch) : cc.cameraPitch;
     const horizontal = radius * Math.cos(pitch);
     desired.current

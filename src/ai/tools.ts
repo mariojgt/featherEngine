@@ -2127,6 +2127,9 @@ const rawEngineTools = {
       garageBodyIds: z.array(z.string()).optional().describe('(raycast) Ordered MODEL ASSET ids for the in-game garage: a "CarBody" project variable (0,1,2…) picks which body the chassis wears at runtime (chassis re-fits automatically). Replaces the whole list. Also editable in the Inspector Garage section.'),
       headlightIds: z.array(z.string()).optional(),
       brakeLightIds: z.array(z.string()).optional(),
+      brakeDiscIds: z.array(z.string()).optional().describe('(raycast) Brake DISC child object ids — their emissive glows orange with accumulated brake heat (sustained hard braking from speed) and cools when released.'),
+      hoodCameraOffset: vec3.optional().describe('(raycast) Car-local [side, up, forward] hood camera position — the Play camera cycles chase → hood → cockpit on C (hold V to look back).'),
+      cockpitCameraOffset: vec3.optional().describe("(raycast) Car-local [side, up, forward] cockpit (driver's eye) camera position for the C-key view cycle."),
       keyThrottle: z.string().optional(),
       keyReverse: z.string().optional(),
       keyLeft: z.string().optional(),
@@ -2152,10 +2155,12 @@ const rawEngineTools = {
       }
       store().setVehicleEnabled(objectId, true);
       if (Object.keys(patch).length) {
-        const { cameraOffset, ...rest } = patch;
+        const { cameraOffset, hoodCameraOffset, cockpitCameraOffset, ...rest } = patch;
         store().updateVehicle(objectId, {
           ...rest,
           ...(cameraOffset ? { cameraOffset: asVec3(cameraOffset) } : {}),
+          ...(hoodCameraOffset ? { hoodCameraOffset: asVec3(hoodCameraOffset) } : {}),
+          ...(cockpitCameraOffset ? { cockpitCameraOffset: asVec3(cockpitCameraOffset) } : {}),
         });
       }
       return `Updated vehicle controller on ${object.name}.`;

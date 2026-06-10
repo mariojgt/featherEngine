@@ -130,6 +130,51 @@ class AudioEngine {
     return panner;
   }
 
+  /** Cached noise buffer for the synthesized exhaust pop (built once, ~0.25s of white noise). */
+  private noiseBuffer: AudioBuffer | null = null;
+
+  /**
+   * Synthesized exhaust BACKFIRE pop — no asset needed, so every car's gearbox crackles out of the box.
+   * A short band-passed noise burst (the "crack") over a fast-decaying low sine (the "thump"), with a touch
+   * of random pitch so consecutive shifts don't sound machine-identical.
+   */
+  playBackfirePop(volume = 0.8): void {
+    const ctx = this.ensureContext();
+    if (!ctx || ctx.state === 'suspended' || !this.master) return;
+    if (!this.noiseBuffer) {
+      const len = Math.floor(ctx.sampleRate * 0.25);
+      this.noiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = this.noiseBuffer.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
+    const t = ctx.currentTime;
+    const jitter = 0.85 + Math.random() * 0.3;
+    // Crack: noise → bandpass → fast exponential decay.
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 420 * jitter;
+    band.Q.value = 0.9;
+    const crackGain = ctx.createGain();
+    crackGain.gain.setValueAtTime(volume, t);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    noise.connect(band).connect(crackGain).connect(this.master);
+    noise.start(t);
+    noise.stop(t + 0.2);
+    // Thump: a low sine dropping 90→45Hz under the crack.
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(90 * jitter, t);
+    osc.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    const thumpGain = ctx.createGain();
+    thumpGain.gain.setValueAtTime(volume * 0.7, t);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    osc.connect(thumpGain).connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.16);
+  }
+
   /**
    * Fire a transient sound. With `position` it plays through a PannerNode (spatial); without, it plays at the
    * master gain (2D — UI/menu sounds). Falls back to a plain HTMLAudioElement if the buffer can't be decoded.

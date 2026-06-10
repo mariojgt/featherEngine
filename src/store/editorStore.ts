@@ -98,7 +98,7 @@ import { markExec } from '../runtime/execTrace';
 import { addSkidMark } from '../runtime/skidMarks';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
-import { addVehicleDent, clearVehicleDents } from '../runtime/vehicleDamageBus';
+import { addVehicleDent, clearVehicleDents, clearVehicleDentsFor } from '../runtime/vehicleDamageBus';
 import { publishTransforms, clearTransformBuffer } from '../runtime/transformBuffer';
 import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSight } from '../runtime/aiPerception';
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
@@ -487,7 +487,7 @@ interface EditorState {
   runtimeSoundQueue: RuntimeSoundEvent[];
   /** Live audio state for the driven (camera-follow) vehicle, set each tick by the vehicle pass. Drives the
    *  looping engine (playbackRate ∝ rpm) + skid (volume ∝ slip) beds in useRuntimeAudio. Null when no car drives. */
-  runtimeVehicleSound: { engineId?: string; skidId?: string; rpm: number; slip: number } | null;
+  runtimeVehicleSound: { engineId?: string; skidId?: string; rpm: number; slip: number; pop?: number } | null;
   /** Messages emitted by action.print during Play; shown by the on-screen console overlay. */
   runtimeLog: string[];
   /** Screen UI documents currently shown during Play (keyed by doc id). Seeded from `visibleOnStart`. */
@@ -5473,7 +5473,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // to the Rapier vehicle controller inside physics.frame. Keyed by chassis object id.
       const vehicleInputs: Record<
         string,
-        { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean; shiftUp?: boolean; shiftDown?: boolean }
+        { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean; shiftUp?: boolean; shiftDown?: boolean; gripScale?: number }
       > = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
       // Self writes still mutate the owner's tuples directly; these are merged into the object list before
@@ -7682,9 +7682,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               nextVariableValues[nitroVar.id] = Math.max(0, nitro - delta * 0.5);
             }
           }
-          const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost));
+          // CRASH CONSEQUENCE: accumulated body damage saps engine power (each dent costs ~2.5%, capped at
+          // -40%) — wreck the car and it limps, which makes the breakables/walls actually matter.
+          const dmgVarIn = variableByName.get('Damage');
+          const dmgNow = dmgVarIn ? Math.max(0, toNumber(nextVariableValues[dmgVarIn.id] ?? dmgVarIn.defaultValue)) : 0;
+          const damageScale = 1 - Math.min(0.4, dmgNow * 0.025);
+          const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost)) * damageScale;
+          // WEATHER: a "Wet" project var (0..1, toggled by the template's rain mode) slicks every surface —
+          // the sim multiplies each wheel's surface grip by this, so braking/cornering degrade for real.
+          const wetVar = variableByName.get('Wet');
+          const wetNow = wetVar ? Math.max(0, Math.min(1, toNumber(nextVariableValues[wetVar.id] ?? wetVar.defaultValue))) : 0;
+          const gripScale = 1 - 0.42 * wetNow;
           // Respawn on a fresh R press (edge): teleports the car back to spawn (auto flip-recover is automatic).
           const respawn = Boolean(currentKeys['KeyR'] && !previousKeys['KeyR']);
+          // Respawning also REPAIRS: dents pop back out and the Damage counter (with its power penalty) resets.
+          if (respawn) {
+            clearVehicleDentsFor(object.id);
+            if (dmgVarIn) nextVariableValues[dmgVarIn.id] = 0;
+            vehicleVars.__brakeHeat = 0;
+          }
           // DRIVE FEEL: ease the steering in/out instead of snapping (twitchy) AND reduce the lock at speed so
           // the car is stable on the straights but still turns sharply when slow. Smoothed per-car.
           const refSpeed = 42;
@@ -7701,7 +7717,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Y / LB buttons hit through the default key aliases.
           const shiftUp = Boolean(currentKeys[veh.keyShiftUp ?? 'KeyE']);
           const shiftDown = Boolean(currentKeys[veh.keyShiftDown ?? 'KeyQ']);
-          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn, shiftUp, shiftDown };
+          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn, shiftUp, shiftDown, gripScale };
           continue;
         }
         const braking = throttleSig < -0.05;
@@ -8648,6 +8664,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const input = vehicleInputs[carId];
             const braking = Boolean(input && (input.throttle < -0.05 || input.handbrake));
             for (const lid of veh.brakeLightIds ?? []) brakeLightGlow.set(lid, braking ? 4 : 0.2);
+            // BRAKE DISC HEAT: sustained hard braking from speed heats the discs to an orange glow; they
+            // cool back down once released. Quantized so the emissive renderer only re-clones at visible
+            // steps (the brake-light identity rule), never 60×/s while the value creeps.
+            if (veh.brakeDiscIds?.length) {
+              const bag = mutableObjectVars(carId, byIdNow.get(carId)?.variables ?? {});
+              const spd = Math.abs(st.speed);
+              let heat = toNumber(bag.__brakeHeat ?? 0);
+              heat = braking && spd > 6 ? Math.min(1, heat + delta * (0.3 + spd * 0.014)) : Math.max(0, heat - delta * 0.35);
+              bag.__brakeHeat = heat;
+              const glow = (Math.round(heat * 8) / 8) * 6;
+              for (const did of veh.brakeDiscIds) brakeLightGlow.set(did, glow);
+            }
             if (carId === vehiclePlayerId) {
               if (speedVarMirror) nextVariableValues[speedVarMirror.id] = Math.round(Math.abs(st.speed) * 3.6);
               // Drivetrain HUD: bind UI text/bars to "RPM" and "Gear" project vars (created by the template,
@@ -8673,6 +8701,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               // TIRE MARKS are more lenient than the screech: lay rubber on any slide, the handbrake, OR hard
               // braking from speed — so you actually see marks "when you brake and stuff", not just big drifts.
               const leavingMarks = Math.abs(cs.speed) > 2 && (Math.abs(cs.lateralSpeed) > 1.6 || handbrake || (braking && Math.abs(cs.speed) > 7));
+              // Gear-change edge: drives the exhaust backfire burst below AND a synthesized exhaust "pop" in
+              // the engine audio (useRuntimeAudio fires one pop whenever this sequence number advances).
+              const prevGear = toNumber(mutable.__vehicleGear ?? 1);
+              mutable.__vehicleGear = cs.gear;
+              const upshifted = cs.gear > prevGear && prevGear >= 1;
+              if (upshifted) mutable.__popSeq = toNumber(mutable.__popSeq ?? 0) + 1;
               if (object.id === vehiclePlayerId) {
                 // Engine pitch from the SIM'S RPM, not road speed — so the note climbs through each gear and
                 // drops on the shift, exactly what sells "this car has a real gearbox".
@@ -8682,6 +8716,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   skidId: veh.skidSoundId,
                   rpm: Math.min(1, Math.max(0, (cs.rpm - idle) / Math.max(1, (veh.maxRpm ?? 7200) - idle))),
                   slip: skidding ? Math.min(1, Math.abs(cs.lateralSpeed) / 10) : 0,
+                  pop: toNumber(mutable.__popSeq ?? 0),
                 };
               }
               for (const id of veh.tireMarkIds) sendParticleCommand(id, { type: 'emit', on: leavingMarks });
@@ -8797,11 +8832,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 });
               }
               // SHIFT BACKFIRE: an upshift pops a quick flame burst from the exhaust/boost emitters — pairs
-              // with the RPM drop in the engine audio so the gear change reads visually too.
-              const prevGear = toNumber(mutable.__vehicleGear ?? 1);
-              mutable.__vehicleGear = cs.gear;
-              if (cs.gear > prevGear && prevGear >= 1 && veh.boostFlameIds?.length) {
+              // with the RPM drop + the synthesized pop in the engine audio (gear edge detected above).
+              if (upshifted && veh.boostFlameIds?.length) {
                 for (const id of veh.boostFlameIds) sendParticleCommand(id, { type: 'burst', count: 12 });
+              }
+              // WRECKED-ENGINE SMOKE: a badly damaged car (8+ dents) trails dark smoke from the hood,
+              // thickening (and blackening) as damage climbs. R respawns AND repairs, which stops it.
+              if (object.id === vehiclePlayerId) {
+                const dmgVarV = variableByName.get('Damage');
+                const dmgVal = dmgVarV ? toNumber(nextVariableValues[dmgVarV.id] ?? dmgVarV.defaultValue) : 0;
+                if (dmgVal >= 8) {
+                  const key = `${object.id}:engineSmoke`;
+                  if ((nextCooldowns[key] ?? 0) <= 0) {
+                    nextCooldowns[key] = Math.max(0.12, 0.4 - dmgVal * 0.012);
+                    const hood: Vector3Tuple = [pos[0] + Math.sin(carYaw) * 1.0, pos[1] + 0.75, pos[2] + Math.cos(carYaw) * 1.0];
+                    spawned.push(makeDustPuff(hood, dmgVal >= 14 ? '#23272e' : '#555b66', 6, 0.9));
+                  }
+                }
               }
               if (veh.brakeSoundId && input && input.throttle < -0.1 && cs.speed > 8) {
                 const key = `${object.id}:brakeSfx`;

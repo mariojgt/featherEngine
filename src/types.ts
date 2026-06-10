@@ -1414,6 +1414,13 @@ export interface VehicleComponent {
   headlightIds: string[];
   /** Brake-light child objects — their emissive intensity is raised while braking/reversing. */
   brakeLightIds: string[];
+  /** Brake DISC child objects — their emissive glows with accumulated brake HEAT (sustained hard braking
+   *  from speed heats them orange; they cool back down when released). Raycast sim only. */
+  brakeDiscIds?: string[];
+  /** Onboard camera positions (car-local [side, up, forward]); the Play camera cycles chase → hood →
+   *  cockpit on the C key. Defaults fit a typical sedan when absent. */
+  hoodCameraOffset?: Vector3Tuple;
+  cockpitCameraOffset?: Vector3Tuple;
   // --- Input bindings (KeyboardEvent.code) ---
   keyThrottle: string;
   keyReverse: string;
