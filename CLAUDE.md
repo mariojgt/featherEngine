@@ -9,6 +9,9 @@ react-three-fiber + rapier; visual scripting via @xyflow/react.
 - `npm run build` — type-check (`tsc -b`) + production web build; must pass before done
 - `npm run tauri:dev` — run the desktop app (Tauri); `npm run tauri:build` — package `.app`/`.dmg`
 - `cd src-tauri && cargo check` — compile-check the Rust shell + validate `tauri.conf.json`/capabilities
+- `npm run mcp` — MCP relay: exposes `engineTools` to external agents (Claude Code etc.) at
+  `http://127.0.0.1:5151/mcp`; a running editor auto-attaches via `src/ai/mcpBridge.ts` (see
+  the MCP section of [docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md))
 
 ## Architecture notes
 - **Projects & scenes:** a project has multiple `Scene`s; exactly one is active (`activeSceneId`).

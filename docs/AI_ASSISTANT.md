@@ -93,3 +93,39 @@ Film Mode is edited by both the UI and the assistant, so timeline features must 
   attach → play). Add a high-level convenience tool only if the model proves unreliable at composing.
 - **Every tool returns a sentence.** Success or a precise error — that text is the model's feedback loop.
 - **Keep the snapshot lean.** It's sent on every turn; include what the model needs to act, not everything.
+
+## MCP: the same tools for external agents (Claude Code, VSCode, Cursor)
+
+The full `engineTools` set is also exposed over the **Model Context Protocol**, so external
+agents can drive a live editor session with the exact same tools the in-app chat uses.
+
+```
+Claude Code / VSCode / Cursor
+   │  MCP (streamable HTTP)
+   ▼
+npm run mcp                  ← relay process (scripts/mcp-server.mjs), localhost only
+   │  WebSocket  ws://127.0.0.1:5151/editor
+   ▼
+running editor               ← src/ai/mcpBridge.ts executes engineTools against the live store
+```
+
+Usage:
+
+1. `npm run mcp` — start the relay (port via `NODEFORGE_MCP_PORT`, default 5151).
+2. Open the editor (`npm run dev` or `npm run tauri:dev`) — it attaches automatically.
+3. Register the endpoint once per client, e.g. Claude Code:
+   `claude mcp add --transport http feather http://127.0.0.1:5151/mcp`
+
+**No extra sync work.** The bridge builds the MCP tool manifest at runtime from `engineTools`
+(zod schemas → JSON Schema via `z.toJSONSchema`), and the relay never imports editor code — so
+a tool added through the checklist above appears in MCP automatically. `COMPACT_ENGINE_GUIDE`
+is sent as the MCP server `instructions`, so keeping it accurate (checklist step 4) also keeps
+external agents informed. Steps that are chat-widget-specific (`describeToolCall` chips) don't
+apply to MCP.
+
+Notes:
+- Tool *calls* need a connected editor; the tool *list* survives restarts via a disk cache
+  (`node_modules/.cache/nodeforge-mcp/`), so clients can discover tools before the editor opens.
+- The relay binds 127.0.0.1 only — these tools mutate the open project; never expose them to the LAN.
+- If two editor windows connect, the newest wins (the relay drops the older socket).
+- The Tauri CSP allows `ws://127.0.0.1:*`/`ws://localhost:*` in `connect-src` for this bridge.
