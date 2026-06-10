@@ -12,6 +12,7 @@ import { useEditorStore } from './store/editorStore';
 import { useEditorPrefs } from './store/editorPrefsStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 import { recordFrame, resetHitches } from './runtime/perfStats';
+import { resetFrameClock, smoothFrameDelta } from './runtime/frameClock';
 import { resetGamepadInput, sampleGamepads } from './runtime/gamepadInput';
 import { PerfOverlay } from './components/PerfOverlay';
 import { initHistory } from './store/history';
@@ -47,13 +48,16 @@ function RuntimePreviewLoop() {
   useEffect(() => {
     if (!isPlaying) return;
     resetHitches(); // the hitch counters describe THIS Play session
+    resetFrameClock();
 
     let frame = 0;
     let lastTime = performance.now();
 
     const loop = (time: number) => {
       const frameMs = time - lastTime;
-      const delta = Math.min(frameMs / 1000, 0.05);
+      // Smoothed clock: evens out RAF jitter and spreads hitch backlogs over a few gentle steps —
+      // without it, a moving car/character visibly freezes then SNAPS forward after every spike.
+      const delta = smoothFrameDelta(frameMs / 1000);
       lastTime = time;
       const tickStart = performance.now();
       sampleGamepads(delta, setRuntimeKey);

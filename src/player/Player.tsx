@@ -3,6 +3,7 @@ import { useEditorStore } from '../store/editorStore';
 import { GAME_BUNDLE_FILE, readGameBundle } from '../project/exportGame';
 import { useRuntimeAudio } from '../runtime/useRuntimeAudio';
 import { resetGamepadInput, sampleGamepads } from '../runtime/gamepadInput';
+import { resetFrameClock, smoothFrameDelta } from '../runtime/frameClock';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
@@ -32,10 +33,13 @@ function useRuntimeLoop(active: boolean) {
 
   useEffect(() => {
     if (!active) return;
+    resetFrameClock();
     let frame = 0;
     let lastTime = performance.now();
     const loop = (time: number) => {
-      const delta = Math.min((time - lastTime) / 1000, 0.05);
+      // Smoothed clock (see runtime/frameClock): evens RAF jitter, spreads hitch backlogs over a few
+      // gentle steps — kills the freeze-then-snap teleport on moving cars/characters.
+      const delta = smoothFrameDelta((time - lastTime) / 1000);
       lastTime = time;
       sampleGamepads(delta, setRuntimeKey);
       tickRuntime(delta);

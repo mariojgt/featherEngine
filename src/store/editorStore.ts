@@ -993,6 +993,14 @@ const cloneObjectTree = (
 };
 
 /**
+ * Remaining lifetime of each spawned VFX burst (impact sparks / dust puffs / explosions), keyed by object
+ * id. Kept OUTSIDE the store so ticking a burst's clock never re-mints the object (and with it the whole
+ * scene-objects array identity) every frame — the burst component animates itself; the runtime only needs
+ * to know when to despawn. Cleared when Play starts.
+ */
+const effectLife = new Map<string, number>();
+
+/**
  * True if stamping prefab `candidateId` inside prefab `hostId` would create a containment cycle —
  * i.e. the candidate's stored objects (transitively, through nested-instance `prefabSourceId` tags)
  * contain an instance of the host. A then contains A, which corrupts every future restamp/merge.
@@ -5151,6 +5159,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         clearTransformBuffer();
         clearPerception();
         clearVehicleDents(); // start each run with a pristine (undented) car
+        effectLife.clear(); // drop any stale burst-lifetime entries from the previous run
         return {
           isPlaying,
           runtimeTime: 0,
@@ -8101,14 +8110,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (physicsPatch) {
           return { ...object, physics: withPhysicsDefaults({ ...defaultPhysics(), ...object.physics, ...physicsPatch }) };
         }
-        // Particle bursts (impacts): count down their life; despawn when spent.
+        // Particle bursts (impacts): count down their life; despawn when spent. The countdown lives in a
+        // MODULE map, not the object — ImpactParticles self-animates from its own clock, so re-minting the
+        // object every frame only served the despawn check while invalidating the whole objects array's
+        // identity 60×/s for as long as ANY puff/spark was alive (a re-render storm while drifting/crashing).
         if (object.effect) {
-          const life = object.effect.life - delta;
-          if (life <= 0) {
+          const left = (effectLife.get(object.id) ?? object.effect.life) - delta;
+          if (left <= 0) {
+            effectLife.delete(object.id);
             destroyedIds.add(object.id);
-            return object;
+          } else {
+            effectLife.set(object.id, left);
           }
-          return { ...object, effect: { ...object.effect, life } };
+          return object;
         }
         // Projectiles: fly straight along their stored velocity and count down their life.
         if (object.projectile) {

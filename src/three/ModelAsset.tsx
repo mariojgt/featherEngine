@@ -342,14 +342,19 @@ export function ModelAsset({
   }, [clone, deformObjectId]);
 
   const lastDentVersion = useRef(-1);
+  // A new clone (garage body swap) starts pristine — force one re-deform so existing dents re-apply to it.
+  useEffect(() => {
+    lastDentVersion.current = -1;
+  }, [deformMeshes]);
   useFrame(() => {
     if (!deformObjectId || !deformMeshes) return;
     const state = getVehicleDents(deformObjectId);
     const version = state?.version ?? 0;
     const dents = state?.dents ?? [];
-    // Recompute when the damage changes; while dented, keep re-applying every frame (cheap for one body, and
-    // robust against any version/remount edge case). Only skip when undamaged AND nothing changed.
-    if (version === lastDentVersion.current && dents.length === 0) return;
+    // Recompute ONLY when the damage changes. Re-applying every frame while dented (the old behavior)
+    // walked every vertex + recomputed normals on the whole body 60×/s after the FIRST crash — a permanent
+    // frame-rate tax for the rest of the run.
+    if (version === lastDentVersion.current) return;
     lastDentVersion.current = version;
     const v = new THREE.Vector3();
     for (const m of deformMeshes) {

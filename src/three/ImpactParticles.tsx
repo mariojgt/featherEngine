@@ -73,12 +73,17 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
       matRef.current.size = dust ? 0.34 + progress * 0.5 : (muzzle ? 0.14 : splash ? 0.16 : 0.1) * (1 - progress * 0.6);
     }
     // Bright flash that decays fast (front-loaded) for a punchy pop. Splash gets only a soft glint; dust none.
-    if (lightRef.current) lightRef.current.intensity = (muzzle ? 9 : splash ? 1.5 : dust ? 0 : 5) * Math.max(0, 1 - progress) ** 2;
+    if (lightRef.current) lightRef.current.intensity = (muzzle ? 9 : splash ? 1.5 : 5) * Math.max(0, 1 - progress) ** 2;
   });
 
   return (
     <>
-      <pointLight ref={lightRef} color={effect.color} intensity={muzzle ? 9 : splash ? 1.5 : 5} distance={muzzle ? 5 : 4} decay={2} />
+      {/* Dust gets NO light: its flash intensity was always 0, but mounting one still changed the scene's
+          light count — and drift/offroad puffs spawn constantly, so every puff was flapping the lighting
+          state (uniform/program churn) for nothing. */}
+      {!dust && (
+        <pointLight ref={lightRef} color={effect.color} intensity={muzzle ? 9 : splash ? 1.5 : 5} distance={muzzle ? 5 : 4} decay={2} />
+      )}
       <points>
         <bufferGeometry ref={geomRef}>
           <bufferAttribute attach="attributes-position" args={[positions, 3]} count={count} />
