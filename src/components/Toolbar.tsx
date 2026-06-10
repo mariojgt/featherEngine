@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { PREFAB_EDIT_SCENE_ID } from '../types';
+import { ProblemsButton } from './ProblemsPanel';
 import { useEditorStore } from '../store/editorStore';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
@@ -406,6 +407,7 @@ export function Toolbar() {
           {isPlaying ? <Pause size={16} aria-hidden /> : <Play size={16} aria-hidden />}
           <span>{isPlaying ? 'Running' : 'Play'}</span>
         </button>
+        <ProblemsButton />
         <button className="export-button" title="Save project (⌘S)" onClick={() => void save()} disabled={busy}>
           <Save size={16} aria-hidden />
           <span>Save</span>

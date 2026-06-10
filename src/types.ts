@@ -75,6 +75,20 @@ export type GraphNodeKind =
   | 'logic.delay'
   | 'event.functionEntry'
   | 'logic.callFunction'
+  | 'logic.functionReturn'
+  | 'logic.switch'
+  | 'logic.sequence'
+  | 'logic.flipFlop'
+  | 'logic.select'
+  | 'comment.note'
+  | 'math.abs'
+  | 'math.min'
+  | 'math.max'
+  | 'math.round'
+  | 'math.power'
+  | 'math.sin'
+  | 'math.cos'
+  | 'string.append'
   | 'math.add'
   | 'math.subtract'
   | 'math.multiply'
@@ -235,8 +249,15 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   spawnKind?: SceneObjectKind;
   /** action.spawnPrefab: id of the prefab (captured object tree) to instantiate at runtime. */
   prefabId?: string;
-  /** action.print: message to log to the runtime console. */
+  /** action.print: message to log to the runtime console. comment.note: the comment text. */
   message?: string;
+  /** comment.note: accent color of the comment frame (defaults to a neutral slate). */
+  commentColor?: string;
+  /** logic.switch: the case labels — the wired value is stringified and matched against these; each
+   *  case gets its own exec output pin, with the default exec-out as the no-match path. */
+  switchCases?: string[];
+  /** math.round: which rounding to apply. */
+  roundMode?: 'round' | 'floor' | 'ceil';
   /** animator.setFloat/setBool/setTrigger/getParam/getState: name of the animator parameter. */
   paramName?: string;
   /** animator.* / action.destroyObject / action.setRagdoll: target object. Empty = the owning object (self). */

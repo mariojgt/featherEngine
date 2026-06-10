@@ -31,7 +31,7 @@ export const nodeGroups: Array<{
   {
     title: 'Logic',
     icon: GitBranch,
-    nodes: ['Branch', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop', 'For Each Actor', 'Function', 'Call Function'],
+    nodes: ['Branch', 'Switch', 'Sequence', 'Flip Flop', 'Select', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop', 'For Each Actor', 'Function', 'Call Function', 'Return', 'Comment'],
   },
   {
     title: 'Math',
@@ -44,6 +44,13 @@ export const nodeGroups: Array<{
       'Modulo',
       'Clamp',
       'Lerp',
+      'Abs',
+      'Min',
+      'Max',
+      'Round',
+      'Power',
+      'Sin',
+      'Cos',
       'Distance',
       'Add Vectors',
       'Subtract Vectors',
@@ -55,7 +62,7 @@ export const nodeGroups: Array<{
   {
     title: 'Values',
     icon: Database,
-    nodes: ['Number', 'Random', 'String', 'Boolean', 'Vector3'],
+    nodes: ['Number', 'Random', 'String', 'Boolean', 'Vector3', 'Append'],
   },
   {
     title: 'Variables',
@@ -483,6 +490,9 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesNodeKey = node.data.nodeKind === 'event.keyDown' || node.data.nodeKind === 'event.keyUp';
   const updatesEventName = node.data.nodeKind === 'event.custom' || node.data.nodeKind === 'action.fireEvent';
   const updatesFunctionName = node.data.nodeKind === 'event.functionEntry' || node.data.nodeKind === 'logic.callFunction';
+  const isComment = node.data.nodeKind === 'comment.note';
+  const isSwitch = node.data.nodeKind === 'logic.switch';
+  const isRound = node.data.nodeKind === 'math.round';
   const updatesAxis =
     node.data.nodeKind === 'action.translate' ||
     node.data.nodeKind === 'action.rotate' ||
@@ -670,6 +680,77 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               onChange={(event) => updateGraphNodeData(node.id, { eventName: event.target.value })}
             />
           </label>
+        )}
+
+        {isSwitch && (
+          <>
+            <small className="node-hint">
+              The wired Value is matched against these cases (as text — numbers work too). Each case has its own
+              exec pin; no match fires the Default pin. Perfect for a game-state variable: menu / playing / gameover.
+            </small>
+            {(node.data.switchCases ?? []).map((caseLabel, index) => (
+              <label className="node-field" key={index}>
+                <span>Case {index}</span>
+                <div className="library-row">
+                  <input
+                    value={caseLabel}
+                    onChange={(event) => {
+                      const next = [...(node.data.switchCases ?? [])];
+                      next[index] = event.target.value;
+                      updateGraphNodeData(node.id, { switchCases: next });
+                    }}
+                  />
+                  <button
+                    title="Remove case"
+                    onClick={() => updateGraphNodeData(node.id, { switchCases: (node.data.switchCases ?? []).filter((_, i) => i !== index) })}
+                  >
+                    <Trash2 size={12} aria-hidden />
+                  </button>
+                </div>
+              </label>
+            ))}
+            <button
+              className="full-button"
+              onClick={() => updateGraphNodeData(node.id, { switchCases: [...(node.data.switchCases ?? []), String(node.data.switchCases?.length ?? 0)] })}
+            >
+              ＋ Add case
+            </button>
+          </>
+        )}
+
+        {isRound && (
+          <label className="node-field">
+            <span>Mode</span>
+            <select
+              value={node.data.roundMode ?? 'round'}
+              onChange={(event) => updateGraphNodeData(node.id, { roundMode: event.target.value as 'round' | 'floor' | 'ceil' })}
+            >
+              <option value="round">Round (nearest)</option>
+              <option value="floor">Floor (down)</option>
+              <option value="ceil">Ceil (up)</option>
+            </select>
+          </label>
+        )}
+
+        {isComment && (
+          <>
+            <label className="node-field">
+              <span>Comment</span>
+              <input
+                value={node.data.message ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { message: event.target.value })}
+              />
+            </label>
+            <label className="node-field">
+              <span>Color</span>
+              <input
+                type="color"
+                value={node.data.commentColor ?? '#7d8aa5'}
+                onChange={(event) => updateGraphNodeData(node.id, { commentColor: event.target.value })}
+              />
+              <small className="node-hint">Drag the comment behind a group of nodes and resize its corner (when selected) to frame them.</small>
+            </label>
+          </>
         )}
 
         {updatesFunctionName && (

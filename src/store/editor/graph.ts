@@ -157,6 +157,20 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   Delay: 'logic.delay',
   Function: 'event.functionEntry',
   'Call Function': 'logic.callFunction',
+  Return: 'logic.functionReturn',
+  Switch: 'logic.switch',
+  Sequence: 'logic.sequence',
+  'Flip Flop': 'logic.flipFlop',
+  Select: 'logic.select',
+  Comment: 'comment.note',
+  Abs: 'math.abs',
+  Min: 'math.min',
+  Max: 'math.max',
+  Round: 'math.round',
+  Power: 'math.power',
+  Sin: 'math.sin',
+  Cos: 'math.cos',
+  Append: 'string.append',
   Add: 'math.add',
   Subtract: 'math.subtract',
   Multiply: 'math.multiply',
@@ -268,6 +282,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
 };
 
 export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
+  if (nodeKind.startsWith('comment.')) return 'Logic';
+  if (nodeKind.startsWith('string.')) return 'Values';
   if (nodeKind.startsWith('event.')) return 'Events';
   if (nodeKind.startsWith('logic.')) return 'Logic';
   if (nodeKind.startsWith('math.')) return 'Math';
@@ -554,6 +570,56 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
           'Fires its "Body" output once for EVERY actor matching a Blueprint or a Tag — the iterating form of Unreal "Get All Actors Of Class". The current actor is on the value-out (wire it into a Cast / Get Position / Set Object Var / Apply Damage Target inside the Body). Fires "Completed" once after. Pick a Blueprint, or set a Tag (matches the object\'s Tags). Skips self/dead/disabled. Gate behind an event/Cooldown — it scans every matching actor each time it runs.',
       };
     }
+    case 'logic.switch': {
+      const count = data.switchCases?.length ?? 2;
+      return {
+        label: `Switch (${count} cases)`,
+        description:
+          'Routes execution by VALUE — the state-machine node. Wire a number/string into Value; it\'s matched against the case list (edit cases in the inspector) and the matching case pin fires; no match → Default. E.g. Switch on a "GamePhase" variable: menu / playing / gameover.',
+      };
+    }
+    case 'logic.sequence':
+      return {
+        label: 'Sequence',
+        description: 'Fires Then 0, Then 1, Then 2 in order (same frame) — splits a long chain into readable parallel lanes (Unreal Sequence).',
+      };
+    case 'logic.flipFlop':
+      return {
+        label: 'Flip Flop',
+        description: 'Alternates: first trigger fires A, next fires B, then A again… (Unreal FlipFlop). Toggle doors, alternate gun barrels, on/off switches.',
+      };
+    case 'logic.select':
+      return {
+        label: 'Select',
+        description: 'Outputs A when the condition is true, else B (pure value pick — the value-side Branch). Wire any types.',
+      };
+    case 'logic.functionReturn':
+      return {
+        label: 'Return',
+        description: 'Inside a Function chain: sets the function\'s return value (read from the Call Function node\'s Return pin) and ENDS the function — nodes after it don\'t run.',
+      };
+    case 'math.abs':
+      return { label: 'Abs', description: 'Outputs |value| (absolute value).' };
+    case 'math.min':
+      return { label: 'Min', description: 'Outputs the smaller of A and B.' };
+    case 'math.max':
+      return { label: 'Max', description: 'Outputs the larger of A and B.' };
+    case 'math.round':
+      return { label: `Round (${data.roundMode ?? 'round'})`, description: 'Rounds a number — round (nearest), floor (down) or ceil (up).' };
+    case 'math.power':
+      return { label: 'Power', description: 'Outputs A raised to the power B (A^B).' };
+    case 'math.sin':
+      return { label: 'Sin', description: 'Outputs sin(angle in DEGREES) — orbits, bobbing, waves.' };
+    case 'math.cos':
+      return { label: 'Cos', description: 'Outputs cos(angle in DEGREES) — orbits, bobbing, waves.' };
+    case 'string.append':
+      return { label: 'Append', description: 'Joins A + B as text (e.g. "Score: " + score) — wire into Set UI Text or Print.' };
+    case 'comment.note':
+      return {
+        label: 'Comment',
+        description:
+          'A resizable note frame for organizing/explaining a graph — no pins, never executes. Double-click the text to edit; drag the corner to resize around a group of nodes.',
+      };
     case 'event.functionEntry':
       return {
         label: `Function: ${data.functionName || 'MyFunction'}`,
@@ -756,6 +822,21 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.functionName = 'MyFunction';
   }
 
+  if (nodeKind === 'logic.switch' && !Array.isArray(normalized.switchCases)) {
+    normalized.switchCases = ['0', '1'];
+  }
+
+  if (nodeKind === 'math.round' && !normalized.roundMode) {
+    normalized.roundMode = 'round';
+  }
+
+  if (nodeKind === 'comment.note') {
+    if (typeof normalized.message !== 'string') normalized.message = 'Comment';
+    // A comment has no pins and never participates in execution.
+    normalized.hasInput = false;
+    normalized.hasOutput = false;
+  }
+
   if ((nodeKind === 'action.translate' || nodeKind === 'action.rotate') && !normalized.axis) {
     normalized.axis = nodeKind === 'action.translate' ? 'z' : 'y';
   }
@@ -914,9 +995,21 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.materialProperty = 'metalness';
   }
 
+  if (nodeKind === 'logic.functionReturn') {
+    // Return ends the function — there is no exec continuation.
+    normalized.hasOutput = false;
+  }
+
+  if (nodeKind === 'logic.sequence' || nodeKind === 'logic.flipFlop') {
+    // These route ONLY through their named pins (Then 0/1/2, A/B) — no default exec-out.
+    normalized.hasOutput = false;
+  }
+
   const isPureValueNode =
     nodeKind.startsWith('value.') ||
     nodeKind.startsWith('math.') ||
+    nodeKind.startsWith('string.') ||
+    nodeKind === 'logic.select' ||
     nodeKind === 'logic.compare' ||
     nodeKind === 'logic.and' ||
     nodeKind === 'logic.or' ||

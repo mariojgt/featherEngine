@@ -383,6 +383,9 @@ interface EditorState {
   runtimeKeyPresses: Record<string, number>;
   runtimePreviousKeyPresses: Record<string, number>;
   runtimeEventQueue: string[];
+  /** Last payload carried by each custom event (lowercased name) — Fire Event's Payload pin writes it,
+   *  the matching Custom Event's value-out reads it. Optional: older saves/projects simply have none. */
+  runtimeEventPayloads?: Record<string, GraphValue>;
   runtimeVariableValues: Record<string, GraphValue>;
   /** Per-object animator state machine runtime: active state + live parameter values. Play-only. */
   runtimeAnimators: Record<string, RuntimeAnimator>;
@@ -989,6 +992,27 @@ const cloneObjectTree = (
   return { objects, rootId: idMap.get(rootId)! };
 };
 
+/**
+ * True if stamping prefab `candidateId` inside prefab `hostId` would create a containment cycle —
+ * i.e. the candidate's stored objects (transitively, through nested-instance `prefabSourceId` tags)
+ * contain an instance of the host. A then contains A, which corrupts every future restamp/merge.
+ */
+const prefabWouldCycle = (prefabs: Prefab[], candidateId: string, hostId: string): boolean => {
+  const visited = new Set<string>();
+  const queue = [candidateId];
+  while (queue.length) {
+    const id = queue.pop()!;
+    if (id === hostId) return true;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const prefab = prefabs.find((p) => p.id === id);
+    for (const object of prefab?.objects ?? []) {
+      if (object.prefabSourceId && !visited.has(object.prefabSourceId)) queue.push(object.prefabSourceId);
+    }
+  }
+  return false;
+};
+
 /** Structural fields a prefab merge never copies from the prefab — they define identity/hierarchy. */
 const PREFAB_STRUCT_KEYS = new Set(['id', 'parentId', 'prefabSourceId', 'prefabObjectId']);
 const prefabFieldEqual = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -1101,6 +1125,12 @@ export const selectActiveObjects = (state: EditorState): SceneObject[] =>
  * data that didn't actually change. The shallow compare is O(entries) — far cheaper than the React
  * work a false-positive identity change triggers downstream.
  */
+/** One Call Function activation: the evaluated A/B/C arguments + the value a Return node set. */
+interface FunctionFrame {
+  args: [GraphValue | undefined, GraphValue | undefined, GraphValue | undefined];
+  ret: GraphValue | undefined;
+}
+
 const keepRecord = <T,>(prev: Record<string, T>, next: Record<string, T>): Record<string, T> => {
   if (prev === next) return next;
   const keys = Object.keys(next);
@@ -1650,6 +1680,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     const prefab = state.prefabs.find((item) => item.id === prefabId);
     if (!prefab || !prefab.objects.length) return undefined;
+    // CYCLE GUARD: while the prefab editor is open, stamping the edited prefab into itself (directly,
+    // or via a chain of nested instances) would make A contain A — refuse instead of corrupting it.
+    if (state.editingPrefabId && prefabWouldCycle(state.prefabs, prefabId, state.editingPrefabId)) {
+      console.warn(
+        `[Feather] Blocked prefab cycle: "${prefab.name}" contains (or is) the prefab being edited.`,
+      );
+      return undefined;
+    }
     const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
     // cloneObjectTree preserves order, so clones[i] came from prefab.objects[i] — tag each with its
     // prefab-local id + the source prefab so edits can later 3-way-merge into this instance.
@@ -1768,7 +1806,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       isDirty: true,
     })),
   deletePrefab: (id) =>
-    set((state) => ({ prefabs: state.prefabs.filter((prefab) => prefab.id !== id), isDirty: true })),
+    set((state) => ({
+      prefabs: state.prefabs.filter((prefab) => prefab.id !== id),
+      // CASCADE: placed instances detach from the dead prefab (they stay in the scene as ordinary
+      // objects, but no longer claim a source) — otherwise they'd carry ghost references that make
+      // restamp/apply/revert silently misbehave forever.
+      scenes: state.scenes.map((scene) => ({
+        ...scene,
+        objects: scene.objects.map((object) =>
+          object.prefabSourceId === id ? { ...object, prefabSourceId: undefined, prefabObjectId: undefined } : object,
+        ),
+      })),
+      isDirty: true,
+    })),
   applyInstanceToPrefab: (objectId) => {
     const objects = selectActiveObjects(get());
     const instance = objects.find((object) => object.id === objectId);
@@ -4128,6 +4178,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             object.script?.blueprintId === id ? { ...object, script: undefined } : object,
           ),
         })),
+        // CASCADE: also detach from objects captured inside PREFABS — otherwise every future
+        // instantiation ships a dead script reference whose logic silently never runs.
+        prefabs: state.prefabs.map((prefab) =>
+          prefab.objects.some((object) => object.script?.blueprintId === id)
+            ? {
+                ...prefab,
+                objects: prefab.objects.map((object) =>
+                  object.script?.blueprintId === id ? { ...object, script: undefined } : object,
+                ),
+              }
+            : prefab,
+        ),
         isDirty: true,
       };
     }),
@@ -4839,11 +4901,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         graphs: state.graphs.map((graph) => {
           if (graph.id !== blueprint.graphId) return graph;
           const offset = graph.nodes.length * 38;
+          const nodeData = makeNodeData(label, category, seedNodeDataFromProject(label, data, state.variables, state.dataAssets));
           const node: NodeForgeNode = {
             id: nodeId,
             type: 'nodeforge',
             position: position ?? { x: 80 + (offset % 560), y: 220 + Math.floor(offset / 560) * 112 },
-            data: makeNodeData(label, category, seedNodeDataFromProject(label, data, state.variables, state.dataAssets)),
+            data: nodeData,
+            // Comments are resizable background frames: spawn with a useful size and sit BEHIND real nodes.
+            ...(nodeData.nodeKind === 'comment.note' ? { width: 340, height: 200, zIndex: -1 } : {}),
           };
           return { ...graph, nodes: [...graph.nodes, node] };
         }),
@@ -5373,6 +5438,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const nextVisibleUI = { ...state.runtimeVisibleUI };
       const nextUITextOverrides = { ...state.runtimeUITextOverrides };
       const firedEvents = new Set(state.runtimeEventQueue.map((eventName) => eventName.toLowerCase()));
+      // Last payload carried by each custom event (lowercased name) — written by Fire Event's Payload
+      // pin, read from the matching Custom Event's value-out. Persists until the same event fires again.
+      const eventPayloads: Record<string, GraphValue> = { ...(state.runtimeEventPayloads ?? {}) };
       // HP each object lost on the PREVIOUS tick — drives event.receiveDamage this frame (one-frame delayed,
       // like collisions) and its Damage value-out. Damage dealt THIS tick accumulates into `damageThisFrame`
       // (from the Apply Damage node + every combat-pass source) and becomes next tick's runtimeDamageEvents.
@@ -5807,6 +5875,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // For Loop's value-out = the current 0-based iteration index (0 when not iterating).
             if (node.data.nodeKind === 'logic.forLoop') return loopIndex.get(nodeId) ?? 0;
 
+            // Function entry's A/B/C value-outs = the CURRENT call's arguments (top call frame).
+            if (node.data.nodeKind === 'event.functionEntry') {
+              const frame = functionFrames[functionFrames.length - 1];
+              if (!frame) return undefined;
+              return sourceHandle === 'arg-b' ? frame.args[1] : sourceHandle === 'arg-c' ? frame.args[2] : frame.args[0];
+            }
+
+            // Call Function's Return pin = whatever a Return node set during this node's LAST call.
+            if (node.data.nodeKind === 'logic.callFunction') return callReturns.get(nodeId);
+
+            // Spawn Prefab's value-out = a reference to the actor it most recently spawned.
+            if (node.data.nodeKind === 'action.spawnPrefab') return lastSpawnedByNode.get(nodeId);
+
+            // Custom Event's value-out = the payload the firing Fire Event carried (last one per name).
+            if (node.data.nodeKind === 'event.custom') {
+              return eventPayloads[(node.data.eventName || 'CustomEvent').toLowerCase()];
+            }
+
             // For Each Actor's value-out = the current iteration's actor reference (a wired Body chain reads it).
             if (node.data.nodeKind === 'logic.forEachActor') return forEachCurrent.get(nodeId);
 
@@ -6147,6 +6233,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return b === 0 ? 0 : toNumber(valueInput(node, 'a', 0)) % b;
             }
 
+            if (node.data.nodeKind === 'math.abs') return Math.abs(toNumber(valueInput(node, 'value', 0)));
+            if (node.data.nodeKind === 'math.min') return Math.min(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 0)));
+            if (node.data.nodeKind === 'math.max') return Math.max(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 0)));
+            if (node.data.nodeKind === 'math.round') {
+              const value = toNumber(valueInput(node, 'value', 0));
+              const mode = node.data.roundMode ?? 'round';
+              return mode === 'floor' ? Math.floor(value) : mode === 'ceil' ? Math.ceil(value) : Math.round(value);
+            }
+            if (node.data.nodeKind === 'math.power') return Math.pow(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 2)));
+            // Sin/Cos take DEGREES (matching Set Rotation's authoring convention).
+            if (node.data.nodeKind === 'math.sin') return Math.sin((toNumber(valueInput(node, 'value', 0)) * Math.PI) / 180);
+            if (node.data.nodeKind === 'math.cos') return Math.cos((toNumber(valueInput(node, 'value', 0)) * Math.PI) / 180);
+
+            // Append: text join (numbers/bools stringify naturally) — HUD labels, print messages.
+            if (node.data.nodeKind === 'string.append') {
+              const a = valueInput(node, 'a', node.data.stringValue ?? '');
+              const b = valueInput(node, 'b', '');
+              return `${a ?? ''}${b ?? ''}`;
+            }
+
+            // Select: the value-side Branch — condition ? A : B, any types.
+            if (node.data.nodeKind === 'logic.select') {
+              return toBoolean(valueInput(node, 'condition', false)) ? valueInput(node, 'a') : valueInput(node, 'b');
+            }
+
             // --- Vector math (read inputs as [x,y,z] tuples) ---
             if (node.data.nodeKind === 'math.distance') {
               const a = asVec3(valueInput(node, 'a'));
@@ -6251,18 +6362,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             // Call Function: run the named "Function" entry's chain synchronously (a reusable subgraph —
             // Unreal Blueprint function-lite), then continue this chain. Each call gets a fresh visited
-            // set so the body re-runs on every call; the depth cap stops runaway recursion.
+            // set so the body re-runs on every call; the depth cap stops runaway recursion. Arguments
+            // (the A/B/C pins) evaluate ONCE before the body runs and are exposed on the Function entry's
+            // value-outs; a Return node inside the body sets what this node's Return pin reads.
             if (node.data.nodeKind === 'logic.callFunction') {
               const fnName = (node.data.functionName || 'MyFunction').toLowerCase();
               if (functionDepth < 16) {
                 functionDepth += 1;
+                const frame: FunctionFrame = {
+                  args: [valueInput(node, 'a'), valueInput(node, 'b'), valueInput(node, 'c')],
+                  ret: undefined,
+                };
+                functionFrames.push(frame);
                 for (const entry of runtime.functionRoots.get(fnName) ?? []) {
                   markExec(entry.id);
                   (runtime.outgoing.get(entry.id) ?? []).forEach((targetId) => executeFrom(targetId, new Set([entry.id])));
                 }
+                functionFrames.pop();
+                callReturns.set(nodeId, frame.ret);
                 functionDepth -= 1;
               }
               (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              return;
+            }
+
+            // Switch: route execution by VALUE — the state-machine node. The wired value is stringified
+            // and matched against the editable case list; the matching case pin fires, else Default.
+            if (node.data.nodeKind === 'logic.switch') {
+              const raw = valueInput(node, 'value', node.data.numberValue ?? '');
+              const value = String(raw ?? '');
+              const index = (node.data.switchCases ?? []).indexOf(value);
+              if (index >= 0) {
+                (runtime.outgoingByHandle.get(nodeId)?.get(`case-${index}`) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              } else {
+                (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              }
+              return;
+            }
+
+            // Sequence: fire Then 0 → Then 1 → Then 2 in order, same frame — readable parallel lanes.
+            if (node.data.nodeKind === 'logic.sequence') {
+              for (const handle of ['then-0', 'then-1', 'then-2']) {
+                (runtime.outgoingByHandle.get(nodeId)?.get(handle) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              }
+              return;
+            }
+
+            // Flip Flop: alternate A / B per trigger. The toggle lives in the owner's instance-variable
+            // bag (keyed by node id), so it persists across frames and resets cleanly when Play stops.
+            if (node.data.nodeKind === 'logic.flipFlop') {
+              const bag = mutableObjectVars(object.id, object.variables);
+              const key = `__flip:${node.id}`;
+              const fireA = !toBoolean(bag[key] ?? false);
+              bag[key] = fireA;
+              (runtime.outgoingByHandle.get(nodeId)?.get(fireA ? 'flip-a' : 'flip-b') ?? []).forEach((targetId) => executeFrom(targetId, visited));
               return;
             }
 
@@ -6333,6 +6486,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const forEachCurrent = new Map<string, string>();
           // Live Call Function nesting depth — caps recursion (a function calling itself) at 16.
           let functionDepth = 0;
+          // Function call frames: the entry's A/B/C value-outs read the TOP frame's args; Return writes
+          // ret; each Call Function node remembers what its last call returned (read on its Return pin).
+          const functionFrames: FunctionFrame[] = [];
+          const callReturns = new Map<string, GraphValue | undefined>();
+          // The actor most recently spawned by each Spawn Prefab node — its value-out reference.
+          const lastSpawnedByNode = new Map<string, string>();
 
           // The most recent successful Cast target on THIS owner this execution — resolved by the "$cast"
           // sentinel so downstream Get/Set Object Var act on the cast actor's instance variables.
@@ -6735,6 +6894,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'action.fireEvent') {
               const eventName = (node.data.eventName || 'CustomEvent').toLowerCase();
+              // Optional payload: carried by name, read from the matching Custom Event's value-out (so
+              // "enemy_died" can say HOW MANY points, "checkpoint" WHICH index). Last fire wins per name.
+              const payload = valueInput(node, 'payload');
+              if (payload !== undefined) eventPayloads[eventName] = payload;
               // A Target ($player/$trigger/$cast/id or wired ref) other than self = call the event on THAT
               // actor's blueprint, delivered next frame (Unreal call-event-on-reference). No target = fire
               // this graph's own matching Custom Event roots synchronously, as before.
@@ -6744,6 +6907,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               } else {
                 (runtime.customEventRoots.get(eventName) ?? []).forEach((candidate) => executeFrom(candidate.id, visited));
               }
+            }
+
+            // Return: set the enclosing function call's return value and END the function chain here.
+            // Outside a function call it's just a chain terminator.
+            if (node.data.nodeKind === 'logic.functionReturn') {
+              const frame = functionFrames[functionFrames.length - 1];
+              if (frame) frame.ret = valueInput(node, 'value');
+              return false;
             }
 
             if (node.data.nodeKind === 'action.playSound' && node.data.assetId) {
@@ -6830,16 +7001,35 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             if (node.data.nodeKind === 'action.spawnPrefab' && node.data.prefabId) {
-              // Instantiate a prefab tree (re-ided) at the spawner's position. The clones keep the prefab's
-              // controllerId/blueprintId (project-level), so spawned enemies animate + run their AI immediately.
+              // Instantiate a prefab tree (re-ided) at a wired Location (spawn points!) or the spawner's
+              // position. The clones keep the prefab's controllerId/blueprintId (project-level), so spawned
+              // enemies animate + run their AI immediately. The node's value-out is a REFERENCE to the new
+              // actor — chain it into Set Object Var / Get Position / Apply Damage Targets.
               const prefab = prefabById.get(node.data.prefabId);
               if (prefab && prefab.objects.length) {
+                const loc = valueInput(node, 'location');
+                const base: Vector3Tuple =
+                  Array.isArray(loc) && loc.length === 3
+                    ? [Number(loc[0]) || 0, Number(loc[1]) || 0, Number(loc[2]) || 0]
+                    : ([...position] as Vector3Tuple);
                 const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
                 for (const clone of clones) {
                   spawned.push(
                     clone.id === rootId
-                      ? { ...clone, parentId: undefined, transform: { ...clone.transform, position: [...position] as Vector3Tuple } }
+                      ? { ...clone, parentId: undefined, transform: { ...clone.transform, position: base } }
                       : clone,
+                  );
+                }
+                lastSpawnedByNode.set(node.id, rootId);
+              } else {
+                // LOUD failure: a dangling/empty prefab reference would otherwise spawn nothing with no
+                // trace. Surface it once per node (per Play) in the on-screen console so it gets fixed.
+                const bag = mutableObjectVars(object.id, object.variables);
+                const key = `__warnedPrefab:${node.id}`;
+                if (!bag[key]) {
+                  bag[key] = true;
+                  prints.push(
+                    `${object.name}: Spawn Prefab failed — prefab ${prefab ? 'is empty' : 'was deleted or not found'}`,
                   );
                 }
               }
@@ -9534,6 +9724,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeDamageEvents: keepRecord(state.runtimeDamageEvents, damageThisFrame),
         runtimePreviousKeys: keepRecord(state.runtimePreviousKeys, { ...currentKeys }),
         runtimePreviousKeyPresses: keepRecord(state.runtimePreviousKeyPresses, { ...currentKeyPresses }),
+        runtimeEventPayloads: keepRecord(state.runtimeEventPayloads ?? {}, eventPayloads),
         runtimeEventQueue: cinematicEvents,
         runtimeStarted: true,
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
@@ -9559,10 +9750,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const activeBlueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
       if (!activeBlueprint) return state;
       // Selection changes ARE applied (multi-select + marquee copy/paste need the `selected` flags on the
-      // nodes), but they never mark the project dirty — only real structural edits do.
-      const structuralChanges = changes.filter((change) => change.type !== 'dimensions');
+      // nodes), but they never mark the project dirty — only real structural edits do. Dimension changes
+      // are measurement noise EXCEPT a user-driven resize (comment frames via NodeResizer), which must
+      // persist + dirty.
+      const structuralChanges = changes.filter(
+        (change) => change.type !== 'dimensions' || ('resizing' in change && change.resizing === true),
+      );
       if (structuralChanges.length === 0) return state;
-      const dirtied = changes.some((change) => change.type !== 'select' && change.type !== 'dimensions');
+      const dirtied = changes.some(
+        (change) => change.type !== 'select' && (change.type !== 'dimensions' || ('resizing' in change && change.resizing === true)),
+      );
       return {
         graphs: state.graphs.map((graph) =>
           graph.id === activeBlueprint.graphId ? { ...graph, nodes: applyNodeChanges(structuralChanges, graph.nodes) } : graph,

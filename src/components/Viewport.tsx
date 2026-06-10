@@ -13,6 +13,7 @@ import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { FragmentMesh } from '../three/FragmentMesh';
 import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkidMarks } from '../three/SkidMarks';
+import { ShaderPrewarm } from '../three/ShaderPrewarm';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
@@ -1205,6 +1206,58 @@ function LightBudget() {
 const lightPosA = new THREE.Vector3();
 const lightPosB = new THREE.Vector3();
 
+/**
+ * Empty-scene quick start: when a project has no objects yet, the viewport offers the two clicks
+ * every game starts with (ground + player) instead of a blank stare. Disappears the moment the
+ * scene has content.
+ */
+function QuickStartOverlay() {
+  const isEmpty = useEditorStore((state) => selectActiveObjects(state).length === 0);
+  const isPlaying = useEditorStore((state) => state.isPlaying);
+  const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
+  if (!isEmpty || isPlaying || editingPrefabId) return null;
+  const store = () => useEditorStore.getState();
+  const addGround = () => {
+    const id = store().createObjectWithProps('plane', {
+      name: 'Ground',
+      position: [0, 0, 0],
+      color: '#39414f',
+      physics: { enabled: true, bodyType: 'fixed', collider: 'box' },
+    });
+    store().updateTransform(id, 'scale', [60, 1, 60]);
+    store().selectObject(id);
+  };
+  const addPlayer = () => {
+    const id = store().createObjectWithProps('capsule', {
+      name: 'Player',
+      position: [0, 1.1, 0],
+      color: '#22e0ff',
+    });
+    store().toggleCharacterController(id); // seeds the third-person controller (WASD + follow camera)
+    store().selectObject(id);
+  };
+  return (
+    <div className="quickstart-overlay">
+      <div className="quickstart-card">
+        <h3>Start your game</h3>
+        <p>Every game starts the same way — or skip ahead with a template or the AI assistant.</p>
+        <div className="quickstart-actions">
+          <button onClick={addGround}>＋ Add ground</button>
+          <button
+            onClick={() => {
+              addGround();
+              addPlayer();
+            }}
+          >
+            ＋ Ground + playable character
+          </button>
+        </div>
+        <small>Tip: the AI chat (bottom right) can build whole scenes — try “make a small race track”.</small>
+      </div>
+    </div>
+  );
+}
+
 /** Lives inside the Canvas so it can expose the live camera + canvas DOM node for drop raycasting. */
 function DropController({ contextRef }: { contextRef: MutableRefObject<DropContext | null> }) {
   const camera = useThree((state) => state.camera);
@@ -1661,6 +1714,7 @@ export function ViewportPanel() {
               <CompressedTextureSupport />
               <AudioListenerSync />
               <SkidMarks />
+              <ShaderPrewarm />
               <RenderStatsProbe />
               <LightBudget />
               <ShadowLOD />
@@ -1716,6 +1770,7 @@ export function ViewportPanel() {
         <DynamicCrosshair />
         <GameHud />
         <MiniMap />
+        <QuickStartOverlay />
       </div>
     </section>
   );

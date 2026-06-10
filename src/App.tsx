@@ -5,12 +5,13 @@ import { useProjectStore } from './store/projectStore';
 import { Toolbar } from './components/Toolbar';
 import { Workspace } from './components/Workspace';
 import { RuntimeConsole } from './components/RuntimeConsole';
+import { VariableWatch } from './components/VariableWatch';
 import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
 import { CinematicOverlay } from './components/CinematicOverlay';
 import { useEditorStore } from './store/editorStore';
 import { useEditorPrefs } from './store/editorPrefsStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
-import { recordFrame } from './runtime/perfStats';
+import { recordFrame, resetHitches } from './runtime/perfStats';
 import { resetGamepadInput, sampleGamepads } from './runtime/gamepadInput';
 import { PerfOverlay } from './components/PerfOverlay';
 import { initHistory } from './store/history';
@@ -45,6 +46,7 @@ function RuntimePreviewLoop() {
 
   useEffect(() => {
     if (!isPlaying) return;
+    resetHitches(); // the hitch counters describe THIS Play session
 
     let frame = 0;
     let lastTime = performance.now();
@@ -94,6 +96,24 @@ function RuntimePreviewLoop() {
   return null;
 }
 
+/**
+ * Closing/reloading the tab while the PREFAB EDITOR is open silently loses those edits — the
+ * transient edit scene is never persisted (serialize strips it). Warn before unload in that state.
+ */
+function PrefabEditGuard() {
+  const editing = useEditorStore((state) => Boolean(state.editingPrefabId));
+  useEffect(() => {
+    if (!editing) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = ''; // required by Chrome to show the confirmation dialog
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [editing]);
+  return null;
+}
+
 export default function App() {
   const hasProject = useProjectStore((state) => state.hasProject);
 
@@ -115,9 +135,11 @@ export default function App() {
     <div className="editor-shell">
       <AppearanceSync />
       <RuntimePreviewLoop />
+      <PrefabEditGuard />
       <Toolbar />
       <Workspace />
       <RuntimeConsole />
+      <VariableWatch />
       <CinematicOverlay />
       <AIChatWidget />
       <PrefabThumbnailHost />

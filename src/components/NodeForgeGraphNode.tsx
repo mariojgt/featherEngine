@@ -1,4 +1,4 @@
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
 import { useEditorStore } from '../store/editorStore';
 import {
   Ampersand,
@@ -95,6 +95,14 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'logic.not': 'boolean',
   'query.grounded': 'boolean',
   'query.raycast': 'boolean',
+  'math.abs': 'number',
+  'math.min': 'number',
+  'math.max': 'number',
+  'math.round': 'number',
+  'math.power': 'number',
+  'math.sin': 'number',
+  'math.cos': 'number',
+  'string.append': 'string',
   'value.vector3': 'vector3',
   'ai.playerLocation': 'vector3',
   'input.move': 'vector3',
@@ -253,6 +261,15 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'logic.and',
   'logic.or',
   'logic.not',
+  'logic.select',
+  'math.abs',
+  'math.min',
+  'math.max',
+  'math.round',
+  'math.power',
+  'math.sin',
+  'math.cos',
+  'string.append',
   'math.add',
   'math.subtract',
   'math.multiply',
@@ -320,7 +337,37 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       ];
     case 'logic.not':
     case 'math.normalize':
+    case 'math.abs':
+    case 'math.round':
+    case 'math.sin':
+    case 'math.cos':
       return [{ id: 'value', label: 'Value' }];
+    case 'math.min':
+    case 'math.max':
+    case 'math.power':
+    case 'string.append':
+      return [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+      ];
+    case 'logic.select':
+      return [
+        { id: 'condition', label: 'Condition' },
+        { id: 'a', label: 'A (true)' },
+        { id: 'b', label: 'B (false)' },
+      ];
+    case 'logic.switch':
+      return [{ id: 'value', label: 'Value' }];
+    case 'logic.functionReturn':
+      return [{ id: 'value', label: 'Value' }];
+    case 'logic.callFunction':
+      return [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+        { id: 'c', label: 'C' },
+      ];
+    case 'action.spawnPrefab':
+      return [{ id: 'location', label: 'Location' }];
     case 'logic.delay':
       return [{ id: 'seconds', label: 'Seconds' }];
     case 'math.vectorScale':
@@ -431,7 +478,10 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
     case 'action.print':
       return [{ id: 'message', label: 'Message' }];
     case 'action.fireEvent':
-      return [{ id: 'target', label: 'Target' }];
+      return [
+        { id: 'target', label: 'Target' },
+        { id: 'payload', label: 'Payload' },
+      ];
     case 'animator.setFloat':
     case 'animator.setBool':
       return [{ id: 'value', label: 'Value' }];
@@ -580,6 +630,33 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   const storeSelected = useEditorStore((state) => state.selectedGraphNodeId === id);
   const isSelected = selected || storeSelected;
 
+  // Comment frame: a resizable, pin-less note that sits BEHIND real nodes — purely organizational.
+  // Rendered after the hooks above so the hook count never changes between node kinds.
+  if (data.nodeKind === 'comment.note') {
+    const accent = data.commentColor || '#7d8aa5';
+    return (
+      <>
+        <NodeResizer minWidth={160} minHeight={90} isVisible={isSelected} lineStyle={{ borderColor: accent }} handleStyle={{ background: accent }} />
+        <div
+          className={`nf-comment ${isSelected ? 'selected' : ''}`}
+          style={{ borderColor: accent, background: `${accent}14` }}
+          onClick={() => useEditorStore.getState().selectGraphNode(id)}
+          onPointerDown={() => useEditorStore.getState().selectGraphNode(id)}
+        >
+          <textarea
+            // `nodrag` stops React Flow from treating typing/drag-select inside the text as a node drag.
+            className="nodrag nf-comment-text"
+            style={{ color: accent }}
+            value={data.message ?? ''}
+            placeholder="Comment…"
+            spellCheck={false}
+            onChange={(event) => useEditorStore.getState().updateGraphNodeData(id, { message: event.target.value })}
+          />
+        </div>
+      </>
+    );
+  }
+
   // Output data type: drives the value-out port color and its "Number/Bool/…" label.
   const outType: GraphValueType | 'any' | null = isValueProducer
     ? outputTypeOf[data.nodeKind] ?? (data.valueType as GraphValueType | undefined) ?? 'any'
@@ -595,6 +672,13 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   if (data.nodeKind === 'logic.cast') pinBottom = Math.max(pinBottom, 122);
   // Raycast has 4 stacked outputs (Hit/Actor/Point/Distance).
   if (data.nodeKind === 'query.raycast') pinBottom = Math.max(pinBottom, pinTop + 3 * pinStep + 30);
+  // Switch stacks one exec pin per case; Sequence 3; Flip Flop 2; Function entry 3 arg value-outs.
+  const switchCases = data.nodeKind === 'logic.switch' ? data.switchCases ?? [] : [];
+  if (data.nodeKind === 'logic.switch') pinBottom = Math.max(pinBottom, pinTop + switchCases.length * pinStep + 30);
+  if (data.nodeKind === 'logic.sequence') pinBottom = Math.max(pinBottom, pinTop + 2 * pinStep + 30);
+  if (data.nodeKind === 'logic.flipFlop') pinBottom = Math.max(pinBottom, pinTop + 1 * pinStep + 30);
+  if (data.nodeKind === 'event.functionEntry') pinBottom = Math.max(pinBottom, pinTop + 2 * pinStep + 30);
+  if (data.nodeKind === 'logic.callFunction' || data.nodeKind === 'action.spawnPrefab') pinBottom = Math.max(pinBottom, pinTop + valueInputs.length * pinStep + 30);
 
   const inputPinCount = (data.hasInput !== false && !isValueProducer ? 1 : 0) + valueInputs.length;
   const outputPinCount =
@@ -604,7 +688,13 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
     (data.nodeKind === 'logic.cast' ? 1 : 0) +
     (data.nodeKind === 'event.receiveDamage' ? 1 : 0) +
     (data.nodeKind === 'action.tweenProperty' ? 1 : 0) +
-    (data.nodeKind === 'logic.forLoop' || data.nodeKind === 'logic.forEachActor' ? 2 : 0);
+    (data.nodeKind === 'logic.forLoop' || data.nodeKind === 'logic.forEachActor' ? 2 : 0) +
+    switchCases.length +
+    (data.nodeKind === 'logic.sequence' ? 3 : 0) +
+    (data.nodeKind === 'logic.flipFlop' ? 2 : 0) +
+    (data.nodeKind === 'event.functionEntry' ? 3 : 0) +
+    (data.nodeKind === 'logic.callFunction' || data.nodeKind === 'action.spawnPrefab' ? 1 : 0) +
+    (data.nodeKind === 'event.custom' ? 1 : 0);
   const nodeMode = isEvent ? 'Event' : isValueProducer ? 'Pure' : 'Exec';
 
   return (
@@ -725,6 +815,122 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
         <>
           <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>
             Damage
+          </span>
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
+        </>
+      )}
+
+      {/* Switch: one exec pin per case (matched by VALUE); the default exec-out above is "Default". */}
+      {data.nodeKind === 'logic.switch' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: 30 }}>
+            Default
+          </span>
+          {switchCases.map((caseLabel, index) => (
+            <span key={`case-${index}`}>
+              <span className="nfn-pin-label" style={{ top: pinTop + index * pinStep - 4 }}>
+                {caseLabel || `case ${index}`}
+              </span>
+              <Handle
+                id={`case-${index}`}
+                className="node-port exec-port source"
+                type="source"
+                position={Position.Right}
+                style={{ top: pinTop + index * pinStep + 2 }}
+              />
+            </span>
+          ))}
+        </>
+      )}
+
+      {/* Sequence: Then 0 → Then 1 → Then 2 fire in order. */}
+      {data.nodeKind === 'logic.sequence' &&
+        [0, 1, 2].map((index) => (
+          <span key={`then-${index}`}>
+            <span className="nfn-pin-label" style={{ top: pinTop + index * pinStep - 4 }}>
+              Then {index}
+            </span>
+            <Handle
+              id={`then-${index}`}
+              className="node-port exec-port source"
+              type="source"
+              position={Position.Right}
+              style={{ top: pinTop + index * pinStep + 2 }}
+            />
+          </span>
+        ))}
+
+      {/* Flip Flop: alternates A / B per trigger. */}
+      {data.nodeKind === 'logic.flipFlop' &&
+        (['flip-a', 'flip-b'] as const).map((handle, index) => (
+          <span key={handle}>
+            <span className="nfn-pin-label" style={{ top: pinTop + index * pinStep - 4 }}>
+              {index === 0 ? 'A' : 'B'}
+            </span>
+            <Handle
+              id={handle}
+              className="node-port exec-port source"
+              type="source"
+              position={Position.Right}
+              style={{ top: pinTop + index * pinStep + 2 }}
+            />
+          </span>
+        ))}
+
+      {/* Function entry: the call's A/B/C arguments come out here. */}
+      {data.nodeKind === 'event.functionEntry' &&
+        (['arg-a', 'arg-b', 'arg-c'] as const).map((handle, index) => (
+          <span key={handle}>
+            <span className="nfn-pin-label" style={{ top: pinTop + index * pinStep - 4 }}>
+              {['A', 'B', 'C'][index]}
+            </span>
+            <Handle
+              id={handle}
+              className="node-port value-port source"
+              type="source"
+              position={Position.Right}
+              style={{ top: pinTop + index * pinStep + 2 }}
+            />
+          </span>
+        ))}
+
+      {/* Call Function: the value a Return node set inside the function. */}
+      {data.nodeKind === 'logic.callFunction' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: pinTop + valueInputs.length * pinStep - 4 }}>
+            Return
+          </span>
+          <Handle
+            id="value-out"
+            className="node-port value-port source"
+            type="source"
+            position={Position.Right}
+            style={{ top: pinTop + valueInputs.length * pinStep + 2 }}
+          />
+        </>
+      )}
+
+      {/* Spawn Prefab: a reference to the actor it just spawned (chain into Set Object Var etc.). */}
+      {data.nodeKind === 'action.spawnPrefab' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: pinTop + valueInputs.length * pinStep - 4 }}>
+            Actor
+          </span>
+          <Handle
+            id="value-out"
+            className="node-port value-port source"
+            type="source"
+            position={Position.Right}
+            style={{ top: pinTop + valueInputs.length * pinStep + 2 }}
+          />
+        </>
+      )}
+
+      {/* Custom Event: the payload the firing Fire Event carried. */}
+      {data.nodeKind === 'event.custom' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>
+            Payload
           </span>
           <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
         </>

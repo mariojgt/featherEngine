@@ -13,6 +13,7 @@ import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
 import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkidMarks } from '../three/SkidMarks';
+import { ShaderPrewarm } from '../three/ShaderPrewarm';
 import { autoQualityStep } from '../runtime/autoQuality';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
@@ -443,6 +444,7 @@ export function GameView() {
       <CompressedTextureSupport />
       <AudioListenerSync />
       <SkidMarks />
+      <ShaderPrewarm />
       <ShadowLOD />
       <MeshLOD />
       <GameScene />

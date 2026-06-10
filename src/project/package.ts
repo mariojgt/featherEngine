@@ -124,6 +124,7 @@ function scanGraphNodeRefs(
     const data = node.data;
     if (!data) continue;
     add.asset(data.assetId);
+    add.asset(data.projectileBlastSound);
     add.prefab(data.prefabId);
     add.blueprint(data.castBlueprintId);
     add.particleSystem(data.particleSystemId);
@@ -209,6 +210,9 @@ export function collectPackage(
 
   /** Pull every id referenced by a captured object's components into the buckets. */
   const scanObject = (object: SceneObject) => {
+    // A nested prefab INSTANCE inside this prefab pulls its source prefab into the closure too —
+    // without this, exporting a prefab-of-prefabs shipped ghosts.
+    add.prefab(object.prefabSourceId);
     add.asset(object.renderer?.modelAssetId);
     add.asset(object.renderer?.textureAssetId);
     add.material(object.renderer?.materialId);
@@ -223,7 +227,10 @@ export function collectPackage(
     const c = object.character;
     if (c) [c.footstepSoundId, c.jumpSoundId, c.landSoundId, c.swimSoundId, c.attackSoundId, c.hurtSoundId].forEach(add.asset);
     const v = object.vehicle;
-    if (v) [v.engineSoundId, v.skidSoundId, v.brakeSoundId, v.hornSoundId, v.collisionSoundId].forEach(add.asset);
+    if (v) {
+      [v.engineSoundId, v.skidSoundId, v.brakeSoundId, v.hornSoundId, v.collisionSoundId].forEach(add.asset);
+      (v.garageBodyIds ?? []).forEach(add.asset);
+    }
     for (const layer of object.terrain?.materialLayers ?? []) {
       add.asset(layer.textureAssetId);
       add.asset(layer.normalMapAssetId);
@@ -358,6 +365,9 @@ export function remapPackageForImport(
     variable: new Map<string, string>(),
     asset: new Map<string, string>(),
     object: new Map<string, string>(),
+    // UI element ids are regenerated on import; graph nodes (Set UI Text) reference them, so the
+    // old→new mapping is allocated UP FRONT and applied in BOTH rewriteUIElement and rewriteGraph.
+    uiElement: new Map<string, string>(),
   };
 
   // Skeletons: reuse an existing identical rig (by signature) when present; otherwise import fresh.
@@ -387,6 +397,12 @@ export function remapPackageForImport(
   pkg.assets.forEach((a) => maps.asset.set(a.id, newId('asset')));
   // Every object across every prefab gets a fresh id (refs between them are rewritten below).
   c.prefabs.forEach((p) => p.objects.forEach((o) => maps.object.set(o.id, newId('obj'))));
+  // Allocate UI element ids before any rewriting so graph nodes can be remapped in the same pass.
+  const allocElementIds = (element: UIElement) => {
+    maps.uiElement.set(element.id, newId('uiel'));
+    for (const child of element.children ?? []) allocElementIds(child);
+  };
+  c.uiDocuments.forEach((doc) => allocElementIds(doc.root));
 
   // 2. Rewrite a captured object's components.
   const rewriteObject = (object: SceneObject): SceneObject => {
@@ -432,12 +448,17 @@ export function remapPackageForImport(
       v.tireMarkIds = (v.tireMarkIds ?? []).map((id) => remap(maps.object, id)!);
       v.headlightIds = v.headlightIds.map((id) => remap(maps.object, id)!);
       v.brakeLightIds = v.brakeLightIds.map((id) => remap(maps.object, id)!);
+      v.boostFlameIds = (v.boostFlameIds ?? []).map((id) => remap(maps.object, id)!);
+      v.garageBodyIds = (v.garageBodyIds ?? []).map((id) => remap(maps.asset, id)!);
+      v.wheels = (v.wheels ?? []).map((wheel) => ({ ...wheel, objectId: remap(maps.object, wheel.objectId)! }));
       v.engineSoundId = remap(maps.asset, v.engineSoundId);
       v.skidSoundId = remap(maps.asset, v.skidSoundId);
       v.brakeSoundId = remap(maps.asset, v.brakeSoundId);
       v.hornSoundId = remap(maps.asset, v.hornSoundId);
       v.collisionSoundId = remap(maps.asset, v.collisionSoundId);
     }
+    // Physics joints link to another body by object id — without this an imported jointed rig falls apart.
+    if (o.joint?.connectedObjectId) o.joint.connectedObjectId = remap(maps.object, o.joint.connectedObjectId);
     if (o.terrain) {
       for (const layer of o.terrain.materialLayers ?? []) {
         layer.id = newId('layer');
@@ -476,11 +497,18 @@ export function remapPackageForImport(
       if (d.targetObjectId) d.targetObjectId = remap(maps.object, d.targetObjectId);
       if (d.otherObjectId) d.otherObjectId = remap(maps.object, d.otherObjectId);
       if (d.projectileTemplateId) d.projectileTemplateId = remap(maps.object, d.projectileTemplateId);
+      if (d.projectileBlastSound) d.projectileBlastSound = remap(maps.asset, d.projectileBlastSound);
+      if (d.elementId) d.elementId = remap(maps.uiElement, d.elementId);
+      // Scenes and cinematics are PROJECT-level and never travel inside a package — a dangling id
+      // here would silently no-op at runtime in the importing project. Clear them so the node reads
+      // as "unset" in the editor (and the Problems panel can point at it) instead of lying.
+      if (d.cinematicId) d.cinematicId = undefined;
+      if (d.targetSceneId) d.targetSceneId = undefined;
     }
   };
 
   const rewriteUIElement = (element: UIElement) => {
-    element.id = newId('uiel');
+    element.id = remap(maps.uiElement, element.id) ?? newId('uiel');
     element.assetId = remap(maps.asset, element.assetId);
     for (const child of element.children ?? []) rewriteUIElement(child);
   };

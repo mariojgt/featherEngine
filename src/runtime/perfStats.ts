@@ -80,6 +80,9 @@ export interface PerfSnapshot {
   tickMs: SampleStats;
   sections: Record<RuntimeSection, SampleStats>;
   render: RenderStats;
+  /** Frame-pacing reliability since Play started: frames that blew the 2-frame budget (>33ms) and
+   *  outright stalls (>100ms — shader compiles, GC pauses, composer rebuilds). The smoothness metric. */
+  hitches: { over33: number; over100: number };
 }
 
 export type RuntimeSection = 'scripts' | 'physics' | 'combat' | 'animator';
@@ -94,10 +97,21 @@ const sectionRings: Record<RuntimeSection, Ring> = {
 };
 const render: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 };
 
+let hitch33 = 0;
+let hitch100 = 0;
+
+/** Zero the hitch counters — called when Play starts so the numbers describe THIS session. */
+export const resetHitches = () => {
+  hitch33 = 0;
+  hitch100 = 0;
+};
+
 /** Called once per rAF from the runtime loop. `frameMs` is wall-clock between frames; `tickMs` is the cost of `tickRuntime`. */
 export const recordFrame = (frameMs: number, tickMs: number) => {
   frameRing.push(frameMs);
   tickRing.push(tickMs);
+  if (frameMs > 100) hitch100 += 1;
+  else if (frameMs > 33.4) hitch33 += 1;
 };
 
 export const recordRuntimeSection = (section: RuntimeSection, ms: number) => {
@@ -136,5 +150,6 @@ export const getPerfSnapshot = (): PerfSnapshot => {
       animator: sample(sectionRings.animator),
     },
     render: { ...render },
+    hitches: { over33: hitch33, over100: hitch100 },
   };
 };

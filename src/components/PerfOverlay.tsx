@@ -34,6 +34,7 @@ const ZERO_SNAPSHOT: PerfSnapshot = {
     animator: { avg: 0, p95: 0, max: 0, last: 0 },
   },
   render: { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 },
+  hitches: { over33: 0, over100: 0 },
 };
 
 function readCounts(): Counts {
@@ -193,6 +194,8 @@ export function PerfOverlay() {
         <>
           <FrameGraph frames={frames} />
           <Row label="frame" value={`${fmt(frameMs.avg)} / p95 ${fmt(frameMs.p95)}ms`} />
+          {/* Smoothness, not speed: dropped 2-frame budgets + outright stalls since Play started. */}
+          <Row label="hitches" value={`${snap.hitches.over33} >33ms · ${snap.hitches.over100} >100ms`} />
           <Row label="tick (sim)" value={`${fmt(tickMs.avg)} / max ${fmt(tickMs.max)}ms`} />
           <SectionBar snap={snap} />
           <Row label="scripts" value={`${fmt(sections.scripts.avg)}ms`} />
