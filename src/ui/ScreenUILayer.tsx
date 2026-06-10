@@ -9,6 +9,7 @@
  * buttons opt back in (`pointerEvents: auto`, set in `UIElementView`). Button clicks fire a
  * custom runtime event, reusing the existing `event.custom` node path.
  */
+import { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import type { UIDocument } from '../types';
 import { buildUIContext } from './runtimeContext';
@@ -25,12 +26,19 @@ export function ScreenUILayer() {
   const assets = useEditorStore((state) => state.assets);
   const fireCustomEvent = useEditorStore((state) => state.fireCustomEvent);
 
-  if (!isPlaying) return null;
+  // Memoized on their actual inputs — the tick's identity guards keep `visible`/values stable when
+  // unchanged, so these no longer allocate (or re-render the HUD tree) 60×/s.
   // `webgl` docs are drawn in-canvas by WebGLScreenUILayer; the DOM overlay handles the rest.
-  const docs = uiDocuments.filter((doc) => doc.surface === 'screen' && doc.renderMode !== 'webgl' && visible[doc.id]);
-  if (docs.length === 0) return null;
+  const docs = useMemo(
+    () => uiDocuments.filter((doc) => doc.surface === 'screen' && doc.renderMode !== 'webgl' && visible[doc.id]),
+    [uiDocuments, visible],
+  );
+  const ctx = useMemo(
+    () => buildUIContext({ variables, runtimeVariableValues, runtimeObjectVariables, isPlaying }),
+    [variables, runtimeVariableValues, runtimeObjectVariables, isPlaying],
+  );
 
-  const ctx = buildUIContext({ variables, runtimeVariableValues, runtimeObjectVariables, isPlaying });
+  if (!isPlaying || docs.length === 0) return null;
   const resolveAssetUrl = (assetId: string) => assets.find((asset) => asset.id === assetId)?.url;
 
   const overridesFor = (doc: UIDocument) => scopeOverrides(textOverrides, doc.id);

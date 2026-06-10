@@ -1166,7 +1166,7 @@ function LightBudget() {
   const scene = useThree((state) => state.scene);
   const evaluatedCount = useRef(-1);
   const evaluatedQuality = useRef<string | undefined>(undefined);
-  useFrame(() => {
+  useFrame(({ camera }) => {
     const editorState = useEditorStore.getState();
     if (!editorState.isPlaying) {
       evaluatedCount.current = -1;
@@ -1183,6 +1183,17 @@ function LightBudget() {
     if (casters.length === evaluatedCount.current && quality === evaluatedQuality.current) return;
     evaluatedCount.current = casters.length;
     evaluatedQuality.current = quality;
+    // Over budget, spend the shadow slots on what the player can SEE: the sun (directional) first,
+    // then the lights nearest the camera at evaluation time — not whatever scene-traversal order
+    // happened to produce. Still evaluated only on count/quality changes (see the recompile note above).
+    if (casters.length > maxCasters) {
+      casters.sort((a, b) => {
+        const aDir = (a as THREE.DirectionalLight).isDirectionalLight ? 1 : 0;
+        const bDir = (b as THREE.DirectionalLight).isDirectionalLight ? 1 : 0;
+        if (aDir !== bDir) return bDir - aDir;
+        return a.getWorldPosition(lightPosA).distanceToSquared(camera.position) - b.getWorldPosition(lightPosB).distanceToSquared(camera.position);
+      });
+    }
     casters.forEach((light, i) => {
       if (light.userData.nfWantsShadow === undefined) light.userData.nfWantsShadow = light.castShadow;
       light.castShadow = Boolean(light.userData.nfWantsShadow) && i < maxCasters;
@@ -1190,6 +1201,9 @@ function LightBudget() {
   });
   return null;
 }
+
+const lightPosA = new THREE.Vector3();
+const lightPosB = new THREE.Vector3();
 
 /** Lives inside the Canvas so it can expose the live camera + canvas DOM node for drop raycasting. */
 function DropController({ contextRef }: { contextRef: MutableRefObject<DropContext | null> }) {

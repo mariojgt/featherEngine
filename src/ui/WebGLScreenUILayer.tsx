@@ -8,6 +8,7 @@
  * `GameView` (`GameScene`), next to `WorldUIAnchor`. Only renders while `isPlaying`. Data, text
  * overrides and button → `fireCustomEvent` wiring are identical to the DOM layer.
  */
+import { useMemo } from 'react';
 import { Container, Fullscreen } from '@react-three/uikit';
 import { useEditorStore } from '../store/editorStore';
 import { buildUIContext } from './runtimeContext';
@@ -34,11 +35,17 @@ export function WebGLScreenUILayer() {
   const assets = useEditorStore((state) => state.assets);
   const fireCustomEvent = useEditorStore((state) => state.fireCustomEvent);
 
-  if (!isPlaying) return null;
-  const docs = uiDocuments.filter((doc) => doc.surface === 'screen' && doc.renderMode === 'webgl' && visible[doc.id]);
-  if (docs.length === 0) return null;
-
-  const ctx = buildUIContext({ variables, runtimeVariableValues, runtimeObjectVariables, isPlaying });
+  // Memoized on their actual inputs — the tick's identity guards keep `visible`/values stable when
+  // unchanged, so these no longer allocate (or re-render the HUD tree) 60×/s.
+  const docs = useMemo(
+    () => uiDocuments.filter((doc) => doc.surface === 'screen' && doc.renderMode === 'webgl' && visible[doc.id]),
+    [uiDocuments, visible],
+  );
+  const ctx = useMemo(
+    () => buildUIContext({ variables, runtimeVariableValues, runtimeObjectVariables, isPlaying }),
+    [variables, runtimeVariableValues, runtimeObjectVariables, isPlaying],
+  );
+  if (!isPlaying || docs.length === 0) return null;
   const resolveAssetUrl = (assetId: string) => assets.find((asset) => asset.id === assetId)?.url;
 
   return (

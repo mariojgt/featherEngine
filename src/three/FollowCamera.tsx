@@ -202,14 +202,20 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     preview && targetId ? selectActiveObjects(state).find((object) => object.id === targetId) : undefined,
   );
   const target = preview ? previewTarget : targetId ? selectActiveObjects(useEditorStore.getState()).find((object) => object.id === targetId) : undefined;
+  // Allocation-free signature: this selector runs on EVERY store write (60×/s in Play), so it walks
+  // the list once and concatenates — no intermediate arrays/Sets per evaluation.
   const viewModelSignature = useEditorStore((state) => {
     if (!targetId) return '';
-    const hidden = new Set(state.runtimeHidden);
-    return selectActiveObjects(state)
-      .filter((object) => object.viewModel?.ownerObjectId === targetId)
-      .filter((object, index) => (preview ? index === 0 : !hidden.has(object.id)))
-      .map((object) => object.id)
-      .join('|');
+    const objects = selectActiveObjects(state);
+    let signature = '';
+    let matchIndex = 0;
+    for (const object of objects) {
+      if (object.viewModel?.ownerObjectId !== targetId) continue;
+      const visible = preview ? matchIndex === 0 : !state.runtimeHidden.includes(object.id);
+      matchIndex += 1;
+      if (visible) signature += object.id + '|';
+    }
+    return signature;
   });
   const allViewModels = useMemo(() => {
     if (!targetId) return [];

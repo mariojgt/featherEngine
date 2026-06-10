@@ -1094,6 +1094,28 @@ const mergePrefabInstances = (
 export const selectActiveObjects = (state: EditorState): SceneObject[] =>
   state.scenes.find((scene) => scene.id === state.activeSceneId)?.objects ?? [];
 
+/**
+ * Identity-preserving guards for the per-tick state patch. tickRuntime builds fresh records/arrays
+ * every frame by construction; when the CONTENTS turn out unchanged, these return the PREVIOUS
+ * reference so Zustand subscribers (HUD layers, panels, render memos) don't re-render at 60fps for
+ * data that didn't actually change. The shallow compare is O(entries) — far cheaper than the React
+ * work a false-positive identity change triggers downstream.
+ */
+const keepRecord = <T,>(prev: Record<string, T>, next: Record<string, T>): Record<string, T> => {
+  if (prev === next) return next;
+  const keys = Object.keys(next);
+  if (keys.length !== Object.keys(prev).length) return next;
+  for (const key of keys) if (!Object.is(prev[key], next[key])) return next;
+  return prev;
+};
+
+const keepArray = <T,>(prev: T[], next: T[]): T[] => {
+  if (prev === next) return next;
+  if (prev.length !== next.length) return next;
+  for (let i = 0; i < next.length; i++) if (!Object.is(prev[i], next[i])) return next;
+  return prev;
+};
+
 /** Stable selector for the active scene's environment settings (sky/fog/sun). May be undefined. */
 export const selectActiveSceneEnvironment = (
   state: EditorState,
@@ -5593,14 +5615,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let interactFocusId: string | null = null;
       {
         const hiddenNow = new Set(state.runtimeHidden);
-        const interactables = activeObjects.filter((o) => {
-          if (nextDisabled.has(o.id) || hiddenNow.has(o.id)) return false;
-          const vars = { ...(o.variables ?? {}), ...(nextObjectVariables[o.id] ?? {}) };
-          return toBoolean(vars.interactable ?? false);
-        });
+        // One pass collects interactables WITH their priority resolved, so the per-character loop below
+        // does zero allocations (previously it spread a merged-vars object per interactable × character
+        // × frame, the single biggest GC churn in the interaction pass).
+        const interactables: Array<{ id: string; position: Vector3Tuple; priority: number }> = [];
+        for (const o of activeObjects) {
+          if (nextDisabled.has(o.id) || hiddenNow.has(o.id)) continue;
+          const live = nextObjectVariables[o.id];
+          const flag = live && 'interactable' in live ? live.interactable : o.variables?.interactable;
+          if (!toBoolean(flag ?? false)) continue;
+          const prio = live && 'interactPriority' in live ? live.interactPriority : o.variables?.interactPriority;
+          interactables.push({ id: o.id, position: o.transform.position, priority: toNumber(prio ?? 0) });
+        }
         if (interactables.length) {
           for (const char of activeObjects) {
             if (!char.character?.enabled || isRagdoll(char.id)) continue;
+            // Only scan when the result could matter THIS frame: the camera-follow character needs the
+            // focus highlight every frame, but an NPC's scan only matters while its interact key is down
+            // (keys are global, so this preserves the exact firing semantics while skipping the O(N)
+            // candidate walk for every idle NPC every frame).
+            const isFollow = Boolean(char.character.cameraFollow);
+            const interactKey = char.character.keyInteract ?? 'KeyE';
+            // (keyPressedThisTick covers a tap that was already released before this tick ran.)
+            if (!isFollow && !currentKeys[interactKey] && !keyPressedThisTick(interactKey)) continue;
             const cc = { ...defaultCharacter(), ...char.character };
             const range = Math.max(0.25, cc.interactRange ?? 3);
             const cp = char.transform.position;
@@ -5610,10 +5647,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             let best: { id: string; score: number } | null = null;
             for (const it of interactables) {
               if (it.id === char.id) continue;
-              const vars = { ...(it.variables ?? {}), ...(nextObjectVariables[it.id] ?? {}) };
-              const dx = it.transform.position[0] - cp[0];
-              const dy = it.transform.position[1] - cp[1];
-              const dz = it.transform.position[2] - cp[2];
+              const dx = it.position[0] - cp[0];
+              const dy = it.position[1] - cp[1];
+              const dz = it.position[2] - cp[2];
               const horizontal = Math.hypot(dx, dz);
               const verticalLimit = Math.max(1.8, range * 0.75);
               if (Math.abs(dy) > verticalLimit) continue;
@@ -5622,9 +5658,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const dot = horizontal > 0.001 ? (dx / horizontal) * fwdX + (dz / horizontal) * fwdZ : 1;
               const nearOverride = horizontal <= Math.min(1.6, range * 0.42);
               if (!nearOverride && dot < (cc.cameraFollow ? -0.55 : -0.15)) continue;
-              const priority = toNumber(vars.interactPriority ?? 0);
               const score =
-                priority * 3 +
+                it.priority * 3 +
                 (1 - weightedDistance / range) * 2.4 +
                 Math.max(0, dot) * 1.25 +
                 (nearOverride ? 0.75 : 0) -
@@ -7841,6 +7876,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (vw) return { ...object, transform: { ...object.transform, position: vw.position, rotation: vw.rotation } };
         const vbrake = vehicleBrake.get(object.id);
         if (vbrake !== undefined && object.renderer) {
+          // Only mint a new renderer when the glow VALUE changes (press/release edges) — re-cloning every
+          // frame while braking gave the light a fresh identity 60×/s and re-rendered its subtree.
+          if (object.renderer.materialOverrides?.emissiveIntensity === vbrake) return object;
           return {
             ...object,
             renderer: {
@@ -8380,6 +8418,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               transform: { position, rotation: usePhysicsRotation ? next.rotation : object.transform.rotation, scale: object.transform.scale },
             };
           }
+          // IDENTITY GUARD (perf): a sleeping/static body reports the exact same numbers every step —
+          // cloning it anyway gave every physics object a fresh identity each frame, defeating the React
+          // memo layer scene-wide. Keep the object when nothing actually moved.
+          const cur = object.transform;
+          const rot = next.rotation;
+          if (
+            cur.position[0] === position[0] && cur.position[1] === position[1] && cur.position[2] === position[2] &&
+            cur.rotation[0] === rot[0] && cur.rotation[1] === rot[1] && cur.rotation[2] === rot[2]
+          ) {
+            return object;
+          }
           return {
             ...object,
             transform: { position, rotation: next.rotation, scale: object.transform.scale },
@@ -8647,9 +8696,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 },
               };
             }
-            // Brake lights: brighten the emissive while braking/handbraking.
+            // Brake lights: brighten the emissive while braking/handbraking. Only mint a NEW renderer when
+            // the glow VALUE changed (press/release edges) — re-cloning every frame while braking gave the
+            // light a fresh identity 60×/s, re-resolving its material and re-rendering its subtree.
             const glow = brakeLightGlow.get(object.id);
             if (glow !== undefined && object.renderer) {
+              if (object.renderer.materialOverrides?.emissiveIntensity === glow) return object;
               return {
                 ...object,
                 renderer: {
@@ -9177,15 +9229,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const groundedIdSet = new Set(groundedIds);
       const swimmingIdSet = new Set(swimmingIds);
       const climbingIdSet = new Set(climbingIds);
-      const nextScenes = state.scenes.map((scene) => {
-        if (scene.id !== state.activeSceneId) return scene;
-        // action.setEnvironment patches accumulated this tick → merge them onto the live scene's
-        // environment so a cinematic trigger can crossfade sky/fog/sun in one frame.
-        const env = pendingEnvironment && scene.environment
-          ? { ...scene.environment, ...pendingEnvironment } as SceneEnvironmentSettings
-          : scene.environment;
-        return { ...scene, objects: allObjects, ...(env !== scene.environment ? { environment: env } : {}) };
-      });
+      // IDENTITY GUARD (perf): when every object survived the tick with the same identity (idle scene —
+      // nothing moved, scripted, spawned or despawned), keep the previous scenes array wholesale. This is
+      // what stops every selectActiveObjects subscriber + the scene's React reconciliation from churning
+      // at 60fps while the world is still.
+      const sceneObjectsUnchanged = !pendingEnvironment && keepArray(activeObjects, allObjects) === activeObjects;
+      const nextScenes = sceneObjectsUnchanged
+        ? state.scenes
+        : state.scenes.map((scene) => {
+            if (scene.id !== state.activeSceneId) return scene;
+            // action.setEnvironment patches accumulated this tick → merge them onto the live scene's
+            // environment so a cinematic trigger can crossfade sky/fog/sun in one frame.
+            const env = pendingEnvironment && scene.environment
+              ? { ...scene.environment, ...pendingEnvironment } as SceneEnvironmentSettings
+              : scene.environment;
+            return { ...scene, objects: allObjects, ...(env !== scene.environment ? { environment: env } : {}) };
+          });
       // Publish this frame's final transforms to the mutable render buffer. SceneObjectView reads
       // them imperatively in useFrame, so moving objects don't reconcile their React subtree each
       // frame (see transformBuffer.ts). The store copy above still drives Inspector/gizmo/save.
@@ -9429,56 +9488,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       return {
         runtimeTime,
-        runtimeVelocities: nextVelocities,
-        runtimeVariableValues: nextVariableValues,
-        runtimeAnimators: nextAnimators,
-        runtimeCameraOverrides: nextCameraOverrides,
+        // keepRecord/keepArray: hand back the PREVIOUS reference when the fresh-built value is
+        // content-identical, so 60fps subscribers only re-render for data that actually changed.
+        runtimeVelocities: keepRecord(state.runtimeVelocities, nextVelocities),
+        runtimeVariableValues: keepRecord(state.runtimeVariableValues, nextVariableValues),
+        runtimeAnimators: keepRecord(state.runtimeAnimators, nextAnimators),
+        runtimeCameraOverrides: keepRecord(state.runtimeCameraOverrides, nextCameraOverrides),
         runtimeCameraShake: cameraShake,
-        runtimeGrounded: groundedIds,
-        runtimeSwimming: swimmingIds,
-        runtimeInWater: inWaterIds,
-        runtimeWaterImpacts: [...state.runtimeWaterImpacts, ...newWaterImpacts].slice(-10),
-        runtimeWaterWake: nextWaterWake,
-        runtimeClimbing: climbingIds,
-        runtimeRoll: nextRoll,
-        runtimeMantle: nextMantle,
-        runtimeTurnInPlace: nextTurnInPlace,
-        runtimeCoyote: nextCoyote,
-        runtimeAttack: nextAttack,
-        runtimeReload: nextReload,
-        runtimeInteract: nextInteract,
-        runtimeFootstep: nextFootstep,
-        runtimeCooldowns: nextCooldowns,
-        runtimeDelays: nextDelays,
-        runtimeTweens: nextTweens,
-        runtimeActorEvents: nextActorEvents,
-        runtimeTimers: nextTimers,
+        runtimeGrounded: keepArray(state.runtimeGrounded, groundedIds),
+        runtimeSwimming: keepArray(state.runtimeSwimming, swimmingIds),
+        runtimeInWater: keepArray(state.runtimeInWater, inWaterIds),
+        runtimeWaterImpacts: newWaterImpacts.length
+          ? [...state.runtimeWaterImpacts, ...newWaterImpacts].slice(-10)
+          : state.runtimeWaterImpacts,
+        runtimeWaterWake: keepRecord(state.runtimeWaterWake, nextWaterWake),
+        runtimeClimbing: keepArray(state.runtimeClimbing, climbingIds),
+        runtimeRoll: keepRecord(state.runtimeRoll, nextRoll),
+        runtimeMantle: keepRecord(state.runtimeMantle, nextMantle),
+        runtimeTurnInPlace: keepRecord(state.runtimeTurnInPlace, nextTurnInPlace),
+        runtimeCoyote: keepRecord(state.runtimeCoyote, nextCoyote),
+        runtimeAttack: keepRecord(state.runtimeAttack, nextAttack),
+        runtimeReload: keepRecord(state.runtimeReload, nextReload),
+        runtimeInteract: keepRecord(state.runtimeInteract, nextInteract),
+        runtimeFootstep: keepRecord(state.runtimeFootstep, nextFootstep),
+        runtimeCooldowns: keepRecord(state.runtimeCooldowns, nextCooldowns),
+        runtimeDelays: keepRecord(state.runtimeDelays, nextDelays),
+        runtimeTweens: keepRecord(state.runtimeTweens, nextTweens),
+        runtimeActorEvents: keepRecord(state.runtimeActorEvents ?? {}, nextActorEvents),
+        runtimeTimers: keepRecord(state.runtimeTimers, nextTimers),
         // Disabled objects are also hidden (no render) via the existing hidden path.
-        runtimeHidden: [...new Set([...nextHidden, ...nextDisabled])],
-        runtimeDisabled: [...nextDisabled],
-        runtimeVehicleOccupants: nextOccupants,
+        runtimeHidden: keepArray(state.runtimeHidden, [...new Set([...nextHidden, ...nextDisabled])]),
+        runtimeDisabled: keepArray(state.runtimeDisabled, [...nextDisabled]),
+        runtimeVehicleOccupants: keepRecord(state.runtimeVehicleOccupants, nextOccupants),
         runtimeInteractFocusId: interactFocusId,
         runtimeHitMarker: hitMarker,
         runtimeHurt: hurt,
-        runtimeEnemyCooldown: nextEnemyCd,
-        runtimeSurfaceSound: nextSurfaceSound,
-        runtimeMovementMode: movementModeNow,
-        runtimeMontageRequests: {},
-        runtimeCollisions: collisions,
-        runtimeCollisionsExit: collisionsExit,
-        runtimeTriggers: triggers,
-        runtimeTriggersExit: triggersExit,
-        runtimeDamageEvents: damageThisFrame,
-        runtimePreviousKeys: { ...currentKeys },
-        runtimePreviousKeyPresses: { ...currentKeyPresses },
+        runtimeEnemyCooldown: keepRecord(state.runtimeEnemyCooldown, nextEnemyCd),
+        runtimeSurfaceSound: keepRecord(state.runtimeSurfaceSound, nextSurfaceSound),
+        runtimeMovementMode: keepRecord(state.runtimeMovementMode, movementModeNow),
+        runtimeMontageRequests: keepRecord(state.runtimeMontageRequests, {}),
+        runtimeCollisions: keepArray(state.runtimeCollisions, collisions),
+        runtimeCollisionsExit: keepArray(state.runtimeCollisionsExit, collisionsExit),
+        runtimeTriggers: keepArray(state.runtimeTriggers, triggers),
+        runtimeTriggersExit: keepArray(state.runtimeTriggersExit, triggersExit),
+        runtimeDamageEvents: keepRecord(state.runtimeDamageEvents, damageThisFrame),
+        runtimePreviousKeys: keepRecord(state.runtimePreviousKeys, { ...currentKeys }),
+        runtimePreviousKeyPresses: keepRecord(state.runtimePreviousKeyPresses, { ...currentKeyPresses }),
         runtimeEventQueue: cinematicEvents,
         runtimeStarted: true,
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
         runtimeVehicleSound: nextVehicleSound,
         runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
         runtimeObjectVariables: nextObjectVariables,
-        runtimeVisibleUI: nextVisibleUI,
-        runtimeUITextOverrides: nextUITextOverrides,
+        runtimeVisibleUI: keepRecord(state.runtimeVisibleUI, nextVisibleUI),
+        runtimeUITextOverrides: keepRecord(state.runtimeUITextOverrides, nextUITextOverrides),
         runtimeCinematic: nextRuntimeCinematic,
         runtimeCinematicCamera: nextRuntimeCinematicCamera,
         runtimeCinematicFade: nextRuntimeCinematicFade,

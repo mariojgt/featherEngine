@@ -177,6 +177,8 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
   const emitting = useRef(config.enabled);
   const prevPlaying = useRef(false);
   const cursor = useRef(0);
+  /** Live particles after the previous sim step — lets a dormant emitter skip its frame entirely. */
+  const aliveRef = useRef(0);
 
   // Blueprint / runtime commands (Burst Particles, Set Particles Emitting).
   useEffect(() => {
@@ -203,7 +205,17 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
       if (playing) {
         for (let i = 0; i < n; i++) pool.life[i] = 0;
         if (cfg.enabled && cfg.burst > 0) pendingBurst.current += cfg.burst;
+        aliveRef.current = 0;
       }
+    }
+
+    // IDLE EARLY-OUT (perf): a dormant emitter — nothing alive, nothing queued, not emitting — costs
+    // NOTHING. Previously every emitter walked all maxParticles slots and re-uploaded three GPU
+    // attributes every frame, even switched off (the sim template alone idles several 900-slot pools).
+    // The last sim pass already zeroed the buffers, so the uploaded state is clean to leave as-is.
+    if (playing && !emitting.current && pendingBurst.current <= 0 && aliveRef.current === 0) {
+      if (lightRef.current) lightRef.current.intensity = 0;
+      return;
     }
 
     // Parent (the object's group) world transform — needed for world-space simulation.
@@ -335,6 +347,7 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
       colors[i * 4] = _color.r; colors[i * 4 + 1] = _color.g; colors[i * 4 + 2] = _color.b; colors[i * 4 + 3] = alpha;
       sizes[i] = size;
     }
+    aliveRef.current = alive;
     pool.posAttr.needsUpdate = true;
     pool.colorAttr.needsUpdate = true;
     pool.sizeAttr.needsUpdate = true;
