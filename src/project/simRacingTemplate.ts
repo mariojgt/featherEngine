@@ -483,16 +483,17 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
     cockpitCameraOffset: [0, max[1] * 0.88, cz + halfL * 0.02] as Vector3Tuple,
     // ARCADE (NFS/Burnout) tune: punchy pickup + high top speed, planted on flat ground, AWD so it hooks up out
     // of corners — but holding Space breaks the rear loose for a controllable power-slide (engine drift assist).
-    engineForce: 7200,
-    brakeForce: 3800,
+    engineForce: 7800,
+    brakeForce: 4100,
     handbrakeForce: 1500,
     drivetrain: 'awd',
     chassisMass: 950,
     centerOfMassY: -0.62,
     linearDamping: 0.02,
-    angularDamping: 1.15,
+    // Lower yaw damping = the nose answers the wheel NOW; anti-roll bars + assists keep it from darting.
+    angularDamping: 0.92,
     wheelFrictionSlip: 2.6,
-    sideFrictionStiffness: 1.7,
+    sideFrictionStiffness: 1.85,
     suspensionRestLength: 0.42,
     suspensionStiffnessSim: 38,
     suspensionCompression: 0.92,

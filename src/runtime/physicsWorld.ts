@@ -99,7 +99,8 @@ const SURFACE_GRIP: Record<string, number> = {
 function engineTorqueCurve(rpm: number, idleRpm: number, maxRpm: number): number {
   if (rpm >= maxRpm * 1.02) return 0; // rev limiter
   const n = Math.min(Math.max((rpm - idleRpm) / Math.max(1, maxRpm - idleRpm), 0), 1);
-  if (n < 0.55) return 0.6 + 0.4 * (n / 0.55); // climb to peak torque
+  // Strong low end (0.72 at idle) so the throttle answers NOW — the old 0.6 floor read as turbo lag.
+  if (n < 0.5) return 0.72 + 0.28 * (n / 0.5); // climb to peak torque
   if (n < 0.85) return 1; // flat peak through the midrange
   return 1 - 0.3 * ((n - 0.85) / 0.15); // falls off approaching redline
 }
@@ -1240,7 +1241,7 @@ class PhysicsRuntime {
       rpm = Math.min(Math.max(rpm, idleRpm), maxRpm * 1.02);
       // Shifting: auto box moves on RPM thresholds; manual moves on key edges (level inputs, latched here).
       entry.shiftTimer = Math.max(0, entry.shiftTimer - dt);
-      const shiftTime = v.shiftTime ?? 0.22;
+      const shiftTime = v.shiftTime ?? 0.16; // quick modern-DCT shifts; raise per-car for an old manual feel
       if (entry.gear >= 1 && entry.shiftTimer <= 0) {
         if ((v.transmission ?? 'auto') === 'manual') {
           if (input.shiftUp && !entry.shiftUpHeld && entry.gear < ratios.length) {
@@ -1267,13 +1268,16 @@ class PhysicsRuntime {
       // cut while a shift completes — the rhythm you feel and hear as the box works through the gears.
       const torque = engineTorqueCurve(rpm, idleRpm, maxRpm);
       const gearScale = ratio / (ratios[0] * finalDrive);
-      const torqueCut = entry.shiftTimer > 0 ? 0 : 1;
+      // Shifts cut torque to 20% rather than zero — the gear change still reads (RPM drop + backfire)
+      // without the dead quarter-second of throttle that made the box feel unresponsive.
+      const torqueCut = entry.shiftTimer > 0 ? 0.2 : 1;
       let driveForce = (v.engineForce ?? 1800) * (input.engineScale ?? 1) * torque * gearScale * torqueCut;
-      // TRACTION CONTROL (assist): tame wheelspin launches and catch power-oversteer — cut power while the
-      // rear steps out so the throttle can't spin you, and ramp the launch in over the first few meters.
+      // TRACTION CONTROL (assist): tame wheelspin launches and catch power-oversteer. Tuned LIGHT —
+      // the old 0.55 cuts answered the throttle with mush; these keep the nose responsive and only
+      // shave the genuinely unrecoverable extremes.
       if (v.tcsEnabled ?? true) {
-        if (Math.abs(lateralSpeed) > 3.5) driveForce *= 0.55;
-        if (Math.abs(speed) < 6 && entry.gear !== -1) driveForce *= 0.55 + 0.45 * (Math.abs(speed) / 6);
+        if (Math.abs(lateralSpeed) > 4.5) driveForce *= 0.72;
+        if (Math.abs(speed) < 4 && entry.gear !== -1) driveForce *= 0.78 + 0.22 * (Math.abs(speed) / 4);
       }
       // ABS (assist): braking hard while steering/sliding eases the brakes enough that the front tires keep
       // steering authority instead of locking and ploughing straight on.

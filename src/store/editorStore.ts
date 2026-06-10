@@ -7747,12 +7747,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // the car is stable on the straights but still turns sharply when slow. Smoothed per-car.
           const refSpeed = 42;
           const spd = Math.abs(toNumber(vehicleVars.__vehicleSpeed ?? 0));
-          // Keep more steering authority at speed (0.62 floor) so it stays fun/responsive, not numb.
-          const steerLimit = 1 - 0.38 * Math.min(1, spd / refSpeed);
+          // Keep more steering authority at speed (0.68 floor) so it stays fun/responsive, not numb.
+          const steerLimit = 1 - 0.32 * Math.min(1, spd / refSpeed);
           const targetSteer = steerRaw * steerLimit;
           const prevSteerState = toNumber(vehicleVars.__vehicleSteerState ?? 0);
-          // Snappy turn-in, even snappier return to center (crisp, arcade-sim feel).
-          const steerRate = (steerRaw === 0 ? 9 : 6) * delta;
+          // Crisp turn-in, even crisper return-to-center — and BOTH quicken at low speed, so parking-lot
+          // flicks feel instant while highway speed keeps a touch of ease (stable, never darty).
+          const lowSpeedBoost = 1 + 0.6 * (1 - Math.min(1, spd / refSpeed));
+          const steerRate = (steerRaw === 0 ? 13 : 9.5) * lowSpeedBoost * delta;
           const steerState = approach(prevSteerState, targetSteer, steerRate);
           vehicleVars.__vehicleSteerState = steerState;
           // Manual gearbox paddles (level-style; the sim edge-detects): E/Q by default, which the gamepad
