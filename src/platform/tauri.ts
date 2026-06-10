@@ -93,7 +93,8 @@ export const tauriPlatform: Platform = {
       filters: [{ name: 'Game bundle', extensions: ['json'] }],
     });
     if (typeof target !== 'string') return null;
-    await writeTextFile(target, JSON.stringify(bundle, null, 2));
+    // Compact (no pretty-print) — bundles inline asset data and get large.
+    await writeTextFile(target, JSON.stringify(bundle));
     return target;
   },
 

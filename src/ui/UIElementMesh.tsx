@@ -78,53 +78,87 @@ export function UIElementMesh({ element, ctx, textOverrides, resolveAssetUrl, on
     />
   ));
 
-  switch (element.kind) {
-    case 'text':
-      // uikit text styling lives on the <Text> itself; layout props wrap it in a Container.
-      return (
-        <Container {...props}>
-          <Text color={props.color} fontSize={props.fontSize} fontWeight={props.fontWeight} textAlign={props.textAlign}>
-            {text}
-          </Text>
-          {childMeshes}
-        </Container>
-      );
-
-    case 'button':
-      return (
-        <Container
-          {...props}
-          cursor="pointer"
-          onClick={onButtonClick ? () => onButtonClick(element) : undefined}
-          backgroundColor={props.backgroundColor ?? '#5B8CFF'}
-        >
-          {text ? (
-            <Text color={props.color ?? '#ffffff'} fontSize={props.fontSize} fontWeight={props.fontWeight}>
+  const content = (() => {
+    switch (element.kind) {
+      case 'text':
+        // uikit text styling lives on the <Text> itself; layout props wrap it in a Container.
+        return (
+          <Container {...props}>
+            <Text color={props.color} fontSize={props.fontSize} fontWeight={props.fontWeight} textAlign={props.textAlign}>
               {text}
             </Text>
-          ) : null}
-          {childMeshes}
-        </Container>
-      );
+            {childMeshes}
+          </Container>
+        );
 
-    case 'image': {
-      const src = element.assetId ? resolveAssetUrl?.(element.assetId) : undefined;
-      return <Image src={src} width={props.width} height={props.height} borderRadius={props.borderRadius} />;
+      case 'button':
+        return (
+          <Container
+            {...props}
+            cursor="pointer"
+            onClick={onButtonClick ? () => onButtonClick(element) : undefined}
+            backgroundColor={props.backgroundColor ?? '#5B8CFF'}
+          >
+            {text ? (
+              <Text color={props.color ?? '#ffffff'} fontSize={props.fontSize} fontWeight={props.fontWeight}>
+                {text}
+              </Text>
+            ) : null}
+            {childMeshes}
+          </Container>
+        );
+
+      case 'image': {
+        const src = element.assetId ? resolveAssetUrl?.(element.assetId) : undefined;
+        return <Image src={src} width={props.width} height={props.height} borderRadius={props.borderRadius} />;
+      }
+
+      case 'bar': {
+        const fillWidth = 'fill' in resolved ? fillToPercent(resolved.fill) : '100%';
+        const fillColor = 'color' in resolved && resolved.color != null ? String(resolved.color) : '#5B8CFF';
+        return (
+          <Container {...props} color={undefined}>
+            <Container width={fillWidth} height="100%" backgroundColor={fillColor} borderRadius={props.borderRadius} />
+            {childMeshes}
+          </Container>
+        );
+      }
+
+      case 'scroll':
+        // Scrollable list — uikit handles drag/wheel scrolling + scrollbar when overflow is 'scroll'.
+        return (
+          <Container {...props} overflow="scroll">
+            {childMeshes}
+          </Container>
+        );
+
+      case 'panel':
+      default:
+        return <Container {...props}>{childMeshes}</Container>;
     }
+  })();
 
-    case 'bar': {
-      const fillWidth = 'fill' in resolved ? fillToPercent(resolved.fill) : '100%';
-      const fillColor = 'color' in resolved && resolved.color != null ? String(resolved.color) : '#5B8CFF';
-      return (
-        <Container {...props} color={undefined}>
-          <Container width={fillWidth} height="100%" backgroundColor={fillColor} borderRadius={props.borderRadius} />
-          {childMeshes}
-        </Container>
-      );
-    }
-
-    case 'panel':
-    default:
-      return <Container {...props}>{childMeshes}</Container>;
-  }
+  // Screen anchor → a full-size absolute flex wrapper floating the element to its corner/edge
+  // (mirrors UIElementView.anchorWrapStyle; offsets become padding so it's resolution-independent).
+  const anchor = element.anchor;
+  if (!anchor) return content;
+  const main = (pos: typeof anchor.h | typeof anchor.v) =>
+    pos === 'left' || pos === 'top' ? 'flex-start' : pos === 'right' || pos === 'bottom' ? 'flex-end' : pos === 'stretch' ? 'flex-start' : 'center';
+  const column = anchor.h === 'stretch';
+  return (
+    <Container
+      positionType="absolute"
+      width="100%"
+      height="100%"
+      flexDirection={column ? 'column' : 'row'}
+      justifyContent={column ? (anchor.v === 'stretch' ? 'flex-start' : main(anchor.v)) : main(anchor.h)}
+      alignItems={column ? 'stretch' : anchor.v === 'stretch' ? 'stretch' : main(anchor.v)}
+      paddingLeft={anchor.offsetX}
+      paddingRight={anchor.offsetX}
+      paddingTop={anchor.offsetY}
+      paddingBottom={anchor.offsetY}
+    >
+      {content}
+    </Container>
+  );
 }

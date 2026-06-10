@@ -11,6 +11,7 @@ import {
   MousePointerClick,
   Plus,
   RectangleHorizontal,
+  ScrollText,
   Trash2,
   Type as TextIcon,
   Workflow,
@@ -29,6 +30,24 @@ const ELEMENT_KINDS: Array<{ kind: UIElementKind; label: string; icon: typeof Pa
   { kind: 'bar', label: 'Bar', icon: RectangleHorizontal },
   { kind: 'button', label: 'Button', icon: MousePointerClick },
   { kind: 'image', label: 'Image', icon: ImageIcon },
+  { kind: 'scroll', label: 'Scroll List', icon: ScrollText },
+];
+
+/** 9-slice anchor presets for the inspector (screen docs) — `${h}:${v}` value ↔ UIAnchor fields. */
+const ANCHOR_PRESETS: Array<{ label: string; h: 'left' | 'center' | 'right' | 'stretch'; v: 'top' | 'middle' | 'bottom' | 'stretch' }> = [
+  { label: 'Top Left', h: 'left', v: 'top' },
+  { label: 'Top Center', h: 'center', v: 'top' },
+  { label: 'Top Right', h: 'right', v: 'top' },
+  { label: 'Middle Left', h: 'left', v: 'middle' },
+  { label: 'Center', h: 'center', v: 'middle' },
+  { label: 'Middle Right', h: 'right', v: 'middle' },
+  { label: 'Bottom Left', h: 'left', v: 'bottom' },
+  { label: 'Bottom Center', h: 'center', v: 'bottom' },
+  { label: 'Bottom Right', h: 'right', v: 'bottom' },
+  { label: 'Stretch Width · Top', h: 'stretch', v: 'top' },
+  { label: 'Stretch Width · Bottom', h: 'stretch', v: 'bottom' },
+  { label: 'Stretch Height · Left', h: 'left', v: 'stretch' },
+  { label: 'Stretch Height · Right', h: 'right', v: 'stretch' },
 ];
 
 const KIND_ICON: Record<UIElementKind, typeof PanelIcon> = {
@@ -37,6 +56,7 @@ const KIND_ICON: Record<UIElementKind, typeof PanelIcon> = {
   bar: RectangleHorizontal,
   button: MousePointerClick,
   image: ImageIcon,
+  scroll: ScrollText,
 };
 
 const PRESETS: Array<{ preset: UIPresetKind; label: string; icon: typeof PanelIcon }> = [
@@ -58,6 +78,7 @@ function bindableTargetsFor(kind: UIElementKind): UIBinding['target'][] {
     case 'image':
       return ['width', 'visible'];
     case 'panel':
+    case 'scroll':
     default:
       return ['background', 'width', 'visible'];
   }
@@ -156,7 +177,7 @@ function TreeRow({ element, doc, depth, addingUnder, setAddingUnder }: { element
           <span className="ui-node-kind">{element.kind}</span>
         </button>
         <div className="ui-node-tools">
-          {element.kind === 'panel' && (
+          {(element.kind === 'panel' || element.kind === 'scroll') && (
             <button title="Add child" onClick={() => setAddingUnder(addingUnder === element.id ? null : element.id)}>
               <Plus size={13} aria-hidden />
             </button>
@@ -278,6 +299,61 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
             <StyleField label="Y" value={element.style.top ?? ''} placeholder="0px" onChange={(v) => patchStyle({ top: v || undefined })} />
           </div>
           <button className="full-button" onClick={() => patchStyle({ position: undefined, left: undefined, top: undefined })}>Return to auto-layout</button>
+        </>
+      )}
+
+      {/* Anchor (screen docs): pin the element to a corner/edge so HUDs survive any resolution.
+          Picking an anchor clears free placement; dragging on the canvas clears the anchor back. */}
+      {doc.surface === 'screen' && element.id !== doc.root.id && (
+        <>
+          <h4 className="ui-inspector-sub">Anchor</h4>
+          <label className="node-field">
+            <span>Pin to screen</span>
+            <select
+              value={element.anchor ? `${element.anchor.h}:${element.anchor.v}` : ''}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (!value) {
+                  updateUIElement(doc.id, element.id, { anchor: undefined });
+                  return;
+                }
+                const preset = ANCHOR_PRESETS.find((p) => `${p.h}:${p.v}` === value);
+                if (!preset) return;
+                updateUIElement(doc.id, element.id, {
+                  anchor: { h: preset.h, v: preset.v, offsetX: element.anchor?.offsetX ?? 16, offsetY: element.anchor?.offsetY ?? 16 },
+                  // Anchored placement replaces free placement.
+                  style: { ...element.style, position: undefined, left: undefined, top: undefined },
+                });
+              }}
+            >
+              <option value="">None (flow / free placement)</option>
+              {ANCHOR_PRESETS.map((preset) => (
+                <option key={`${preset.h}:${preset.v}`} value={`${preset.h}:${preset.v}`}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {element.anchor && (
+            <div className="node-vector-field">
+              <label className="node-field">
+                <span>Offset X</span>
+                <input
+                  type="number"
+                  value={element.anchor.offsetX}
+                  onChange={(event) => updateUIElement(doc.id, element.id, { anchor: { ...element.anchor!, offsetX: Number(event.target.value) } })}
+                />
+              </label>
+              <label className="node-field">
+                <span>Offset Y</span>
+                <input
+                  type="number"
+                  value={element.anchor.offsetY}
+                  onChange={(event) => updateUIElement(doc.id, element.id, { anchor: { ...element.anchor!, offsetY: Number(event.target.value) } })}
+                />
+              </label>
+            </div>
+          )}
         </>
       )}
 

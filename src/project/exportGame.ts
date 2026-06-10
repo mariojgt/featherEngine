@@ -110,6 +110,22 @@ export function buildGameBundle(project: NodeForgeProject): GameBundle {
   };
 }
 
+/**
+ * Drop assets the project never references from a bundle (smaller download, nothing lost).
+ * Callers must pass ids from a *successful* reference scan — when the scan fails, fail open
+ * and keep everything (see `collectReferencedAssetIds`).
+ */
+export function stripUnusedAssets(bundle: GameBundle, referencedAssetIds: string[]): GameBundle {
+  const keep = new Set(referencedAssetIds);
+  return {
+    ...bundle,
+    project: {
+      ...bundle.project,
+      assets: bundle.project.assets.filter((asset) => keep.has(asset.id)),
+    },
+  };
+}
+
 /** Point each asset's runtime `url` at its embedded data so the player can render/play it. */
 function resolveEmbeddedAssets(project: NodeForgeProject): NodeForgeProject {
   return {

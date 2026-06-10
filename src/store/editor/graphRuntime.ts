@@ -67,6 +67,8 @@ export interface GraphRuntime {
   incomingValueByHandle: Map<string, Map<string, Edge>>;
   eventRoots: NodeForgeNode[];
   customEventRoots: Map<string, NodeForgeNode[]>;
+  /** Function entry nodes grouped by lowercased name — the targets of Call Function (never auto-fire). */
+  functionRoots: Map<string, NodeForgeNode[]>;
 }
 
 const graphRuntimeCache = new WeakMap<ProjectGraph, GraphRuntime>();
@@ -108,7 +110,15 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
 
   const eventRoots = graph.nodes.filter((node) => node.data.nodeKind?.startsWith('event.'));
   const customEventRoots = new Map<string, NodeForgeNode[]>();
+  const functionRoots = new Map<string, NodeForgeNode[]>();
   for (const node of eventRoots) {
+    if (node.data.nodeKind === 'event.functionEntry') {
+      const key = (node.data.functionName || 'MyFunction').toLowerCase();
+      const existing = functionRoots.get(key);
+      if (existing) existing.push(node);
+      else functionRoots.set(key, [node]);
+      continue;
+    }
     if (node.data.nodeKind !== 'event.custom') continue;
     const key = (node.data.eventName || 'CustomEvent').toLowerCase();
     const existing = customEventRoots.get(key);
@@ -116,7 +126,7 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
     else customEventRoots.set(key, [node]);
   }
 
-  return { graph, nodesById, outgoing, outgoingByHandle, incomingValues, incomingValueByHandle, eventRoots, customEventRoots };
+  return { graph, nodesById, outgoing, outgoingByHandle, incomingValues, incomingValueByHandle, eventRoots, customEventRoots, functionRoots };
 };
 
 export const getGraphRuntime = (graph: ProjectGraph): GraphRuntime => {

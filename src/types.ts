@@ -73,6 +73,8 @@ export type GraphNodeKind =
   | 'logic.not'
   | 'logic.doOnce'
   | 'logic.delay'
+  | 'event.functionEntry'
+  | 'logic.callFunction'
   | 'math.add'
   | 'math.subtract'
   | 'math.multiply'
@@ -117,6 +119,7 @@ export type GraphNodeKind =
   | 'action.setPosition'
   | 'action.setRotation'
   | 'action.setScale'
+  | 'action.tweenProperty'
   | 'action.lookAt'
   | 'animator.setFloat'
   | 'animator.setBool'
@@ -186,6 +189,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   description: string;
   tone: GraphNodeTone;
   eventName?: string;
+  /** event.functionEntry / logic.callFunction: name binding a Call Function to its Function entry. */
+  functionName?: string;
   keyCode?: string;
   axis?: 'x' | 'y' | 'z';
   /** action.applyImpulse: whether axis/vector values are interpreted in world axes or the target actor's local axes. */
@@ -220,6 +225,10 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   materialColorTarget?: 'base' | 'emissive';
   /** action.set/getMaterialProperty: which numeric material property to read/write. */
   materialProperty?: 'metalness' | 'roughness' | 'emissiveIntensity';
+  /** action.tweenProperty: which transform property to animate over time. */
+  tweenProperty?: 'position' | 'rotation' | 'scale';
+  /** action.tweenProperty: easing curve shaping the animation (defaults to easeInOut). */
+  easing?: 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
   /** action.playSound: id of the audio asset to play. */
   assetId?: string;
   /** action.spawnObject: kind of object to spawn at runtime. */
@@ -2065,7 +2074,7 @@ export interface ProjectGraph {
 }
 
 /** Kinds of UI element a document can contain. */
-export type UIElementKind = 'panel' | 'text' | 'image' | 'bar' | 'button';
+export type UIElementKind = 'panel' | 'text' | 'image' | 'bar' | 'button' | 'scroll';
 
 /** Whether a UI document draws on the player's screen (HUD) or anchored in the 3D world. */
 export type UISurface = 'screen' | 'world';

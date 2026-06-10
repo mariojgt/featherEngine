@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { GAME_BUNDLE_FILE, readGameBundle } from '../project/exportGame';
 import { useRuntimeAudio } from '../runtime/useRuntimeAudio';
+import { resetGamepadInput, sampleGamepads } from '../runtime/gamepadInput';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
 import { DynamicCrosshair } from '../ui/DynamicCrosshair';
 import { GameHud } from '../ui/GameHud';
@@ -36,12 +37,16 @@ function useRuntimeLoop(active: boolean) {
     const loop = (time: number) => {
       const delta = Math.min((time - lastTime) / 1000, 0.05);
       lastTime = time;
+      sampleGamepads(delta, setRuntimeKey);
       tickRuntime(delta);
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(frame);
-  }, [active, tickRuntime]);
+    return () => {
+      cancelAnimationFrame(frame);
+      resetGamepadInput();
+    };
+  }, [active, tickRuntime, setRuntimeKey]);
 
   useEffect(() => {
     if (!active) return;

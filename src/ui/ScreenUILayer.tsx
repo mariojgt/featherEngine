@@ -43,7 +43,8 @@ export function ScreenUILayer() {
         <div key={doc.id} style={{ position: 'absolute', inset: 0 }}>
           {doc.css ? <style>{doc.css}</style> : null}
           <UIElementView
-            element={{ ...doc.root, style: { width: '100%', height: '100%', position: 'relative', ...doc.root.style } }}
+            // The root fills the screen; its legacy `anchor` is stripped — anchors place elements WITHIN the doc.
+            element={{ ...doc.root, anchor: undefined, style: { width: '100%', height: '100%', position: 'relative', ...doc.root.style } }}
             ctx={ctx}
             textOverrides={overridesFor(doc)}
             resolveAssetUrl={resolveAssetUrl}

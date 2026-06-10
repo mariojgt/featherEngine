@@ -445,6 +445,9 @@ const NODE_LABELS = [
   'Set Rotation',
   'Set Scale',
   'Look At',
+  'Tween',
+  'Function',
+  'Call Function',
 ] as const;
 
 const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
@@ -558,6 +561,9 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Set Rotation': 'Runtime',
   'Set Scale': 'Runtime',
   'Look At': 'Runtime',
+  Tween: 'Runtime',
+  Function: 'Events',
+  'Call Function': 'Logic',
 };
 
 const findObject = (id: string) => selectActiveObjects(store()).find((object) => object.id === id);
@@ -607,7 +613,7 @@ const setUIStyle = (documentId: string, elementId: string, style: Partial<UIElem
   });
 };
 
-export const engineTools = {
+const rawEngineTools = {
   list_scene: tool({
     description: 'List the current project snapshot. Defaults to tiny; request compact/standard/full only when extra graph or asset detail is needed.',
     inputSchema: z.object({ detail: z.enum(['tiny', 'compact', 'standard', 'full']).optional(), limit: z.number().int().min(1).max(200).optional() }),
@@ -2934,11 +2940,11 @@ export const engineTools = {
 
   add_ui_element: tool({
     description:
-      'Add a UI element under a parent or root. Kinds: panel, text, bar, button, image. Returns elementId.',
+      'Add a UI element under a parent or root. Kinds: panel, text, bar, button, image, scroll (a scrollable list container). Returns elementId.',
     inputSchema: z.object({
       documentId: z.string(),
       parentId: z.string().optional().describe('Parent element id; defaults to the root panel.'),
-      kind: z.enum(['panel', 'text', 'bar', 'button', 'image']),
+      kind: z.enum(['panel', 'text', 'bar', 'button', 'image', 'scroll']),
     }),
     execute: async ({ documentId, parentId, kind }) => {
       if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
@@ -2949,7 +2955,7 @@ export const engineTools = {
 
   update_ui_element: tool({
     description:
-      'Update UI element text/name/class/event/image/style/fx. Style uses CSS-like strings plus flexDirection/textAlign enums. fx applies only when the document renderMode is "webgl".',
+      'Update UI element text/name/class/event/image/style/fx/anchor. Style uses CSS-like strings plus flexDirection/textAlign enums. fx applies only when the document renderMode is "webgl". anchor pins the element to a screen corner/edge/center so HUDs survive any resolution (screen docs only; clears free placement).',
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
@@ -2958,6 +2964,16 @@ export const engineTools = {
       className: z.string().optional(),
       onClickEvent: z.string().optional(),
       assetId: z.string().optional(),
+      anchor: z
+        .object({
+          h: z.enum(['left', 'center', 'right', 'stretch']),
+          v: z.enum(['top', 'middle', 'bottom', 'stretch']),
+          offsetX: z.number().optional().describe('Pixels from the horizontal edge (default 16).'),
+          offsetY: z.number().optional().describe('Pixels from the vertical edge (default 16).'),
+        })
+        .nullable()
+        .optional()
+        .describe('9-slice screen pin, e.g. {h:"right", v:"bottom"} = bottom-right HUD corner. null removes the anchor.'),
       fx: z.enum(['glow', 'holographic', 'scanline']).optional().describe('WebGL-only visual effect. "glow" blooms via post-FX (use a bright color); "holographic"/"scanline" render translucent. Pass "" via none is not supported here; omit to leave unchanged.'),
       style: z
         .object({
@@ -2974,15 +2990,26 @@ export const engineTools = {
         })
         .optional(),
     }),
-    execute: async ({ documentId, elementId, style, ...rest }) => {
+    execute: async ({ documentId, elementId, style, anchor, ...rest }) => {
       const doc = findUIDocument(documentId);
       if (!doc) return `No UI document with id ${documentId}.`;
       const existing = findUIElement(doc.root, elementId);
       if (!existing) return `No element ${elementId} in UI ${documentId}.`;
+      // Anchored placement replaces free placement (position/left/top), mirroring the inspector.
+      const anchorPatch =
+        anchor === undefined
+          ? {}
+          : anchor === null
+            ? { anchor: undefined }
+            : {
+                anchor: { h: anchor.h, v: anchor.v, offsetX: anchor.offsetX ?? 16, offsetY: anchor.offsetY ?? 16 },
+                style: { ...existing.style, ...style, position: undefined, left: undefined, top: undefined },
+              };
       // Merge style onto the element's existing style so partial updates don't drop other fields.
       store().updateUIElement(documentId, elementId, {
         ...rest,
-        ...(style ? { style: { ...existing.style, ...style } } : {}),
+        ...(style && !('style' in anchorPatch) ? { style: { ...existing.style, ...style } } : {}),
+        ...anchorPatch,
       });
       return `Updated element ${elementId}.`;
     },
@@ -4075,5 +4102,30 @@ export const engineTools = {
     },
   }),
 };
+
+// --- Tool-result truncation ----------------------------------------------------------------------
+// Every tool result is re-sent to the model on each remaining step of the agentic loop, so one huge
+// inspect result (a full blueprint graph can be 10 KB+) multiplies across the turn. Cap results and
+// tell the model how to get the rest — it can always re-ask with a narrower inspect.
+const MAX_TOOL_RESULT_CHARS = 3000;
+
+const truncateToolResult = (value: unknown): unknown =>
+  typeof value === 'string' && value.length > MAX_TOOL_RESULT_CHARS
+    ? `${value.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated ${value.length - MAX_TOOL_RESULT_CHARS} chars — re-ask with a narrower inspect (specific object/blueprint/section) for the rest]`
+    : value;
+
+type AnyExecutableTool = { execute?: (input: never, options: never) => unknown };
+
+export const engineTools = Object.fromEntries(
+  Object.entries(rawEngineTools as Record<string, AnyExecutableTool>).map(([name, def]) => [
+    name,
+    def.execute
+      ? {
+          ...def,
+          execute: async (input: never, options: never) => truncateToolResult(await def.execute!(input, options)),
+        }
+      : def,
+  ]),
+) as typeof rawEngineTools;
 
 export type EngineTools = typeof engineTools;

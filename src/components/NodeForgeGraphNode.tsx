@@ -41,6 +41,7 @@ import {
   Search,
   Send,
   Sigma,
+  SquareFunction,
   Palette,
   Spline,
   Sparkles,
@@ -174,6 +175,9 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.setPosition': Move,
   'action.setRotation': RotateCw,
   'action.setScale': Scaling,
+  'action.tweenProperty': Spline,
+  'event.functionEntry': SquareFunction,
+  'logic.callFunction': SquareFunction,
   'action.lookAt': Eye,
   'value.number': Hash,
   'value.random': Dices,
@@ -350,6 +354,12 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'point', label: 'Point' },
         { id: 'target', label: 'Target' },
       ];
+    case 'action.tweenProperty':
+      return [
+        { id: 'to', label: 'To' },
+        { id: 'duration', label: 'Duration' },
+        { id: 'target', label: 'Target' },
+      ];
     case 'math.clamp':
       return [
         { id: 'value', label: 'Value' },
@@ -520,6 +530,9 @@ function nodeDetail(
     case 'event.custom':
     case 'action.fireEvent':
       return `“${data.eventName ?? 'CustomEvent'}”`;
+    case 'event.functionEntry':
+    case 'logic.callFunction':
+      return `“${data.functionName ?? 'MyFunction'}”`;
     case 'action.translate':
     case 'action.rotate': {
       const unit = data.nodeKind === 'action.rotate' ? '°/s' : 'u/s';
@@ -590,6 +603,7 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
     (data.nodeKind === 'query.raycast' ? 4 : 0) +
     (data.nodeKind === 'logic.cast' ? 1 : 0) +
     (data.nodeKind === 'event.receiveDamage' ? 1 : 0) +
+    (data.nodeKind === 'action.tweenProperty' ? 1 : 0) +
     (data.nodeKind === 'logic.forLoop' || data.nodeKind === 'logic.forEachActor' ? 2 : 0);
   const nodeMode = isEvent ? 'Event' : isValueProducer ? 'Pure' : 'Exec';
 
@@ -713,6 +727,16 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
             Damage
           </span>
           <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
+        </>
+      )}
+
+      {/* Tween: the standard exec-out (above) continues immediately; "Done" fires when the animation completes. */}
+      {data.nodeKind === 'action.tweenProperty' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>
+            Done
+          </span>
+          <Handle id="exec-done" className="node-port exec-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
         </>
       )}
 

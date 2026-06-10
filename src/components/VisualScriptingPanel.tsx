@@ -8,6 +8,7 @@ import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
 import type { GraphNodeCategory, GraphNodeKind, GraphValue, GraphValueType, NodeForgeNode, NodeForgeNodeData, QualityLevel, UIElement, Vector3Tuple } from '../types';
 import { QUALITY_LEVELS } from '../three/quality';
 import { KEY_CODE_OPTIONS, keyLabelByCode } from '../utils/keyboardCodes';
+import { execTrace, setExecTraceEnabled } from '../runtime/execTrace';
 
 const nodeTypes: NodeTypes = {
   nodeforge: NodeForgeGraphNode,
@@ -30,7 +31,7 @@ export const nodeGroups: Array<{
   {
     title: 'Logic',
     icon: GitBranch,
-    nodes: ['Branch', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop', 'For Each Actor'],
+    nodes: ['Branch', 'Compare', 'AND', 'OR', 'NOT', 'Cast', 'Cooldown', 'Do Once', 'Delay', 'For Loop', 'For Each Actor', 'Function', 'Call Function'],
   },
   {
     title: 'Math',
@@ -69,7 +70,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Tween', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -481,6 +482,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
 
   const updatesNodeKey = node.data.nodeKind === 'event.keyDown' || node.data.nodeKind === 'event.keyUp';
   const updatesEventName = node.data.nodeKind === 'event.custom' || node.data.nodeKind === 'action.fireEvent';
+  const updatesFunctionName = node.data.nodeKind === 'event.functionEntry' || node.data.nodeKind === 'logic.callFunction';
   const updatesAxis =
     node.data.nodeKind === 'action.translate' ||
     node.data.nodeKind === 'action.rotate' ||
@@ -541,6 +543,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesEnvironment = node.data.nodeKind === 'action.setEnvironment';
   const updatesPhysics = node.data.nodeKind === 'action.setPhysics';
   const updatesMoveTo = node.data.nodeKind === 'action.moveTo';
+  const updatesTween = node.data.nodeKind === 'action.tweenProperty';
   const appliesDamage = node.data.nodeKind === 'action.applyDamage';
   const updatesCast = node.data.nodeKind === 'logic.cast';
   const findsActorByBlueprint = node.data.nodeKind === 'query.findActorByBlueprint';
@@ -666,6 +669,21 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               value={eventName}
               onChange={(event) => updateGraphNodeData(node.id, { eventName: event.target.value })}
             />
+          </label>
+        )}
+
+        {updatesFunctionName && (
+          <label className="node-field">
+            <span>Function Name</span>
+            <input
+              value={node.data.functionName ?? 'MyFunction'}
+              onChange={(event) => updateGraphNodeData(node.id, { functionName: event.target.value })}
+            />
+            <small className="node-hint">
+              {node.data.nodeKind === 'event.functionEntry'
+                ? 'This entry only runs when a "Call Function" with the same name executes.'
+                : 'Runs the matching "Function" entry in this blueprint, then continues.'}
+            </small>
           </label>
         )}
 
@@ -877,6 +895,85 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                 onChange={(event) => updateGraphNodeData(node.id, { damageAmount: Math.max(0, Number(event.target.value)) })}
               />
               <small className="node-hint">HP subtracted from the target’s <code>health</code> variable (the Amount input overrides this). The target needs a <code>health</code> instance variable. At 0 HP it dies.</small>
+            </label>
+          </>
+        )}
+
+        {updatesTween && (
+          <>
+            <label className="node-field">
+              <span>Property</span>
+              <select
+                value={node.data.tweenProperty ?? 'position'}
+                onChange={(event) =>
+                  updateGraphNodeData(node.id, { tweenProperty: event.target.value as 'position' | 'rotation' | 'scale' })
+                }
+              >
+                <option value="position">Position</option>
+                <option value="rotation">Rotation (degrees)</option>
+                <option value="scale">Scale</option>
+              </select>
+            </label>
+            <label className="node-field">
+              <span>To</span>
+              <div className="vec-inline">
+                {([0, 1, 2] as const).map((axis) => (
+                  <input
+                    key={axis}
+                    type="number"
+                    step="0.1"
+                    value={Number((node.data.vectorValue ?? [0, 0, 0])[axis] ?? 0)}
+                    onChange={(event) => {
+                      const next = [...(node.data.vectorValue ?? [0, 0, 0])] as Vector3Tuple;
+                      next[axis] = Number(event.target.value);
+                      updateGraphNodeData(node.id, { vectorValue: next });
+                    }}
+                  />
+                ))}
+              </div>
+              <small className="node-hint">World-space end value (rotation in degrees). A Vector3 wired into To overrides this.</small>
+            </label>
+            <label className="node-field">
+              <span>Duration (s)</span>
+              <input
+                type="number"
+                step="0.1"
+                min="0.01"
+                value={node.data.numberValue ?? 1}
+                onChange={(event) => updateGraphNodeData(node.id, { numberValue: Math.max(0.01, Number(event.target.value)) })}
+              />
+            </label>
+            <label className="node-field">
+              <span>Easing</span>
+              <select
+                value={node.data.easing ?? 'easeInOut'}
+                onChange={(event) =>
+                  updateGraphNodeData(node.id, { easing: event.target.value as 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' })
+                }
+              >
+                <option value="easeInOut">Ease In-Out (smooth)</option>
+                <option value="easeIn">Ease In (accelerate)</option>
+                <option value="easeOut">Ease Out (decelerate)</option>
+                <option value="linear">Linear (constant)</option>
+              </select>
+            </label>
+            <label className="node-field">
+              <span>Target</span>
+              <select
+                value={node.data.targetObjectId ?? ''}
+                onChange={(event) => updateGraphNodeData(node.id, { targetObjectId: event.target.value || undefined })}
+              >
+                <option value="">Self (this object)</option>
+                <option value="$player">Player ($player)</option>
+                <option value="$trigger">Trigger toucher ($trigger)</option>
+                <option value="$cast">Cast result ($cast)</option>
+                {sceneObjects.map((object) => (
+                  <option key={object.id} value={object.id}>
+                    {object.name}
+                  </option>
+                ))}
+              </select>
+              <small className="node-hint">Whose transform animates. Exec-out continues immediately; the Done pin fires when the tween finishes.</small>
             </label>
           </>
         )}
@@ -1952,6 +2049,8 @@ export function VisualScriptingPanel() {
   const variables = useEditorStore((state) => state.variables);
   const createVariable = useEditorStore((state) => state.createVariable);
   const deleteGraphNode = useEditorStore((state) => state.deleteGraphNode);
+  const deleteGraphNodes = useEditorStore((state) => state.deleteGraphNodes);
+  const pasteGraphNodes = useEditorStore((state) => state.pasteGraphNodes);
   const autoLayoutActiveGraph = useEditorStore((state) => state.autoLayoutActiveGraph);
   const selectedGraphNode = useEditorStore((state) => state.selectedGraphNode());
   const selectGraphNode = useEditorStore((state) => state.selectGraphNode);
@@ -1961,7 +2060,43 @@ export function VisualScriptingPanel() {
   const { screenToFlowPosition } = useReactFlow();
   const flowShellRef = useRef<HTMLDivElement | null>(null);
   const [searchMenu, setSearchMenu] = useState<{ x: number; y: number } | null>(null);
-  const [copiedNode, setCopiedNode] = useState<NodeForgeNode | null>(null);
+  // Multi-node clipboard: the copied nodes plus the wires running between them (other wires don't travel).
+  const [clipboard, setClipboard] = useState<{ nodes: NodeForgeNode[]; edges: Edge[] } | null>(null);
+
+  // Exec-flow visualization (Unreal-style): while Play runs with this editor open, the runtime marks
+  // every exec node it runs (see runtime/execTrace); we poll that trace and pulse the nodes + wires
+  // that executed within the last ~⅓ second.
+  const isPlaying = useEditorStore((state) => state.isPlaying);
+  const [hotNodes, setHotNodes] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    setExecTraceEnabled(isPlaying);
+    if (!isPlaying) {
+      setHotNodes((prev) => (prev.size ? new Set<string>() : prev));
+      return () => setExecTraceEnabled(false);
+    }
+    const interval = window.setInterval(() => {
+      const cutoff = performance.now() - 350;
+      const next = new Set<string>();
+      for (const [nodeId, at] of execTrace.nodes) if (at >= cutoff) next.add(nodeId);
+      setHotNodes((prev) => {
+        if (prev.size === next.size && [...next].every((id) => prev.has(id))) return prev;
+        return next;
+      });
+    }, 150);
+    return () => {
+      window.clearInterval(interval);
+      setExecTraceEnabled(false);
+    };
+  }, [isPlaying]);
+
+  // Nodes fed to React Flow, tagged with the exec-hot pulse class while they're executing.
+  const flowNodes = useMemo<NodeForgeNode[]>(
+    () =>
+      (hotNodes.size
+        ? graph?.nodes.map((node) => (hotNodes.has(node.id) ? { ...node, className: 'exec-hot' } : node))
+        : graph?.nodes) ?? [],
+    [graph, hotNodes],
+  );
 
   const nodeChoices = useMemo<NodeChoice[]>(
     () => [
@@ -2056,33 +2191,43 @@ export function VisualScriptingPanel() {
       const isCopy = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c';
       const isPaste = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v';
       const isDelete = event.key === 'Delete' || event.key === 'Backspace';
-      if (isCopy && selectedGraphNode) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setCopiedNode(selectedGraphNode);
+      // The working set = every marquee/shift-selected node, falling back to the inspector's single selection.
+      const selectedNodes = graph?.nodes.filter((node) => node.selected) ?? [];
+      if (selectedGraphNode && !selectedNodes.some((node) => node.id === selectedGraphNode.id)) {
+        selectedNodes.push(selectedGraphNode);
       }
-      if (isPaste && copiedNode) {
+      if (isCopy && selectedNodes.length && graph) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        const id = addGraphNodeToBlueprint(
-          activeBlueprintId,
-          copiedNode.data.label,
-          copiedNode.data.category,
-          copiedNode.data,
-          { x: copiedNode.position.x + 36, y: copiedNode.position.y + 36 },
-        );
-        selectGraphNode(id);
-        setCopiedNode({ ...copiedNode, id, position: { x: copiedNode.position.x + 36, y: copiedNode.position.y + 36 } });
+        const ids = new Set(selectedNodes.map((node) => node.id));
+        setClipboard({
+          nodes: selectedNodes.map((node) => ({ ...node, selected: false, data: structuredClone(node.data) })),
+          edges: graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({ ...edge })),
+        });
       }
-      if (isDelete && selectedGraphNode) {
+      if (isPaste && clipboard) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        deleteGraphNode(selectedGraphNode.id);
+        const newIds = pasteGraphNodes(activeBlueprintId, clipboard.nodes, clipboard.edges);
+        if (newIds[0]) selectGraphNode(newIds[0]);
+        // Shift the stored clipboard so a repeated paste cascades instead of stacking in place.
+        setClipboard({
+          nodes: clipboard.nodes.map((node) => ({
+            ...node,
+            position: { x: node.position.x + 36, y: node.position.y + 36 },
+          })),
+          edges: clipboard.edges,
+        });
+      }
+      if (isDelete && selectedNodes.length) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        deleteGraphNodes(selectedNodes.map((node) => node.id));
       }
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
-  }, [activeBlueprintId, addGraphNodeToBlueprint, copiedNode, deleteGraphNode, selectGraphNode, selectedGraphNode]);
+  }, [activeBlueprintId, clipboard, deleteGraphNodes, graph, pasteGraphNodes, selectGraphNode, selectedGraphNode]);
 
   // Reject wires that cross categories (exec↔value) or loop a node back to itself.
   const isExecHandle = (handleId?: string | null) => (handleId ?? '').startsWith('exec');
@@ -2100,10 +2245,12 @@ export function VisualScriptingPanel() {
     }
     return graph.edges.map((edge) => {
       const exec = isExecHandle(edge.sourceHandle);
-      const stroke = exec ? EXEC_WIRE_COLOR : VALUE_TYPE_COLORS[typeByNode.get(edge.source) ?? 'any'];
-      return { ...edge, style: { ...edge.style, stroke, strokeWidth: 2 } };
+      // A wire pulses gold while both its endpoints executed within the trace window.
+      const hot = exec && hotNodes.has(edge.source) && hotNodes.has(edge.target);
+      const stroke = hot ? '#ffd34d' : exec ? EXEC_WIRE_COLOR : VALUE_TYPE_COLORS[typeByNode.get(edge.source) ?? 'any'];
+      return { ...edge, style: { ...edge.style, stroke, strokeWidth: hot ? 3 : 2 } };
     });
-  }, [graph]);
+  }, [graph, hotNodes]);
 
   if (!graph || !activeBlueprint) {
     return (
@@ -2214,10 +2361,13 @@ export function VisualScriptingPanel() {
         >
           <div className="flow-hud" aria-hidden>
             <span>{selectedNodeDetail}</span>
-            <small>{graph.nodes.length} nodes / {graph.edges.length} wires{copiedNode ? ' / copied' : ''}</small>
+            <small>
+              {graph.nodes.length} nodes / {graph.edges.length} wires
+              {clipboard ? ` / ${clipboard.nodes.length} copied` : ''} · Shift+drag to box-select
+            </small>
           </div>
           <ReactFlow
-            nodes={graph.nodes}
+            nodes={flowNodes}
             edges={styledEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}

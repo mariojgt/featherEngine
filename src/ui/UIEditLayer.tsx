@@ -30,6 +30,8 @@ interface Rect {
 function rootFill(doc: UIDocument): UIElement {
   return {
     ...doc.root,
+    // The root fills the frame; its legacy `anchor` is stripped (anchors place elements WITHIN the doc).
+    anchor: undefined,
     style: { width: '100%', height: '100%', position: 'relative', ...doc.root.style },
   };
 }
@@ -137,8 +139,10 @@ export function UIEditLayer({ doc, fillParent }: { doc: UIDocument; fillParent?:
     event.stopPropagation();
     const base = measureBase();
     if (!base) return;
-    // Bake current layout into absolute so deltas are coherent.
+    // Bake current layout into absolute so deltas are coherent. Dragging means free placement, so an
+    // anchor is cleared (the measured rect already includes the anchored position — no visual jump).
     updateUIElement(doc.id, selected.id, {
+      anchor: undefined,
       style: {
         ...selected.style,
         position: 'absolute',

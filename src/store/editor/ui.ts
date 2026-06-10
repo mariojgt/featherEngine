@@ -14,6 +14,17 @@ export const makeUIElement = (kind: UIElementKind, name?: string): UIElement => 
     children: [],
   };
   if (kind === 'panel') base.style = { display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px' };
+  if (kind === 'scroll')
+    base.style = {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px',
+      padding: '8px',
+      width: '220px',
+      height: '200px',
+      background: 'rgba(15,17,23,0.5)',
+      borderRadius: '8px',
+    };
   if (kind === 'text' || kind === 'button') base.text = kind === 'button' ? 'Button' : 'Text';
   if (kind === 'bar') base.style = { width: '160px', height: '16px', background: '#23262F', borderRadius: '8px' };
   if (kind === 'button') base.style = { padding: '6px 12px', background: '#5B8CFF', color: '#fff', borderRadius: '8px' };

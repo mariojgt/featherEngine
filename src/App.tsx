@@ -11,6 +11,7 @@ import { useEditorStore } from './store/editorStore';
 import { useEditorPrefs } from './store/editorPrefsStore';
 import { useRuntimeAudio } from './runtime/useRuntimeAudio';
 import { recordFrame } from './runtime/perfStats';
+import { resetGamepadInput, sampleGamepads } from './runtime/gamepadInput';
 import { PerfOverlay } from './components/PerfOverlay';
 import { initHistory } from './store/history';
 
@@ -53,14 +54,18 @@ function RuntimePreviewLoop() {
       const delta = Math.min(frameMs / 1000, 0.05);
       lastTime = time;
       const tickStart = performance.now();
+      sampleGamepads(delta, setRuntimeKey);
       tickRuntime(delta);
       recordFrame(frameMs, performance.now() - tickStart);
       frame = requestAnimationFrame(loop);
     };
 
     frame = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(frame);
-  }, [isPlaying, tickRuntime]);
+    return () => {
+      cancelAnimationFrame(frame);
+      resetGamepadInput();
+    };
+  }, [isPlaying, tickRuntime, setRuntimeKey]);
 
   useEffect(() => {
     if (!isPlaying) return;

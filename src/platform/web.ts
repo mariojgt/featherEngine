@@ -4,8 +4,11 @@ import type { OpenedProject, Platform } from './types';
 
 const WEB_DIR = 'web';
 
-function downloadJson(fileName: string, data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+function downloadJson(fileName: string, data: unknown, pretty = true) {
+  // Game bundles inline asset data and get large — write those compactly.
+  const blob = new Blob([pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data)], {
+    type: 'application/json',
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -64,13 +67,13 @@ export const webPlatform: Platform = {
   },
 
   async exportGame(name, bundle) {
-    downloadJson('game.json', bundle);
+    downloadJson('game.json', bundle, false);
     return `${name} downloaded as game.json`;
   },
 
   async stageProduction(_name, bundle) {
     // No local filesystem on web — download the bundle; the build script picks it up.
-    downloadJson('game.json', bundle);
+    downloadJson('game.json', bundle, false);
     return null;
   },
 

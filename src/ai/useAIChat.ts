@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { type ModelMessage, stepCountIs, streamText } from 'ai';
-import { PROVIDERS, resolveModel } from './providers';
+import { FAST_MODELS, PROVIDERS, resolveModel } from './providers';
 import { useAISettings } from '../store/aiSettingsStore';
 import { COMPACT_ENGINE_GUIDE, buildSnapshotContext } from './systemPrompt';
 import { engineTools } from './tools';
@@ -28,6 +28,19 @@ const trimForModelHistory = (content: string) =>
   content.length > MAX_HISTORY_CHARS ? `${content.slice(0, MAX_HISTORY_CHARS)}... [trimmed]` : content;
 
 const chooseActiveTools = (_prompt: string): EngineToolName[] => Object.keys(engineTools) as EngineToolName[];
+
+// --- Smart model routing -------------------------------------------------------------------------
+// Short, read-only questions ("what's in my scene?", "how many enemies are there?") don't need the
+// big model — the provider's fast tier (Haiku / mini / flash, ~1/5th the price) answers them with
+// the same tools. Anything that BUILDS or EDITS stays on the user's selected model. The heuristic
+// is deliberately conservative: any build/edit verb forces the big model.
+const BUILD_VERBS =
+  /\b(make|create|build|add|spawn|place|set\s?up|setup|design|generate|write|script|wire|connect|animate|fix|change|update|move|rotate|scale|delete|remove|replace|attach|detach|import|export|tune|improve|implement|give|turn|paint|sculpt|play|start|stop|undo|redo|rename|duplicate|apply)\b/i;
+const SIMPLE_OPENERS =
+  /^(what|which|where|who|how many|how much|how does|is|are|does|do|did|can|could|should|why|when|list|show|tell|explain|describe|count)\b/i;
+
+const isSimpleQuery = (text: string): boolean =>
+  text.length <= 160 && SIMPLE_OPENERS.test(text) && !BUILD_VERBS.test(text);
 
 /** Human-friendly label for a tool call shown as a chip in the chat. */
 function describeToolCall(toolName: string, input: Record<string, unknown>): string {
@@ -370,22 +383,28 @@ export function useAIChat() {
     const assistantId = newId();
     const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '', actions: [] };
 
-    // Cacheable prefix first: the static engine guide carries an Anthropic cache breakpoint so the
-    // (also-static) tool schemas + guide are billed at ~10% on cache hits instead of full price every
-    // step. The changing scene snapshot is a SEPARATE, uncached system message placed AFTER the
-    // breakpoint, and recent turns follow. OpenAI/Gemini auto-cache this now-stable prefix too.
+    // Cache-aware request layout (Anthropic prompt caching is a PREFIX match; tools render first,
+    // then system, then messages — three breakpoints, stable → volatile):
+    //  bp1 guide      — tools + engine guide are static, so every call reads them at ~10%.
+    //  bp2 snapshot   — when the scene didn't change between turns (follow-up questions), the
+    //                   snapshot prefix is byte-identical and reads from cache too.
+    //  bp3 user msg   — the agentic loop below re-sends the whole prefix on every one of its up-to-16
+    //                   tool steps; this breakpoint makes steps 2..16 read snapshot+history at ~10%
+    //                   instead of paying full price each step.
+    // OpenAI/Gemini ignore the markers and auto-cache the same stable prefix.
+    const cachePoint = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
     const history: ModelMessage[] = [
       {
         role: 'system',
         content: COMPACT_ENGINE_GUIDE,
-        providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+        providerOptions: cachePoint,
       },
-      { role: 'system', content: buildSnapshotContext() },
+      { role: 'system', content: buildSnapshotContext(), providerOptions: cachePoint },
       ...messages.slice(-MAX_CONTEXT_MESSAGES).map((message) => ({
         role: message.role,
         content: trimForModelHistory(message.content),
       })),
-      { role: userMessage.role, content: userMessage.content },
+      { role: userMessage.role, content: userMessage.content, providerOptions: cachePoint },
     ];
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
@@ -398,7 +417,10 @@ export function useAIChat() {
     abortRef.current = controller;
 
     try {
-      const model = resolveModel(settings.provider, apiKey, settings.activeModel());
+      // Smart routing: short read-only questions go to the provider's fast tier (~1/5th the price).
+      const routedModelId =
+        settings.smartRouting && isSimpleQuery(trimmed) ? FAST_MODELS[settings.provider] : settings.activeModel();
+      const model = resolveModel(settings.provider, apiKey, routedModelId);
       const result = streamText({
         model,
         messages: history,

@@ -40,6 +40,8 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
   const setProvider = useAISettings((state) => state.setProvider);
   const setApiKey = useAISettings((state) => state.setApiKey);
   const setModel = useAISettings((state) => state.setModel);
+  const smartRouting = useAISettings((state) => state.smartRouting);
+  const setSmartRouting = useAISettings((state) => state.setSmartRouting);
   const info = PROVIDERS[provider];
 
   return (
@@ -77,6 +79,14 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
             <option key={model} value={model} />
           ))}
         </datalist>
+      </label>
+
+      <label className="node-field" title="Short read-only questions are answered by the provider's fast tier (≈1/5th the price). Anything that builds or edits always uses the model above.">
+        <span>Smart routing</span>
+        <select value={smartRouting ? 'on' : 'off'} onChange={(event) => setSmartRouting(event.target.value === 'on')}>
+          <option value="on">On — cheap model for simple questions</option>
+          <option value="off">Off — always use the selected model</option>
+        </select>
       </label>
 
       <label className="node-field">

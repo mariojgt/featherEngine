@@ -47,7 +47,8 @@ export function WebGLScreenUILayer() {
         // Each doc fills the overlay; children flow or place absolutely via their own styles.
         <Container key={doc.id} positionType="absolute" inset={0} width="100%" height="100%">
           <UIElementMesh
-            element={doc.root}
+            // The root fills the overlay; its legacy `anchor` is stripped (anchors place elements WITHIN the doc).
+            element={{ ...doc.root, anchor: undefined }}
             ctx={ctx}
             textOverrides={scopeOverrides(textOverrides, doc.id)}
             resolveAssetUrl={resolveAssetUrl}

@@ -41,6 +41,14 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
   google: PROVIDERS.google.models[0],
 };
 
+/** Each provider's fast/cheap tier, used by smart routing for simple read-only questions
+ *  (e.g. Haiku 4.5 is ~1/5th the per-token price of Opus). */
+export const FAST_MODELS: Record<ProviderId, string> = {
+  openai: 'gpt-5-mini',
+  anthropic: 'claude-haiku-4-5',
+  google: 'gemini-2.5-flash',
+};
+
 /**
  * Build a configured AI SDK model for a BYO-key, browser-only setup.
  * All requests go directly browser -> provider with the user's key.

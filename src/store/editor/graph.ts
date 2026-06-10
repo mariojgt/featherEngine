@@ -155,6 +155,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   NOT: 'logic.not',
   'Do Once': 'logic.doOnce',
   Delay: 'logic.delay',
+  Function: 'event.functionEntry',
+  'Call Function': 'logic.callFunction',
   Add: 'math.add',
   Subtract: 'math.subtract',
   Multiply: 'math.multiply',
@@ -240,6 +242,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set Rotation': 'action.setRotation',
   'Set Scale': 'action.setScale',
   'Look At': 'action.lookAt',
+  Tween: 'action.tweenProperty',
   'Save Game': 'save.write',
   'Load Game': 'save.load',
   'Clear Save': 'save.clear',
@@ -551,6 +554,18 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
           'Fires its "Body" output once for EVERY actor matching a Blueprint or a Tag — the iterating form of Unreal "Get All Actors Of Class". The current actor is on the value-out (wire it into a Cast / Get Position / Set Object Var / Apply Damage Target inside the Body). Fires "Completed" once after. Pick a Blueprint, or set a Tag (matches the object\'s Tags). Skips self/dead/disabled. Gate behind an event/Cooldown — it scans every matching actor each time it runs.',
       };
     }
+    case 'event.functionEntry':
+      return {
+        label: `Function: ${data.functionName || 'MyFunction'}`,
+        description:
+          'A reusable subgraph entry (Unreal Blueprint function-lite). It NEVER fires on its own — it runs only when a "Call Function" node with the same name executes, then returns to the caller. Build a chain once (open door, reload, apply buff…) and call it from many places. Use Get/Set variables to pass data in and out.',
+      };
+    case 'logic.callFunction':
+      return {
+        label: `Call: ${data.functionName || 'MyFunction'}`,
+        description:
+          'Runs the matching "Function" entry\'s chain in THIS blueprint synchronously, then continues. Reuse logic instead of copy-pasting node chains. Recursion is capped at depth 16.',
+      };
     case 'logic.doOnce':
       return { label: 'Do Once', description: 'Gate: lets execution through ONLY the first time it is reached this Play session, then blocks forever. Use to fire one-shot setup from an event that can repeat (a trigger, a key).' };
     case 'logic.delay':
@@ -643,6 +658,14 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return { label: 'Set Scale', description: "Sets this object's scale (wire a Vector3 into Scale) — grow/shrink/pulse the owner." };
     case 'action.lookAt':
       return { label: 'Look At', description: 'Turns this object to face a world position on the ground plane (wire a Vector3 — e.g. Player Location — into Target).' };
+    case 'action.tweenProperty': {
+      const prop = data.tweenProperty ?? 'position';
+      return {
+        label: `Tween ${prop} ${Number(data.numberValue ?? 1)}s`,
+        description:
+          'Animates an actor\'s position/rotation/scale to a target value over Duration seconds with easing (Unreal Timeline-lite) — sliding doors, lifts, pickups, UI pops. "To" is a world-space Vector3 (rotation in degrees); wire one in or set it on the node. Exec-out continues IMMEDIATELY (the tween runs in the background); the "Done" pin fires when it finishes. Re-triggers are ignored while it is running. Target defaults to self. Moving kinematic/fixed bodies follow the tween; avoid tweening dynamic bodies (physics fights it).',
+      };
+    }
     case 'action.playAnimation':
       return {
         label: 'Play Animation',
@@ -729,6 +752,10 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.eventName = 'CustomEvent';
   }
 
+  if ((nodeKind === 'event.functionEntry' || nodeKind === 'logic.callFunction') && !normalized.functionName) {
+    normalized.functionName = 'MyFunction';
+  }
+
   if ((nodeKind === 'action.translate' || nodeKind === 'action.rotate') && !normalized.axis) {
     normalized.axis = nodeKind === 'action.translate' ? 'z' : 'y';
   }
@@ -792,6 +819,13 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'logic.delay' && typeof normalized.numberValue !== 'number') {
     normalized.numberValue = 1;
+  }
+
+  if (nodeKind === 'action.tweenProperty') {
+    if (!normalized.tweenProperty) normalized.tweenProperty = 'position';
+    if (typeof normalized.numberValue !== 'number') normalized.numberValue = 1; // duration (seconds)
+    if (!normalized.easing) normalized.easing = 'easeInOut';
+    if (!Array.isArray(normalized.vectorValue)) normalized.vectorValue = [0, 0, 0]; // "To" fallback
   }
 
   if (nodeKind === 'event.timer' && typeof normalized.numberValue !== 'number') {

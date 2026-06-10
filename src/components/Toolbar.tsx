@@ -33,6 +33,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useEditorPrefs } from '../store/editorPrefsStore';
 import { applyCustomLayout, applyWorkspaceLayout, resetWorkspaceLayout, WORKSPACE_LAYOUTS } from './Workspace';
 import { PreferencesModal } from './PreferencesModal';
+import { BuildReportDialog } from './BuildReportDialog';
 import type { SceneObjectKind } from '../types';
 
 const creationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
@@ -366,6 +367,7 @@ export function Toolbar() {
 
       <SaveToast />
       <BuildProgressOverlay />
+      <BuildReportDialog />
 
       <div className="project-pill" title={projectName}>
         <span>{projectName}</span>

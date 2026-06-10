@@ -93,6 +93,8 @@ import {
 import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent, type VehicleWheelState } from '../runtime/physicsWorld';
 import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
+import { gamepadInput } from '../runtime/gamepadInput';
+import { markExec } from '../runtime/execTrace';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
 import { addVehicleDent, clearVehicleDents } from '../runtime/vehicleDamageBus';
@@ -420,6 +422,20 @@ interface EditorState {
   runtimeCooldowns: Record<string, number>;
   /** Per (object:node) remaining seconds for latent Delay nodes — when one hits 0 the node's output fires. */
   runtimeDelays: Record<string, number>;
+  /** Per (owner:node) running Tween Property animations — advanced each tick (eased transform writes onto
+   *  the target via the cross-object transform pass); the node's "Done" pin fires when one completes. */
+  runtimeTweens: Record<
+    string,
+    {
+      targetId: string;
+      property: 'position' | 'rotation' | 'scale';
+      from: Vector3Tuple;
+      to: Vector3Tuple;
+      time: number;
+      duration: number;
+      easing: 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
+    }
+  >;
   /** Targeted custom events queued for delivery NEXT tick: objectId → event names to fire on that actor
    *  (Fire Event with a Target, one-frame-delayed like collisions). */
   runtimeActorEvents: Record<string, string[]>;
@@ -867,6 +883,16 @@ interface EditorState {
     targetHandle?: string,
   ) => void;
   deleteGraphNode: (nodeId: string) => void;
+  /** Delete several graph nodes (and every wire touching them) from the active blueprint in one step. */
+  deleteGraphNodes: (nodeIds: string[]) => void;
+  /** Paste a copied set of nodes (+ the wires between them) into a blueprint's graph with fresh ids,
+   *  offset from the originals. The pasted set becomes the selection. Returns the new node ids. */
+  pasteGraphNodes: (
+    blueprintId: string,
+    nodes: NodeForgeNode[],
+    edges: Edge[],
+    offset?: { x: number; y: number },
+  ) => string[];
   autoLayoutActiveGraph: () => void;
   selectGraphNode: (id?: string) => void;
   updateGraphNodeData: (id: string, patch: Partial<NodeForgeNodeData>) => void;
@@ -1161,6 +1187,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeFootstep: {},
   runtimeCooldowns: {},
   runtimeDelays: {},
+  runtimeTweens: {},
   runtimeActorEvents: {},
   runtimeTimers: {},
   runtimeHidden: [],
@@ -4848,6 +4875,62 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         isDirty: true,
       };
     }),
+  deleteGraphNodes: (nodeIds) =>
+    set((state) => {
+      const blueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
+      if (!blueprint || nodeIds.length === 0) return state;
+      const doomed = new Set(nodeIds);
+      return {
+        graphs: state.graphs.map((graph) =>
+          graph.id === blueprint.graphId
+            ? {
+                ...graph,
+                nodes: graph.nodes.filter((node) => !doomed.has(node.id)),
+                edges: graph.edges.filter((edge) => !doomed.has(edge.source) && !doomed.has(edge.target)),
+              }
+            : graph,
+        ),
+        selectedGraphNodeId:
+          state.selectedGraphNodeId && doomed.has(state.selectedGraphNodeId) ? undefined : state.selectedGraphNodeId,
+        isDirty: true,
+      };
+    }),
+  pasteGraphNodes: (blueprintId, nodes, edges, offset = { x: 36, y: 36 }) => {
+    const idMap = new Map(nodes.map((node) => [node.id, makeId('node')]));
+    set((state) => {
+      const blueprint = state.blueprints.find((item) => item.id === blueprintId);
+      if (!blueprint) return state;
+      return {
+        graphs: state.graphs.map((graph) => {
+          if (graph.id !== blueprint.graphId) return graph;
+          const pasted: NodeForgeNode[] = nodes.map((node) => ({
+            ...node,
+            id: idMap.get(node.id)!,
+            position: { x: node.position.x + offset.x, y: node.position.y + offset.y },
+            data: structuredClone(node.data),
+            selected: true,
+          }));
+          // Only wires fully inside the copied set come along; new ids keep them isolated from the originals.
+          const pastedEdges: Edge[] = edges
+            .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+            .map((edge) => ({
+              ...edge,
+              id: makeId('edge'),
+              source: idMap.get(edge.source)!,
+              target: idMap.get(edge.target)!,
+            }));
+          return {
+            ...graph,
+            // The pasted set becomes the new selection (originals deselect) so repeat-paste cascades read clearly.
+            nodes: [...graph.nodes.map((node) => (node.selected ? { ...node, selected: false } : node)), ...pasted],
+            edges: [...graph.edges, ...pastedEdges],
+          };
+        }),
+        isDirty: true,
+      };
+    });
+    return nodes.map((node) => idMap.get(node.id)!);
+  },
   autoLayoutActiveGraph: () =>
     set((state) => {
       const blueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
@@ -5005,6 +5088,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeDelays: {},
+      runtimeTweens: {},
       runtimeActorEvents: {},
       runtimeTimers: {},
       runtimeHidden: [],
@@ -5106,6 +5190,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeDelays: {},
+      runtimeTweens: {},
       runtimeActorEvents: {},
       runtimeTimers: {},
       runtimeHidden: [],
@@ -5455,6 +5540,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           else elapsedDelaysByObject.set(objId, [nodeId]);
         }
       }
+      // Tween Property animations (key = `${ownerId}:${nodeId}`): advance each frame and write the eased
+      // value onto the target via nextTransforms (applied before the character/physics passes, so moving
+      // kinematic/fixed bodies follow). A tween that finishes this frame fires its node's "Done" pin via
+      // the resume pass below (on the OWNER object, like Delay).
+      const nextTweens: EditorState['runtimeTweens'] = {};
+      const elapsedTweensByObject = new Map<string, string[]>();
+      for (const [key, tween] of Object.entries(state.runtimeTweens)) {
+        const time = tween.time + (delta || 1 / 60);
+        const t = Math.min(1, time / Math.max(0.01, tween.duration));
+        const eased =
+          tween.easing === 'linear'
+            ? t
+            : tween.easing === 'easeIn'
+              ? t * t
+              : tween.easing === 'easeOut'
+                ? 1 - (1 - t) * (1 - t)
+                : t * t * (3 - 2 * t);
+        const value: Vector3Tuple = [
+          tween.from[0] + (tween.to[0] - tween.from[0]) * eased,
+          tween.from[1] + (tween.to[1] - tween.from[1]) * eased,
+          tween.from[2] + (tween.to[2] - tween.from[2]) * eased,
+        ];
+        const slot = (nextTransforms[tween.targetId] ??= {});
+        if (tween.property === 'position') slot.position = value;
+        else if (tween.property === 'rotation') slot.rotation = value;
+        else slot.scale = value;
+        if (t >= 1) {
+          const sep = key.indexOf(':');
+          const objId = key.slice(0, sep);
+          const nodeId = key.slice(sep + 1);
+          const list = elapsedTweensByObject.get(objId);
+          if (list) list.push(nodeId);
+          else elapsedTweensByObject.set(objId, [nodeId]);
+        } else {
+          nextTweens[key] = { ...tween, time };
+        }
+      }
       // "The player" for AI nodes (Distance/Direction/Face To Player) = the active follow-camera character.
       const aiPlayer = playerId ? activeObjectById.get(playerId) : undefined;
 
@@ -5587,7 +5709,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // collision/trigger/interact/key, none firing this frame): if no event-root fires, the
           // dispatch below would run nothing and `changed` would stay false, so returning the object
           // unchanged is identical behavior — but skips the transform-tuple clones + roots array.
-          if (!elapsedDelaysByObject.has(object.id) && !graphRuntime.eventRoots.some((node) => eventRootFires(node, object.id))) return object;
+          if (
+            !elapsedDelaysByObject.has(object.id) &&
+            !elapsedTweensByObject.has(object.id) &&
+            !graphRuntime.eventRoots.some((node) => eventRootFires(node, object.id))
+          )
+            return object;
           // Only scripted objects clone their transform tuples — a script may mutate these in place.
           const position = [...object.transform.position] as Vector3Tuple;
           const rotation = [...object.transform.rotation] as Vector3Tuple;
@@ -5660,10 +5787,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if (currentKeys[back] || currentKeys.ArrowDown) iz -= 1;
               if (currentKeys[left] || currentKeys.ArrowLeft) ix += 1;
               if (currentKeys[right] || currentKeys.ArrowRight) ix -= 1;
+              // Gamepad left stick (analog): stick right = -X here (left is +1), stick up = forward.
+              ix -= gamepadInput.moveX;
+              iz += gamepadInput.moveY;
               const length = Math.hypot(ix, iz);
-              if (length === 0) return [0, 0, 0] as Vector3Tuple;
-              let dirX = ix / length;
-              let dirZ = iz / length;
+              if (length < 0.001) return [0, 0, 0] as Vector3Tuple;
+              // Keep analog magnitude (≤1) so a half-tilted stick walks; keys still produce unit vectors.
+              const magnitude = Math.min(1, length);
+              let dirX = (ix / length) * magnitude;
+              let dirZ = (iz / length) * magnitude;
               if (cc?.cameraRelativeMovement && cc.mouseLook) {
                 const yaw = mouseCameraYaw(cc.mouseSensitivity);
                 const cos = Math.cos(yaw);
@@ -5687,8 +5819,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const kLeft = veh?.keyLeft ?? 'KeyA';
               const kRight = veh?.keyRight ?? 'KeyD';
               const kHand = veh?.keyHandbrake ?? 'Space';
-              const throttle = (currentKeys[kThrottle] ? 1 : 0) - (currentKeys[kReverse] ? 1 : 0);
-              const steer = (currentKeys[kLeft] ? 1 : 0) - (currentKeys[kRight] ? 1 : 0);
+              // Gamepad: RT/LT are analog throttle/brake, left stick X steers (stick right = steer right = -1 here).
+              const throttle = Math.max(
+                -1,
+                Math.min(
+                  1,
+                  (currentKeys[kThrottle] ? 1 : 0) - (currentKeys[kReverse] ? 1 : 0) + gamepadInput.throttle - gamepadInput.brake,
+                ),
+              );
+              const steer = Math.max(
+                -1,
+                Math.min(1, (currentKeys[kLeft] ? 1 : 0) - (currentKeys[kRight] ? 1 : 0) - gamepadInput.moveX),
+              );
               const hand = currentKeys[kHand] ? 1 : 0;
               return [throttle, steer, hand] as Vector3Tuple;
             }
@@ -6064,6 +6206,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             visited.add(nodeId);
             const node = runtime.nodesById.get(nodeId);
             if (!node) return;
+            // Feed the editor's exec-flow visualization (no-op unless a graph editor is open in Play).
+            markExec(nodeId);
+
+            // Call Function: run the named "Function" entry's chain synchronously (a reusable subgraph —
+            // Unreal Blueprint function-lite), then continue this chain. Each call gets a fresh visited
+            // set so the body re-runs on every call; the depth cap stops runaway recursion.
+            if (node.data.nodeKind === 'logic.callFunction') {
+              const fnName = (node.data.functionName || 'MyFunction').toLowerCase();
+              if (functionDepth < 16) {
+                functionDepth += 1;
+                for (const entry of runtime.functionRoots.get(fnName) ?? []) {
+                  markExec(entry.id);
+                  (runtime.outgoing.get(entry.id) ?? []).forEach((targetId) => executeFrom(targetId, new Set([entry.id])));
+                }
+                functionDepth -= 1;
+              }
+              (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              return;
+            }
 
             // For Loop: fire the "Body" pin N times (exposing the index on the value-out), then fall through
             // to the default "exec-out" pin ("Completed"). Each iteration gets a fresh visited set seeded with
@@ -6130,6 +6291,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const loopIndex = new Map<string, number>();
           // Current actor reference of each active For Each Actor on this owner, read by its value-out.
           const forEachCurrent = new Map<string, string>();
+          // Live Call Function nesting depth — caps recursion (a function calling itself) at 16.
+          let functionDepth = 0;
 
           // The most recent successful Cast target on THIS owner this execution — resolved by the "$cast"
           // sentinel so downstream Get/Set Object Var act on the cast actor's instance variables.
@@ -6197,6 +6360,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 nextDelays[key] = Math.max(0.01, toNumber(valueInput(node, 'seconds', Number(node.data.numberValue ?? 1))));
               }
               return false;
+            }
+
+            // Tween Property (latent, non-blocking): arm a tween animating the target's transform property
+            // to "To" over Duration seconds, then continue the chain IMMEDIATELY (the tween advances in the
+            // per-tick pass; its "Done" pin fires from the resume pass on completion). Re-triggers while one
+            // is running are ignored, like Delay — so an Update-driven arm doesn't restart it every frame.
+            if (node.data.nodeKind === 'action.tweenProperty') {
+              const key = `${object.id}:${node.id}`;
+              if (nextTweens[key] === undefined) {
+                const property = node.data.tweenProperty ?? 'position';
+                const tid = objectVarTarget(node);
+                const targetObj = activeObjectById.get(tid);
+                if (tid !== object.id && !targetObj) return true; // unknown target — skip arming
+                const rawTo = valueInput(node, 'to', node.data.vectorValue ?? ([0, 0, 0] as Vector3Tuple));
+                const toVec: Vector3Tuple = Array.isArray(rawTo)
+                  ? [Number(rawTo[0]) || 0, Number(rawTo[1]) || 0, Number(rawTo[2]) || 0]
+                  : [0, 0, 0];
+                // Rotation tweens are authored in degrees (matching Set Rotation) but run in radians.
+                const d = Math.PI / 180;
+                const to: Vector3Tuple = property === 'rotation' ? [toVec[0] * d, toVec[1] * d, toVec[2] * d] : toVec;
+                const fromSource =
+                  tid === object.id
+                    ? property === 'position'
+                      ? position
+                      : property === 'rotation'
+                        ? rotation
+                        : scale
+                    : targetObj!.transform[property];
+                nextTweens[key] = {
+                  targetId: tid,
+                  property,
+                  from: [fromSource[0], fromSource[1], fromSource[2]],
+                  to,
+                  time: 0,
+                  duration: Math.max(0.01, toNumber(valueInput(node, 'duration', Number(node.data.numberValue ?? 1)))),
+                  easing: node.data.easing ?? 'easeInOut',
+                };
+              }
+              return true;
             }
 
             // Teleport an actor to a world position (wire a Vector3 into "position"). Owner by default;
@@ -7026,6 +7228,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
 
+          // Resume Tween Property "Done" pins for tweens that finished this frame (exec-done handle).
+          const tweensDoneHere = elapsedTweensByObject.get(object.id);
+          if (tweensDoneHere) {
+            for (const tweenNodeId of tweensDoneHere) {
+              (runtime.outgoingByHandle.get(tweenNodeId)?.get('exec-done') ?? []).forEach((targetId) =>
+                executeFrom(targetId, new Set()),
+              );
+            }
+          }
+
           return changed
             ? {
                 ...object,
@@ -7191,15 +7403,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const scripted = Boolean(object.script?.enabled);
         const di = vehicleScriptInputs[object.id];
         const crashControl = crashPhysicsActive ? 0.22 : 1;
+        // Gamepad (auto cars only — scripted cars get pad input through their Get Drive Input node):
+        // RT/LT analog throttle/brake, left stick X steers (stick right = steer right = -1 here).
         const throttleSig = (scripted
           ? (di ? di.throttle : 0)
           : drivingActive
-            ? (currentKeys[veh.keyThrottle] ? 1 : 0) - (currentKeys[veh.keyReverse] ? 1 : 0)
+            ? Math.max(
+                -1,
+                Math.min(
+                  1,
+                  (currentKeys[veh.keyThrottle] ? 1 : 0) -
+                    (currentKeys[veh.keyReverse] ? 1 : 0) +
+                    gamepadInput.throttle -
+                    gamepadInput.brake,
+                ),
+              )
             : 0) * crashControl;
         const steerRaw = (scripted
           ? (di ? di.steer : 0)
           : drivingActive
-            ? (currentKeys[veh.keyLeft] ? 1 : 0) - (currentKeys[veh.keyRight] ? 1 : 0)
+            ? Math.max(
+                -1,
+                Math.min(1, (currentKeys[veh.keyLeft] ? 1 : 0) - (currentKeys[veh.keyRight] ? 1 : 0) - gamepadInput.moveX),
+              )
             : 0) * crashControl;
         // Handbrake: scripted cars read it from the Drive node, auto cars from the key. It loosens rear grip
         // (oversteer / drift) and bleeds a little speed.
@@ -7727,6 +7953,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (currentKeys[cc.keyBackward]) inputZ -= 1;
           if (currentKeys[cc.keyLeft]) inputX += 1;
           if (currentKeys[cc.keyRight]) inputX -= 1;
+          // Gamepad left stick (analog): stick right = -X here (left is +1), stick up = forward.
+          inputX -= gamepadInput.moveX;
+          inputZ += gamepadInput.moveY;
           const length = Math.hypot(inputX, inputZ);
           const sprinting = Boolean(currentKeys[cc.keySprint]);
           const crouching = Boolean(currentKeys[cc.keyCrouch]);
@@ -7749,8 +7978,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
             moveDirX = dirX;
             moveDirZ = dirZ;
-            targetX = dirX * speed;
-            targetZ = dirZ * speed;
+            // Analog walk: a half-tilted stick moves slower (keys always give length ≥ 1 → full speed).
+            const analog = Math.min(1, length);
+            targetX = dirX * speed * analog;
+            targetZ = dirZ * speed * analog;
           }
           const mantleKey = cc.keyMantle || cc.keyJump;
           const wantsMantle =
@@ -9052,6 +9283,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeFootstep: {},
             runtimeCooldowns: {},
             runtimeDelays: {},
+            runtimeTweens: {},
             runtimeActorEvents: {},
             runtimeTimers: {},
             runtimeHidden: [],
@@ -9111,6 +9343,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeFootstep: nextFootstep,
         runtimeCooldowns: nextCooldowns,
         runtimeDelays: nextDelays,
+        runtimeTweens: nextTweens,
         runtimeActorEvents: nextActorEvents,
         runtimeTimers: nextTimers,
         // Disabled objects are also hidden (no render) via the existing hidden path.
@@ -9155,9 +9388,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => {
       const activeBlueprint = state.blueprints.find((item) => item.id === state.activeBlueprintId);
       if (!activeBlueprint) return state;
-      const structuralChanges = changes.filter((change) => change.type !== 'select' && change.type !== 'dimensions');
+      // Selection changes ARE applied (multi-select + marquee copy/paste need the `selected` flags on the
+      // nodes), but they never mark the project dirty — only real structural edits do.
+      const structuralChanges = changes.filter((change) => change.type !== 'dimensions');
       if (structuralChanges.length === 0) return state;
-      // Pure selection/dimension changes shouldn't mark the project dirty or be persisted.
       const dirtied = changes.some((change) => change.type !== 'select' && change.type !== 'dimensions');
       return {
         graphs: state.graphs.map((graph) =>
@@ -9357,6 +9591,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeFootstep: {},
       runtimeCooldowns: {},
       runtimeDelays: {},
+      runtimeTweens: {},
       runtimeActorEvents: {},
       runtimeTimers: {},
       runtimeHidden: [],
