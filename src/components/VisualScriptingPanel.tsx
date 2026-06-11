@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type Connection, type Edge, type NodeTypes } from '@xyflow/react';
 import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2, Plus, Save, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
-import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useEditorStore } from '../store/editorStore';
+import { useSceneOptions, useStableActiveObjects, useStableActiveScene } from '../store/stableSelectors';
 import { nodeDescriptions, nodeKindByLabel } from '../store/editor/graph';
 import { NodeForgeGraphNode, outputTypeOf, VALUE_TYPE_COLORS, EXEC_WIRE_COLOR } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
@@ -450,9 +451,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const particleSystems = useEditorStore((state) => state.particleSystems);
   const blueprints = useEditorStore((state) => state.blueprints);
   const activeGraph = useEditorStore((state) => state.activeGraph());
-  const activeScene = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId));
-  const scenes = useEditorStore((state) => state.scenes);
-  const sceneObjects = useEditorStore(selectActiveObjects);
+  // Stable subscriptions: the raw scene/scenes/objects references are replaced EVERY Play tick, which
+  // re-rendered this whole xyflow graph 60×/s — the single biggest panel cost in the perf profiler.
+  const activeScene = useStableActiveScene();
+  const scenes = useSceneOptions();
+  const sceneObjects = useStableActiveObjects();
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
   const isAnimNode = Boolean(node?.data.nodeKind.startsWith('animator.'));
 
@@ -2119,7 +2122,8 @@ export function VisualScriptingPanel() {
   const blueprints = useEditorStore((state) => state.blueprints);
   const activeBlueprint = useEditorStore((state) => state.activeBlueprint());
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
-  const sceneObjects = useEditorStore(selectActiveObjects);
+  // Stable list — only used for instance counts / pickers, must not re-render the graph during Play.
+  const sceneObjects = useStableActiveObjects();
   const setActiveBlueprint = useEditorStore((state) => state.setActiveBlueprint);
   const createBlueprint = useEditorStore((state) => state.createBlueprint);
   const onNodesChange = useEditorStore((state) => state.onNodesChange);

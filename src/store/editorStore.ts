@@ -5489,8 +5489,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const receiveDamageHealth = new Map<string, number>();
       for (const obj of activeObjects) {
         if (!obj.script?.enabled) continue;
-        const gr = graphRuntimes.get(obj.script.graphId);
-        const dmgNode = gr?.eventRoots.find((n) => n.data.nodeKind === 'event.receiveDamage');
+        const dmgNode = graphRuntimes.get(obj.script.graphId)?.receiveDamageRoot;
         if (!dmgNode) continue;
         listensForReceiveDamage.add(obj.id);
         const hp = Number(dmgNode.data.startingHealth ?? 0);
@@ -5505,11 +5504,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       for (const obj of activeObjects) {
         if (!obj.script?.enabled || isRagdoll(obj.id)) continue;
         const gr = graphRuntimes.get(obj.script.graphId);
-        if (!gr) continue;
-        for (const node of gr.eventRoots) {
-          const isTimer = node.data.nodeKind === 'event.timer';
-          const isThrottledUpdate = node.data.nodeKind === 'event.update' && Number(node.data.numberValue ?? 0) > 0;
-          if (!isTimer && !isThrottledUpdate) continue;
+        if (!gr || gr.timerRoots.length === 0) continue;
+        for (const node of gr.timerRoots) {
+          const isThrottledUpdate = node.data.nodeKind === 'event.update';
           const key = `${obj.id}:${node.id}`;
           const interval = Math.max(0.05, Number(node.data.numberValue ?? 1));
           let remaining = (state.runtimeTimers[key] ?? (isThrottledUpdate ? 0 : interval)) - timerStep;
@@ -5876,6 +5873,54 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // (e.g. a Cast + two Get Object Vars all reading the same Find Actor pin). '' = computed, none found.
       const findActorCache = new Map<string, string>();
 
+      // Per-tick candidate lists for actor queries (Find Actor / For Each Actor), keyed by the QUERY
+      // itself rather than the evaluating node. Previously N enemies each finding the player cost N
+      // full-scene scans per frame; now each distinct query scans the scene once per tick and every
+      // evaluation filters the (small) cached list with its per-owner dynamic checks (self/destroyed/
+      // disabled/ragdoll), which keeps the original semantics — including 'first' picking the earliest
+      // match in scene order. Static exclusions (projectiles, effects) are baked into the list.
+      const actorQueryCache = new Map<string, SceneObject[]>();
+      const actorQueryCandidates = (kind: 'bp' | 'tag', a: string, b = ''): SceneObject[] => {
+        const cacheKey = kind === 'bp' ? `bp:${a}` : `tag:${a}:${b}`;
+        let list = actorQueryCache.get(cacheKey);
+        if (list) return list;
+        list = [];
+        if (kind === 'bp') {
+          for (const c of activeObjects) {
+            if (c.projectile || c.effect) continue;
+            if (c.script?.blueprintId === a) list.push(c);
+          }
+        } else {
+          const tagKey = a;
+          const tag = b;
+          for (const c of activeObjects) {
+            if (c.projectile || c.effect) continue;
+            const listed = c.variables?.[tagKey];
+            let match: boolean;
+            if (!tag) {
+              // No specific tag → match any actor that HAS the tag variable (flag-style, like `interactable`).
+              match = listed !== undefined;
+            } else {
+              match = false;
+              // (1) the tag is one of the comma-separated values in the tag variable (the Inspector chips),
+              //     or the whole value equals the tag.
+              if (listed !== undefined) {
+                const sv = String(listed);
+                if (sv === tag || sv.split(',').some((token) => token.trim() === tag)) match = true;
+              }
+              // (2) or the actor has a truthy instance variable literally NAMED the tag (flag idiom).
+              if (!match) {
+                const flag = c.variables?.[tag];
+                if (flag !== undefined && flag !== false && flag !== 0 && flag !== '') match = true;
+              }
+            }
+            if (match) list.push(c);
+          }
+        }
+        actorQueryCache.set(cacheKey, list);
+        return list;
+      };
+
       // Per-tick memo for Raycast nodes (keyed `${ownerId}:${nodeId}`): one physics ray serves all four of
       // a Raycast node's outputs (Hit/Actor/Point/Distance) within the frame instead of casting per pin.
       const raycastCache = new Map<string, { hit: boolean; actor: string | undefined; point: Vector3Tuple; distance: number }>();
@@ -6109,34 +6154,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }
               let best: string | undefined;
               let bestDist = Infinity;
-              for (const candidate of activeObjects) {
+              // Static predicate (blueprint / tag / projectile / effect) is resolved by the shared
+              // per-tick candidate list — one scene scan per DISTINCT query per frame, not per node.
+              const candidates = byTag ? actorQueryCandidates('tag', tagKey, tag) : actorQueryCandidates('bp', blueprintId!);
+              for (const candidate of candidates) {
                 if (candidate.id === object.id || destroyedIds.has(candidate.id) || nextDisabled.has(candidate.id)) continue;
-                if (candidate.projectile || candidate.effect || isRagdoll(candidate.id)) continue;
-                let match: boolean;
-                if (byTag) {
-                  const listed = candidate.variables?.[tagKey];
-                  if (!tag) {
-                    // No specific tag → match any actor that HAS the tag variable (flag-style, like `interactable`).
-                    match = listed !== undefined;
-                  } else {
-                    match = false;
-                    // (1) the tag is one of the comma-separated values in the `tags` variable (the Inspector chips),
-                    //     or the whole value equals the tag.
-                    if (listed !== undefined) {
-                      const sv = String(listed);
-                      if (sv === tag || sv.split(',').some((token) => token.trim() === tag)) match = true;
-                    }
-                    // (2) or the actor has a truthy instance variable literally NAMED the tag (flag idiom, e.g. a
-                    //     `boss` or `interactable` var) — so it matches however you tagged the object.
-                    if (!match) {
-                      const flag = candidate.variables?.[tag];
-                      if (flag !== undefined && flag !== false && flag !== 0 && flag !== '') match = true;
-                    }
-                  }
-                } else {
-                  match = candidate.script?.blueprintId === blueprintId;
-                }
-                if (!match) continue;
+                if (isRagdoll(candidate.id)) continue;
                 if (!nearest) {
                   best = candidate.id;
                   break;
@@ -6566,23 +6589,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const key = node.data.objectKey || 'tags';
               const matches: string[] = [];
               if (byBlueprint || tag) {
-                for (const c of activeObjects) {
-                  if (c.id === object.id || destroyedIds.has(c.id) || nextDisabled.has(c.id)) continue;
-                  if (c.projectile || c.effect || isRagdoll(c.id)) continue;
-                  let hit: boolean;
-                  if (byBlueprint) {
-                    hit = c.script?.blueprintId === node.data.castBlueprintId;
-                  } else {
-                    const listed = c.variables?.[key];
-                    const sv = listed === undefined ? undefined : String(listed);
-                    hit =
-                      (sv !== undefined && (sv === tag || sv.split(',').some((t) => t.trim() === tag))) ||
-                      (() => {
-                        const flag = c.variables?.[tag];
-                        return flag !== undefined && flag !== false && flag !== 0 && flag !== '';
-                      })();
-                  }
-                  if (hit) matches.push(c.id);
+                // Shared per-tick candidate list: one scene scan per distinct query per frame; only the
+                // per-owner dynamic checks (self/destroyed/disabled/ragdoll) run here.
+                const candidates = byBlueprint
+                  ? actorQueryCandidates('bp', node.data.castBlueprintId!)
+                  : actorQueryCandidates('tag', key, tag);
+                for (const c of candidates) {
+                  if (c.id === object.id || destroyedIds.has(c.id) || nextDisabled.has(c.id) || isRagdoll(c.id)) continue;
+                  matches.push(c.id);
                 }
               }
               const bodyTargets = runtime.outgoingByHandle.get(nodeId)?.get('exec-body') ?? [];

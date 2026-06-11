@@ -2,6 +2,7 @@ import { Link2, Palette, Settings2, Unlink } from 'lucide-react';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { defaultCharacter, defaultLight, defaultVehicle, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { objectToken, useStableActiveObjects } from '../store/stableSelectors';
 import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
@@ -503,16 +504,9 @@ function AnimatorSection({
 
 /** Attach this object to a bone "socket" of a skinned character — its Transform becomes the offset. */
 function AttachmentSection({ objectId }: { objectId: string }) {
-  // Structural-signature subscription (like HierarchyPanel): this section reads only object
-  // identity/name/model/attachment — never per-frame transforms — so it must NOT re-render 60×/s
-  // during Play off the raw objects array. Re-derive the list only when that structure changes.
-  const objectsSig = useEditorStore((state) =>
-    selectActiveObjects(state)
-      .map((o) => `${o.id}~${o.name}~${o.renderer?.modelAssetId ?? ''}~${o.attachment?.targetObjectId ?? ''}~${o.attachment?.boneName ?? ''}`)
-      .join('|'),
-  );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const sceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [objectsSig]);
+  // Structurally-stable list (shared hook): this section reads only object identity/name/model/
+  // attachment — never per-frame transforms — so it must NOT re-render 60×/s during Play.
+  const sceneObjects = useStableActiveObjects();
   const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
   const skeletons = useEditorStore((state) => state.skeletons);
   const setAttachment = useEditorStore((state) => state.setAttachment);
@@ -627,7 +621,8 @@ function AttachmentSection({ objectId }: { objectId: string }) {
 
 /** World-space UI (a widget anchored over this object) + per-instance variables for `self.*` bindings. */
 function UISection({ objectId }: { objectId: string }) {
-  const object = useEditorStore((state) => selectActiveObjects(state).find((o) => o.id === objectId));
+  // Structural subscription: ui/variables edits refresh this section; Play-mode motion doesn't.
+  const object = useStableActiveObjects().find((o) => o.id === objectId);
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
   const attachUI = useEditorStore((state) => state.attachUI);
   const detachUI = useEditorStore((state) => state.detachUI);
@@ -2451,7 +2446,14 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
 }
 
 export function InspectorPanel() {
-  const object = useEditorStore((state) => state.selectedObject());
+  // Structural subscription to the selected object: a SELECTED moving actor must not re-render the
+  // whole Inspector every Play tick (its transform readout freezes during Play; edit mode is live).
+  const selectedSig = useEditorStore((state) => {
+    const selected = state.selectedObject();
+    return selected ? `${selected.id}:${objectToken(selected, state.isPlaying)}` : '';
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const object = useMemo(() => useEditorStore.getState().selectedObject(), [selectedSig]);
   const renameObject = useEditorStore((state) => state.renameObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
   const updateRenderer = useEditorStore((state) => state.updateRenderer);
@@ -2472,7 +2474,8 @@ export function InspectorPanel() {
   const addCloth = useEditorStore((state) => state.addCloth);
   const updateCloth = useEditorStore((state) => state.updateCloth);
   const removeCloth = useEditorStore((state) => state.removeCloth);
-  const sceneObjects = useEditorStore((state) => selectActiveObjects(state));
+  // Structurally-stable list: motion during Play must not re-render the whole Inspector 60×/s.
+  const sceneObjects = useStableActiveObjects();
   const toggleAnimator = useEditorStore((state) => state.toggleAnimator);
   const updateAnimator = useEditorStore((state) => state.updateAnimator);
   const toggleCharacterController = useEditorStore((state) => state.toggleCharacterController);
@@ -2485,7 +2488,9 @@ export function InspectorPanel() {
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
   const setObjectAnimatorController = useEditorStore((state) => state.setObjectAnimatorController);
   const setActiveAnimatorController = useEditorStore((state) => state.setActiveAnimatorController);
-  const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
+  // Subscribe to the selected object's live animator STATE ID (a primitive) rather than the whole
+  // runtimeAnimators record — that record is replaced every Play tick and re-rendered this panel 60×/s.
+  const liveAnimStateId = useEditorStore((state) => (object ? state.runtimeAnimators[object.id]?.stateId : undefined));
   const attachScript = useEditorStore((state) => state.attachScript);
   const detachScript = useEditorStore((state) => state.detachScript);
   const blueprints = useEditorStore((state) => state.blueprints);
@@ -2518,9 +2523,8 @@ export function InspectorPanel() {
   const liveStateName = useMemo(() => {
     if (!object?.animator?.controllerId) return undefined;
     const controller = animatorControllers.find((c) => c.id === object.animator!.controllerId);
-    const stateId = runtimeAnimators[object.id]?.stateId;
-    return controller?.states.find((s) => s.id === stateId)?.name;
-  }, [object, animatorControllers, runtimeAnimators]);
+    return controller?.states.find((s) => s.id === liveAnimStateId)?.name;
+  }, [object, animatorControllers, liveAnimStateId]);
 
   const transformValues = useMemo(
     () =>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, CircleDot, Clapperboard, Copy, Download, Eye, Flag, FolderOpen, Magnet, Pause, Play, Plus, RotateCcw, Scissors, Search, SkipBack, SkipForward, StepBack, StepForward, Trash2, Video, ZoomIn, ZoomOut } from 'lucide-react';
-import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useEditorStore } from '../store/editorStore';
+import { useStableActiveObjects, useStableActiveScene } from '../store/stableSelectors';
 import { useProjectStore } from '../store/projectStore';
 import { editorCameraPose } from '../three/EditorCamera';
 import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicLook, CinematicTransformKeyframe, MaterialOverrides, RuntimeCinematicFade, RuntimeCinematicText, SceneObjectKind, Vector3Tuple } from '../types';
@@ -342,9 +343,11 @@ function VectorEditor({
 }
 
 export function CinematicPanel() {
-  const scene = useEditorStore((state) => state.scenes.find((item) => item.id === state.activeSceneId));
+  // Stable subscriptions: the scene + objects references churn every Play tick; the sequencer only
+  // needs cinematics/track structure, so it must not re-render 60×/s while playing.
+  const scene = useStableActiveScene();
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
-  const objects = useEditorStore(selectActiveObjects);
+  const objects = useStableActiveObjects();
   const animations = useEditorStore((state) => state.animations);
   const assets = useEditorStore((state) => state.assets);
   const activeCinematicId = useEditorStore((state) => state.activeCinematicId);

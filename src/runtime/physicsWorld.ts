@@ -231,19 +231,31 @@ function bodyDescFor(object: SceneObject) {
   return RAPIER.RigidBodyDesc.dynamic();
 }
 
+// Signature strings are pure functions of the (immutable) scene object, so they're cached by object
+// reference: per-frame sync passes recompute them only for objects whose reference actually changed
+// (i.e. ones that moved or were edited), instead of string-building for EVERY body 60×/s — a large
+// static world previously spent a chunk of every frame re-joining identical signature strings.
+// The one input that can change WITHOUT a new object reference is model-geometry availability (a GLB
+// finishing its load), so cache entries remember their mesh token and revalidate just that on a hit.
+const bodySignatureCache = new WeakMap<SceneObject, { sig: string; meshToken: string }>();
+
+const meshTokenFor = (object: SceneObject, needsGeometry: boolean): string =>
+  needsGeometry
+    ? `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`
+    : '';
+
 /** Anything that would require rebuilding the body/collider rather than just nudging it. */
 function bodySignature(object: SceneObject): string {
-  const p = object.physics;
-  const [sx, sy, sz] = halfScale(object);
   const kind = colliderKindFor(object);
   // Mesh/convex colliders depend on loaded model geometry — fold the source model and
   // whether its geometry is available yet into the signature so the box-fallback collider
   // gets rebuilt into the real mesh the moment the model finishes loading.
-  const meshToken =
-    kind === 'trimesh' || kind === 'convex'
-      ? `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`
-      : '';
-  return [
+  const meshToken = meshTokenFor(object, kind === 'trimesh' || kind === 'convex');
+  const cached = bodySignatureCache.get(object);
+  if (cached && cached.meshToken === meshToken) return cached.sig;
+  const p = object.physics;
+  const [sx, sy, sz] = halfScale(object);
+  const sig = [
     p?.bodyType,
     kind,
     meshToken,
@@ -260,6 +272,8 @@ function bodySignature(object: SceneObject): string {
     p?.collisionLayer,
     p?.collisionMask,
   ].join('|');
+  bodySignatureCache.set(object, { sig, meshToken });
+  return sig;
 }
 
 interface BodyEntry {
@@ -448,14 +462,22 @@ interface VehicleEntry {
   signature: string;
 }
 
+const vehicleSignatureCache = new WeakMap<SceneObject, { sig: string; meshToken: string }>();
+const characterSignatureCache = new WeakMap<SceneObject, string>();
+// Per-terrain-object base of the chunk signature (everything except the chunk coords) — terrain
+// objects rarely change reference, so the per-chunk per-frame cost drops to a tiny string concat.
+const terrainSignatureBaseCache = new WeakMap<SceneObject, string>();
+
 /** Everything that, if changed, requires rebuilding the chassis body + wheels. */
 function vehicleSignature(object: SceneObject): string {
-  const v = object.vehicle;
-  const [sx, sy, sz] = halfScale(object);
   // Fold in the chassis model + whether its geometry has loaded, so the chassis box (sized from the model's
   // bounds) rebuilds the moment the GLB finishes loading instead of staying a unit-cube fallback.
-  const modelToken = `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`;
-  return [
+  const modelToken = meshTokenFor(object, true);
+  const cached = vehicleSignatureCache.get(object);
+  if (cached && cached.meshToken === modelToken) return cached.sig;
+  const v = object.vehicle;
+  const [sx, sy, sz] = halfScale(object);
+  const sig = [
     v?.physicsModel,
     (v?.wheelObjectIds ?? []).join(','),
     (v?.steeredWheelIds ?? []).join(','),
@@ -470,6 +492,8 @@ function vehicleSignature(object: SceneObject): string {
     sy.toFixed(3),
     sz.toFixed(3),
   ].join('|');
+  vehicleSignatureCache.set(object, { sig, meshToken: modelToken });
+  return sig;
 }
 
 class PhysicsRuntime {
@@ -570,8 +594,12 @@ class PhysicsRuntime {
   }
 
   private characterSignature(object: SceneObject): string {
+    const cached = characterSignatureCache.get(object);
+    if (cached !== undefined) return cached;
     const { radius, halfHeight } = characterCapsule(object);
-    return `${radius.toFixed(3)}|${halfHeight.toFixed(3)}`;
+    const sig = `${radius.toFixed(3)}|${halfHeight.toFixed(3)}`;
+    characterSignatureCache.set(object, sig);
+    return sig;
   }
 
   private createCharacter(object: SceneObject) {
@@ -623,7 +651,7 @@ class PhysicsRuntime {
         this.createCharacter(object);
       }
     }
-    for (const id of [...this.charEntries.keys()]) {
+    for (const id of this.charEntries.keys()) {
       if (!present.has(id)) this.removeCharacter(id);
     }
   }
@@ -820,7 +848,7 @@ class PhysicsRuntime {
         this.createVehicle(object);
       }
     }
-    for (const id of [...this.vehicleEntries.keys()]) {
+    for (const id of this.vehicleEntries.keys()) {
       if (!present.has(id)) this.removeVehicle(id);
     }
   }
@@ -843,7 +871,8 @@ class PhysicsRuntime {
         this.createBody(object);
       }
     }
-    for (const id of [...this.entries.keys()]) {
+    // Deleting the entry being visited is safe during Map iteration — no per-frame keys snapshot needed.
+    for (const id of this.entries.keys()) {
       if (!present.has(id)) this.removeBody(id);
     }
   }
@@ -962,17 +991,24 @@ class PhysicsRuntime {
         this.createJoint(object, signature);
       }
     }
-    for (const id of [...this.jointEntries.keys()]) {
+    for (const id of this.jointEntries.keys()) {
       if (!present.has(id)) this.removeJoint(id);
     }
   }
 
   private terrainSignature(object: SceneObject, chunkX: number, chunkZ: number): string {
+    let base = terrainSignatureBaseCache.get(object);
+    if (base === undefined) {
+      base = this.terrainSignatureBase(object);
+      terrainSignatureBaseCache.set(object, base);
+    }
+    return `${base}|${chunkX}|${chunkZ}`;
+  }
+
+  private terrainSignatureBase(object: SceneObject): string {
     const terrain = withTerrainDefaults(object.terrain);
     return [
       object.id,
-      chunkX,
-      chunkZ,
       object.transform.position.map((v) => v.toFixed(3)).join(','),
       object.transform.scale.map((v) => v.toFixed(3)).join(','),
       terrain.size,
@@ -997,6 +1033,8 @@ class PhysicsRuntime {
 
   private syncTerrainChunks(objects: SceneObject[]) {
     const terrains = objects.filter((object) => object.terrain?.enabled && object.physics?.enabled !== false);
+    // No terrain in the scene (the common case): skip the focus-point scan and chunk bookkeeping.
+    if (terrains.length === 0 && this.terrainEntries.size === 0) return;
     const focus = objects
       .filter((object) => object.character?.enabled || (object.physics?.enabled && object.physics.bodyType === 'dynamic'))
       .map((object) => object.transform.position);
@@ -1018,7 +1056,7 @@ class PhysicsRuntime {
       }
     }
 
-    for (const [key, entry] of [...this.terrainEntries]) {
+    for (const [key, entry] of this.terrainEntries) {
       const next = desired.get(key);
       if (!next || next.signature !== entry.signature) this.removeTerrainChunk(key);
     }
@@ -1055,21 +1093,26 @@ class PhysicsRuntime {
     // does the same for last frame's transforms so the scripted-motion delta is also world-space.
     const byId = new Map(objects.map((object) => [object.id, object]));
     this.frameById = byId;
-    const prevById = new Map(
-      objects.map((object) => {
-        const pt = prevTransforms.get(object.id);
-        return [
-          object.id,
-          pt ? { ...object, transform: { ...object.transform, position: pt.position, rotation: pt.rotation } } : object,
-        ] as const;
-      }),
-    );
+    // prevById clones EVERY object's transform back to its start-of-tick value — but it's only read
+    // when composing the parent chain of a PARENTED body, which most scenes have few or none of.
+    // Build it lazily so the common case (flat hierarchies) skips ~2 object spreads per object per frame.
+    let prevByIdLazy: Map<string, SceneObject> | undefined;
+    const prevById = (): Map<string, SceneObject> =>
+      (prevByIdLazy ??= new Map(
+        objects.map((object) => {
+          const pt = prevTransforms.get(object.id);
+          return [
+            object.id,
+            pt ? { ...object, transform: { ...object.transform, position: pt.position, rotation: pt.rotation } } : object,
+          ] as const;
+        }),
+      ));
     // World transform (this frame / last frame) for an object — local for roots, composed for children.
     const curWorld = (object: SceneObject): PosRot =>
       object.parentId ? worldPosRot(byId, object.id) : object.transform;
     const prevWorld = (object: SceneObject): PosRot | undefined => {
       if (!object.parentId) return prevTransforms.get(object.id);
-      return worldPosRot(prevById, object.id);
+      return worldPosRot(prevById(), object.id);
     };
     this.syncTerrainChunks(objects);
     this.syncBodies(objects);
@@ -1102,13 +1145,15 @@ class PhysicsRuntime {
         // Per-axis: an axis a script touched becomes velocity-controlled this frame;
         // untouched axes keep their simulated velocity (gravity, momentum, knockback).
         const v = body.linvel();
-        const moved = dp.map((d) => Math.abs(d) > EPSILON);
-        if (moved[0] || moved[1] || moved[2]) {
+        const movedX = Math.abs(dp[0]) > EPSILON;
+        const movedY = Math.abs(dp[1]) > EPSILON;
+        const movedZ = Math.abs(dp[2]) > EPSILON;
+        if (movedX || movedY || movedZ) {
           body.setLinvel(
             {
-              x: moved[0] ? dp[0] / dt : v.x,
-              y: moved[1] ? dp[1] / dt : v.y,
-              z: moved[2] ? dp[2] / dt : v.z,
+              x: movedX ? dp[0] / dt : v.x,
+              y: movedY ? dp[1] / dt : v.y,
+              z: movedZ ? dp[2] / dt : v.z,
             },
             true,
           );

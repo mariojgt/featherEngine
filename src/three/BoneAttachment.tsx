@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import { getBone } from './boneRegistry';
-import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useEditorStore } from '../store/editorStore';
+import { useStableActiveObjects } from '../store/stableSelectors';
 import type { SceneObject } from '../types';
 
 // Reusable temporaries for stripping the bone's (often large, rig-baked) world scale each frame.
@@ -31,7 +32,8 @@ export function BoneAttachment({
   const attachment = object.attachment!;
   const skeletons = useEditorStore((state) => state.skeletons);
   const skeletalMeshes = useEditorStore((state) => state.skeletalMeshes);
-  const objects = useEditorStore(selectActiveObjects);
+  // Stable list: this lookup is structural (target model id); bone following happens in useFrame.
+  const objects = useStableActiveObjects();
 
   // Resolve a named socket (if any) on the target's skeleton → its bone + reusable offset.
   const socket = useMemo(() => {

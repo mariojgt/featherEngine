@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { Profiler, useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { profileRender } from '../runtime/reactProfile';
 import {
   DockviewReact,
   themeAbyss,
@@ -50,20 +51,29 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   cinematic: { component: 'cinematic', title: 'Film Mode', ref: 'scripting', direction: 'within' },
 };
 
+// Each panel is wrapped in a React <Profiler> feeding the perf overlay's render-attribution table
+// (dev builds only — onRender is a no-op in production), so a panel re-rendering during Play shows
+// up by name instead of as anonymous "react/other" frame time.
+const profiled = (id: string, node: ReactNode) => (
+  <Profiler id={id} onRender={profileRender}>
+    {node}
+  </Profiler>
+);
+
 // Each Dockview panel just renders the existing panel component (they read stores directly).
 const components = {
-  hierarchy: () => <HierarchyPanel />,
-  viewport: () => <ViewportPanel />,
-  inspector: () => <InspectorPanel />,
-  project: () => <AssetBrowser />,
-  scripting: () => <VisualScriptingPanel />,
-  materials: () => <MaterialEditorPanel />,
-  terrain: () => <TerrainEditorPanel />,
-  particles: () => <ParticleSystemEditorPanel />,
-  animator: () => <AnimatorEditorPanel />,
-  ui: () => <UIEditorPanel />,
-  scene: () => <SceneSettingsPanel />,
-  cinematic: () => <CinematicPanel />,
+  hierarchy: () => profiled('hierarchy', <HierarchyPanel />),
+  viewport: () => profiled('viewport', <ViewportPanel />),
+  inspector: () => profiled('inspector', <InspectorPanel />),
+  project: () => profiled('project', <AssetBrowser />),
+  scripting: () => profiled('scripting', <VisualScriptingPanel />),
+  materials: () => profiled('materials', <MaterialEditorPanel />),
+  terrain: () => profiled('terrain', <TerrainEditorPanel />),
+  particles: () => profiled('particles', <ParticleSystemEditorPanel />),
+  animator: () => profiled('animator', <AnimatorEditorPanel />),
+  ui: () => profiled('ui', <UIEditorPanel />),
+  scene: () => profiled('scene', <SceneSettingsPanel />),
+  cinematic: () => profiled('cinematic', <CinematicPanel />),
 };
 
 /** Re-add a panel to the dock (after its popped-out window closes), avoiding duplicates. */

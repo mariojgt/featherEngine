@@ -78,6 +78,9 @@ export interface PerfSnapshot {
   fps: number;
   frameMs: SampleStats;
   tickMs: SampleStats;
+  /** Wall-clock spent inside WebGLRenderer.render this frame (three scene traversal + draw submission).
+   *  frame − tick − renderMs ≈ React reconciliation + r3f + browser work: the "where did it go" residual. */
+  renderMs: SampleStats;
   sections: Record<RuntimeSection, SampleStats>;
   render: RenderStats;
   /** Frame-pacing reliability since Play started: frames that blew the 2-frame budget (>33ms) and
@@ -89,6 +92,7 @@ export type RuntimeSection = 'scripts' | 'physics' | 'combat' | 'animator';
 
 const frameRing = new Ring();
 const tickRing = new Ring();
+const renderRing = new Ring();
 const sectionRings: Record<RuntimeSection, Ring> = {
   scripts: new Ring(),
   physics: new Ring(),
@@ -118,6 +122,11 @@ export const recordRuntimeSection = (section: RuntimeSection, ms: number) => {
   sectionRings[section].push(ms);
 };
 
+/** Total ms spent inside WebGLRenderer.render calls during one rAF (recorded by the Canvas probe). */
+export const recordRenderTime = (ms: number) => {
+  renderRing.push(ms);
+};
+
 /** Chronological frame-time samples (ms, oldest → newest) for the profiler's history graph. */
 export const getFrameHistory = (): number[] => frameRing.ordered();
 
@@ -143,6 +152,7 @@ export const getPerfSnapshot = (): PerfSnapshot => {
     fps: frameMs.avg > 0 ? 1000 / frameMs.avg : 0,
     frameMs,
     tickMs: sample(tickRing),
+    renderMs: sample(renderRing),
     sections: {
       scripts: sample(sectionRings.scripts),
       physics: sample(sectionRings.physics),

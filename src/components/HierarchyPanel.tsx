@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
-import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useEditorStore } from '../store/editorStore';
+import { useStableActiveObjects } from '../store/stableSelectors';
 import { useProjectStore } from '../store/projectStore';
 import { focusWorkspacePanel } from './workspacePanels';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
@@ -123,13 +124,9 @@ export function HierarchyPanel() {
   // re-render this whole tree 60×/sec — a major FPS sink in object-heavy scenes (the hierarchy doesn't even
   // show transforms). Subscribe instead to a STRUCTURAL SIGNATURE (id/name/kind/parent/prefab) that only
   // changes when the tree actually changes; the object list is then a stable ref derived from it.
-  const structureSig = useEditorStore((state) =>
-    selectActiveObjects(state)
-      .map((o) => `${o.id}${o.name}${o.kind}${o.parentId ?? ''}${o.prefabSourceId ?? ''}`)
-      .join(''),
-  );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const sceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [structureSig]);
+  // (Shared structurally-stable hook — its token signature is also far cheaper per tick than the
+  // per-object string this used to build on every frame.)
+  const sceneObjects = useStableActiveObjects();
   const activeSceneName = useEditorStore((state) => state.activeScene()?.name ?? 'Scene');
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const createObject = useEditorStore((state) => state.createObject);

@@ -69,6 +69,11 @@ export interface GraphRuntime {
   customEventRoots: Map<string, NodeForgeNode[]>;
   /** Function entry nodes grouped by lowercased name — the targets of Call Function (never auto-fire). */
   functionRoots: Map<string, NodeForgeNode[]>;
+  /** Timer-driven roots (event.timer + throttled event.update) — the store advances their countdowns
+   *  once per tick; precomputed so the per-frame pass doesn't re-filter eventRoots per object. */
+  timerRoots: NodeForgeNode[];
+  /** The graph's On Receive Damage root, if any — read once per scripted object per tick. */
+  receiveDamageRoot: NodeForgeNode | undefined;
 }
 
 const graphRuntimeCache = new WeakMap<ProjectGraph, GraphRuntime>();
@@ -126,7 +131,26 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
     else customEventRoots.set(key, [node]);
   }
 
-  return { graph, nodesById, outgoing, outgoingByHandle, incomingValues, incomingValueByHandle, eventRoots, customEventRoots, functionRoots };
+  const timerRoots = eventRoots.filter(
+    (node) =>
+      node.data.nodeKind === 'event.timer' ||
+      (node.data.nodeKind === 'event.update' && Number(node.data.numberValue ?? 0) > 0),
+  );
+  const receiveDamageRoot = eventRoots.find((node) => node.data.nodeKind === 'event.receiveDamage');
+
+  return {
+    graph,
+    nodesById,
+    outgoing,
+    outgoingByHandle,
+    incomingValues,
+    incomingValueByHandle,
+    eventRoots,
+    customEventRoots,
+    functionRoots,
+    timerRoots,
+    receiveDamageRoot,
+  };
 };
 
 export const getGraphRuntime = (graph: ProjectGraph): GraphRuntime => {

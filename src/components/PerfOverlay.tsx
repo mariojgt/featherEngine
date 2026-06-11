@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getFrameHistory, getPerfSnapshot, type PerfSnapshot, type RuntimeSection } from '../runtime/perfStats';
+import { getReactProfile, type ReactProfileRow } from '../runtime/reactProfile';
 import { getActivePhysics } from '../runtime/physicsWorld';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useInstancingEnabled, toggleInstancing } from '../three/modelInstancing';
@@ -27,6 +28,7 @@ const ZERO_SNAPSHOT: PerfSnapshot = {
   fps: 0,
   frameMs: { avg: 0, p95: 0, max: 0, last: 0 },
   tickMs: { avg: 0, p95: 0, max: 0, last: 0 },
+  renderMs: { avg: 0, p95: 0, max: 0, last: 0 },
   sections: {
     scripts: { avg: 0, p95: 0, max: 0, last: 0 },
     physics: { avg: 0, p95: 0, max: 0, last: 0 },
@@ -119,13 +121,16 @@ function SectionBar({ snap }: { snap: PerfSnapshot }) {
  * stats, and a stress-scene spawner so every optimization is measurable against the same load.
  */
 export function PerfOverlay() {
-  const [visible, setVisible] = useState(false);
+  // `?perf=1` opens the HUD on load — lets headless/automated runs (and bug reports) capture
+  // perf numbers without needing an F8 keypress.
+  const [visible, setVisible] = useState(() => new URLSearchParams(window.location.search).has('perf'));
   const [expanded, setExpanded] = useState(true);
   const [snap, setSnap] = useState<PerfSnapshot>(ZERO_SNAPSHOT);
   const [frames, setFrames] = useState<number[]>([]);
   const [counts, setCounts] = useState<Counts>({ objects: 0, scripted: 0, dynamicBodies: 0, lights: 0 });
   const [phys, setPhys] = useState<PhysStats | null>(null);
   const [mem, setMem] = useState<MemStats | null>(null);
+  const [reactRows, setReactRows] = useState<ReactProfileRow[]>([]);
   const instancingOn = useInstancingEnabled();
 
   useEffect(() => {
@@ -146,6 +151,7 @@ export function PerfOverlay() {
       setFrames(getFrameHistory());
       setCounts(readCounts());
       setPhys(getActivePhysics()?.getStats() ?? null);
+      setReactRows(getReactProfile().filter((row) => row.msPerSec >= 0.5).slice(0, 6));
       // performance.memory is a non-standard Chromium extension — absent in Firefox/Safari.
       const m = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
       setMem(m ? { used: m.usedJSHeapSize, limit: m.jsHeapSizeLimit } : null);
@@ -161,6 +167,7 @@ export function PerfOverlay() {
 
   return (
     <div
+      className="perf-overlay"
       style={{
         position: 'fixed',
         bottom: 12,
@@ -197,6 +204,10 @@ export function PerfOverlay() {
           {/* Smoothness, not speed: dropped 2-frame budgets + outright stalls since Play started. */}
           <Row label="hitches" value={`${snap.hitches.over33} >33ms · ${snap.hitches.over100} >100ms`} />
           <Row label="tick (sim)" value={`${fmt(tickMs.avg)} / max ${fmt(tickMs.max)}ms`} />
+          {/* gl.render = three traversal + draw submission; react/other = everything else in the frame
+              (React reconciliation, r3f, browser). The residual is the re-render-storm signal. */}
+          <Row label="gl.render" value={`${fmt(snap.renderMs.avg)}ms`} />
+          <Row label="react/other" value={`${fmt(Math.max(0, frameMs.avg - tickMs.avg - snap.renderMs.avg))}ms`} />
           <SectionBar snap={snap} />
           <Row label="scripts" value={`${fmt(sections.scripts.avg)}ms`} />
           <Row label="physics" value={`${fmt(sections.physics.avg)}ms`} />
@@ -223,6 +234,16 @@ export function PerfOverlay() {
             <Row label="dyn bodies" value={String(counts.dynamicBodies)} />
           )}
           <Row label="lights" value={String(counts.lights)} />
+          {/* React render ms/s by UI region (dev builds only — empty in production). The named
+              culprits behind the "react/other" slice. */}
+          {reactRows.length > 0 && (
+            <>
+              <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '6px 0' }} />
+              {reactRows.map((row) => (
+                <Row key={row.id} label={`⚛ ${row.id}`} value={`${fmt(row.msPerSec)}ms/s`} />
+              ))}
+            </>
+          )}
           <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '6px 0' }} />
           <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
             {[100, 500, 1000].map((n) => (

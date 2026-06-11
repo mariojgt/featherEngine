@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { Profiler, useEffect, type ReactNode } from 'react';
+import { profileRender, resetReactProfile } from './runtime/reactProfile';
 import { AIChatWidget } from './components/AIChatWidget';
 import { Launcher } from './components/Launcher';
 import { useProjectStore } from './store/projectStore';
@@ -48,6 +49,7 @@ function RuntimePreviewLoop() {
   useEffect(() => {
     if (!isPlaying) return;
     resetHitches(); // the hitch counters describe THIS Play session
+    resetReactProfile(); // ...and so does the per-region React render attribution
     resetFrameClock();
 
     let frame = 0;
@@ -135,17 +137,25 @@ export default function App() {
     );
   }
 
+  // Top-level chrome regions get the same render-attribution wrapper as the dock panels, so a
+  // widget re-rendering 60×/s during Play is identifiable in the perf overlay (dev builds).
+  const profiled = (id: string, node: ReactNode) => (
+    <Profiler id={id} onRender={profileRender}>
+      {node}
+    </Profiler>
+  );
+
   return (
     <div className="editor-shell">
       <AppearanceSync />
       <RuntimePreviewLoop />
       <PrefabEditGuard />
-      <Toolbar />
+      {profiled('toolbar', <Toolbar />)}
       <Workspace />
-      <RuntimeConsole />
-      <VariableWatch />
-      <CinematicOverlay />
-      <AIChatWidget />
+      {profiled('console', <RuntimeConsole />)}
+      {profiled('varwatch', <VariableWatch />)}
+      {profiled('cine-overlay', <CinematicOverlay />)}
+      {profiled('ai-chat', <AIChatWidget />)}
       <PrefabThumbnailHost />
       <PerfOverlay />
     </div>

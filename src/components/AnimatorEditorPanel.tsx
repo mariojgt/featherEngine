@@ -435,17 +435,22 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
   const updateAnimatorState = useEditorStore((state) => state.updateAnimatorState);
   const removeAnimatorState = useEditorStore((state) => state.removeAnimatorState);
   const removeAnimatorTransition = useEditorStore((state) => state.removeAnimatorTransition);
-  const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
   const animations = useEditorStore((state) => state.animations);
-  const objects = useEditorStore(selectActiveObjects);
 
   const [selected, setSelected] = useState<{ kind: 'state' | 'transition'; id: string } | null>(null);
 
-  // The live (Play) state for any object currently driven by this controller.
-  const liveStateId = useMemo(() => {
-    const owner = objects.find((object) => object.animator?.controllerId === controller.id && runtimeAnimators[object.id]);
-    return owner ? runtimeAnimators[owner.id]?.stateId : undefined;
-  }, [objects, runtimeAnimators, controller.id]);
+  // The live (Play) state for any object currently driven by this controller. Subscribed as a
+  // PRIMITIVE: the objects array and runtimeAnimators record are both replaced every Play tick, and
+  // subscribing to them re-rendered this whole xyflow graph 60×/s. The graph now only re-renders
+  // when the live state id actually changes (a transition fired).
+  const liveStateId = useEditorStore((state) => {
+    for (const object of selectActiveObjects(state)) {
+      if (object.animator?.controllerId === controller.id && state.runtimeAnimators[object.id]) {
+        return state.runtimeAnimators[object.id]?.stateId;
+      }
+    }
+    return undefined;
+  });
 
   const condLabel = (t: AnimatorTransition) => {
     if (!t.conditions.length) return '—';

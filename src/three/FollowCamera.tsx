@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useStableActiveObjects } from '../store/stableSelectors';
 import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLook } from '../runtime/mouseLook';
 import { readTransform } from '../runtime/transformBuffer';
 import { SkinnedModel, useResolvedAnimator } from './SkinnedModel';
@@ -64,7 +65,9 @@ function sceneObjectIdFor(object3d: THREE.Object3D | null): string | undefined {
 
 /** The first active-scene object whose character OR vehicle controller wants a follow camera. */
 export function useFollowTarget(): SceneObject | undefined {
-  const objects = useEditorStore(selectActiveObjects);
+  // Stable list: WHICH object is followed is structural; per-frame position comes from the
+  // transform buffer (readTransform) inside useFrame, so motion must not re-render the camera.
+  const objects = useStableActiveObjects();
   return objects.find(
     (object) =>
       (object.character?.enabled && object.character.cameraFollow) ||

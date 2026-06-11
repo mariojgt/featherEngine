@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { CloudFog, CloudSun, Image as ImageIcon, Music2, Sparkles, Sun, Volume2, Wind } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
+import { useStableActiveScene } from '../store/stableSelectors';
 import { withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import type { SceneEnvironmentSettings } from '../types';
 import { LIGHTING_PRESETS } from '../three/presets';
@@ -17,7 +18,9 @@ const num = (value: string, fallback: number) => {
 
 export function SceneSettingsPanel() {
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
-  const scene = useEditorStore((state) => state.scenes.find((item) => item.id === state.activeSceneId));
+  // Stable scene subscription — the raw scene reference is replaced every Play tick (its objects
+  // array is), but this panel only reads environment/name/count, so motion must not re-render it.
+  const scene = useStableActiveScene();
   const objectCount = useEditorStore((state) => state.scenes.find((item) => item.id === state.activeSceneId)?.objects.length ?? 0);
   const assets = useEditorStore((state) => state.assets);
   const renameScene = useEditorStore((state) => state.renameScene);

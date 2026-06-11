@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Brush, Eraser, Mountain, Palette, Plus, Settings2, Sprout, Trash2 } from 'lucide-react';
-import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { useEditorStore } from '../store/editorStore';
+import { useStableActiveObjects } from '../store/stableSelectors';
 import { RangeField } from './InspectorPanel';
 import { withTerrainDefaults } from '../terrain/terrain';
 import type { AssetItem, TerrainBrushMode, TerrainComponent, TerrainSculptOperation } from '../types';
@@ -338,7 +339,9 @@ function FoliageControls({
 }
 
 export function TerrainEditorPanel() {
-  const objects = useEditorStore(selectActiveObjects);
+  // Stable list: terrain edits bump editVersion (a structural change), so the panel stays live
+  // while Play-mode motion no longer re-renders it every tick.
+  const objects = useStableActiveObjects();
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
   const selectObject = useEditorStore((state) => state.selectObject);
   const createObjectWithProps = useEditorStore((state) => state.createObjectWithProps);

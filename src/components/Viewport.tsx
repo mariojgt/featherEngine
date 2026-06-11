@@ -5,9 +5,10 @@ import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { effectiveSelection, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { structuralObjectsSignature } from '../store/stableSelectors';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
-import { recordRender } from '../runtime/perfStats';
+import { recordRender, recordRenderTime } from '../runtime/perfStats';
 import { readTransform } from '../runtime/transformBuffer';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { FragmentMesh } from '../three/FragmentMesh';
@@ -130,47 +131,6 @@ const SHARED_GEO = {
 const EMPTY_BATCHES: Map<string, SceneObject[]> = new Map();
 
 const hideInRuntime = (object: SceneObject) => object.renderer?.hideInPlay ?? Boolean(object.physics?.isTrigger);
-
-function viewportSceneSignature(state: ReturnType<typeof useEditorStore.getState>) {
-  return selectActiveObjects(state)
-    .map((object) => {
-      const renderer = object.renderer;
-      const base = [
-        object.id,
-        object.parentId ?? '',
-        object.kind,
-        object.name,
-        object.viewModel?.ownerObjectId ?? '',
-        object.attachment?.targetObjectId ?? '',
-        object.attachment?.socketName ?? '',
-        object.physics?.enabled ? 'p' : '',
-        object.physics?.isTrigger ? 't' : '',
-        object.character?.enabled ? 'c' : '',
-        object.vehicle?.enabled ? 'v' : '',
-        object.terrain?.enabled ? `terrain:${object.terrain.editVersion ?? 0}` : '',
-        object.effect?.kind ?? '',
-        object.projectile ? 'projectile' : '',
-        renderer?.enabled === false ? 'off' : '',
-        renderer?.hideInPlay ? 'hide' : '',
-        renderer?.mesh ?? '',
-        renderer?.modelAssetId ?? '',
-        renderer?.materialId ?? '',
-        renderer?.textureAssetId ?? '',
-        renderer?.fragmentKey ?? '',
-        renderer?.overrideMaterial ? 'override' : '',
-        renderer?.materialOverrides?.color ?? '',
-        object.animator?.enabled ? 'anim' : '',
-        object.animator?.controllerId ?? '',
-        object.particles?.systemId ?? '',
-        object.ui?.documentId ?? '',
-      ];
-      if (!state.isPlaying) {
-        base.push(object.transform.position.join(','), object.transform.rotation.join(','), object.transform.scale.join(','));
-      }
-      return base.join(':');
-    })
-    .join('|');
-}
 
 function Primitive({ object, selected }: { object: SceneObject; selected: boolean }) {
   // Floating combat damage number.
@@ -780,7 +740,10 @@ function SceneContent({
   sceneApiRef: MutableRefObject<SceneApi | null>;
   suppressDeselectRef: MutableRefObject<boolean>;
 }) {
-  const sceneSignature = useEditorStore(viewportSceneSignature);
+  // Shared token-based structural signature (see stableSelectors): same decoupling as the bespoke
+  // field-string signature this used before, but the per-tick selector cost is integer compares
+  // instead of building a multi-KB string from ~30 fields × every object on every frame.
+  const sceneSignature = useEditorStore(structuralObjectsSignature);
   const allSceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [sceneSignature]);
   const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
@@ -1155,7 +1118,24 @@ function ViewportFallback() {
  */
 function RenderStatsProbe() {
   const gl = useThree((state) => state.gl);
+  // Wrap WebGLRenderer.render with a wall-clock accumulator: a frame may render several times
+  // (post-fx passes, shadow updates happen inside), so sum all calls between two useFrames. The
+  // pre-render useFrame below then publishes the PREVIOUS frame's total — same 1-frame lag as gl.info.
+  const renderAccum = useRef(0);
+  useEffect(() => {
+    const original = gl.render.bind(gl);
+    (gl as { render: typeof gl.render }).render = (...args: Parameters<typeof gl.render>) => {
+      const start = performance.now();
+      original(...args);
+      renderAccum.current += performance.now() - start;
+    };
+    return () => {
+      (gl as { render: typeof gl.render }).render = original;
+    };
+  }, [gl]);
   useFrame(() => {
+    recordRenderTime(renderAccum.current);
+    renderAccum.current = 0;
     const info = gl.info;
     recordRender({
       calls: info.render.calls,
