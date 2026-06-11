@@ -116,9 +116,6 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
 
   // --- ENVIRONMENT: the Unreal default-level look - a bright blue-grey sky, a high warm sun, soft IBL
   //     ambient, almost no fog. Lets the matte grey arena read clean and casts long crisp shadows. ---
-  // Environment baseline — bright UE-default look. The [E] Day/Night pedestal still works (it adds
-  // a warm directional / cool moon + 4 corner streetlamps on top of this base), but the base alone
-  // reads as proper daylight so the arena never looks washed-out or "off".
   store.updateSceneEnvironment(sceneId, {
     skyMode: 'procedural',
     skyTopColor: '#b3cee8',
@@ -133,6 +130,17 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
     fogColor: '#cad6e2',
     fogNear: 90,
     fogFar: 320,
+    // A whisper of raymarched haze layered over the linear fog: it softens the long corridor
+    // sightline, puts a warm in-scatter glow toward the sun, and (on High/Epic) draws faint shafts
+    // through the door frames. Density stays very low so the daylight read remains crisp.
+    volumetricFogEnabled: true,
+    volumetricFogDensity: 0.014,
+    volumetricFogColor: '#cdd9e6',
+    volumetricFogHeight: 0,
+    volumetricFogFalloff: 0.16,
+    volumetricScattering: 0.55,
+    volumetricSunStrength: 0.85,
+    volumetricMaxDistance: 130,
   });
   store.updateRenderSettings({
     bloomEnabled: true,
@@ -141,6 +149,11 @@ export async function createThirdPersonTemplate(): Promise<string | undefined> {
     bloomRadius: 0.65,
     vignetteEnabled: true,
     minimapEnabled: false,
+    // Showcase template: default to the High scalability preset so shadows/post read AAA out of the
+    // box (autoQuality still steps down on weak machines), plus a barely-there filmic grade — a touch
+    // of contrast and warmth so the grey-blue corridor doesn't read flat-ungraded.
+    quality: 'High',
+    colorGrade: { grade: 'custom', gradeIntensity: 1, contrast: 0.08, saturation: 0.06, temperature: 0.03 },
   });
 
   buildArena();
@@ -297,12 +310,32 @@ async function assemblePlayerKit(pawnId: string, switchSound: string | undefined
     store.connectGraphNodes(blueprintId, gate, fire, 'exec-out', 'exec-in');
   }
 
+  // Controls bar: a centred bottom pill (blurred glass, letter-spaced caps) instead of a raw
+  // text line in the corner — the same treatment AAA in-game control hints use.
   const hud = store.createUIDocument('HUD', 'screen');
   store.updateUIDocument(hud, { visibleOnStart: true });
   const hintId = store.addUIPreset(hud, undefined, 'label');
   store.updateUIElement(hud, hintId, {
-    text: 'WASD move - Mouse look - Shift sprint - Space jump - LMB attack - RMB aim - Tab weapon wheel - E interact',
-    style: { color: '#9aa3b3', fontSize: '12px', custom: { position: 'absolute', bottom: '14px', left: '16px', opacity: '0.78' } },
+    text: 'WASD Move   ·   Shift Sprint   ·   Space Jump   ·   LMB Attack   ·   RMB Aim   ·   Tab Weapons   ·   E Interact',
+    style: {
+      color: '#c3cbd9',
+      fontSize: '11px',
+      fontWeight: '600',
+      background: 'rgba(9,13,20,0.62)',
+      padding: '8px 22px',
+      borderRadius: '999px',
+      custom: {
+        position: 'absolute',
+        bottom: '16px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        letterSpacing: '0.08em',
+        whiteSpace: 'nowrap',
+        border: '1px solid rgba(148,163,184,0.18)',
+        backdropFilter: 'blur(8px)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+      },
+    },
   });
   store.moveToFolder('uiDocument', hud, uiFolder);
 
@@ -418,6 +451,8 @@ type TutorialUi = {
   titleId: string;
   bodyId: string;
   statusId: string;
+  /** "ROOM 0X / 06" progress chip at the top of the coach panel. */
+  progressId: string;
 };
 
 function createWorldLabel(name: string, position: Vector3Tuple, title: string, body: string, color: string, scale = 0.012): void {
@@ -485,12 +520,18 @@ function tutorialPad(
   const roomMatch = title.match(/^(\d+)/) ?? name.match(/^(\d+)/);
   if (playerId && roomMatch) {
     const roomIndex = Number(roomMatch[1]);
+    const setProgress = add('Set UI Text', {
+      documentId: ui.documentId,
+      elementId: ui.progressId,
+      stringValue: `ROOM ${String(roomIndex).padStart(2, '0')} / 06`,
+    });
+    ex(statusNode, setProgress);
     const setRoom = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointRoom', numberValue: roomIndex });
     const setDone = add('Set Object Var', { targetObjectId: playerId, objectKey: 'roomsCompleted', numberValue: roomIndex });
     const setX = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointX', numberValue: position[0] });
     const setY = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointY', numberValue: position[1] });
     const setZ = add('Set Object Var', { targetObjectId: playerId, objectKey: 'checkpointZ', numberValue: position[2] });
-    ex(statusNode, setRoom);
+    ex(setProgress, setRoom);
     ex(setRoom, setDone);
     ex(setDone, setX);
     ex(setX, setY);
@@ -542,6 +583,18 @@ function buildDoorFrame(name: string, z: number, color: string): void {
     roughness: 0.25,
     emissive: { color, intensity: 2.1 },
   });
+  // Vertical jamb strips + a floor threshold in the next room's accent colour — the doorway reads as
+  // an authored portal (and previews the colour of what's ahead) instead of a hole between two walls.
+  for (const side of [-1, 1]) {
+    decoBlock(`${name} Door Jamb ${side < 0 ? 'L' : 'R'}`, [side * 2.26, 1.45, z], [0.09, 2.9, 0.1], color, {
+      roughness: 0.25,
+      emissive: { color, intensity: 1.6 },
+    });
+  }
+  decoBlock(`${name} Door Threshold`, [0, 0.11, z], [4.3, 0.05, 0.6], color, {
+    roughness: 0.3,
+    emissive: { color, intensity: 0.8 },
+  });
 }
 
 function buildTutorialRoomFrame(name: string, z: number, color: string, title: string, body: string): void {
@@ -561,6 +614,26 @@ function buildTutorialRoomFrame(name: string, z: number, color: string, title: s
     metalness: 0.12,
     roughness: 0.58,
   });
+  // Architectural finish pass — skirting at the wall base, a parapet cap on top, and two overhead
+  // cross-beams. Purely decorative, but they close the silhouette so each room reads as a built
+  // interior (UE-template style) rather than two floating walls.
+  for (const side of [-1, 1]) {
+    const wx = side * (ROOM_WIDTH / 2 - 0.32);
+    decoBlock(`${name} Skirting ${side < 0 ? 'L' : 'R'}`, [wx, 0.16, z], [0.14, 0.32, ROOM_LENGTH - 0.2], '#2a3344', {
+      metalness: 0.18,
+      roughness: 0.45,
+    });
+    decoBlock(`${name} Wall Cap ${side < 0 ? 'L' : 'R'}`, [side * (ROOM_WIDTH / 2), ROOM_WALL_HEIGHT + 0.07, z], [0.62, 0.14, ROOM_LENGTH], '#242e3f', {
+      metalness: 0.2,
+      roughness: 0.4,
+    });
+  }
+  for (const beamOffset of [-ROOM_LENGTH / 4, ROOM_LENGTH / 4]) {
+    decoBlock(`${name} Roof Beam`, [0, ROOM_WALL_HEIGHT + 0.18, z + beamOffset], [ROOM_WIDTH + 0.4, 0.24, 0.34], '#1d2533', {
+      metalness: 0.25,
+      roughness: 0.42,
+    });
+  }
   createWorldLabel(`${name} Room Label`, [-6.3, 2.75, z - 3.8], title, body, color, 0.011);
 }
 
@@ -585,27 +658,6 @@ function buildTutorialRoomShells(): void {
     ['Final Back Wall', TUTORIAL_ROOM_Z.cinematic + ROOM_LENGTH / 2, '#fde047'],
   ];
   for (const [name, z, color] of doorData) buildDoorFrame(name, z, color);
-}
-
-/** A wide flat grey floor, with a coarse 4x4 dark-tile checker pattern just above it for the UE feel. */
-function buildFloor(): void {
-  // Base ground: a 80x80 light-grey slab that doubles as the physics collider for the whole arena.
-  block('Ground', [0, -0.5, 0], [80, 1, 80], '#3f4652', { metalness: 0.04, roughness: 0.9 });
-
-  // Subtle large-format floor panels instead of a busy checkerboard.
-  const tile = 8;
-  const half = 4;
-  for (let i = -half; i <= half; i++) {
-    for (let j = -half; j <= half; j++) {
-      if (((i + j) & 1) === 0) continue;
-      const x = (i + 0.5) * tile;
-      const z = (j + 0.5) * tile;
-      const store = useEditorStore.getState();
-      const id = store.createObjectWithProps('cube', { name: 'Floor Panel', position: [x, 0.01, z], color: '#4b5563' });
-      scaled(id, [tile - 0.05, 0.02, tile - 0.05]);
-      store.updateRenderer(id, { metalness: 0.04, roughness: 0.88 });
-    }
-  }
 }
 
 /** A strong first-read spawn stack: hero arch, runway, and orientation signage. */
@@ -663,176 +715,6 @@ function buildArenaLighting(): void {
     const light = store.createObjectWithProps('light', { name: `Room Fill ${index + 1}`, position: [0, 4.2, lamp.z - 1.8] });
     store.setObjectLight(light, { type: 'point', color: lamp.color, intensity: 8, distance: 14, angle: 0, castShadow: false });
   });
-}
-
-/** A border of low walls keeping the player on the arena floor. */
-function buildPerimeter(): void {
-  const half = 34;
-  const h = 1.4;
-  // N / S walls
-  block('Perimeter N', [0, h / 2, -half], [half * 2, h, 0.5], '#202632');
-  block('Perimeter S', [0, h / 2,  half], [half * 2, h, 0.5], '#202632');
-  // E / W walls
-  block('Perimeter E', [ half, h / 2, 0], [0.5, h, half * 2], '#202632');
-  block('Perimeter W', [-half, h / 2, 0], [0.5, h, half * 2], '#202632');
-}
-
-function buildCampusRoute(): void {
-  const routes: Array<{ name: string; position: Vector3Tuple; scale: Vector3Tuple; color?: string }> = [
-    { name: 'Main Tutorial Spine', position: [0, 0.055, 8], scale: [7.2, 0.08, 28], color: '#1f2937' },
-    { name: 'West Launch Branch', position: [-6.8, 0.058, 0], scale: [9.5, 0.08, 4.6], color: '#283246' },
-    { name: 'East Traversal Branch', position: [9.8, 0.058, -1.2], scale: [11, 0.08, 5.2], color: '#283246' },
-    { name: 'North Movement Apron', position: [0, 0.06, -10.5], scale: [13, 0.08, 12], color: '#263241' },
-    { name: 'South Systems Plaza', position: [0, 0.06, 21.5], scale: [14, 0.08, 11], color: '#242b38' },
-  ];
-
-  for (const route of routes) {
-    decoBlock(route.name, route.position, route.scale, route.color ?? '#1f2937', {
-      metalness: 0.08,
-      roughness: 0.48,
-    });
-  }
-
-  const accentLines: Array<{ name: string; position: Vector3Tuple; scale: Vector3Tuple; color: string }> = [
-    { name: 'Route Accent Main', position: [0, 0.13, 8], scale: [0.16, 0.035, 26], color: '#38bdf8' },
-    { name: 'Route Accent West', position: [-6.8, 0.13, 0], scale: [8.2, 0.035, 0.16], color: '#fde047' },
-    { name: 'Route Accent East', position: [9.8, 0.13, -1.2], scale: [9.4, 0.035, 0.16], color: '#a78bfa' },
-    { name: 'Route Accent South', position: [0, 0.13, 16.5], scale: [8, 0.035, 0.16], color: '#f472b6' },
-  ];
-  for (const line of accentLines) {
-    decoBlock(line.name, line.position, line.scale, line.color, {
-      emissive: { color: line.color, intensity: 1.1 },
-      roughness: 0.35,
-    });
-  }
-}
-
-/** Five steps climbing north, leading up to a raised platform with a knee-high cover wall. */
-function buildStairsAndNorthPlatform(): void {
-  const stepCount = 5;
-  const stepW = 4;
-  const stepH = 0.35;
-  const stepD = 1;
-  const baseZ = -8; // first step centred at z = -8
-  // Stairs - climb is -z, each step is +y, +z (deeper into north).
-  for (let i = 0; i < stepCount; i++) {
-    block(`Stair ${i + 1}`, [0, stepH / 2 + i * stepH, baseZ - i * stepD], [stepW, stepH * (i + 1) * 2, stepD], '#8a8f9b', {
-      // Make each step a separate box that's "filled" down to ground so the player can't fall behind them.
-      metalness: 0.05,
-      roughness: 0.85,
-    });
-  }
-  // North platform - sits at the top step height + a bit, deep into north.
-  const platformY = stepCount * stepH;
-  block('North Platform', [0, platformY + 0.2, -16], [10, 0.4, 7], '#8a8f9b', { metalness: 0.05, roughness: 0.85 });
-  // Cover wall on the platform: knee-high so the player can vault / shoot over it.
-  block('Cover Wall', [-2.5, platformY + 1.1, -18], [4, 1.4, 0.4], '#7d828e');
-  // A second, slightly higher full wall (chest height) on the other side.
-  block('Cover Wall 2', [3, platformY + 1.5, -18.5], [3, 2.2, 0.4], '#7d828e');
-}
-
-/** A ramp climbing east to a lower platform, with a single jump up to a higher platform. */
-function buildRampAndEastPlatform(): void {
-  // Ramp - a long tilted cube. Tilt pitch +0.30 rad (~17deg) about X so the +Z end rises; rotate by -PI/2
-  // around Y so the long axis runs E-W. Centre at the ramp midpoint so it lands on the floor at the W end.
-  const rampLen = 8;
-  const rampPitch = 0.30;
-  const rampMidY = (Math.sin(rampPitch) * rampLen) / 2 + 0.05;
-  const rampMidX = 7;
-  block('Ramp', [rampMidX, rampMidY, 0], [rampLen, 0.3, 3.6], '#8a8f9b', {
-    rotation: [rampPitch, -Math.PI / 2, 0],
-    roughness: 0.85,
-  });
-  // Lower platform at the top of the ramp - centred at the high end of the ramp.
-  const lowerY = Math.sin(rampPitch) * rampLen;
-  block('Lower Platform', [12, lowerY + 0.2, 0], [4, 0.4, 4], '#8a8f9b');
-  // Higher platform: a single jump up + over. Player has to time a jump from the lower platform.
-  block('Higher Platform', [16, lowerY + 1.8, -3], [3.5, 0.4, 3.5], '#8a8f9b');
-}
-
-/** Three floating puzzle platforms reachable from the W jump pad - each higher than the last. */
-function buildPuzzlePlatforms(): void {
-  block('Puzzle 1', [-9, 3.2, 0], [2.5, 0.3, 2.5], '#8a8f9b', { metalness: 0.1, roughness: 0.7 });
-  block('Puzzle 2', [-12, 4.8, -3], [2.5, 0.3, 2.5], '#8a8f9b', { metalness: 0.1, roughness: 0.7 });
-  block('Puzzle 3', [-15, 6.4, -1], [2.5, 0.3, 2.5], '#8a8f9b', { metalness: 0.1, roughness: 0.7 });
-}
-
-/** Three staggered chest-high cover walls on the south side - classic TPS cover demo. */
-function buildCoverWalls(): void {
-  block('Cover A', [-4, 0.9,  10], [3, 1.8, 0.4], '#7d828e');
-  block('Cover B', [ 0, 0.9,  13], [3, 1.8, 0.4], '#7d828e', { rotation: [0, 0.25, 0] });
-  block('Cover C', [ 4, 0.9,  10], [3, 1.8, 0.4], '#7d828e');
-}
-
-function buildCombatGallery(): void {
-  decoBlock('Combat Range Deck', [0, 0.09, 12.8], [11.5, 0.1, 7.8], '#1b2330', {
-    roughness: 0.45,
-    metalness: 0.08,
-  });
-  decoBlock('Combat Range Line', [0, 0.16, 9.2], [8.4, 0.04, 0.16], '#fb7185', {
-    emissive: { color: '#fb7185', intensity: 1.5 },
-    roughness: 0.35,
-  });
-  block('Cover A', [-4.2, 0.9,  10.5], [3, 1.8, 0.4], '#303846', { metalness: 0.12, roughness: 0.55 });
-  block('Cover B', [ 0, 0.9,  13.2], [3.5, 1.8, 0.4], '#303846', { rotation: [0, 0.25, 0], metalness: 0.12, roughness: 0.55 });
-  block('Cover C', [ 4.2, 0.9,  10.5], [3, 1.8, 0.4], '#303846', { metalness: 0.12, roughness: 0.55 });
-  block('Backstop Wall', [0, 2.2, 18.2], [11, 4.4, 0.4], '#171d27', { metalness: 0.12, roughness: 0.5 });
-  decoBlock('Backstop Glow', [0, 4.5, 18.0], [9, 0.08, 0.12], '#fb7185', {
-    emissive: { color: '#fb7185', intensity: 1.8 },
-    roughness: 0.3,
-  });
-}
-
-/** Four tall thin pillars at the inner corners - visual depth + something to weave around. */
-function buildPillars(): void {
-  const corners: Vector3Tuple[] = [[-14, 2.5, -14], [14, 2.5, -14], [-14, 2.5, 14], [14, 2.5, 14]];
-  corners.forEach((p, i) => block(`Pillar ${i + 1}`, p, [0.7, 5, 0.7], '#8a8f9b', { metalness: 0.1, roughness: 0.7 }));
-}
-
-/** A subtle raised disc at spawn so the player knows where they start. */
-function buildSpawnDisc(): void {
-  const store = useEditorStore.getState();
-  const disc = store.createObjectWithProps('cube', { name: 'Spawn Disc', position: [0, 0.04, 0], color: '#aab0bc' });
-  scaled(disc, [5, 0.08, 5]);
-  store.updateRenderer(disc, { metalness: 0.1, roughness: 0.7 });
-}
-
-/** Non-blocking coloured guide lanes from spawn to each feature station, giving the map a sample-project read. */
-function buildFeatureWayfinding(): void {
-  const lanes: Array<{ name: string; position: Vector3Tuple; scale: Vector3Tuple; color: string }> = [
-    { name: 'Guide Lane - Stairs', position: [0, 0.055, -8], scale: [0.16, 0.035, 12], color: '#38bdf8' },
-    { name: 'Guide Lane - Ramp', position: [7, 0.055, 0], scale: [11, 0.035, 0.16], color: '#a78bfa' },
-    { name: 'Guide Lane - Jump Pad', position: [-5.2, 0.055, 0], scale: [7.4, 0.035, 0.16], color: '#fde047' },
-    { name: 'Guide Lane - Cover', position: [0, 0.055, 9], scale: [0.16, 0.035, 10], color: '#fb7185' },
-    { name: 'Guide Lane - Swim', position: [-12.6, 0.055, 12.6], scale: [12, 0.035, 0.16], color: '#22d3ee' },
-    { name: 'Guide Lane - Climb', position: [13.2, 0.055, -13.2], scale: [12, 0.035, 0.16], color: '#f59e0b' },
-  ];
-
-  for (const lane of lanes) {
-    const rotation: Vector3Tuple | undefined =
-      lane.name.endsWith('Swim') ? [0, -Math.PI / 4, 0] : lane.name.endsWith('Climb') ? [0, -Math.PI / 4, 0] : undefined;
-    decoBlock(lane.name, lane.position, lane.scale, lane.color, {
-      rotation,
-      emissive: { color: lane.color, intensity: 0.55 },
-      roughness: 0.45,
-    });
-  }
-
-  const stations: Array<{ name: string; position: Vector3Tuple; color: string }> = [
-    { name: 'Station Marker - Locomotion', position: [0, 0.18, -5], color: '#38bdf8' },
-    { name: 'Station Marker - Jump Pad', position: [-9, 0.18, 1.9], color: '#fde047' },
-    { name: 'Station Marker - Combat Cover', position: [0, 0.18, 8.1], color: '#fb7185' },
-    { name: 'Station Marker - Swimming', position: [-16.4, 0.18, 16.4], color: '#22d3ee' },
-    { name: 'Station Marker - Climbing', position: [16.4, 0.18, -16.4], color: '#f59e0b' },
-    { name: 'Station Marker - Lighting', position: [0, 0.18, 18.3], color: '#f472b6' },
-  ];
-
-  for (const station of stations) {
-    decoBlock(station.name, station.position, [2.8, 0.12, 0.18], station.color, {
-      emissive: { color: station.color, intensity: 1.4 },
-      roughness: 0.35,
-    });
-  }
 }
 
 /**
@@ -996,113 +878,6 @@ function buildMovementRoom(playerId: string, ui: TutorialUi): void {
     useEditorStore.getState().updateRenderer(post, { materialOverrides: { emissiveColor: '#38bdf8', emissiveIntensity: 0.6 } });
   });
   buildJumpPad(playerId, ui);
-}
-
-function buildTutorialStations(playerId: string, ui: TutorialUi): void {
-  const store = useEditorStore.getState();
-  const folder = store.folders.find((f) => f.name === 'Tutorial')?.id ?? store.createFolder('Tutorial');
-
-  tutorialPad(
-    '01 Movement',
-    [0, 0, -4.8],
-    [4.4, 1, 1.7],
-    '#38bdf8',
-    ui,
-    '01 MOVEMENT + CAMERA',
-    'WASD moves relative to the spring-arm camera. Hold Shift to sprint. The camera follows a smoothed pivot so walking and jumping stay stable.',
-    'Controller: smooth acceleration, soft turn, spring-arm follow',
-    playerId,
-  );
-  createWorldLabel('Movement Station', [0, 2.35, -5.2], '01 MOVEMENT', 'WASD + Shift. Camera is spring-arm smoothed.', '#38bdf8');
-
-  tutorialPad(
-    '03 Jump Training',
-    [7.8, 0, -1.8],
-    [3.6, 1, 1.7],
-    '#a78bfa',
-    ui,
-    '03 JUMP + TRAVERSAL',
-    'Space jumps. Ramps, stairs, ledges, and landing changes are here to tune capsule motion without camera bounce.',
-    'Traversal: stairs, ramp, ledge jump, landing feel',
-    playerId,
-  );
-  createWorldLabel('Jump Station', [9.2, 2.7, -3.2], '03 TRAVERSAL', 'Stairs, ramp, ledge jump, landing.', '#a78bfa');
-
-  tutorialPad(
-    '05 Combat Cover',
-    [0, 0, 8.2],
-    [6.4, 1, 2.1],
-    '#fb7185',
-    ui,
-    '05 COMBAT + COVER',
-    'LMB attacks. Equip the bat or pistol from the weapon bar or Tab wheel. Targets use health variables and projectiles apply damage.',
-    'Systems: inventory, sockets, projectiles, health variables',
-    playerId,
-  );
-  createWorldLabel('Combat Station', [0, 2.65, 8.4], '05 COMBAT', 'Weapon bar, cover walls, target dummies.', '#fb7185');
-
-  tutorialPad(
-    '06 Swim Volume',
-    [-16.4, 0, 16.4],
-    [4.8, 1, 2.2],
-    '#22d3ee',
-    ui,
-    '06 SWIM VOLUME',
-    'Entering water changes movement mode to swimming. Space strokes up; crouch dives down. The water volume is a trigger.',
-    'System: trigger volume + water movement mode',
-    playerId,
-  );
-  createWorldLabel('Swim Station', [-19, 2.2, 15], '06 SWIM', 'Water volume changes movement mode.', '#22d3ee');
-
-  tutorialPad(
-    '07 Climb Volume',
-    [16.4, 0, -16.4],
-    [4.8, 1, 2.2],
-    '#f59e0b',
-    ui,
-    '07 CLIMB VOLUME',
-    'Walk into the climb volume, then move up and down the wall. This demonstrates authored traversal volumes.',
-    'System: trigger volume + climb movement mode',
-    playerId,
-  );
-  createWorldLabel('Climb Station', [18.2, 3.8, -18.8], '07 CLIMB', 'Move on a wall using climb mode.', '#f59e0b');
-
-  tutorialPad(
-    '08 Lighting Theatre',
-    [0, 0, 18.2],
-    [5.6, 1, 2.1],
-    '#f472b6',
-    ui,
-    '08 LIGHTING THEATRE',
-    'Use the pedestals to toggle warm, cool, and fill lights. This shows emissive fixtures, spot lights, point lights, and shadows.',
-    'Rendering: bloom, emissive material, point/spot lights',
-    playerId,
-  );
-  createWorldLabel('Lighting Station', [0, 3.1, 18.5], '08 LIGHTING', 'Toggle fixtures with E and compare mood.', '#f472b6');
-
-  buildCombatDummies();
-  buildRagdollStation(playerId, ui, folder);
-}
-
-function buildCombatDummies(): void {
-  const store = useEditorStore.getState();
-  const spots: Vector3Tuple[] = [[-4, 1.05, 14.8], [0, 1.05, 16.6], [4, 1.05, 14.8]];
-  spots.forEach((position, index) => {
-    const dummy = store.createObjectWithProps('capsule', {
-      name: `Target Dummy ${index + 1}`,
-      position,
-      color: '#ef4444',
-      physics: { enabled: true, bodyType: 'fixed', collider: 'capsule' },
-    });
-    scaled(dummy, [0.75, 1.15, 0.75]);
-    store.updateRenderer(dummy, {
-      metalness: 0.08,
-      roughness: 0.55,
-      materialOverrides: { emissiveColor: '#7f1d1d', emissiveIntensity: 0.25 },
-    });
-    store.setObjectVariable(dummy, 'health', 60);
-    store.setObjectVariable(dummy, 'maxHealth', 60);
-  });
 }
 
 function buildRagdollStation(playerId: string, ui: TutorialUi, folder: string): void {
@@ -1477,110 +1252,6 @@ function buildFinalCinematicRoom(playerId: string, ui: TutorialUi, folder: strin
 }
 
 /**
- * DAY/NIGHT TOGGLE - a pedestal near spawn that flips the world between two LIGHT GROUPS via Set Active.
- * "Day" is a warm overhead key light. "Night" is a dim moonlight + four warm streetlamp point lights at
- * the arena corners (the gym "powers on" its lights). The scene-environment sun stays neutral so neither
- * mode is over-lit. (There's no scene-environment node yet, so this drives mood via scene lights only.)
- */
-function buildDayNightToggle(ui?: TutorialUi): void {
-  const store = useEditorStore.getState();
-  const folder = store.createFolder('Day-Night');
-
-  // DAY: a warm directional "key" stacked on the env sun — strong golden-hour bounce. Active to start.
-  const daySun = store.createObjectWithProps('light', { name: 'Day Sun', position: [0, 30, -15] });
-  store.setObjectLight(daySun, { type: 'directional', color: '#fff2cc', intensity: 1.6, distance: 0, angle: 0, castShadow: true });
-  rotated(daySun, [-Math.PI / 3, 0, 0]);
-
-  // NIGHT: a cool moon directional + 4 streetlamp point lights at the corners. All inactive to start.
-  const moon = store.createObjectWithProps('light', { name: 'Moon', position: [0, 30, -10] });
-  store.setObjectLight(moon, { type: 'directional', color: '#8aa3d6', intensity: 0.9, distance: 0, angle: 0, castShadow: true });
-  rotated(moon, [-Math.PI / 2.4, 0, 0]);
-
-  const streetlamps: string[] = [];
-  const lampSpots: Vector3Tuple[] = [[-15, 4.4, -15], [15, 4.4, -15], [-15, 4.4, 15], [15, 4.4, 15]];
-  for (const pos of lampSpots) {
-    const lamp = store.createObjectWithProps('light', { name: 'Streetlamp', position: pos });
-    store.setObjectLight(lamp, { type: 'point', color: '#ffd9a0', intensity: 22, distance: 24, angle: 0, castShadow: false });
-    streetlamps.push(lamp);
-    // A tall lamppost + glowing bulb so the "off" state still hints where the lamp is.
-    const post = store.createObjectWithProps('cube', { name: 'Lamppost', position: [pos[0], 2.2, pos[2]], color: '#0e1018' });
-    scaled(post, [0.25, 4.4, 0.25]);
-    store.updateRenderer(post, { metalness: 0.4, roughness: 0.5 });
-    const bulb = store.createObjectWithProps('sphere', { name: 'Lamp Bulb', position: pos, color: '#ffd9a0' });
-    scaled(bulb, [0.35, 0.35, 0.35]);
-    store.updateRenderer(bulb, { materialOverrides: { emissiveColor: '#ffd9a0', emissiveIntensity: 2.4 } });
-  }
-
-  // Initial state is done in the blueprint (a Start event chain below) - there's no setVisible/setActive
-  // API at scene-build time. All lights are created "on", then the Start chain disables moon + lamps.
-
-  // The toggle pedestal directly in front of spawn (south, 3u away) so the player sees it the moment
-  // they get control - it's the first interactable they meet, well within the [E] range.
-  const ped = interactPedestal('Day/Night Toggle', [0, 0.8, 3.5], '#fcd34d');
-  store.setObjectVariable(ped, 'interactable', true);
-  store.setObjectVariable(ped, 'interactPrompt', 'Toggle Day / Night');
-  store.setObjectVariable(ped, 'dayMode', true);
-
-  const { blueprintId: bp } = store.createBlueprintNamed('Day/Night', 'On Interact, swap which light group is active (day key vs moon + streetlamps).', folder);
-  store.attachScript(ped, bp);
-  const add = (label: string, data?: Record<string, unknown>) => store.addGraphNodeToBlueprint(bp, label, categoryFor(label), data);
-  const ex = (a: string, b: string) => store.connectGraphNodes(bp, a, b, 'exec-out', 'exec-in');
-  const vl = (a: string, b: string, handle: string) => store.connectGraphNodes(bp, a, b, 'value-out', handle);
-
-  // INTERACT flow: Interact -> NOT(dayMode) -> Set Object Var(dayMode) + Set Active(daySun=newDay) +
-  //                            Set Active(moon=!newDay) + Set Active(streetlamp_i=!newDay) ...
-  const onI = add('Interact');
-  const getDay = add('Get Object Var', { objectKey: 'dayMode' });
-  const flip = add('NOT'); // newDay = !dayMode
-  const setDay = add('Set Object Var', { objectKey: 'dayMode' });
-  const notDay = add('NOT'); // newDay inverted -> the OPPOSITE of day (so moon = !newDay)
-  const setSun = add('Set Active', { targetObjectId: daySun });
-  const setMoon = add('Set Active', { targetObjectId: moon });
-  vl(getDay, flip, 'value');
-  vl(flip, setDay, 'value');
-  vl(flip, setSun, 'on'); // Set Active reads its bool from "on", not "value"
-  vl(flip, notDay, 'value');
-  vl(notDay, setMoon, 'on');
-  ex(onI, setDay);
-  ex(setDay, setSun);
-  ex(setSun, setMoon);
-  // Chain a Set Active for each streetlamp (each driven by the same notDay value).
-  let last: string = setMoon;
-  for (const lampId of streetlamps) {
-    const setLamp = add('Set Active', { targetObjectId: lampId });
-    vl(notDay, setLamp, 'on');
-    ex(last, setLamp);
-    last = setLamp;
-  }
-  if (ui) {
-    const show = add('Show UI', { documentId: ui.documentId });
-    const title = add('Set UI Text', { documentId: ui.documentId, elementId: ui.titleId, stringValue: '02 INTERACTION' });
-    const body = add('Set UI Text', {
-      documentId: ui.documentId,
-      elementId: ui.bodyId,
-      stringValue: 'Interactable objects expose an [E] prompt. This pedestal flips day and night light groups with Set Active.',
-    });
-    const status = add('Set UI Text', { documentId: ui.documentId, elementId: ui.statusId, stringValue: 'Runtime nodes: Interact + NOT + Set Active' });
-    ex(last, show);
-    ex(show, title);
-    ex(title, body);
-    ex(body, status);
-  }
-
-  // START chain: at scene start, disable the moon + streetlamps so the world begins in DAY mode. Each
-  // node carries booleanValue:false in its data so Set Active turns OFF without needing a wired Boolean.
-  const startNode = add('Start');
-  const initMoon = add('Set Active', { targetObjectId: moon, booleanValue: false });
-  ex(startNode, initMoon);
-  let prevInit: string = initMoon;
-  for (const lampId of streetlamps) {
-    const initLamp = add('Set Active', { targetObjectId: lampId, booleanValue: false });
-    ex(prevInit, initLamp);
-    prevInit = initLamp;
-  }
-}
-
-/**
  * UI SHOWCASE - demos the engine's UI document system in BOTH surfaces:
  *  - SCREEN HUD: a stats panel with a label header, a health bar (bound to the player's `health`), a
  *    counter (interaction count), and a tiny image swatch. Shows the typical inventory/HUD pattern.
@@ -1603,14 +1274,16 @@ function buildUIShowcase(playerId: string): TutorialUi {
   const panel = store.addUIPreset(stats, undefined, 'panel');
   store.updateUIElement(stats, panel, {
     style: {
-      background: 'rgba(13,17,23,0.78)',
+      background: 'rgba(10,14,21,0.66)',
       padding: '12px 16px',
       borderRadius: '14px',
       custom: {
         position: 'absolute',
         top: '14px',
         left: '14px',
-        border: '1px solid rgba(125,211,252,0.25)',
+        border: '1px solid rgba(125,211,252,0.22)',
+        borderLeft: '3px solid rgba(56,189,248,0.85)',
+        backdropFilter: 'blur(10px)',
         boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
         display: 'flex',
         flexDirection: 'column',
@@ -1645,14 +1318,16 @@ function buildUIShowcase(playerId: string): TutorialUi {
   const coach = store.addUIPreset(tutorial, undefined, 'panel');
   store.updateUIElement(tutorial, coach, {
     style: {
-      background: 'rgba(8,12,20,0.84)',
+      background: 'rgba(8,12,20,0.7)',
       padding: '14px 18px',
       borderRadius: '12px',
       custom: {
         position: 'absolute',
         right: '18px',
         top: '18px',
-        border: '1px solid rgba(148,163,184,0.28)',
+        border: '1px solid rgba(148,163,184,0.24)',
+        borderLeft: '3px solid rgba(253,224,71,0.8)',
+        backdropFilter: 'blur(10px)',
         boxShadow: '0 14px 36px rgba(0,0,0,0.38)',
         width: '320px',
         display: 'flex',
@@ -1661,15 +1336,22 @@ function buildUIShowcase(playerId: string): TutorialUi {
       },
     },
   });
+  // Progress chip ("ROOM 01 / 06") — each room's lesson pad advances it, so the player always knows
+  // how far down the corridor they are.
+  const lessonProgress = store.addUIPreset(tutorial, coach, 'label');
+  store.updateUIElement(tutorial, lessonProgress, {
+    text: 'ROOM 00 / 06',
+    style: { color: '#fde68a', fontSize: '10px', fontWeight: '700', custom: { letterSpacing: '0.22em' } },
+  });
   const lessonTitle = store.addUIPreset(tutorial, coach, 'label');
   store.updateUIElement(tutorial, lessonTitle, {
-    text: '00 ORIENTATION',
-    style: { color: '#f8fafc', fontSize: '15px', fontWeight: '800' },
+    text: 'ORIENTATION',
+    style: { color: '#f8fafc', fontSize: '15px', fontWeight: '800', custom: { letterSpacing: '0.04em' } },
   });
   const lessonBody = store.addUIElement(tutorial, coach, 'text');
   store.updateUIElement(tutorial, lessonBody, {
     text: 'Move room by room. Each lesson pad updates this panel and demonstrates a real engine system.',
-    style: { color: '#cbd5e1', fontSize: '12px' },
+    style: { color: '#cbd5e1', fontSize: '12px', custom: { lineHeight: '1.5' } },
   });
   const lessonStatus = store.addUIPreset(tutorial, coach, 'label');
   store.updateUIElement(tutorial, lessonStatus, {
@@ -1706,5 +1388,5 @@ function buildUIShowcase(playerId: string): TutorialUi {
   const anchor = store.createObjectWithProps('empty', { name: 'Welcome Anchor', position: [0, 3.6, TUTORIAL_ROOM_Z.movement - 1.0] });
   store.attachUI(anchor, welcome);
   store.updateUIComponent(anchor, { offset: [0, 0, 0], scale: 0.012, billboard: true });
-  return { documentId: tutorial, titleId: lessonTitle, bodyId: lessonBody, statusId: lessonStatus };
+  return { documentId: tutorial, titleId: lessonTitle, bodyId: lessonBody, statusId: lessonStatus, progressId: lessonProgress };
 }

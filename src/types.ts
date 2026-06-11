@@ -1528,6 +1528,16 @@ export interface VehicleComponent {
   /** Per-wheel surface grip: each wheel reads the `surface` instance variable of whatever it's rolling on
    *  (tarmac/curb/dirt/grass/gravel/sand/mud/snow/ice) and scales its grip — going wide costs lap time. */
   surfaceGripEnabled?: boolean;
+  // --- AI rival driver (works for both arcade and raycast cars) ---
+  /** This car drives ITSELF around the scene's "Checkpoint <n>" gates (the same objects the lap system
+   *  reads) — no blueprint needed. It steers toward the next gate, slows for corners, reverses out when
+   *  stuck, and waits for the green light when a "Driving" var gates the race start. */
+  aiDriver?: boolean;
+  /** Rival pace, 0..1: corner speed, straight-line commitment and steering aggression (default 0.7). */
+  aiSkill?: number;
+  /** Rubber-banding, 0..1: rivals quietly slow when ahead of the player and push when behind, keeping the
+   *  race close (default 0.5; 0 = honest pace). */
+  aiRubberBand?: number;
 }
 
 export interface SceneObject {

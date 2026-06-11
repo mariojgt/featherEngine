@@ -5,6 +5,7 @@
  * alongside ScreenUILayer in both the editor viewport and the standalone player. Shows only while Play is on.
  */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { audioEngine } from '../runtime/audioEngine';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 
 /** Turn a KeyboardEvent.code into a short label for the prompt chip ("KeyE" → "E", "Space" → "Space"). */
@@ -47,6 +48,7 @@ export function GameHud() {
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
   const sceneSignature = useEditorStore(hudSceneSignature);
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
+  const killMarker = useEditorStore((state) => state.runtimeKillMarker);
   const hurt = useEditorStore((state) => state.runtimeHurt);
   const objVars = useEditorStore((state) => state.runtimeObjectVariables);
   const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
@@ -54,6 +56,18 @@ export function GameHud() {
   const equipInventorySlot = useEditorStore((state) => state.equipInventorySlot);
   const occupants = useEditorStore((state) => state.runtimeVehicleOccupants);
   const objects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [sceneSignature]);
+
+  // Kill-confirm: when player damage KILLS a target, hold a longer red marker window + play the
+  // synthesized confirm blip. The blip lives here (not DynamicCrosshair) so it fires exactly once
+  // and covers third-person too — both components are mounted together in every Play surface.
+  const [kill, setKill] = useState(false);
+  useEffect(() => {
+    if (!killMarker) return;
+    setKill(true);
+    audioEngine.playKillConfirm();
+    const t = setTimeout(() => setKill(false), 380);
+    return () => clearTimeout(t);
+  }, [killMarker]);
 
   // Radial weapon wheel: hold Tab to show, release to hide (GTA-style). Tab's default focus-cycling is
   // suppressed while playing so it never steals focus from the canvas.
@@ -182,18 +196,19 @@ export function GameHud() {
           <div style={reticleTick({ right: '3px', top: '50%', width: '13px', height: '2px', marginTop: '-1px' })} />
         </div>
       )}
-      {/* Hit marker (third-person): a brief center mark each time the player's shot lands. */}
+      {/* Hit marker (third-person): a brief center mark each time the player's shot lands — drawn red,
+          bigger and longer when the hit was a KILL. */}
       {hitMarker > 0 && thirdPerson && (
         <div
-          key={`hit-${hitMarker}`}
+          key={kill ? `kill-${killMarker}` : `hit-${hitMarker}`}
           style={{
             position: 'absolute',
             top: '50%',
             left: '50%',
             transform: 'translate(-50%,-50%)',
-            width: '26px',
-            height: '26px',
-            animation: 'nf-hit 0.32s ease-out forwards',
+            width: kill ? '34px' : '26px',
+            height: kill ? '34px' : '26px',
+            animation: `nf-hit ${kill ? '0.42s' : '0.32s'} ease-out forwards`,
           }}
         >
           {[45, -45].map((deg) => (
@@ -203,13 +218,13 @@ export function GameHud() {
                 position: 'absolute',
                 left: '50%',
                 top: '50%',
-                width: '19px',
+                width: kill ? '25px' : '19px',
                 height: '3px',
-                marginLeft: '-9.5px',
+                marginLeft: kill ? '-12.5px' : '-9.5px',
                 marginTop: '-1.5px',
-                background: '#ffffff',
+                background: kill ? '#ff3b30' : '#ffffff',
                 borderRadius: '3px',
-                boxShadow: '0 0 3px rgba(0,0,0,0.95), 0 0 12px rgba(125,211,252,0.38)',
+                boxShadow: kill ? '0 0 3px rgba(0,0,0,0.95), 0 0 12px rgba(255,59,48,0.6)' : '0 0 3px rgba(0,0,0,0.95), 0 0 12px rgba(125,211,252,0.38)',
                 transform: `rotate(${deg}deg)`,
               }}
             />

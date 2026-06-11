@@ -5,14 +5,16 @@ import { useFollowTargetId } from '../three/FollowCamera';
 /**
  * A dynamic first-person crosshair (Call-of-Duty style): four ticks that SPREAD apart while the player
  * moves (more when sprinting) and ease back when still, plus a brief X "hitmarker" pop each time the
- * player's shot damages a target. Pure DOM overlay; only shows during Play for a first-person pawn.
- * Reads `runtimeKeys` (movement) and `runtimeHitMarker` (the store bumps it on a player hit).
+ * player's shot damages a target — RED (bigger, with a confirm blip) when the hit was a KILL. Pure DOM
+ * overlay; only shows during Play for a first-person pawn. Reads `runtimeKeys` (movement) plus
+ * `runtimeHitMarker` / `runtimeKillMarker` (the store bumps them on player hits / kills).
  */
 export function DynamicCrosshair() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const targetId = useFollowTargetId();
   const keys = useEditorStore((state) => state.runtimeKeys);
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
+  const killMarker = useEditorStore((state) => state.runtimeKillMarker);
   const target = targetId ? selectActiveObjects(useEditorStore.getState()).find((object) => object.id === targetId) : undefined;
 
   // Show only for a first-person player during Play.
@@ -27,6 +29,16 @@ export function DynamicCrosshair() {
     const t = setTimeout(() => setHit(false), 240);
     return () => clearTimeout(t);
   }, [hitMarker]);
+
+  // Kill-confirm: a longer red flash whenever the kill count changes. (The confirm BLIP plays from
+  // GameHud — it's mounted alongside this in both Play surfaces and covers third-person too.)
+  const [kill, setKill] = useState(false);
+  useEffect(() => {
+    if (!killMarker) return;
+    setKill(true);
+    const t = setTimeout(() => setKill(false), 380);
+    return () => clearTimeout(t);
+  }, [killMarker]);
 
   if (!active) return null;
 
@@ -61,18 +73,19 @@ export function DynamicCrosshair() {
         <div style={bar(`translateX(${-(gap + 4)}px)`, 8, 2)} />
         <div style={bar(`translateX(${gap + 4}px)`, 8, 2)} />
       </div>
-      {/* Hitmarker X — pops big then shrinks/fades on each confirmed hit. */}
-      {hit && (
+      {/* Hitmarker X — pops big then shrinks/fades on each confirmed hit; a KILL draws it red, larger
+          and longer (the kill flash overrides a same-frame plain hit). */}
+      {(hit || kill) && (
         <div
-          key={hitMarker}
+          key={kill ? `k-${killMarker}` : `h-${hitMarker}`}
           style={{
             position: 'absolute',
             left: '50%',
             top: '50%',
-            width: 22,
-            height: 22,
+            width: kill ? 30 : 22,
+            height: kill ? 30 : 22,
             transform: 'translate(-50%,-50%)',
-            animation: 'nf-hitmarker 0.24s ease-out forwards',
+            animation: `nf-hitmarker ${kill ? '0.38s' : '0.24s'} ease-out forwards`,
           }}
         >
           {[45, -45].map((deg) => (
@@ -82,12 +95,12 @@ export function DynamicCrosshair() {
                 position: 'absolute',
                 left: '50%',
                 top: '50%',
-                width: 16,
-                height: 2.5,
-                marginLeft: -8,
-                marginTop: -1.25,
-                background: '#ffffff',
-                boxShadow: '0 0 3px rgba(0,0,0,0.9)',
+                width: kill ? 22 : 16,
+                height: kill ? 3 : 2.5,
+                marginLeft: kill ? -11 : -8,
+                marginTop: kill ? -1.5 : -1.25,
+                background: kill ? '#ff3b30' : '#ffffff',
+                boxShadow: kill ? '0 0 6px rgba(255,59,48,0.9)' : '0 0 3px rgba(0,0,0,0.9)',
                 transform: `rotate(${deg}deg)`,
                 borderRadius: 2,
               }}

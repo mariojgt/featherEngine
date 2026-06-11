@@ -458,6 +458,8 @@ interface EditorState {
   runtimeInteractFocusId: string | null;
   /** Monotonic counter bumped each time a player-owned projectile lands a hit — drives the HUD hit marker. */
   runtimeHitMarker: number;
+  /** Monotonic counter bumped each time PLAYER damage kills a target — drives the red kill-confirm marker. */
+  runtimeKillMarker: number;
   /** Monotonic counter bumped each time the local player takes damage — drives the HUD hurt flash. */
   runtimeHurt: number;
   /** Per-enemy attack cooldown (seconds remaining) so contact damage applies on a cadence, not every frame. */
@@ -1270,6 +1272,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVehicleOccupants: {},
   runtimeInteractFocusId: null,
   runtimeHitMarker: 0,
+  runtimeKillMarker: 0,
   runtimeHurt: 0,
   runtimeEnemyCooldown: {},
   runtimeSurfaceSound: {},
@@ -5210,6 +5213,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
+      runtimeKillMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
       runtimeSurfaceSound: {},
@@ -5312,6 +5316,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
+      runtimeKillMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
       runtimeSurfaceSound: {},
@@ -5507,7 +5512,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // to the Rapier vehicle controller inside physics.frame. Keyed by chassis object id.
       const vehicleInputs: Record<
         string,
-        { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean; shiftUp?: boolean; shiftDown?: boolean; gripScale?: number }
+        { throttle: number; steer: number; handbrake: boolean; engineScale?: number; respawn?: boolean; shiftUp?: boolean; shiftDown?: boolean; gripScale?: number; brakeScale?: number }
       > = {};
       // Absolute transform writes to ANOTHER actor (Set Position/Rotation/Scale/Look At with a Target).
       // Self writes still mutate the owner's tuples directly; these are merged into the object list before
@@ -5536,6 +5541,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let pendingEnvironment: Partial<SceneEnvironmentSettings> | undefined;
       // Combat feedback counters (bumped on hits / when the local player is hurt) + per-enemy attack cooldowns.
       let hitMarker = state.runtimeHitMarker;
+      let killMarker = state.runtimeKillMarker;
       let hurt = state.runtimeHurt;
       const nextEnemyCd: Record<string, number> = {};
       const meleeSwings = new Set<string>(); // characters that started an attack swing this frame (melee hit-test)
@@ -5559,7 +5565,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
       // Explosions: an object with an `explosive` instance var bursts on death (barrels, grenades) — queued here,
       // then processed after the hit passes so blasts can CHAIN (a barrel killed by another barrel explodes too).
-      const explodeQueue: Array<{ pos: Vector3Tuple; dmg: number; radius: number; force?: number }> = [];
+      const explodeQueue: Array<{ pos: Vector3Tuple; dmg: number; radius: number; force?: number; byPlayer?: boolean }> = [];
       const exploded = new Set<string>();
       const killTarget = (target: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
         if (target?.variables?.explosive) {
@@ -7100,7 +7106,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                     spawned.push(makeDamageNumber(targetObj.transform.position, amount));
                     if (targetId === playerId) hurt += 1;
                     if (next > 0 && targetObj.character?.hurtSoundId) pushSound(targetObj.character.hurtSoundId, [...targetObj.transform.position] as Vector3Tuple);
-                    if (next <= 0) killTarget(targetObj, targetId, targetObj.transform.position);
+                    if (next <= 0) {
+                      if (object.id === playerId && targetId !== playerId) killMarker += 1;
+                      killTarget(targetObj, targetId, targetObj.transform.position);
+                    }
                   }
                 } else {
                   // Listener with no health var: fire its On Receive Damage event (notify-only, never dies).
@@ -7445,7 +7454,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                       mutableObjectVars(hit.objectId, target.variables).health = next;
                       recordDamage(hit.objectId, cur - next);
                       if (next > 0 && target.character?.hurtSoundId) pushSound(target.character.hurtSoundId, [...target.transform.position] as Vector3Tuple);
-                      if (next <= 0) killTarget(target, hit.objectId, hitPoint);
+                      if (next <= 0) {
+                        if (object.id === playerId && hit.objectId !== playerId) killMarker += 1;
+                        killTarget(target, hit.objectId, hitPoint);
+                      }
                       spawned.push(makeDamageNumber(hitPoint, damage));
                       if (object.id === playerId) hitMarker += 1;
                       if (hit.objectId === playerId) hurt += 1;
@@ -7601,6 +7613,51 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
         return best?.to;
       };
+      // ---- Race support (AI rivals / slipstream / positions) -----------------------------------
+      // The scene's "Checkpoint <n>" gates double as the AI rivals' driving line — the same objects the
+      // lap timer reads, so authoring a circuit once gives both lap timing AND opponents a racing line.
+      const raceCheckpoints: Array<{ idx: number; pos: Vector3Tuple }> = [];
+      for (const o of mappedObjects) {
+        const m = /^Checkpoint\s*(\d+)/i.exec(o.name);
+        if (m) raceCheckpoints.push({ idx: Number(m[1]), pos: o.transform.position });
+      }
+      raceCheckpoints.sort((a, b) => a.idx - b.idx);
+      const raceCpCount = raceCheckpoints.length ? raceCheckpoints[raceCheckpoints.length - 1].idx + 1 : 0;
+      // Continuous race progress: laps + gates passed + how far toward the next gate. Comparable across
+      // every car, so it ranks the field and feeds the rivals' rubber-banding.
+      const raceProgress = (lap: number, nextIdx: number, x: number, z: number): number => {
+        const t = raceCheckpoints.find((c) => c.idx === nextIdx) ?? raceCheckpoints[0];
+        const frac = 1 - Math.min(1, Math.hypot(t.pos[0] - x, t.pos[2] - z) / 80);
+        return lap * raceCpCount + ((nextIdx - 1 + raceCpCount) % raceCpCount) + frac;
+      };
+      // Last frame's pose of every vehicle — slipstream and the rivals' rubber-band read these.
+      const vehiclePoses: Array<{ id: string; x: number; z: number; yaw: number; speed: number }> = [];
+      for (const o of mappedObjects) {
+        if (!o.vehicle?.enabled) continue;
+        const bag = nextObjectVariables[o.id] ?? o.variables ?? {};
+        const yawRaw = bag.__vehicleYaw;
+        vehiclePoses.push({
+          id: o.id,
+          x: o.transform.position[0],
+          z: o.transform.position[2],
+          yaw: typeof yawRaw === 'number' && Number.isFinite(yawRaw) ? yawRaw : o.transform.rotation[1],
+          speed: toNumber(bag.__vehicleSpeed ?? 0),
+        });
+      }
+      let playerRaceProgress: number | undefined;
+      if (raceCpCount && vehiclePlayerId) {
+        const lapV = variableByName.get('Lap');
+        const cpV = variableByName.get('Checkpoint');
+        const pose = vehiclePoses.find((p) => p.id === vehiclePlayerId);
+        if (lapV && cpV && pose) {
+          playerRaceProgress = raceProgress(
+            toNumber(nextVariableValues[lapV.id] ?? lapV.defaultValue),
+            toNumber(nextVariableValues[cpV.id] ?? cpV.defaultValue) % raceCpCount,
+            pose.x,
+            pose.z,
+          );
+        }
+      }
       for (const object of mappedObjects) {
         if (!object.vehicle?.enabled) continue;
         const veh = { ...defaultVehicle(), ...object.vehicle };
@@ -7667,49 +7724,123 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const scripted = Boolean(object.script?.enabled);
         const di = vehicleScriptInputs[object.id];
         const crashControl = crashPhysicsActive ? 0.22 : 1;
+        // AI RIVAL DRIVER: a self-driving opponent aiming at the "Checkpoint <n>" gates. Pure-pursuit
+        // steering toward the next gate (aim blends toward the one after as it nears, cutting a racing line),
+        // corner-aware pace, a reverse-out unstick, and rubber-banding against the player's race progress.
+        // It holds on the grid while a "Driving" var gates the start, exactly like the player's keys.
+        const aiDriving = Boolean(veh.aiDriver) && !scripted;
+        let aiThrottle = 0;
+        let aiSteer = 0;
+        let aiHandbrake = false;
+        if (aiDriving && raceCpCount) {
+          const skill = clamp(veh.aiSkill ?? 0.7, 0, 1);
+          let nextCp = toNumber(vehicleVars.__aiNextCp ?? 0) % raceCpCount;
+          const pos = object.transform.position;
+          const target = raceCheckpoints.find((c) => c.idx === nextCp) ?? raceCheckpoints[0];
+          const dist = Math.hypot(target.pos[0] - pos[0], target.pos[2] - pos[2]);
+          if (dist < 16) {
+            // Same gate radius + ordering rules as the player's lap timer, so rivals bank laps fairly.
+            if (nextCp === 0) vehicleVars.__aiLap = toNumber(vehicleVars.__aiLap ?? 0) + 1;
+            nextCp = (nextCp + 1) % raceCpCount;
+            vehicleVars.__aiNextCp = nextCp;
+          }
+          const after = raceCheckpoints.find((c) => c.idx === (nextCp + 1) % raceCpCount) ?? target;
+          const blend = clamp(1 - dist / 34, 0, 0.6);
+          const aimX = target.pos[0] + (after.pos[0] - target.pos[0]) * blend;
+          const aimZ = target.pos[2] + (after.pos[2] - target.pos[2]) * blend;
+          const desired = angleDelta(yaw, Math.atan2(aimX - pos[0], aimZ - pos[2]));
+          aiSteer = clamp(desired * (1.6 + skill * 0.8), -1, 1);
+          const spd = Math.abs(toNumber(vehicleVars.__vehicleSpeed ?? prevSpeed));
+          // Corner-aware pace: the harder the line bends at the gate, the more it slows on approach.
+          const corner = Math.abs(
+            angleDelta(
+              Math.atan2(target.pos[0] - pos[0], target.pos[2] - pos[2]),
+              Math.atan2(after.pos[0] - target.pos[0], after.pos[2] - target.pos[2]),
+            ),
+          );
+          const cornerBrake = clamp(1 - dist / 40, 0, 1) * clamp(corner / 1.6, 0, 1);
+          let targetSpeed = (16 + 18 * skill) * (1 - 0.62 * cornerBrake) * (1 - 0.5 * Math.abs(aiSteer));
+          // RUBBER-BAND: quietly breathe when ahead of the player, push when behind — keeps the pack close.
+          if (playerRaceProgress !== undefined) {
+            const rubber = clamp(veh.aiRubberBand ?? 0.5, 0, 1);
+            const gap = raceProgress(toNumber(vehicleVars.__aiLap ?? 0), nextCp, pos[0], pos[2]) - playerRaceProgress;
+            targetSpeed *= 1 - clamp(gap * 0.1, -0.3, 0.22) * rubber;
+          }
+          aiThrottle = clamp((targetSpeed - spd) * 0.35, -1, 1);
+          // Unstick: nosed into a wall (commanding throttle, not moving) → back out with opposite lock.
+          let stuck = toNumber(vehicleVars.__aiStuck ?? 0);
+          let reverseT = toNumber(vehicleVars.__aiReverse ?? 0);
+          if (reverseT > 0) {
+            reverseT -= delta;
+            aiThrottle = -1;
+            aiSteer = -aiSteer;
+          } else {
+            stuck = drivingActive && spd < 1.2 && aiThrottle > 0.2 ? stuck + delta : 0;
+            if (stuck > 1.6) {
+              reverseT = 1.3;
+              stuck = 0;
+            }
+          }
+          vehicleVars.__aiStuck = stuck;
+          vehicleVars.__aiReverse = Math.max(0, reverseT);
+          if (!drivingActive) {
+            // Grid hold: lights aren't green yet — park on the handbrake.
+            aiThrottle = 0;
+            aiHandbrake = true;
+          }
+        }
         // Gamepad (auto cars only — scripted cars get pad input through their Get Drive Input node):
         // RT/LT analog throttle/brake, left stick X steers (stick right = steer right = -1 here).
         const throttleSig = (scripted
           ? (di ? di.throttle : 0)
-          : drivingActive
-            ? Math.max(
-                -1,
-                Math.min(
-                  1,
-                  (currentKeys[veh.keyThrottle] ? 1 : 0) -
-                    (currentKeys[veh.keyReverse] ? 1 : 0) +
-                    gamepadInput.throttle -
-                    gamepadInput.brake,
-                ),
-              )
-            : 0) * crashControl;
+          : aiDriving
+            ? aiThrottle
+            : drivingActive
+              ? Math.max(
+                  -1,
+                  Math.min(
+                    1,
+                    (currentKeys[veh.keyThrottle] ? 1 : 0) -
+                      (currentKeys[veh.keyReverse] ? 1 : 0) +
+                      gamepadInput.throttle -
+                      gamepadInput.brake,
+                  ),
+                )
+              : 0) * crashControl;
         const steerRaw = (scripted
           ? (di ? di.steer : 0)
-          : drivingActive
-            ? Math.max(
-                -1,
-                Math.min(1, (currentKeys[veh.keyLeft] ? 1 : 0) - (currentKeys[veh.keyRight] ? 1 : 0) - gamepadInput.moveX),
-              )
-            : 0) * crashControl;
+          : aiDriving
+            ? aiSteer
+            : drivingActive
+              ? Math.max(
+                  -1,
+                  Math.min(1, (currentKeys[veh.keyLeft] ? 1 : 0) - (currentKeys[veh.keyRight] ? 1 : 0) - gamepadInput.moveX),
+                )
+              : 0) * crashControl;
         // Handbrake: scripted cars read it from the Drive node, auto cars from the key. It loosens rear grip
         // (oversteer / drift) and bleeds a little speed.
         const handbrake = scripted
           ? Boolean(di?.handbrake)
-          : drivingActive
-            ? Boolean(currentKeys[veh.keyHandbrake])
-            : false;
+          : aiDriving
+            ? aiHandbrake
+            : drivingActive
+              ? Boolean(currentKeys[veh.keyHandbrake])
+              : false;
         // RAYCAST SIM: a real Rapier DynamicRayCastVehicleController owns the chassis dynamics. We only resolve
         // driver input here and hand it to physics.frame; the chassis transform + wheel poses come BACK from the
         // physics result (handled in the post-step writeback below). Skip the entire arcade tire model.
         if (veh.physicsModel === 'raycast') {
+          // The speed menu / Nitro / Damage project vars tune (and drain against) the PLAYER car only —
+          // rivals on the same circuit must not get the player's upgrades or burn the player's Nitro.
+          const isPlayerCar = object.id === vehiclePlayerId;
           // In-game speed menu: a "SpeedLevel" project var scales engine force at runtime (buttons inc/dec it).
           const slVar = variableByName.get('SpeedLevel');
-          const speedLevel = slVar ? toNumber(nextVariableValues[slVar.id] ?? slVar.defaultValue) : 0;
+          const speedLevel = isPlayerCar && slVar ? toNumber(nextVariableValues[slVar.id] ?? slVar.defaultValue) : 0;
           // NITRO boost (opt-in, same hook as arcade): a "Nitro" var set to 1 (e.g. a Shift key / boost pad)
           // gives a big engine-force surge that drains back to 0 over ~2s. Bind a HUD bar's fill to "Nitro".
           const nitroVar = variableByName.get('Nitro');
           let nitroBoost = 1;
-          if (nitroVar) {
+          if (isPlayerCar && nitroVar) {
             const nitro = Math.max(0, Math.min(1, toNumber(nextVariableValues[nitroVar.id] ?? nitroVar.defaultValue)));
             if (nitro > 0) {
               nitroBoost = 1 + 1.4 * nitro;
@@ -7719,16 +7850,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // CRASH CONSEQUENCE: accumulated body damage saps engine power (each dent costs ~2.5%, capped at
           // -40%) — wreck the car and it limps, which makes the breakables/walls actually matter.
           const dmgVarIn = variableByName.get('Damage');
-          const dmgNow = dmgVarIn ? Math.max(0, toNumber(nextVariableValues[dmgVarIn.id] ?? dmgVarIn.defaultValue)) : 0;
+          const dmgNow = isPlayerCar && dmgVarIn ? Math.max(0, toNumber(nextVariableValues[dmgVarIn.id] ?? dmgVarIn.defaultValue)) : 0;
           const damageScale = 1 - Math.min(0.4, dmgNow * 0.025);
-          const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost)) * damageScale;
+          // SLIPSTREAM: tuck in close behind another car at speed and the hole it punches in the air feeds
+          // the engine — following close pays off with a genuine overtake run (rivals draft each other too).
+          let draft = 0;
+          const draftSpd = Math.abs(toNumber(vehicleVars.__vehicleSpeed ?? 0));
+          if (draftSpd > 13) {
+            const fwdX = Math.sin(yaw);
+            const fwdZ = Math.cos(yaw);
+            for (const other of vehiclePoses) {
+              if (other.id === object.id) continue;
+              const dx = other.x - object.transform.position[0];
+              const dz = other.z - object.transform.position[2];
+              const ahead = dx * fwdX + dz * fwdZ;
+              if (ahead < 4 || ahead > 22) continue;
+              const side = Math.abs(dx * fwdZ - dz * fwdX);
+              if (side > 3.2) continue;
+              draft = Math.max(draft, (1 - (ahead - 4) / 18) * (1 - side / 3.2));
+            }
+          }
+          // Mirror the player's tow strength into an optional "Draft" var (HUD slipstream indicator).
+          const draftVar = variableByName.get('Draft');
+          if (isPlayerCar && draftVar) nextVariableValues[draftVar.id] = Math.round(draft * 100) / 100;
+          const engineScale = Math.max(0.5, Math.min(4, (1 + 0.18 * speedLevel) * nitroBoost)) * damageScale * (1 + 0.34 * draft);
           // WEATHER: a "Wet" project var (0..1, toggled by the template's rain mode) slicks every surface —
           // the sim multiplies each wheel's surface grip by this, so braking/cornering degrade for real.
           const wetVar = variableByName.get('Wet');
           const wetNow = wetVar ? Math.max(0, Math.min(1, toNumber(nextVariableValues[wetVar.id] ?? wetVar.defaultValue))) : 0;
           const gripScale = 1 - 0.42 * wetNow;
+          // BRAKE FADE: the disc-heat model (accumulated post-physics) softens the service brake once the
+          // discs run hot — up to -40% bite at full glow, recovering as they cool. Handbrake is unaffected.
+          const heatNow = Math.max(0, Math.min(1, toNumber(vehicleVars.__brakeHeat ?? 0)));
+          const brakeScale = 1 - (0.4 * Math.max(0, heatNow - 0.45)) / 0.55;
           // Respawn on a fresh R press (edge): teleports the car back to spawn (auto flip-recover is automatic).
-          const respawn = Boolean(currentKeys['KeyR'] && !previousKeys['KeyR']);
+          const respawn = isPlayerCar && Boolean(currentKeys['KeyR'] && !previousKeys['KeyR']);
           // Respawning also REPAIRS: dents pop back out and the Damage counter (with its power penalty) resets.
           if (respawn) {
             clearVehicleDentsFor(object.id);
@@ -7759,9 +7915,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           vehicleVars.__vehicleSteerState = steerState;
           // Manual gearbox paddles (level-style; the sim edge-detects): E/Q by default, which the gamepad
           // Y / LB buttons hit through the default key aliases.
-          const shiftUp = Boolean(currentKeys[veh.keyShiftUp ?? 'KeyE']);
-          const shiftDown = Boolean(currentKeys[veh.keyShiftDown ?? 'KeyQ']);
-          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn, shiftUp, shiftDown, gripScale };
+          const shiftUp = isPlayerCar && Boolean(currentKeys[veh.keyShiftUp ?? 'KeyE']);
+          const shiftDown = isPlayerCar && Boolean(currentKeys[veh.keyShiftDown ?? 'KeyQ']);
+          vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn, shiftUp, shiftDown, gripScale, brakeScale };
           continue;
         }
         const braking = throttleSig < -0.05;
@@ -8718,14 +8874,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // BRAKE DISC HEAT: sustained hard braking from speed heats the discs to an orange glow; they
             // cool back down once released. Quantized so the emissive renderer only re-clones at visible
             // steps (the brake-light identity rule), never 60×/s while the value creeps.
-            if (veh.brakeDiscIds?.length) {
+            {
+              // Heat is tracked for EVERY raycast car (it also drives brake fade), the glow only when the
+              // car actually has disc meshes to light up.
               const bag = mutableObjectVars(carId, byIdNow.get(carId)?.variables ?? {});
               const spd = Math.abs(st.speed);
               let heat = toNumber(bag.__brakeHeat ?? 0);
               heat = braking && spd > 6 ? Math.min(1, heat + delta * (0.3 + spd * 0.014)) : Math.max(0, heat - delta * 0.35);
               bag.__brakeHeat = heat;
-              const glow = (Math.round(heat * 8) / 8) * 6;
-              for (const did of veh.brakeDiscIds) brakeLightGlow.set(did, glow);
+              if (veh.brakeDiscIds?.length) {
+                const glow = (Math.round(heat * 8) / 8) * 6;
+                for (const did of veh.brakeDiscIds) brakeLightGlow.set(did, glow);
+              }
             }
             if (carId === vehiclePlayerId) {
               if (speedVarMirror) nextVariableValues[speedVarMirror.id] = Math.round(Math.abs(st.speed) * 3.6);
@@ -9182,7 +9342,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (!proj) continue;
         // Detonate an explosive projectile (grenade/rocket) on impact OR when its fuse (life) runs out.
         const detonate = () => {
-          explodeQueue.push({ pos: [...obj.transform.position] as Vector3Tuple, dmg: proj.blastDamage ?? 60, radius: proj.blastRadius ?? 4.5, force: 13 });
+          explodeQueue.push({ pos: [...obj.transform.position] as Vector3Tuple, dmg: proj.blastDamage ?? 60, radius: proj.blastRadius ?? 4.5, force: 13, byPlayer: proj.ownerId === playerId });
           if (proj.blastSound) pushSound(proj.blastSound, [...obj.transform.position] as Vector3Tuple);
         };
         if (proj.life <= 0) {
@@ -9222,7 +9382,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           recordDamage(other, cur - next);
           // Hurt sound: a damaged character grunts (unless this hit kills it — death handles that).
           if (next > 0 && target.character?.hurtSoundId) pushSound(target.character.hurtSoundId, [...target.transform.position] as Vector3Tuple);
-          if (next <= 0) killTarget(target, other, obj.transform.position); // explosive → blast; rig → ragdoll; destructible → shatter from hit; prop → despawn
+          if (next <= 0) {
+            if (proj.ownerId === playerId && other !== playerId) killMarker += 1;
+            killTarget(target, other, obj.transform.position); // explosive → blast; rig → ragdoll; destructible → shatter from hit; prop → despawn
+          }
           // Combat feedback: floating damage number at the hit; hit marker if the LOCAL player shot it;
           // hurt vignette if the LOCAL player was the one hit.
           spawned.push(makeDamageNumber(obj.transform.position, proj.damage));
@@ -9337,7 +9500,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (attackerId === playerId) hitMarker += 1;
           if (target.id === playerId) hurt += 1;
           if (next > 0 && target.character?.hurtSoundId) pushSound(target.character.hurtSoundId, [...target.transform.position] as Vector3Tuple);
-          if (next <= 0) killTarget(target, target.id); // explosive → blast; rig → ragdoll; prop → despawn
+          if (next <= 0) {
+            if (attackerId === playerId && target.id !== playerId) killMarker += 1;
+            killTarget(target, target.id); // explosive → blast; rig → ragdoll; prop → despawn
+          }
         }
       }
 
@@ -9377,7 +9543,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             mutableObjectVars(o.id, o.variables).health = next;
             recordDamage(o.id, cur - next);
             if (o.id === playerId) hurt += 1;
-            if (next <= 0) killTarget(o, o.id); // chains if `o` is explosive
+            if (next <= 0) {
+              if (blast.byPlayer && o.id !== playerId) killMarker += 1;
+              killTarget(o, o.id); // chains if `o` is explosive
+            }
           } else {
             // Listener with no HP pool: just fire its On Receive Damage event (notify-only, never dies).
             recordDamage(o.id, blast.dmg);
@@ -9431,8 +9600,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const CP_RADIUS = 16;
           if (Math.hypot(carPos[0] - target.pos[0], carPos[2] - target.pos[2]) < CP_RADIUS) {
             if (target.idx === 0) {
+              // The FIRST start/finish crossing only arms the lap (leaving the grid) — a best time can
+              // only bank once a full flying lap has been driven, never the few seconds off the grid.
+              if (laps > 0 && (best === 0 || lapTime < best)) best = lapTime;
               laps += 1;
-              if (best === 0 || lapTime < best) best = lapTime;
               lapTime = 0;
               nextIdx = maxIdx > 0 ? 1 : 0;
               const chime = assetByName.get('lap_complete.mp3');
@@ -9447,6 +9618,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           nextVariableValues[lapVar.id] = laps;
           if (lapTimeVar) nextVariableValues[lapTimeVar.id] = Math.round(lapTime * 10) / 10;
           if (bestVar) nextVariableValues[bestVar.id] = Math.round(best * 10) / 10;
+          // RACE POSITION (opt-in via a "Position" var): rank the player against every aiDriver rival by
+          // continuous race progress (laps + gates passed + distance toward the next gate) — drives a
+          // "POS 2/4" HUD chip. Rival lap/gate state lives in their __aiLap/__aiNextCp runtime vars.
+          const posVar = variableByName.get('Position');
+          if (posVar) {
+            const cpCountRank = maxIdx + 1;
+            const progressOf = (lap: number, next: number, x: number, z: number) => {
+              const t = checkpoints.find((c) => c.idx === next) ?? checkpoints[0];
+              const frac = 1 - Math.min(1, Math.hypot(t.pos[0] - x, t.pos[2] - z) / 80);
+              return lap * cpCountRank + ((next - 1 + cpCountRank) % cpCountRank) + frac;
+            };
+            const playerProg = progressOf(laps, nextIdx, carPos[0], carPos[2]);
+            let rank = 1;
+            for (const o of resolvedObjects) {
+              if (o.id === vehiclePlayerId || !o.vehicle?.enabled || !o.vehicle.aiDriver) continue;
+              const bag = nextObjectVariables[o.id] ?? o.variables ?? {};
+              const rivalProg = progressOf(
+                toNumber(bag.__aiLap ?? 0),
+                toNumber(bag.__aiNextCp ?? 0) % cpCountRank,
+                o.transform.position[0],
+                o.transform.position[2],
+              );
+              if (rivalProg > playerProg) rank += 1;
+            }
+            nextVariableValues[posVar.id] = rank;
+          }
         }
       }
       recordRuntimeSection('combat', performance.now() - combatStart);
@@ -9875,6 +10072,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeVehicleOccupants: keepRecord(state.runtimeVehicleOccupants, nextOccupants),
         runtimeInteractFocusId: interactFocusId,
         runtimeHitMarker: hitMarker,
+        runtimeKillMarker: killMarker,
         runtimeHurt: hurt,
         runtimeEnemyCooldown: keepRecord(state.runtimeEnemyCooldown, nextEnemyCd),
         runtimeSurfaceSound: keepRecord(state.runtimeSurfaceSound, nextSurfaceSound),
@@ -10129,6 +10327,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
+      runtimeKillMarker: 0,
       runtimeHurt: 0,
       runtimeEnemyCooldown: {},
       runtimeSurfaceSound: {},

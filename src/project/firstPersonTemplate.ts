@@ -505,6 +505,11 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   const grenadeBoomId = await loadSound('fps_grenade_explode.mp3');
   const footstepSound = await importAudio('fps_footstep.mp3', audioFolder);
   const ambientSound = await importPublicAudio('ambient.mp3', audioFolder);
+  // Player feedback one-shots the controller plays automatically: a hurt sting when health drops (pairs
+  // with the engine's red hurt-flash), plus jump/land for movement weight.
+  const hurtSound = await importPublicAudio('hurt.mp3', audioFolder);
+  const jumpSound = await importPublicAudio('jump.mp3', audioFolder);
+  const landSound = await importPublicAudio('land.mp3', audioFolder);
   store.setSceneAudio(sceneId, { ambientSoundId: ambientSound?.id });
 
   // --- Project variables: HUD weapon name, slot (gates which weapons fire), and ammo + magazine size. ---
@@ -671,6 +676,9 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
       keyCrawl: 'KeyZ',
       crawlMultiplier: 0.32,
       footstepSoundId: footstepSound?.id,
+      hurtSoundId: hurtSound?.id,
+      jumpSoundId: jumpSound?.id,
+      landSoundId: landSound?.id,
       rollSpeed: 0,
       rollDuration: 0.1,
     },
@@ -1398,6 +1406,24 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     box.children = [label, bar];
     root.children = [box];
     extraUIDocs.push({ id: makeId('ui'), name: 'Integrity', surface: 'screen', root, css: '', visibleOnStart: true, createdAt: Date.now() });
+  }
+  // Low-integrity pulse — a red vignette that BREATHES while Health is critical (mission only), so taking
+  // heavy fire reads instantly without glancing at the bar. Pure bound UI: no graph, no per-frame script.
+  {
+    const root = uiElement('panel', 'Low Integrity Root', { width: '100%', height: '100%', position: 'relative', padding: '0' });
+    const veil = boundElement('panel', 'Low Integrity Veil', {
+      position: 'absolute',
+      custom: {
+        top: '0', left: '0', right: '0', bottom: '0', pointerEvents: 'none',
+        boxShadow: 'inset 0 0 140px 42px rgba(255,30,70,0.5)', animation: 'nf-lowhp 1.1s ease-in-out infinite',
+      },
+    }, [{ target: 'visible', expression: 'InMission >= 1 && Health > 0 && Health <= 30' }]);
+    root.children = [veil];
+    extraUIDocs.push({
+      id: makeId('ui'), name: 'Low Integrity Pulse', surface: 'screen', root,
+      css: '@keyframes nf-lowhp { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }',
+      visibleOnStart: true, createdAt: Date.now(),
+    });
   }
   // Full-screen MISSION FAILED / MISSION COMPLETE overlays (shown purely by their visible bindings).
   const overlay = (name: string, titleText: string, subText: string, titleColor: string, backColor: string, visibleExpr: string) => {

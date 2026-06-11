@@ -562,6 +562,155 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
   return { carId, rainEmitterId, objects: [car, ...wheelObjects, ...vfx] };
 }
 
+/** A lean AI RIVAL: a bundled body + wheel set on the same raycast sim, driven by the engine's aiDriver
+ *  autopilot around the "Checkpoint <n>" gates (no blueprint). Carries only brake lights, headlamp lenses
+ *  and a team-color roof stripe — three of these race the player without the player car's full VFX cost. */
+async function buildRivalCar(
+  bodyFile: string,
+  wheelFile: string,
+  color: string,
+  name: string,
+  aiSkill: number,
+  gridX: number,
+  gridZ: number,
+): Promise<SceneObject[]> {
+  const carId = makeId('obj');
+  const bodyAsset = await importAsset(bodyFile, 'model');
+  const wheelAsset = await importAsset(wheelFile, 'model');
+  const collisionSound = await importAsset('collision.mp3', 'audio', AUDIO_DIR);
+  const bodyBox = await measureModel(bodyFile);
+  const wheelBox = await measureModel(wheelFile);
+  const min = bodyBox?.min ?? [-0.9, 0, -2];
+  const max = bodyBox?.max ?? [0.9, 1.4, 2];
+  const cx = (min[0] + max[0]) / 2;
+  const cz = (min[2] + max[2]) / 2;
+  const halfW = (max[0] - min[0]) / 2;
+  const halfL = (max[2] - min[2]) / 2;
+  const wheelRadius = wheelBox ? Math.max(wheelBox.max[1] - wheelBox.min[1], wheelBox.max[0] - wheelBox.min[0]) / 2 : 0.4;
+  const sideX = halfW * 0.92;
+  const frontZ = cz + halfL * 0.72;
+  const rearZ = cz - halfL * 0.72;
+  const wheelY = min[1];
+  const cy = (min[1] + max[1]) / 2;
+
+  // Same steering-anchor wheel rig as the player car (anchor steers + bobs, wheel mesh spins under it).
+  const spots: Array<{ x: number; z: number; front: boolean; tag: string }> = [
+    { x: cx - sideX, z: frontZ, front: true, tag: 'FL' },
+    { x: cx + sideX, z: frontZ, front: true, tag: 'FR' },
+    { x: cx - sideX, z: rearZ, front: false, tag: 'RL' },
+    { x: cx + sideX, z: rearZ, front: false, tag: 'RR' },
+  ];
+  const wheelIds: string[] = [];
+  const steeredIds: string[] = [];
+  const wheelSetups: VehicleWheelSetup[] = [];
+  const parts: SceneObject[] = [];
+  spots.forEach((spot) => {
+    const anchorId = makeId('obj');
+    const wheelId = makeId('obj');
+    wheelIds.push(wheelId);
+    if (spot.front) steeredIds.push(anchorId);
+    wheelSetups.push({ objectId: wheelId, axle: spot.front ? 'front' : 'rear', side: spot.x < cx ? 'left' : 'right', steered: spot.front });
+    parts.push({
+      id: anchorId,
+      name: `Wheel Anchor ${spot.tag}`,
+      kind: 'empty',
+      parentId: carId,
+      transform: { position: [spot.x, wheelY, spot.z], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    parts.push({
+      id: wheelId,
+      name: `Wheel ${spot.tag}`,
+      kind: 'cube',
+      parentId: anchorId,
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      renderer: renderer('#14161b', { modelAssetId: wheelAsset?.id, metalness: 0.4, roughness: 0.6 }),
+    });
+  });
+  // Brake lights (the runtime brightens them while the autopilot brakes for a corner) + headlamp lenses
+  // (emissive only — no spot lights, three rivals' worth would be a real lighting cost at night).
+  const brakeLightIds: string[] = [];
+  const headlightIds: string[] = [];
+  ([-1, 1] as const).forEach((s, i) => {
+    const brakeId = makeId('obj');
+    brakeLightIds.push(brakeId);
+    parts.push({
+      id: brakeId,
+      name: `Brake Light ${i ? 'R' : 'L'}`,
+      kind: 'cube',
+      parentId: carId,
+      transform: { position: [cx + s * halfW * 0.6, cy, min[2] * 0.99], rotation: [0, 0, 0], scale: [Math.max(0.14, halfW * 0.34), 0.14, 0.07] },
+      renderer: renderer('#3a0c0c', { materialOverrides: { emissiveColor: '#ff2a2a', emissiveIntensity: 0.2 } }),
+    });
+    const lensId = makeId('obj');
+    headlightIds.push(lensId);
+    parts.push({
+      id: lensId,
+      name: `Headlamp ${i ? 'R' : 'L'}`,
+      kind: 'cube',
+      parentId: carId,
+      transform: { position: [cx + s * halfW * 0.62, cy, max[2] * 0.99], rotation: [0, 0, 0], scale: [0.28, 0.16, 0.08] },
+      renderer: renderer('#fff4cf', { materialOverrides: { emissiveColor: '#fff4cf', emissiveIntensity: 1.6 } }),
+    });
+  });
+  // Team-color roof stripe so you can tell who you're fighting at a glance (pops under bloom).
+  parts.push({
+    id: makeId('obj'),
+    name: 'Team Stripe',
+    kind: 'cube',
+    parentId: carId,
+    transform: { position: [cx, max[1] * 0.98, cz], rotation: [0, 0, 0], scale: [halfW * 0.5, 0.05, halfL * 1.2] },
+    renderer: renderer(color, { materialOverrides: { emissiveColor: color, emissiveIntensity: 1.8 } }),
+  });
+
+  const vehicle: VehicleComponent = {
+    ...defaultVehicle(),
+    enabled: true,
+    physicsModel: 'raycast',
+    cameraFollow: false,
+    aiDriver: true,
+    aiSkill,
+    aiRubberBand: 0.55,
+    wheelRadius,
+    wheelObjectIds: wheelIds,
+    steeredWheelIds: steeredIds,
+    wheels: wheelSetups,
+    deformable: true,
+    headlightIds,
+    brakeLightIds,
+    // Same baseline tune as the player car; pace differences come from aiSkill, not a faster engine.
+    engineForce: 7400,
+    brakeForce: 4100,
+    handbrakeForce: 1500,
+    drivetrain: 'awd',
+    chassisMass: 950,
+    centerOfMassY: -0.62,
+    linearDamping: 0.02,
+    angularDamping: 0.92,
+    wheelFrictionSlip: 2.6,
+    sideFrictionStiffness: 1.85,
+    suspensionRestLength: 0.42,
+    suspensionStiffnessSim: 38,
+    suspensionCompression: 0.92,
+    suspensionRelaxation: 0.95,
+    maxSuspensionForce: 40000,
+    steerAngle: 0.58,
+    transmission: 'auto',
+    collisionSoundId: collisionSound?.id,
+  };
+
+  const spawnY = wheelRadius - wheelY + 0.1;
+  parts.unshift({
+    id: carId,
+    name,
+    kind: 'cube',
+    // Grid slot, nose pointed down the start/finish straight (+X) like the player.
+    transform: { position: [gridX, spawnY, gridZ], rotation: [0, Math.PI / 2, 0], scale: [1, 1, 1] },
+    renderer: renderer(color, { modelAssetId: bodyAsset?.id, metalness: 0.5, roughness: 0.45 }),
+    vehicle,
+  });
+  return parts;
+}
+
 /** Build the in-game SPEED MENU: a HUD speedometer + −/+ buttons that adjust a "SpeedLevel" var (which the
  *  raycast car reads to scale its engine force), plus the blueprint that handles the button events. */
 function buildSpeedMenu(): {
@@ -821,6 +970,189 @@ function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable
   const root = uiPanel('Score Root', { width: '100%', height: '100%', position: 'relative' }, [score, banner]);
   const hud: UIDocument = { id: makeId('ui'), name: 'Score HUD', surface: 'screen', root, visibleOnStart: true, createdAt: now };
   return { scoreVar, stuntVar, hud };
+}
+
+/** RACE CONTROL: the project vars the engine's race systems read/write (Lap/LapTime/BestLap/Checkpoint
+ *  from the lap timer, Position from the rank pass, Draft from slipstream, Driving as the start gate), a
+ *  3-2-1-GO countdown blueprint that holds the whole grid then waves it green, and the race HUD. */
+function buildRaceControl(): { vars: ProjectVariable[]; blueprint: ScriptBlueprint; graph: ProjectGraph; hud: UIDocument } {
+  const now = Date.now();
+  const lapVar: ProjectVariable = { id: makeId('var'), name: 'Lap', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const lapTimeVar: ProjectVariable = { id: makeId('var'), name: 'LapTime', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const bestVar: ProjectVariable = { id: makeId('var'), name: 'BestLap', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const checkpointVar: ProjectVariable = { id: makeId('var'), name: 'Checkpoint', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const positionVar: ProjectVariable = { id: makeId('var'), name: 'Position', type: 'number', defaultValue: 1, persistent: false, createdAt: now };
+  // Gate for ALL driving input (player keys and AI throttle): 0 during the countdown, 1 at the green.
+  const drivingVar: ProjectVariable = { id: makeId('var'), name: 'Driving', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  // Countdown display state: 3 / 2 / 1 / 0 (= GO!) / -1 (= hidden).
+  const countVar: ProjectVariable = { id: makeId('var'), name: 'Count', type: 'number', defaultValue: -1, persistent: false, createdAt: now };
+  // Slipstream tow strength 0..1, mirrored by the sim for the player car (drives the SLIPSTREAM chip).
+  const draftVar: ProjectVariable = { id: makeId('var'), name: 'Draft', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+
+  const graphId = makeId('graph');
+  const bpId = makeId('bp');
+  const mk = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>) => graphNode(makeId('node'), label, cat, x, y, data);
+  const setCount = (label: string, x: number, value: number) => mk(label, 'Variables', x, 40, { nodeKind: 'variable.set', variableId: countVar.id, valueType: 'number', numberValue: value });
+  const wait = (label: string, x: number, secs: number) => mk(label, 'Logic', x, 40, { nodeKind: 'logic.delay', numberValue: secs });
+  const start = mk('On Race Start', 'Events', 40, 40, { nodeKind: 'event.start', hasInput: false });
+  const c3 = setCount('Count = 3', 280, 3);
+  const w3 = wait('1s', 520, 1);
+  const c2 = setCount('Count = 2', 760, 2);
+  const w2 = wait('1s', 1000, 1);
+  const c1 = setCount('Count = 1', 1240, 1);
+  const w1 = wait('1s', 1480, 1);
+  const go = setCount('Count = GO', 1720, 0);
+  const green = mk('Driving = 1', 'Variables', 1960, 40, { nodeKind: 'variable.set', variableId: drivingVar.id, valueType: 'number', numberValue: 1 });
+  const wGo = wait('1.2s', 2200, 1.2);
+  const hide = setCount('Hide Count', 2440, -1);
+  const graph: ProjectGraph = {
+    id: graphId,
+    name: 'Race Control',
+    nodes: [start, c3, w3, c2, w2, c1, w1, go, green, wGo, hide],
+    edges: [
+      execEdge(start.id, c3.id), execEdge(c3.id, w3.id), execEdge(w3.id, c2.id), execEdge(c2.id, w2.id),
+      execEdge(w2.id, c1.id), execEdge(c1.id, w1.id), execEdge(w1.id, go.id), execEdge(go.id, green.id),
+      execEdge(green.id, wGo.id), execEdge(wGo.id, hide.id),
+    ],
+  };
+  const blueprint: ScriptBlueprint = {
+    id: bpId,
+    name: 'Race Control',
+    description: '3-2-1-GO countdown: holds the grid (Driving = 0 gates player keys AND the AI rivals), then waves it green.',
+    graphId,
+    color: '#2ecf6f',
+    createdAt: now,
+  };
+
+  // --- Race HUD: position + lap board (top-left), countdown banner (center), slipstream chip. ---
+  const pos = uiText('Race Position', {
+    color: '#ffffff', fontSize: '30px', fontWeight: '900', textAlign: 'left',
+    custom: { letterSpacing: '1px', textShadow: '0 0 14px #2ecf6f88', fontVariantNumeric: 'tabular-nums', lineHeight: '1' },
+  }, 'POS 4/4', [{ target: 'text', expression: `'POS ' + Position + '/4'` }]);
+  const lap = uiText('Lap Readout', { color: '#c9f7da', fontSize: '13px', fontWeight: '800', textAlign: 'left', custom: { letterSpacing: '2px', marginTop: '5px', fontVariantNumeric: 'tabular-nums' } }, 'LAP 1', [
+    { target: 'text', expression: `'LAP ' + (Lap < 1 ? 1 : Lap)` },
+  ]);
+  const time = uiText('Lap Time', { color: '#9fe8ff', fontSize: '12px', fontWeight: '700', textAlign: 'left', custom: { letterSpacing: '2px', marginTop: '3px', fontVariantNumeric: 'tabular-nums' } }, 'TIME 0s', [
+    { target: 'text', expression: `'TIME ' + LapTime + 's'` },
+  ]);
+  const best = uiText('Best Lap', { color: '#ffd34d', fontSize: '12px', fontWeight: '800', textAlign: 'left', custom: { letterSpacing: '2px', marginTop: '3px', fontVariantNumeric: 'tabular-nums' } }, '', [
+    { target: 'text', expression: `'BEST ' + BestLap + 's'` },
+    { target: 'visible', expression: 'BestLap > 0' },
+  ]);
+  const board = uiPanel('Race Board', {
+    position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+    background: 'rgba(8,16,12,0.55)', borderRadius: '12px',
+    custom: { top: '16px', left: '18px', padding: '10px 16px', border: '1px solid #2ecf6f55', backdropFilter: 'blur(6px)', boxShadow: '0 0 18px #2ecf6f22' },
+  }, [pos, lap, time, best]);
+  const countdown = uiText('Countdown', {
+    color: '#ffd34d', fontSize: '84px', fontWeight: '900', textAlign: 'center', position: 'absolute',
+    custom: { top: '30%', left: '50%', transform: 'translateX(-50%)', letterSpacing: '6px', textShadow: '0 0 30px #ffd34daa', lineHeight: '1' },
+  }, '', [
+    { target: 'text', expression: `(Count == 3 ? '3' : Count == 2 ? '2' : Count == 1 ? '1' : Count == 0 ? 'GO!' : '')` },
+    { target: 'visible', expression: 'Count >= 0' },
+  ]);
+  const slip = uiText('Slipstream Chip', {
+    color: '#22e0ff', fontSize: '14px', fontWeight: '800', textAlign: 'center', position: 'absolute',
+    custom: { top: '58%', left: '50%', transform: 'translateX(-50%)', letterSpacing: '4px', textShadow: '0 0 16px #22e0ffcc', fontStyle: 'italic' },
+  }, 'SLIPSTREAM', [{ target: 'visible', expression: 'Draft > 0.05' }]);
+  const root = uiPanel('Race Root', { width: '100%', height: '100%', position: 'relative' }, [board, countdown, slip]);
+  const hud: UIDocument = { id: makeId('ui'), name: 'Race HUD', surface: 'screen', root, visibleOnStart: true, createdAt: now };
+
+  return {
+    vars: [lapVar, lapTimeVar, bestVar, checkpointVar, positionVar, drivingVar, countVar, draftVar],
+    blueprint,
+    graph,
+    hud,
+  };
+}
+
+// The neon circuit: an octagonal loop around the proving-ground perimeter (the playground toys stay
+// in the infield). Checkpoint 0 is the start/finish on the south straight; the engine's lap timer AND
+// the AI rivals both read these gates, so this one list is the whole race.
+const CIRCUIT: Array<[number, number]> = [
+  [0, -78],
+  [55, -55],
+  [78, 0],
+  [55, 55],
+  [0, 78],
+  [-55, 55],
+  [-78, 0],
+  [-60, -78],
+];
+
+/** Build the circuit: checkpoint gates with glowing arches, a dark ribbon of track with neon edge lines,
+ *  a start/finish checker line, and two on-line boost pads (nitro strategy: hold it for the straights). */
+function buildCircuit(boost: { blueprint: ScriptBlueprint; graph: ProjectGraph }): SceneObject[] {
+  const objects: SceneObject[] = [];
+  CIRCUIT.forEach(([x, z], i) => {
+    // The functional gate the engine reads (lap timer + AI driving line).
+    objects.push({
+      id: makeId('obj'),
+      name: `Checkpoint ${i}`,
+      kind: 'empty',
+      transform: { position: [x, 0.5, z], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    // Visual arch: posts straddle the ribbon radially (the loop circles the origin), crossbar overhead.
+    const r = Math.hypot(x, z) || 1;
+    const rx = x / r;
+    const rz = z / r;
+    const accent = i === 0 ? '#ff2eea' : '#22e0ff';
+    for (const s of [-1, 1] as const) {
+      objects.push(staticBox(`Gate ${i} Post ${s < 0 ? 'In' : 'Out'}`, [x + rx * 7.5 * s, 2.3, z + rz * 7.5 * s], [0.5, 4.6, 0.5], '#15171c', { metalness: 0.6, roughness: 0.4, emissive: accent, emissiveIntensity: 0.5 }));
+    }
+    const bar: SceneObject = {
+      id: makeId('obj'),
+      name: `Gate ${i} Arch`,
+      kind: 'cube',
+      transform: { position: [x, 4.8, z], rotation: [0, Math.atan2(rx, rz), 0], scale: [0.45, 0.4, 16] },
+      renderer: renderer(accent, { materialOverrides: { emissiveColor: accent, emissiveIntensity: 1.8 } }),
+    };
+    objects.push(bar);
+    // Ribbon segment to the NEXT gate (visual only — the asphalt pad below does the physics), with neon
+    // edge lines so the line through dusk/night/rain is always readable.
+    const [nx, nz] = CIRCUIT[(i + 1) % CIRCUIT.length];
+    const dx = nx - x;
+    const dz = nz - z;
+    const len = Math.hypot(dx, dz);
+    const yaw = Math.atan2(dx, dz);
+    const midX = x + dx / 2;
+    const midZ = z + dz / 2;
+    objects.push({
+      id: makeId('obj'),
+      name: `Track Ribbon ${i}`,
+      kind: 'cube',
+      transform: { position: [midX, 0.02, midZ], rotation: [0, yaw, 0], scale: [13, 0.02, len + 8] },
+      renderer: renderer('#272b34', { roughness: 0.9 }),
+    });
+    const px = Math.cos(yaw);
+    const pz = -Math.sin(yaw);
+    for (const s of [-1, 1] as const) {
+      objects.push({
+        id: makeId('obj'),
+        name: `Track Edge ${i}${s < 0 ? 'L' : 'R'}`,
+        kind: 'cube',
+        transform: { position: [midX + px * 6.5 * s, 0.03, midZ + pz * 6.5 * s], rotation: [0, yaw, 0], scale: [0.3, 0.025, len + 6] },
+        renderer: renderer('#22e0ff', { materialOverrides: { emissiveColor: '#22e0ff', emissiveIntensity: 0.7 } }),
+      });
+    }
+  });
+  // Start/finish checker line across the south straight at Checkpoint 0.
+  for (let i = -5; i <= 5; i++) {
+    objects.push(staticBox(`Start Stripe ${i + 5}`, [0, 0.045, -78 + i * 1.15], [2.4, 0.03, 0.95], i % 2 ? '#0a0a0a' : '#f2f2f2'));
+  }
+  // Two boost pads ON the racing line — grab the tow, hit the pad, send it down the straight.
+  ([[-15, -78], [27.5, 66.5]] as Array<[number, number]>).forEach(([px2, pz2], i) => {
+    objects.push({
+      id: makeId('obj'),
+      name: `Circuit Boost ${i}`,
+      kind: 'cube',
+      transform: { position: [px2, 0.06, pz2], rotation: [0, 0, 0], scale: [4, 0.12, 4] },
+      renderer: renderer('#ff8a3d', { materialOverrides: { emissiveColor: '#ff8a3d', emissiveIntensity: 1.4 } }),
+      physics: triggerBox(),
+      script: { blueprintId: boost.blueprint.id, graphId: boost.graph.id, enabled: true },
+    });
+  });
+  return objects;
 }
 
 /** Build the SIM-RACING "Proving Ground" into the (already-created) active project. */

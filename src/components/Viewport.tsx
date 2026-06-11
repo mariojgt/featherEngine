@@ -188,11 +188,23 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.
   const interactFocusId = useEditorStore((state) => state.runtimeInteractFocusId);
-  // Combat damage reads via the floating damage number only — no emissive tint on the struck object.
   const focusGlow = interactFocusId === object.id;
-  const resolved = focusGlow
-    ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
-    : baseResolved;
+  // Combat hit-flash: a brief white-hot emissive blink when this object takes damage. `runtimeDamageEvents`
+  // already carries per-object damage each tick; subscribing to just THIS object's entry keeps the re-render
+  // local to the struck object (the value is undefined on no-damage frames, so quiet frames never re-render).
+  const damageTick = useEditorStore((state) => (state.isPlaying ? state.runtimeDamageEvents[object.id] : undefined));
+  const [hitFlash, setHitFlash] = useState(false);
+  useEffect(() => {
+    if (damageTick === undefined) return;
+    setHitFlash(true);
+    const t = setTimeout(() => setHitFlash(false), 150);
+    return () => clearTimeout(t);
+  }, [damageTick]);
+  const resolved = hitFlash
+    ? { ...baseResolved, emissiveColor: '#ffffff', emissiveIntensity: 1.5, overrideModel: true }
+    : focusGlow
+      ? { ...baseResolved, emissiveColor: '#ffcf66', emissiveIntensity: 0.7, overrideModel: true }
+      : baseResolved;
   // Per-slot materials for imported models (each model material editable independently). Folds in the
   // interact-focus glow so a slot-bound model still highlights. Memoized so ModelAsset's apply effect
   // doesn't re-run every frame during Play.
@@ -205,15 +217,15 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
               color: slot.color,
               metalness: slot.metalness,
               roughness: slot.roughness,
-              emissiveColor: focusGlow ? '#ffcf66' : slot.emissiveColor,
-              emissiveIntensity: focusGlow ? 0.7 : slot.emissiveIntensity,
-              override: focusGlow ? true : slot.overrideModel,
+              emissiveColor: hitFlash ? '#ffffff' : focusGlow ? '#ffcf66' : slot.emissiveColor,
+              emissiveIntensity: hitFlash ? 1.5 : focusGlow ? 0.7 : slot.emissiveIntensity,
+              override: hitFlash || focusGlow ? true : slot.overrideModel,
               baseColorUrl: slot.baseColorUrl,
               normalUrl: slot.normalUrl,
             }
           : undefined,
       ),
-    [slotResolved, focusGlow],
+    [slotResolved, focusGlow, hitFlash],
   );
   const modelMaterial = useMemo(
     () => ({

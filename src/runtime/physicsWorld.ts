@@ -308,6 +308,8 @@ export interface VehicleInput {
   shiftDown?: boolean;
   /** Global grip multiplier on every wheel's surface grip (weather): 1 = dry, ~0.6 = rain-slick. */
   gripScale?: number;
+  /** Brake-fade multiplier on the service brake (NOT the handbrake): 1 = cold, <1 = heat-faded discs. */
+  brakeScale?: number;
 }
 
 /** Per-wheel + chassis readback for one raycast-sim vehicle after a physics step. */
@@ -1320,7 +1322,9 @@ class PhysicsRuntime {
         entry.controller.setWheelEngineForce(i, engine);
         // Brake = service brake (biased front/rear, eased by ABS) + handbrake on the rear wheels.
         let brake = 0;
-        if (braking) brake += brakeForce * (isFront ? brakeBias : 1 - brakeBias) * (absActive ? 0.62 : 1);
+        // Brake FADE: overheated discs (input.brakeScale < 1, from the tick's heat model) bite softer —
+        // ride the brakes downhill or stand on them lap after lap and the pedal goes long until they cool.
+        if (braking) brake += brakeForce * (isFront ? brakeBias : 1 - brakeBias) * (absActive ? 0.62 : 1) * (input.brakeScale ?? 1);
         if (input.handbrake && !isFront) brake += handbrakeForce;
         entry.controller.setWheelBrake(i, brake);
         entry.controller.setWheelSteering(i, entry.rig[i]?.steered ? input.steer * steerAngle : 0);

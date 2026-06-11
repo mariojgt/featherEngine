@@ -176,6 +176,28 @@ class AudioEngine {
   }
 
   /**
+   * Synthesized KILL-CONFIRM tick (no asset needed) — two quick descending triangle blips, the classic
+   * arena-shooter "target down" cue. Played 2D (it's HUD feedback, not a world sound).
+   */
+  playKillConfirm(volume = 0.5): void {
+    const ctx = this.ensureContext();
+    if (!ctx || ctx.state === 'suspended' || !this.master) return;
+    const t = ctx.currentTime;
+    ([[1320, 0], [880, 0.07]] as Array<[number, number]>).forEach(([freq, at]) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t + at);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t + at);
+      gain.gain.exponentialRampToValueAtTime(volume, t + at + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + at + 0.09);
+      osc.connect(gain).connect(this.master!);
+      osc.start(t + at);
+      osc.stop(t + at + 0.1);
+    });
+  }
+
+  /**
    * Fire a transient sound. With `position` it plays through a PannerNode (spatial); without, it plays at the
    * master gain (2D — UI/menu sounds). Falls back to a plain HTMLAudioElement if the buffer can't be decoded.
    */
