@@ -559,9 +559,7 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
     id: carId,
     name: 'Sim Car',
     kind: 'cube',
-    // POLE POSITION on the circuit's start/finish straight (heading +X along z = −78, like the rival grid);
-    // the proving-ground toys stay in the infield, one boost pad ahead on the racing line.
-    transform: { position: [-4, spawnY, -75], rotation: [0, Math.PI / 2, 0], scale: [1, 1, 1] },
+    transform: { position: [0, spawnY, -34], rotation: [0, 0, 0], scale: [1, 1, 1] },
     renderer: renderer('#d24b3c', { modelAssetId: bodyAsset?.id, metalness: 0.5, roughness: 0.45 }),
     // No Rapier physics component: the raycast vehicle controller builds its own dynamic chassis from the model.
     vehicle,
@@ -1184,33 +1182,7 @@ export async function createSimRacingTemplate(): Promise<string> {
   const garage = buildGarage();
   const score = buildScoreHud();
   const conditions = buildTrackConditions(rainEmitterId);
-  // THE RACE: the neon perimeter circuit (checkpoint gates the lap timer + AI line both read), race
-  // control (3-2-1-GO countdown that holds the grid via the Driving var, with the start-light tree +
-  // synthesized beeps + the perfect-launch bonus all keying off it), and three AI rivals on the grid
-  // behind the player's pole slot (staggered two-wide, heading +X down the start/finish straight).
-  const race = buildRaceControl();
-  const rivalA = await buildRivalCar('CarModel1_body.glb', 'CarModel1_wheel.glb', '#3f9df0', 'Rival Azure', 0.78, -10, -81);
-  const rivalB = await buildRivalCar('CarModel3_body.glb', 'CarModel3_wheel.glb', '#f2c53d', 'Rival Gold', 0.7, -16, -75);
-  const rivalC = await buildRivalCar('Ban_body.glb', 'Ban_wheel.glb', '#2ecf6f', 'Rival Verde', 0.62, -22, -81);
   const objects: SceneObject[] = [];
-  objects.push(...buildCircuit(boost));
-
-  // --- START LIGHT TREE: a gantry over the start/finish gate. The lamps are NAMED "Start Light 1..3" —
-  //     the engine's countdown pass follows the Count var: red one-by-one on 3/2/1, all green at GO!,
-  //     dim once the race is running (countdown beeps are synthesized off the same var). ---
-  objects.push(staticBox('Gantry Post In', [0, 3.1, -86.5], [0.6, 6.2, 0.6], '#15171c', { metalness: 0.6, roughness: 0.4 }));
-  objects.push(staticBox('Gantry Post Out', [0, 3.1, -69.5], [0.6, 6.2, 0.6], '#15171c', { metalness: 0.6, roughness: 0.4 }));
-  objects.push(staticBox('Gantry Beam', [0, 6.4, -78], [0.5, 0.55, 17.6], '#15171c', { metalness: 0.6, roughness: 0.4 }));
-  [-80.4, -78, -75.6].forEach((z, i) => {
-    objects.push(
-      staticBox(`Start Light ${i + 1}`, [0, 5.7, z], [0.55, 0.8, 1.7], '#1a0808', {
-        emissive: '#ff3b30',
-        emissiveIntensity: 0.12,
-        metalness: 0.3,
-        roughness: 0.5,
-      }),
-    );
-  });
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
   objects.push(staticBox('Track', [0, -0.5, 0], [220, 1, 220], '#23262d', { friction: 1.3, roughness: 0.95 }));
@@ -1268,9 +1240,7 @@ export async function createSimRacingTemplate(): Promise<string> {
   ];
   crateRows.forEach((row, r) => {
     row.forEach((x, c) => {
-      // z = 70 keeps the stack past the landing ramp but INSIDE the circuit ribbon (the north straight
-      // runs through z ≈ 78) so the AI rivals don't plow the pyramid every lap — that's the player's job.
-      const crate = prop(`Crate ${r}-${c}`, [x, CRATE / 2 + r * (CRATE + 0.02), 70], [CRATE, CRATE, CRATE], '#9c6b3f', 8);
+      const crate = prop(`Crate ${r}-${c}`, [x, CRATE / 2 + r * (CRATE + 0.02), 76], [CRATE, CRATE, CRATE], '#9c6b3f', 8);
       crate.fracture = { enabled: true, pattern: 'chunks', pieces: 3, jitter: 0.4, seed: r * 4 + c + 1, strength: 3, impactThreshold: 13, focusImpact: true };
       objects.push(crate);
     });
@@ -1583,27 +1553,17 @@ export async function createSimRacingTemplate(): Promise<string> {
     transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
     script: { blueprintId: conditions.blueprint.id, graphId: conditions.graph.id, enabled: true },
   });
-  // Race control: runs the 3-2-1-GO countdown blueprint (Driving gate + the Count var the light tree,
-  // beeps and perfect-launch all read).
-  objects.push({
-    id: makeId('obj'),
-    name: 'Race Control',
-    kind: 'empty',
-    transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-    script: { blueprintId: race.blueprint.id, graphId: race.graph.id, enabled: true },
-  });
-
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, score.comboVar, conditions.wetVar, ...race.vars],
-    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, race.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
-    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, conditions.graph, race.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
-    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud, race.hud],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, score.comboVar, conditions.wetVar],
+    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
+    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, conditions.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
+    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId
         ? {
             ...scene,
-            objects: [...scene.objects, ...objects, ...carObjects, ...rivalA, ...rivalB, ...rivalC],
+            objects: [...scene.objects, ...objects, ...carObjects],
             environment: {
               ...defaultSceneEnvironment(),
               skyMode: 'procedural',
