@@ -1012,6 +1012,7 @@ function VehicleSection({
               {num('Engine Force', 'engineForce', 50, 2600)}
               {num('Brake Force', 'brakeForce', 50, 2200)}
               {num('Handbrake Force', 'handbrakeForce', 50, 1400)}
+              {num('Engine Braking', 'engineBrakeForce', 50, 600)}
               {num('Brake Bias (front)', 'brakeBias', 0.05, 0.55)}
               <label className="field-row">
                 <span>Drivetrain</span>
@@ -1069,6 +1070,8 @@ function VehicleSection({
                 <span>Surface Grip</span>
                 <input type="checkbox" checked={v.surfaceGripEnabled ?? true} onChange={(event) => onChange({ surfaceGripEnabled: event.target.checked })} />
               </label>
+              {num('Counter-steer Assist', 'counterSteerAssist', 0.05, 0.5)}
+              <p className="field-hint">Counter-steer assist feeds automatic opposite lock when the car genuinely slides — drifts stay catchable. 0 = off, 1 = strong.</p>
               <p className="field-hint">
                 With Surface Grip on, each wheel reads the <code>surface</code> instance variable of whatever it rolls over
                 (tarmac/curb/dirt/grass/gravel/sand/snow/ice) — running wide onto tagged grass costs real grip. Untagged ground = tarmac.
@@ -1085,6 +1088,7 @@ function VehicleSection({
               {num('Wheel Radius', 'wheelRadius', 0.02, 0.4)}
               {num('Friction Slip (grip)', 'wheelFrictionSlip', 0.05, 1.4)}
               {num('Side Friction', 'sideFrictionStiffness', 0.05, 0.9)}
+              {num('Load Sensitivity', 'loadSensitivity', 0.05, 0.6)}
               {num('Susp. Rest Length', 'suspensionRestLength', 0.02, 0.35)}
               {num('Susp. Stiffness', 'suspensionStiffnessSim', 1, 24)}
               {num('Compression Damping', 'suspensionCompression', 0.02, 0.82)}
@@ -1295,9 +1299,15 @@ function CharacterSection({
           {num('Fall Multiplier', 'fallMultiplier', 0.1, 1.9)}
           {num('Jump Cut', 'jumpCutMultiplier', 0.05, 0.45)}
           {num('Coyote Time', 'coyoteTime', 0.02, 0.12)}
+          {num('Jump Buffer', 'jumpBufferTime', 0.02, 0.15)}
+          {num('Landing Recovery', 'landingRecovery', 0.05, 0.4)}
+          {num('Apex Hang', 'apexHang', 0.05, 0.65)}
+          {num('Sprint Turn ×', 'sprintTurnFactor', 0.05, 0.55)}
           <p className="field-hint">
             Higher Accel/Decel = snappier starts &amp; stops. Fall Multiplier &gt;1 makes the jump less floaty; Jump Cut
-            shortens a tapped jump; Coyote Time lets you jump just after leaving a ledge.
+            shortens a tapped jump; Coyote Time lets you jump just after leaving a ledge; Jump Buffer remembers a
+            press made just before landing. Landing Recovery (0–1) saps speed + dips the camera after hard
+            landings; Apex Hang &lt;1 floats the jump peak; Sprint Turn ×&lt;1 makes fast runs carve wider arcs.
           </p>
 
           <label className="field-row">
@@ -1343,10 +1353,51 @@ function CharacterSection({
             </>
           )}
 
+          <h4 className="inspector-subhead">Lock-On Targeting</h4>
+          <label className="field-row">
+            <span>Lock-On</span>
+            <input
+              type="checkbox"
+              checked={Boolean(cc.lockOnEnabled)}
+              onChange={(event) => onChange({ lockOnEnabled: event.target.checked })}
+            />
+          </label>
+          {cc.lockOnEnabled && (
+            <>
+              <KeyBinding label="Lock-On Key" value={cc.keyLockOn ?? 'KeyT'} onChange={(keyLockOn) => onChange({ keyLockOn })} />
+              {num('Lock Range', 'lockOnRange', 0.5, 16)}
+              {num('Break Distance', 'lockOnBreakDistance', 0.5, 22)}
+              <p className="field-hint">
+                Locks the nearest living target (an object with a health instance variable, or tagged enemy). The
+                character strafes facing it and the camera keeps both in frame; the lock breaks on death or distance.
+              </p>
+            </>
+          )}
+
           <h4 className="inspector-subhead">Roll / Dodge</h4>
           {num('Roll Speed', 'rollSpeed')}
           {num('Roll Duration', 'rollDuration', 0.05)}
-          <p className="field-hint">Roll distance ≈ {(cc.rollSpeed * cc.rollDuration).toFixed(1)} units (speed × duration).</p>
+          <p className="field-hint">
+            Roll distance ≈ {(cc.rollSpeed * cc.rollDuration).toFixed(1)} units (speed × duration). The dodge goes
+            toward the held movement direction (sideways/backwards too — vital while locked on).
+          </p>
+
+          <h4 className="inspector-subhead">Sprint Slide</h4>
+          <label className="field-row">
+            <span>Slide</span>
+            <input
+              type="checkbox"
+              checked={cc.slideEnabled ?? true}
+              onChange={(event) => onChange({ slideEnabled: event.target.checked })}
+            />
+          </label>
+          {(cc.slideEnabled ?? true) && (
+            <>
+              {num('Slide Duration', 'slideDuration', 0.05, 0.9)}
+              {num('Slide Boost ×', 'slideSpeedBoost', 0.05, 1.2)}
+              <p className="field-hint">Tap crouch while sprinting to power-slide; jumping cancels into a slide-hop.</p>
+            </>
+          )}
 
           <h4 className="inspector-subhead">Controls</h4>
           <KeyBinding label="Forward" value={cc.keyForward} onChange={(keyForward) => onChange({ keyForward })} />
@@ -1424,6 +1475,11 @@ function CharacterSection({
                 <input type="number" step={0.1} value={cc.cameraOffset[2]} onChange={(event) => setOffset(2, Number(event.target.value))} />
               </label>
               {num('Pitch', 'cameraPitch', 0.05)}
+              <KeyBinding
+                label="Swap Shoulder"
+                value={cc.keySwapShoulder ?? 'KeyV'}
+                onChange={(keySwapShoulder) => onChange({ keySwapShoulder })}
+              />
               <label className="field-row">
                 <span>Mouse Look</span>
                 <input type="checkbox" checked={cc.mouseLook} onChange={(event) => onChange({ mouseLook: event.target.checked })} />

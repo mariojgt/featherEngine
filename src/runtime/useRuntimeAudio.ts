@@ -47,6 +47,28 @@ export function useRuntimeAudio() {
     };
   }, [isPlaying]);
 
+  // Race-countdown beeps: watch the "Count" project var (a countdown blueprint steps it 3→2→1→0) and chirp
+  // each step — short low blips for the red lights, a held two-tone chord at the green. Synthesized (no
+  // asset needed), subscribed imperatively so it never re-renders React.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const countId = useEditorStore.getState().variables.find((v) => v.name === 'Count')?.id;
+    if (!countId) return;
+    let last: number | undefined;
+    const check = (value: unknown) => {
+      const count = Math.round(Number(value ?? -1));
+      if (!Number.isFinite(count) || count === last) return;
+      const stepped = last !== undefined; // don't beep for the initial value on Play start…
+      last = count;
+      if (!stepped && count !== 3) return; // …unless Play opens straight onto the first red light
+      if (count >= 1 && count <= 3) audioEngine.playCountdownBeep(false);
+      else if (count === 0) audioEngine.playCountdownBeep(true);
+    };
+    check(useEditorStore.getState().runtimeVariableValues[countId]);
+    const unsubscribe = useEditorStore.subscribe((state) => check(state.runtimeVariableValues[countId]));
+    return unsubscribe;
+  }, [isPlaying]);
+
   // Driven-vehicle audio: a looping engine whose playback rate rises with rpm + a looping tire-skid bed whose
   // volume tracks slip. Updated imperatively from runtimeVehicleSound (set every tick) via a store subscription
   // so it never triggers a React re-render. Created lazily once a car starts driving; torn down on Stop.

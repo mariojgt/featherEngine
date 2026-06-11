@@ -15,7 +15,7 @@ import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkidMarks } from '../three/SkidMarks';
 import { ShaderPrewarm } from '../three/ShaderPrewarm';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
-import { FollowCamera, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
+import { FollowCamera, LockOnMarker, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
 import { EditorCamera, editorNav, type ViewPreset } from '../three/EditorCamera';
@@ -1109,6 +1109,8 @@ function SceneContent({
       ) : (
         <EditorCamera focusNonce={focusNonce} viewCommand={viewCommand} />
       )}
+      {/* Marker over the player's lock-on target — only ever set during Play, renders nothing otherwise. */}
+      {isPlaying && <LockOnMarker />}
       {/* Post-FX (bloom/vignette + cinematic grade/DoF) during Play so the editor matches the shipped
           game look — and also while scrubbing a cinematic preview so grading/focus are visible there. */}
       {(isPlaying || previewingCinematic || volumetricFogActive) && <PostFx />}

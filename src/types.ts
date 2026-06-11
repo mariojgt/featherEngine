@@ -725,6 +725,9 @@ export type AnimatorParamSource =
   | 'turning'
   | 'moveX'
   | 'moveY'
+  | 'sliding'
+  | 'landing'
+  | 'rollX'
   | 'variable';
 
 export interface AnimatorParameter {
@@ -837,6 +840,37 @@ export interface CharacterControllerComponent {
   /** Grace window (seconds) after walking off a ledge during which a jump still registers. Default 0.12. */
   coyoteTime?: number;
   /**
+   * Jump buffering: a jump pressed up to this many seconds BEFORE landing is remembered and fires on
+   * touchdown (the twin of coyoteTime — together they make jumping feel reliable). Default 0.15. 0 disables.
+   */
+  jumpBufferTime?: number;
+  /**
+   * Landing recovery (0..1): a hard touchdown briefly saps move speed and dips the camera, scaled by
+   * impact velocity — gives jumps consequence and weight. Drives the "landing" animator source.
+   * Default 0.4. 0 disables.
+   */
+  landingRecovery?: number;
+  /**
+   * Gravity multiplier near the jump apex (while |vertical velocity| is small): <1 adds a brief "hang"
+   * at the top of the arc so jumps feel controllable, while fallMultiplier keeps the descent snappy.
+   * Default 0.65. 1 disables.
+   */
+  apexHang?: number;
+  /**
+   * Turn-rate multiplier at full sprint speed — turning eases from full rate at a standstill down to
+   * this at sprint, so sprint arcs feel weighty instead of pivoting on a dime. Default 0.55. 1 disables.
+   */
+  sprintTurnFactor?: number;
+  /**
+   * Sprint-slide: tapping crouch at sprint speed drops into a momentum slide (steerable, decaying,
+   * jump-cancellable) that drives the "sliding" animator source. Default true.
+   */
+  slideEnabled?: boolean;
+  /** Max slide duration (seconds). Default 0.9. */
+  slideDuration?: number;
+  /** Slide entry speed = current speed × this (the little surge that sells the slide). Default 1.2. */
+  slideSpeedBoost?: number;
+  /**
    * Ground acceleration (units/sec²) ramping horizontal speed UP toward the target. Higher = snappier
    * starts; lower = weightier. `undefined` keeps the legacy instant-velocity behavior. Default 60.
    */
@@ -905,6 +939,20 @@ export interface CharacterControllerComponent {
   interactRange?: number;
   /** Emote key (held) — drives the "emoting" parameter (dance/wave). */
   keyEmote: string;
+  // --- Lock-on targeting (Z-targeting) ---
+  /**
+   * Enable lock-on targeting: the lock-on key toggles a lock onto the nearest living target (an object
+   * with a `health` instance variable > 0 or an `enemy` tag) in range. While locked the character strafes
+   * facing the target and the follow camera steers to keep both in frame. The lock breaks when the target
+   * dies, is destroyed, or moves past `lockOnBreakDistance`.
+   */
+  lockOnEnabled?: boolean;
+  /** Lock-on toggle key. Default "KeyT". */
+  keyLockOn?: string;
+  /** Max distance (world units) to acquire a lock-on target. Default 16. */
+  lockOnRange?: number;
+  /** Distance at which an existing lock breaks. Default 22. */
+  lockOnBreakDistance?: number;
   /** Test key that toggles the physics ragdoll on this character during Play. */
   keyRagdoll: string;
   // --- Player sound effects (audio asset ids; played automatically by the runtime on the matching event). ---
@@ -930,6 +978,12 @@ export interface CharacterControllerComponent {
    * Negative Z sits behind a +Z-forward model. Positioned with the on-screen camera gizmo.
    */
   cameraOffset: Vector3Tuple;
+  /**
+   * Shoulder-swap key (third person): tapping it mirrors the camera's side offset to the other shoulder,
+   * smoothly sweeping across the character's back. Also flips the aim-down-sights shoulder shift, so it
+   * matters even with a centred camera. Default "KeyV".
+   */
+  keySwapShoulder?: string;
   /** Orbit the follow camera with the mouse (click the view to capture the pointer). */
   mouseLook: boolean;
   /** Radians of camera rotation per pixel of mouse movement. */
@@ -1528,6 +1582,18 @@ export interface VehicleComponent {
   /** Per-wheel surface grip: each wheel reads the `surface` instance variable of whatever it's rolling on
    *  (tarmac/curb/dirt/grass/gravel/sand/mud/snow/ice) and scales its grip — going wide costs lap time. */
   surfaceGripEnabled?: boolean;
+  // --- Raycast sim: driving feel (engine braking, weight transfer, counter-steer) ---
+  /** Engine braking (newtons at the driven wheels) when coasting off-throttle in gear — compression braking
+   *  that scales with gear ratio and RPM, so lifting (or a manual downshift) genuinely slows the car into a
+   *  corner instead of it freewheeling. 0 disables. */
+  engineBrakeForce?: number;
+  /** Load-sensitive lateral grip, 0..1: weight transfer shifts cornering grip toward the loaded axle —
+   *  trail-braking sharpens turn-in, lifting mid-corner loosens the rear (lift-off oversteer), throttle
+   *  plants the rear on exit. Balance only (average grip is unchanged). 0 = off. */
+  loadSensitivity?: number;
+  /** Counter-steer assist, 0..1: feeds automatic opposite lock toward the chassis slip angle once the car
+   *  is genuinely sliding, keeping drifts and snap-oversteer catchable without fast hands. 0 = off. */
+  counterSteerAssist?: number;
   // --- AI rival driver (works for both arcade and raycast cars) ---
   /** This car drives ITSELF around the scene's "Checkpoint <n>" gates (the same objects the lap system
    *  reads) — no blueprint needed. It steers toward the next gate, slows for corners, reverses out when

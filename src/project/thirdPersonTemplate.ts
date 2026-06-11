@@ -316,7 +316,7 @@ async function assemblePlayerKit(pawnId: string, switchSound: string | undefined
   store.updateUIDocument(hud, { visibleOnStart: true });
   const hintId = store.addUIPreset(hud, undefined, 'label');
   store.updateUIElement(hud, hintId, {
-    text: 'WASD Move   ·   Shift Sprint   ·   Space Jump   ·   LMB Attack   ·   RMB Aim   ·   Tab Weapons   ·   E Interact',
+    text: 'WASD Move   ·   Shift Sprint   ·   Space Jump   ·   LMB Attack   ·   RMB Aim   ·   T Lock-On   ·   V Shoulder   ·   Tab Weapons   ·   E Interact',
     style: {
       color: '#c3cbd9',
       fontSize: '11px',
@@ -877,6 +877,32 @@ function buildMovementRoom(playerId: string, ui: TutorialUi): void {
     scaled(post, [0.35, 0.65, 0.35]);
     useEditorStore.getState().updateRenderer(post, { materialOverrides: { emissiveColor: '#38bdf8', emissiveIntensity: 0.6 } });
   });
+  // Lock-on training dummies: living targets (health instance vars) so T-targeting, melee and the pistol
+  // all have something to bite on in the very first room. Fixed bodies — they block movement and take hits.
+  const dummies: Vector3Tuple[] = [
+    [1.1, 0.75, z + 3.4],
+    [3.0, 0.75, z + 4.3],
+    [-0.9, 0.75, z + 4.7],
+  ];
+  dummies.forEach((pos, i) => {
+    const dummy = store.createObjectWithProps('capsule', {
+      name: `Training Dummy ${i + 1}`,
+      position: pos,
+      color: '#e35d4f',
+      physics: { enabled: true, bodyType: 'fixed', collider: 'capsule' },
+    });
+    scaled(dummy, [0.5, 0.75, 0.5]);
+    store.updateRenderer(dummy, { roughness: 0.5, materialOverrides: { emissiveColor: '#e35d4f', emissiveIntensity: 0.35 } });
+    store.setObjectVariable(dummy, 'health', 60);
+    store.setObjectVariable(dummy, 'maxHealth', 60);
+  });
+  createWorldLabel(
+    'Lock-On Label',
+    [1.1, 2.3, z + 4.1],
+    'LOCK-ON',
+    'Press T near a dummy to lock on - strafe circles around it. V swaps the camera shoulder.',
+    '#e35d4f',
+  );
   buildJumpPad(playerId, ui);
 }
 

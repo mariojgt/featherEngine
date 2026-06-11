@@ -500,6 +500,12 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
     suspensionRelaxation: 0.95,
     maxSuspensionForce: 40000,
     steerAngle: 0.58,
+    // Drive feel: light engine braking (lift-and-coast sets the nose for a corner without feeling draggy),
+    // weight-transfer grip balance (trail-brake rotates, throttle plants the exit), and a firm counter-steer
+    // assist so handbrake drifts stay catchable at this tune's speeds.
+    engineBrakeForce: 750,
+    loadSensitivity: 0.55,
+    counterSteerAssist: 0.6,
     engineSoundId: engineSound?.id,
     skidSoundId: skidSound?.id,
     brakeSoundId: brakeSound?.id,
@@ -553,7 +559,9 @@ async function buildSimCar(): Promise<{ carId: string; rainEmitterId: string; ob
     id: carId,
     name: 'Sim Car',
     kind: 'cube',
-    transform: { position: [0, spawnY, -34], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    // POLE POSITION on the circuit's start/finish straight (heading +X along z = −78, like the rival grid);
+    // the proving-ground toys stay in the infield, one boost pad ahead on the racing line.
+    transform: { position: [-4, spawnY, -75], rotation: [0, Math.PI / 2, 0], scale: [1, 1, 1] },
     renderer: renderer('#d24b3c', { modelAssetId: bodyAsset?.id, metalness: 0.5, roughness: 0.45 }),
     // No Rapier physics component: the raycast vehicle controller builds its own dynamic chassis from the model.
     vehicle,
@@ -694,6 +702,9 @@ async function buildRivalCar(
     suspensionRelaxation: 0.95,
     maxSuspensionForce: 40000,
     steerAngle: 0.58,
+    engineBrakeForce: 750,
+    loadSensitivity: 0.55,
+    counterSteerAssist: 0.6,
     transmission: 'auto',
     collisionSoundId: collisionSound?.id,
   };
@@ -950,26 +961,36 @@ function buildTrackConditions(rainEmitterId: string): { wetVar: ProjectVariable;
   return { wetVar, blueprint, graph };
 }
 
-/** Score HUD: a top-right SCORE readout + a center DRIFT!/BIG AIR! banner. The runtime writes the Score/Stunt
- *  vars (drift slip + airtime), so no blueprint is needed — the HUD just binds to them. */
-function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable; hud: UIDocument } {
+/** Score HUD: a top-right SCORE readout with a live "+N" COMBO chip under it (pending style points — they
+ *  bank into Score after a second of clean driving and are LOST if you crash first), plus a center
+ *  DRIFT!/BIG AIR!/PERFECT LAUNCH! banner. The runtime writes the Score/Combo/Stunt vars — no blueprint. */
+function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable; comboVar: ProjectVariable; hud: UIDocument } {
   const now = Date.now();
   const scoreVar: ProjectVariable = { id: makeId('var'), name: 'Score', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   const stuntVar: ProjectVariable = { id: makeId('var'), name: 'Stunt', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const comboVar: ProjectVariable = { id: makeId('var'), name: 'Combo', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   const score = uiText('Score', {
     color: '#ffe08a', fontSize: '22px', fontWeight: '800', textAlign: 'right',
     position: 'absolute', custom: { top: '16px', right: '18px', letterSpacing: '1px', textShadow: '0 0 12px #ffb24788', fontVariantNumeric: 'tabular-nums' },
   }, 'SCORE 0', [{ target: 'text', expression: `'SCORE ' + Score` }]);
+  // Pending combo: visible while style points are on the line — crash and it vanishes unbanked.
+  const combo = uiText('Combo', {
+    color: '#22e0ff', fontSize: '15px', fontWeight: '800', textAlign: 'right',
+    position: 'absolute', custom: { top: '44px', right: '18px', letterSpacing: '1px', textShadow: '0 0 12px #22e0ff88', fontVariantNumeric: 'tabular-nums', fontStyle: 'italic' },
+  }, '', [
+    { target: 'text', expression: `'+' + Combo` },
+    { target: 'visible', expression: `Combo > 0` },
+  ]);
   const banner = uiText('Stunt Banner', {
     color: '#ff8a3d', fontSize: '40px', fontWeight: '800', textAlign: 'center',
     position: 'absolute', custom: { top: '74px', left: '50%', transform: 'translateX(-50%)', letterSpacing: '4px', textShadow: '0 0 18px #ff8a3daa' },
   }, '', [
-    { target: 'text', expression: `(Stunt == 1 ? 'DRIFT!' : Stunt == 2 ? 'BIG AIR!' : '')` },
+    { target: 'text', expression: `(Stunt == 1 ? 'DRIFT!' : Stunt == 2 ? 'BIG AIR!' : Stunt == 3 ? 'PERFECT LAUNCH!' : '')` },
     { target: 'visible', expression: `Stunt > 0` },
   ]);
-  const root = uiPanel('Score Root', { width: '100%', height: '100%', position: 'relative' }, [score, banner]);
+  const root = uiPanel('Score Root', { width: '100%', height: '100%', position: 'relative' }, [score, combo, banner]);
   const hud: UIDocument = { id: makeId('ui'), name: 'Score HUD', surface: 'screen', root, visibleOnStart: true, createdAt: now };
-  return { scoreVar, stuntVar, hud };
+  return { scoreVar, stuntVar, comboVar, hud };
 }
 
 /** RACE CONTROL: the project vars the engine's race systems read/write (Lap/LapTime/BestLap/Checkpoint
@@ -1163,7 +1184,33 @@ export async function createSimRacingTemplate(): Promise<string> {
   const garage = buildGarage();
   const score = buildScoreHud();
   const conditions = buildTrackConditions(rainEmitterId);
+  // THE RACE: the neon perimeter circuit (checkpoint gates the lap timer + AI line both read), race
+  // control (3-2-1-GO countdown that holds the grid via the Driving var, with the start-light tree +
+  // synthesized beeps + the perfect-launch bonus all keying off it), and three AI rivals on the grid
+  // behind the player's pole slot (staggered two-wide, heading +X down the start/finish straight).
+  const race = buildRaceControl();
+  const rivalA = await buildRivalCar('CarModel1_body.glb', 'CarModel1_wheel.glb', '#3f9df0', 'Rival Azure', 0.78, -10, -81);
+  const rivalB = await buildRivalCar('CarModel3_body.glb', 'CarModel3_wheel.glb', '#f2c53d', 'Rival Gold', 0.7, -16, -75);
+  const rivalC = await buildRivalCar('Ban_body.glb', 'Ban_wheel.glb', '#2ecf6f', 'Rival Verde', 0.62, -22, -81);
   const objects: SceneObject[] = [];
+  objects.push(...buildCircuit(boost));
+
+  // --- START LIGHT TREE: a gantry over the start/finish gate. The lamps are NAMED "Start Light 1..3" —
+  //     the engine's countdown pass follows the Count var: red one-by-one on 3/2/1, all green at GO!,
+  //     dim once the race is running (countdown beeps are synthesized off the same var). ---
+  objects.push(staticBox('Gantry Post In', [0, 3.1, -86.5], [0.6, 6.2, 0.6], '#15171c', { metalness: 0.6, roughness: 0.4 }));
+  objects.push(staticBox('Gantry Post Out', [0, 3.1, -69.5], [0.6, 6.2, 0.6], '#15171c', { metalness: 0.6, roughness: 0.4 }));
+  objects.push(staticBox('Gantry Beam', [0, 6.4, -78], [0.5, 0.55, 17.6], '#15171c', { metalness: 0.6, roughness: 0.4 }));
+  [-80.4, -78, -75.6].forEach((z, i) => {
+    objects.push(
+      staticBox(`Start Light ${i + 1}`, [0, 5.7, z], [0.55, 0.8, 1.7], '#1a0808', {
+        emissive: '#ff3b30',
+        emissiveIntensity: 0.12,
+        metalness: 0.3,
+        roughness: 0.5,
+      }),
+    );
+  });
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
   objects.push(staticBox('Track', [0, -0.5, 0], [220, 1, 220], '#23262d', { friction: 1.3, roughness: 0.95 }));
@@ -1221,7 +1268,9 @@ export async function createSimRacingTemplate(): Promise<string> {
   ];
   crateRows.forEach((row, r) => {
     row.forEach((x, c) => {
-      const crate = prop(`Crate ${r}-${c}`, [x, CRATE / 2 + r * (CRATE + 0.02), 76], [CRATE, CRATE, CRATE], '#9c6b3f', 8);
+      // z = 70 keeps the stack past the landing ramp but INSIDE the circuit ribbon (the north straight
+      // runs through z ≈ 78) so the AI rivals don't plow the pyramid every lap — that's the player's job.
+      const crate = prop(`Crate ${r}-${c}`, [x, CRATE / 2 + r * (CRATE + 0.02), 70], [CRATE, CRATE, CRATE], '#9c6b3f', 8);
       crate.fracture = { enabled: true, pattern: 'chunks', pieces: 3, jitter: 0.4, seed: r * 4 + c + 1, strength: 3, impactThreshold: 13, focusImpact: true };
       objects.push(crate);
     });
@@ -1534,18 +1583,27 @@ export async function createSimRacingTemplate(): Promise<string> {
     transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
     script: { blueprintId: conditions.blueprint.id, graphId: conditions.graph.id, enabled: true },
   });
+  // Race control: runs the 3-2-1-GO countdown blueprint (Driving gate + the Count var the light tree,
+  // beeps and perfect-launch all read).
+  objects.push({
+    id: makeId('obj'),
+    name: 'Race Control',
+    kind: 'empty',
+    transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    script: { blueprintId: race.blueprint.id, graphId: race.graph.id, enabled: true },
+  });
 
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, conditions.wetVar],
-    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
-    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, conditions.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
-    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, score.comboVar, conditions.wetVar, ...race.vars],
+    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, race.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
+    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, conditions.graph, race.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
+    uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud, race.hud],
     activeUIDocumentId: menu.hud.id,
     scenes: draft.scenes.map((scene) =>
       scene.id === draft.activeSceneId
         ? {
             ...scene,
-            objects: [...scene.objects, ...objects, ...carObjects],
+            objects: [...scene.objects, ...objects, ...carObjects, ...rivalA, ...rivalB, ...rivalC],
             environment: {
               ...defaultSceneEnvironment(),
               skyMode: 'procedural',

@@ -351,6 +351,8 @@ export interface VehicleWheelState {
   inContact: boolean;
   /** Lateral (side) impulse magnitude — proxy for tire slip → skid audio / marks. */
   sideImpulse: number;
+  /** Lowercased `surface` tag of what this wheel rolls on ('' = untagged tarmac) — drives kick-up VFX. */
+  surface: string;
 }
 
 export interface PhysicsContactEvent {
@@ -438,6 +440,11 @@ interface VehicleEntry {
   shiftDownHeld: boolean;
   /** Per-wheel surface grip multiplier (1 = tarmac), smoothed so crossing a curb doesn't snap the grip. */
   surfaceGrip: number[];
+  /** Per-wheel suspension compression ratio (load proxy) from the last step — drives weight-transfer grip. */
+  wheelLoad: number[];
+  /** Per-wheel surface tag (lowercased `surface` instance variable of what the wheel rolls on; '' = untagged
+   *  tarmac) — read back so the tick can drive surface-aware kick-up VFX (dust/grass/spray). */
+  wheelSurface: string[];
   signature: string;
 }
 
@@ -774,6 +781,8 @@ class PhysicsRuntime {
       shiftUpHeld: false,
       shiftDownHeld: false,
       surfaceGrip: wheelIds.map(() => 1),
+      wheelLoad: wheelIds.map(() => 0),
+      wheelSurface: wheelIds.map(() => ''),
       signature: vehicleSignature(object),
     });
     this.handleToId.set(collider.handle, object.id);
@@ -1285,6 +1294,41 @@ class PhysicsRuntime {
       // steering authority instead of locking and ploughing straight on.
       const absActive = (v.absEnabled ?? true) && braking && (Math.abs(input.steer) > 0.25 || Math.abs(lateralSpeed) > 2);
 
+      // ENGINE BRAKING: lifting off in gear drags the driven wheels — compression braking that scales with
+      // the gear's ratio and RPM (1st slows hard, the overdrive barely), so lift-and-coast and a manual
+      // downshift both genuinely slow the car into a corner instead of it freewheeling there.
+      const coasting = !braking && Math.abs(input.throttle) < 0.05 && entry.gear >= 1 && Math.abs(speed) > 2;
+      const rpmNorm = Math.min(Math.max((rpm - idleRpm) / Math.max(1, maxRpm - idleRpm), 0), 1);
+      const engineBrake = coasting ? (v.engineBrakeForce ?? 600) * gearScale * (0.3 + 0.7 * rpmNorm) : 0;
+
+      // COUNTER-STEER ASSIST: once the chassis genuinely slides, feed automatic opposite lock toward the
+      // slip angle (the direction the car is ACTUALLY travelling) so handbrake drifts and snap-oversteer
+      // stay catchable without fast hands. The dead zone leaves healthy cornering slip alone.
+      const assistGain = Math.min(Math.max(v.counterSteerAssist ?? 0.5, 0), 1);
+      let steerAssist = 0;
+      if (assistGain > 0 && speed > 5) {
+        const slip = Math.atan2(lateralSpeed, Math.max(5, speed));
+        const dead = 0.07; // ~4° of body slip is normal cornering — don't fight the driver there
+        steerAssist = Math.min(
+          Math.max(assistGain * Math.sign(slip) * Math.max(0, Math.abs(slip) - dead), -0.5 * steerAngle),
+          0.5 * steerAngle,
+        );
+      }
+
+      // WEIGHT TRANSFER → GRIP BALANCE: each wheel's load share comes from its suspension compression
+      // (last step's readback). Braking loads the fronts — sharper turn-in and a light rear (trail-brake
+      // rotation, lift-off oversteer); throttle loads the rears — planted corner exits. Pure balance:
+      // only the deviation from the average matters, so total grip is unchanged.
+      const loadSens = Math.min(Math.max(v.loadSensitivity ?? 0.6, 0), 1);
+      const restLen = Math.max(v.suspensionRestLength ?? 0.35, 0.01);
+      let meanLoad = 0;
+      for (let i = 0; i < n; i++) {
+        const len = entry.controller.wheelSuspensionLength(i) ?? restLen;
+        const c = entry.controller.wheelIsInContact(i) ? Math.min(Math.max((restLen - len) / restLen, -1), 1) : 0;
+        entry.wheelLoad[i] = c;
+        meanLoad += c / Math.max(1, n);
+      }
+
       // Drivetrain split / brake bias / handbrake all read each wheel's DECLARED axle, never array position.
       const frontWheels = entry.frontWheelCount;
       const rearWheels = Math.max(1, n - frontWheels);
@@ -1297,6 +1341,7 @@ class PhysicsRuntime {
         // connection point (chassis-local → world) and look up the hit object's `surface` instance variable;
         // untagged geometry is tarmac. Smoothed so clipping a curb doesn't snap the grip for one frame.
         let targetGrip = 1;
+        let surfaceTag = '';
         if (v.surfaceGripEnabled ?? true) {
           reuseVec.set(entry.connectionX[i] ?? 0, entry.connectionY[i] ?? 0, entry.connectionZ[i] ?? 0).applyQuaternion(reuseQuat);
           const t = entry.body.translation();
@@ -1305,10 +1350,11 @@ class PhysicsRuntime {
           const hit = this.world.castRay(ray, rayLen, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, entry.collider);
           if (hit) {
             const hitId = this.handleToId.get(hit.collider.handle);
-            const surface = hitId ? String(byId.get(hitId)?.variables?.surface ?? '') : '';
-            targetGrip = SURFACE_GRIP[surface.toLowerCase()] ?? 1;
+            surfaceTag = (hitId ? String(byId.get(hitId)?.variables?.surface ?? '') : '').toLowerCase();
+            targetGrip = SURFACE_GRIP[surfaceTag] ?? 1;
           }
         }
+        entry.wheelSurface[i] = surfaceTag;
         // Weather: a global grip multiplier (the "Wet" project var) slicks EVERY surface — rain-soaked
         // tarmac brakes long and slides early, and already-loose surfaces get treacherous.
         targetGrip *= Math.min(1, Math.max(0.25, input.gripScale ?? 1));
@@ -1326,14 +1372,23 @@ class PhysicsRuntime {
         // ride the brakes downhill or stand on them lap after lap and the pedal goes long until they cool.
         if (braking) brake += brakeForce * (isFront ? brakeBias : 1 - brakeBias) * (absActive ? 0.62 : 1) * (input.brakeScale ?? 1);
         if (input.handbrake && !isFront) brake += handbrakeForce;
+        // Engine braking drags only the DRIVEN wheels (an FWD car tucks its nose, an RWD car settles the tail).
+        if (engineBrake > 0 && driven) brake += engineBrake / drivenCount;
         entry.controller.setWheelBrake(i, brake);
-        entry.controller.setWheelSteering(i, entry.rig[i]?.steered ? input.steer * steerAngle : 0);
+        entry.controller.setWheelSteering(
+          i,
+          entry.rig[i]?.steered
+            ? Math.min(Math.max(input.steer * steerAngle + steerAssist, -1.15 * steerAngle), 1.15 * steerAngle)
+            : 0,
+        );
         // ARCADE DRIFT (NFS/Burnout feel): holding the handbrake breaks the REAR tires loose (low side grip) so
         // the back end slides into a controllable power-slide; the front keeps grip so you still steer the drift.
         // Releasing snaps grip back and the slide recovers. Front wheels always keep full grip. Surface grip
         // scales BOTH friction channels, so grass/sand corners wash wide the way they should.
         const handbrakeFactor = input.handbrake && !isFront ? 0.16 : 1;
-        entry.controller.setWheelSideFrictionStiffness(i, baseSideFriction * handbrakeFactor * grip);
+        // Weight-transfer balance: this wheel's lateral grip scaled by how loaded it is vs the average.
+        const loadFactor = Math.min(Math.max(1 + loadSens * ((entry.wheelLoad[i] ?? 0) - meanLoad) * 2.4, 0.6), 1.4);
+        entry.controller.setWheelSideFrictionStiffness(i, baseSideFriction * handbrakeFactor * grip * loadFactor);
         entry.controller.setWheelFrictionSlip(i, baseFrictionSlip * grip);
       }
     }
@@ -1492,6 +1547,7 @@ class PhysicsRuntime {
         axle: entry.rig[i]?.axle ?? 'rear',
         inContact: entry.controller.wheelIsInContact(i),
         sideImpulse: Math.abs(entry.controller.wheelSideImpulse(i) ?? 0),
+        surface: entry.wheelSurface[i] ?? '',
       }));
       // Sideways slide speed: project the chassis velocity onto its local right axis (from yaw).
       const lv = entry.body.linvel();

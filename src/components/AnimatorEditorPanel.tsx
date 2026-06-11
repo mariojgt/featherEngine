@@ -45,8 +45,11 @@ const PARAM_SOURCES: Array<{ value: AnimatorParameter['source']; label: string }
   { value: 'climbing', label: 'Is climbing' },
   { value: 'mantling', label: 'Is mantling/vaulting' },
   { value: 'turning', label: 'Is turning in place' },
+  { value: 'sliding', label: 'Is sliding (sprint-slide)' },
+  { value: 'landing', label: 'Is landing (recovery)' },
   { value: 'moveX', label: 'Move X (strafe −1…1)' },
   { value: 'moveY', label: 'Move Y (fwd/back −1…1)' },
+  { value: 'rollX', label: 'Roll X (dodge −1…1)' },
   { value: 'weaponEquipped', label: 'Weapon equipped' },
   { value: 'variable', label: 'Project variable' },
 ];

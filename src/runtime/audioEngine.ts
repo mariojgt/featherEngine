@@ -198,6 +198,31 @@ class AudioEngine {
   }
 
   /**
+   * Synthesized race-countdown beep (no asset needed) — the F1 light-tree cadence: a short low blip per
+   * red light, and a longer, higher, two-tone chord at the green. Played 2D (it's race-control feedback).
+   */
+  playCountdownBeep(final = false, volume = 0.5): void {
+    const ctx = this.ensureContext();
+    if (!ctx || ctx.state === 'suspended' || !this.master) return;
+    const t = ctx.currentTime;
+    const tones: Array<[number, number, number]> = final
+      ? [[880, 0, 0.42], [1108.7, 0, 0.42]] // green: a bright major-third chord, held
+      : [[440, 0, 0.12]]; // red step: short low blip
+    for (const [freq, at, dur] of tones) {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, t + at);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t + at);
+      gain.gain.exponentialRampToValueAtTime(volume * (final ? 0.55 : 0.8), t + at + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + at + dur);
+      osc.connect(gain).connect(this.master);
+      osc.start(t + at);
+      osc.stop(t + at + dur + 0.02);
+    }
+  }
+
+  /**
    * Fire a transient sound. With `position` it plays through a PannerNode (spatial); without, it plays at the
    * master gain (2D — UI/menu sounds). Falls back to a plain HTMLAudioElement if the buffer can't be decoded.
    */

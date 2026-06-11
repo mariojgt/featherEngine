@@ -221,6 +221,19 @@ import { recordRuntimeSection } from '../runtime/perfStats';
 let waterImpactSeq = 0;
 const nextWaterImpactId = () => (waterImpactSeq = (waterImpactSeq + 1) % 1_000_000);
 
+// Kick-up puff colour per `surface` tag (matches the SURFACE_GRIP keys the wheel raycast reads) — so a
+// wheel on grass throws green-flecked sod, sand a bright tan rooster, snow a white plume, and so on.
+const SURFACE_DUST: Record<string, string> = {
+  dirt: '#9a7b58',
+  curb: '#b9a37e',
+  grass: '#7a8f5a',
+  gravel: '#8d8d93',
+  sand: '#e2cb95',
+  mud: '#6b5236',
+  snow: '#eef3f8',
+  ice: '#cfe6f5',
+};
+
 /**
  * Surface displacement of a water volume at world (px,pz) and time t — the SAME 4-octave swell the
  * WaterSurface shader renders (plus directional flow), so buoyant bodies ride the VISIBLE crest. Keep
@@ -409,6 +422,16 @@ interface EditorState {
   runtimeWaterWake: Record<string, number>;
   /** Remaining roll/dodge time (seconds) per object — drives the forward dash + "rolling" param. */
   runtimeRoll: Record<string, number>;
+  /** Active lock-on target per character (character id → locked target object id). */
+  runtimeLockOn: Record<string, string>;
+  /** Buffered jump press per character (seconds remaining) — fires on touchdown (jump buffering). */
+  runtimeJumpBuffer: Record<string, number>;
+  /** Landing-recovery time remaining per character (seconds) — saps speed + dips the camera after a hard landing. */
+  runtimeLanding: Record<string, number>;
+  /** Active sprint-slide per character: time remaining, world direction, and current (decaying) speed. */
+  runtimeSlide: Record<string, { remaining: number; dirX: number; dirZ: number; speed: number }>;
+  /** World-space dodge direction ([x, z]) of the active roll per character — feeds the "rollX" animator source. */
+  runtimeRollDir: Record<string, [number, number]>;
   /** Active mantle/vault arcs per character. The controller owns the arc until time reaches duration. */
   runtimeMantle: Record<string, { from: Vector3Tuple; to: Vector3Tuple; time: number; duration: number }>;
   /** Idle turn-in-place intensity per character (0..1), auto-fed into animator params. */
@@ -1255,6 +1278,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeWaterWake: {},
   runtimeClimbing: [],
   runtimeRoll: {},
+  runtimeLockOn: {},
+  runtimeJumpBuffer: {},
+  runtimeLanding: {},
+  runtimeSlide: {},
+  runtimeRollDir: {},
   runtimeMantle: {},
   runtimeTurnInPlace: {},
   runtimeCoyote: {},
@@ -2854,6 +2882,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const crouchWalkId = pick(/crouch.*(fwd|walk)/i, /crouch.*loop/i);
     // In-place roll (we drive the dash in code) — avoid the root-motion "_RM" variant.
     const rollId = pick(/^roll$/i, /^dodge/i, /roll_loop/i);
+    // Sideways dodge clips (UAL ships Dodge_Left/Dodge_Right) → the Roll state becomes a directional blend.
+    const dodgeLeftId = pick(/^dodge_left$/i, /dodge.*left(?!.*rm)/i);
+    const dodgeRightId = pick(/^dodge_right$/i, /dodge.*right(?!.*rm)/i);
     const rollClip = state.animations.find((a) => a.id === rollId);
     const rollDuration = rollClip?.duration ?? 0.7;
     // Match the dash distance to the rig's root-motion roll (~5 units) so the slide aligns with the clip.
@@ -2893,6 +2924,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       { id: crawlParamId, name: 'Crawling', type: 'bool', source: 'crawling', defaultValue: false },
       { id: swimParamId, name: 'Swimming', type: 'bool', source: 'swimming', defaultValue: false },
       { id: climbParamId, name: 'Climbing', type: 'bool', source: 'climbing', defaultValue: false },
+    );
+    // Directional dodge + sprint-slide sources (the runtime feeds both — see the movement pass).
+    const rollXParamId = makeId('param');
+    const slideParamId = makeId('param');
+    parameters.push(
+      { id: rollXParamId, name: 'RollX', type: 'float', source: 'rollX', defaultValue: 0 },
+      { id: slideParamId, name: 'Sliding', type: 'bool', source: 'sliding', defaultValue: false },
     );
     // PRECISE underscore-anchored picks so directional clips don't collide (loose /jog.*fwd.*loop/ matches
     // BOTH "Jog_Fwd_Loop" and "Jog_Fwd_L_Loop" → duplicate samples → one overwrites the other's weight → A-pose).
@@ -3037,7 +3075,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         blendSamples: climbSamples,
       });
     }
-    addState('roll', 'Roll', rollId, false);
+    // Roll: a 1D blend space over RollX when the rig has sideways dodge clips (Dodge_Left ↔ Roll ↔
+    // Dodge_Right) so a directional dodge plays the matching clip; otherwise the plain roll one-shot.
+    if (rollId && (dodgeLeftId || dodgeRightId)) {
+      const id = makeId('state');
+      stateId.roll = id;
+      states.push({
+        id,
+        name: 'Roll',
+        animationId: rollId,
+        speed: 1,
+        loop: false,
+        position: layout.roll,
+        blendParameterId: rollXParamId,
+        blendSamples: [
+          dodgeLeftId && { animationId: dodgeLeftId, value: -1 },
+          { animationId: rollId, value: 0 },
+          dodgeRightId && { animationId: dodgeRightId, value: 1 },
+        ].filter(Boolean) as { animationId: string; value: number }[],
+      });
+    } else addState('roll', 'Roll', rollId, false);
+    // Slide: the crouch pose doubles as a power-slide pose (the rig ships no dedicated slide clip);
+    // swap the clip on the state to customize.
+    addState('slide', 'Slide', crouchIdleId);
     addState('punch', 'Punch', punchId, false);
     addState('kick', 'Kick', kickId, false);
     addState('swordAttack', 'Sword Attack', swordAttackId, false);
@@ -3104,6 +3164,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (stateId.punch) {
       groundStates.forEach((from) => link(from, 'punch', [C(attackParamId, '==', true), ...unarmed], 0.08));
       linkExit('punch', 'locomotion');
+    }
+    // Sprint-slide: highest-priority ground move — registered BEFORE crouch so its "any" link wins while
+    // the crouch key is still held during a tap-slide.
+    if (stateId.slide) {
+      linkAny('slide', [C(slideParamId, '==', true)], 0.1);
+      link('slide', 'locomotion', [C(slideParamId, '==', false)], 0.16);
     }
     // Crouch: enter the crouch states while crouching, return to the locomotion blend space when released.
     if (stateId.crouchIdle || stateId.crouchWalk) {
@@ -5196,6 +5262,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeSwimming: [],
           runtimeClimbing: [],
           runtimeRoll: {},
+          runtimeLockOn: {},
+          runtimeJumpBuffer: {},
+          runtimeLanding: {},
+          runtimeSlide: {},
+          runtimeRollDir: {},
           runtimeMantle: {},
           runtimeTurnInPlace: {},
           runtimeCoyote: {},
@@ -5299,6 +5370,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: [],
         runtimeClimbing: [],
         runtimeRoll: {},
+        runtimeLockOn: {},
+        runtimeJumpBuffer: {},
+        runtimeLanding: {},
+        runtimeSlide: {},
+        runtimeRollDir: {},
         runtimeMantle: {},
         runtimeTurnInPlace: {},
         runtimeCoyote: {},
@@ -5644,6 +5720,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let cameraShake = Math.max(0, state.runtimeCameraShake - delta * 2);
       // Roll/dodge + attack/reload/interact timers carried frame-to-frame (started on their key, counted down here).
       const nextRoll: Record<string, number> = {};
+      const nextLockOn: Record<string, string> = {};
+      const nextJumpBuffer: Record<string, number> = {};
+      const nextLanding: Record<string, number> = {};
+      const nextSlide: EditorState['runtimeSlide'] = {};
+      const nextRollDir: EditorState['runtimeRollDir'] = {};
       const nextMantle: EditorState['runtimeMantle'] = {};
       const nextTurnInPlace: Record<string, number> = {};
       const nextCoyote: Record<string, number> = {};
@@ -7917,6 +7998,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Y / LB buttons hit through the default key aliases.
           const shiftUp = isPlayerCar && Boolean(currentKeys[veh.keyShiftUp ?? 'KeyE']);
           const shiftDown = isPlayerCar && Boolean(currentKeys[veh.keyShiftDown ?? 'KeyQ']);
+          // PERFECT LAUNCH: be at full throttle the instant the start gate (the "Driving" var) waves green
+          // and the launch pays out — a free shot of Nitro, a "PERFECT LAUNCH!" banner (Stunt = 3) and combo
+          // points. Turns every countdown into a drag-tree timing mini-game.
+          if (isPlayerCar && drivingVar) {
+            const wasDriving = toNumber(vehicleVars.__wasDriving ?? 0) > 0.5;
+            if (drivingActive && !wasDriving && throttleSig > 0.9) {
+              if (nitroVar) nextVariableValues[nitroVar.id] = Math.max(0.8, toNumber(nextVariableValues[nitroVar.id] ?? nitroVar.defaultValue));
+              vehicleVars.__stuntKind = 3;
+              vehicleVars.__stuntTimer = 1.6;
+              vehicleVars.__stuntPending = Math.max(0, toNumber(vehicleVars.__stuntPending ?? 0)) + 120;
+              vehicleVars.__stuntLapse = 0;
+            }
+            vehicleVars.__wasDriving = drivingActive ? 1 : 0;
+          }
           vehicleInputs[object.id] = { throttle: throttleSig, steer: steerState, handbrake, engineScale, respawn, shiftUp, shiftDown, gripScale, brakeScale };
           continue;
         }
@@ -8391,10 +8486,71 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           return { ...object, transform: { ...object.transform, position, rotation } };
         }
 
-        // Roll/dodge: started on the roll key while grounded, dashes forward for rollDuration.
+        // Roll/dodge: started on the roll key while grounded, dashes for rollDuration. DIRECTIONAL — the
+        // dash goes toward the held input (camera-relative), so you can dodge sideways/backwards (vital
+        // while locked on); no input falls back to the facing direction (the classic forward roll).
         let rollRemaining = state.runtimeRoll[object.id] ?? 0;
-        if (rollRemaining <= 0 && grounded && currentKeys[cc.keyRoll]) rollRemaining = cc.rollDuration;
+        if (rollRemaining <= 0 && grounded && currentKeys[cc.keyRoll]) {
+          rollRemaining = cc.rollDuration;
+          let inX = (currentKeys[cc.keyLeft] ? 1 : 0) - (currentKeys[cc.keyRight] ? 1 : 0) - gamepadInput.moveX;
+          let inZ = (currentKeys[cc.keyForward] ? 1 : 0) - (currentKeys[cc.keyBackward] ? 1 : 0) + gamepadInput.moveY;
+          const inLen = Math.hypot(inX, inZ);
+          if (inLen > 0.25) {
+            inX /= inLen;
+            inZ /= inLen;
+            if (cc.cameraRelativeMovement && cc.mouseLook) {
+              const yaw = mouseCameraYaw(cc.mouseSensitivity);
+              const cos = Math.cos(yaw);
+              const sin = Math.sin(yaw);
+              [inX, inZ] = [inX * cos + inZ * sin, -inX * sin + inZ * cos];
+            }
+            nextRollDir[object.id] = [inX, inZ];
+          } else {
+            const facing = rotation[1] - cc.modelYawOffset;
+            nextRollDir[object.id] = [Math.sin(facing), Math.cos(facing)];
+          }
+        } else if (rollRemaining > 0 && state.runtimeRollDir[object.id]) {
+          nextRollDir[object.id] = state.runtimeRollDir[object.id];
+        }
         const rolling = rollRemaining > 0;
+
+        // Lock-on (Z-targeting): the lock key toggles a lock onto the nearest living target — an object
+        // with a `health` instance variable > 0 or an `enemy` tag — within lockOnRange. The lock persists
+        // until the target dies, despawns, or moves past lockOnBreakDistance; while held, the facing pass
+        // below strafes the character toward it and FollowCamera steers to keep both in frame.
+        let lockOnTargetId: string | undefined = state.runtimeLockOn[object.id];
+        const lockOnCandidate = (id: string): { pos: Vector3Tuple; dist: number } | undefined => {
+          if (id === object.id || destroyedIds.has(id) || nextDisabled.has(id)) return undefined;
+          const candidate = mappedObjectById.get(id);
+          if (!candidate || state.runtimeHidden.includes(id)) return undefined;
+          const vars = { ...candidate.variables, ...nextObjectVariables[id] };
+          if (vars.health !== undefined && toNumber(vars.health) <= 0) return undefined;
+          if (vars.health === undefined && !vars.enemy) return undefined;
+          const cp = candidate.transform.position;
+          return { pos: cp, dist: Math.hypot(cp[0] - position[0], cp[2] - position[2]) };
+        };
+        if (cc.lockOnEnabled && keyPressedThisTick(cc.keyLockOn ?? 'KeyT')) {
+          if (lockOnTargetId) {
+            lockOnTargetId = undefined; // second press releases the lock
+          } else {
+            let bestDist = cc.lockOnRange ?? 16;
+            for (const other of mappedObjects) {
+              const found = lockOnCandidate(other.id);
+              if (found && found.dist <= bestDist) {
+                lockOnTargetId = other.id;
+                bestDist = found.dist;
+              }
+            }
+          }
+        }
+        let lockOnPos: Vector3Tuple | undefined;
+        if (lockOnTargetId) {
+          const held = lockOnCandidate(lockOnTargetId);
+          if (held && held.dist <= (cc.lockOnBreakDistance ?? 22)) {
+            lockOnPos = held.pos;
+            nextLockOn[object.id] = lockOnTargetId;
+          }
+        }
 
         // Persistent horizontal velocity (carried across frames so movement accelerates/decelerates instead of
         // snapping on/off — the fix for "stiff" feel). Only the auto-WASD path ramps it; scripted/rolling motion
@@ -8403,7 +8559,72 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         let hVelX = !scripted && !rolling ? storedVel?.[0] ?? 0 : 0;
         let hVelZ = !scripted && !rolling ? storedVel?.[2] ?? 0 : 0;
 
-        if (!scripted && !rolling) {
+        // Landing recovery: the post-physics pass seeds this timer on a hard touchdown; it decays here and
+        // saps the movement target speed below (and dips the follow camera) while it lasts.
+        const landingRemaining = Math.max(0, (state.runtimeLanding[object.id] ?? 0) - delta);
+        if (landingRemaining > 0) nextLanding[object.id] = landingRemaining;
+        const landPenalty = Math.min(1, landingRemaining / 0.3) * (cc.landingRecovery ?? 0.4);
+
+        // Sprint-slide: tapping crouch at sprint speed drops into a momentum slide — a small speed surge that
+        // decays toward crouch speed, gently steerable with A/D, cancelled by a jump (slide-hop) or going
+        // airborne. Drives the "sliding" animator source. The normal input pass is bypassed while sliding.
+        let slideState: EditorState['runtimeSlide'][string] | undefined = state.runtimeSlide[object.id];
+        if (
+          (cc.slideEnabled ?? true) &&
+          !scripted &&
+          !rolling &&
+          !slideState &&
+          grounded &&
+          !swimming &&
+          !climbing &&
+          !flying &&
+          keyPressedThisTick(cc.keyCrouch) &&
+          currentKeys[cc.keySprint]
+        ) {
+          const entrySpeed = Math.hypot(hVelX, hVelZ);
+          if (entrySpeed > cc.moveSpeed * 1.05) {
+            slideState = {
+              remaining: cc.slideDuration ?? 0.9,
+              dirX: hVelX / entrySpeed,
+              dirZ: hVelZ / entrySpeed,
+              speed: entrySpeed * (cc.slideSpeedBoost ?? 1.2),
+            };
+          }
+        }
+        // End conditions: airborne, jump-cancel (the buffered jump then fires from the slide momentum),
+        // timer out, or decayed down to crouch pace.
+        if (slideState && (!grounded || (!scripted && keyPressedThisTick(cc.keyJump)))) slideState = undefined;
+        const sliding = Boolean(
+          slideState && slideState.remaining > 0 && slideState.speed > cc.moveSpeed * (cc.crouchMultiplier + 0.1),
+        );
+        if (slideState && sliding && !scripted && !rolling) {
+          const steer =
+            ((currentKeys[cc.keyLeft] ? 1 : 0) - (currentKeys[cc.keyRight] ? 1 : 0) - gamepadInput.moveX) * 1.15 * delta;
+          if (Math.abs(steer) > 1e-5) {
+            const cos = Math.cos(steer);
+            const sin = Math.sin(steer);
+            const dx = slideState.dirX * cos + slideState.dirZ * sin;
+            const dz = -slideState.dirX * sin + slideState.dirZ * cos;
+            slideState = { ...slideState, dirX: dx, dirZ: dz };
+          }
+          const speed = Math.max(0, slideState.speed - 5.5 * delta);
+          slideState = { ...slideState, speed, remaining: slideState.remaining - delta };
+          hVelX = slideState.dirX * speed;
+          hVelZ = slideState.dirZ * speed;
+          position[0] += hVelX * delta;
+          position[2] += hVelZ * delta;
+          // The body leans into the slide direction (unless locked on — locked slides keep facing the target).
+          if (!lockOnPos) {
+            rotation[1] = lerpAngle(
+              rotation[1],
+              Math.atan2(slideState.dirX, slideState.dirZ) + cc.modelYawOffset,
+              1 - Math.exp(-10 * Math.min(delta, 0.1)),
+            );
+          }
+          if (slideState.remaining > 0) nextSlide[object.id] = slideState;
+        }
+
+        if (!scripted && !rolling && !sliding) {
           // Forward = +Z (model forward); right = -X. Camera sits behind, so this reads correctly on screen.
           let inputX = 0;
           let inputZ = 0;
@@ -8418,7 +8639,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const sprinting = Boolean(currentKeys[cc.keySprint]);
           const crouching = Boolean(currentKeys[cc.keyCrouch]);
           const crawling = Boolean(cc.keyCrawl && currentKeys[cc.keyCrawl]);
-          const speed = cc.moveSpeed * (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
+          const speed =
+            cc.moveSpeed *
+            (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1) *
+            (1 - 0.6 * landPenalty); // hard landings briefly sap the target speed (landing recovery)
           // Target velocity from the (camera-relative) input direction; 0 when no key is held (→ decelerate to stop).
           let targetX = 0;
           let targetZ = 0;
@@ -8473,10 +8697,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           position[2] += hVelZ * delta;
           // Face the actual velocity (not raw input) so turning eases in/out with the slide. Strafe faces the camera.
           const moveLen = Math.hypot(hVelX, hVelZ);
-          if (!(cc.strafe && cc.mouseLook) && moveLen > 0.05) {
+          if (lockOnPos) {
+            // Locked on: always face the target (strafe-style locomotion), so circling reads as orbiting it.
+            rotation[1] = lerpAngle(
+              rotation[1],
+              Math.atan2(lockOnPos[0] - position[0], lockOnPos[2] - position[2]) + cc.modelYawOffset,
+              1 - Math.exp(-cc.turnSpeed * Math.min(delta, 0.1)),
+            );
+          } else if (!(cc.strafe && cc.mouseLook) && moveLen > 0.05) {
             // Framerate-independent easing (was turnSpeed*delta, which turns faster at low FPS and can
             // overshoot >1 on a hitch); exp gives the same ~0.18 feel at 60fps but a smooth turn at any rate.
-            rotation[1] = lerpAngle(rotation[1], Math.atan2(hVelX, hVelZ) + cc.modelYawOffset, 1 - Math.exp(-cc.turnSpeed * Math.min(delta, 0.1)));
+            // Turn rate eases down with speed (full rate at a walk → sprintTurnFactor at sprint) so fast
+            // runs carve weighty arcs instead of pivoting on a dime.
+            const turnScale =
+              1 +
+              ((cc.sprintTurnFactor ?? 0.55) - 1) *
+                Math.min(1, moveLen / Math.max(0.001, cc.moveSpeed * cc.sprintMultiplier));
+            rotation[1] = lerpAngle(rotation[1], Math.atan2(hVelX, hVelZ) + cc.modelYawOffset, 1 - Math.exp(-cc.turnSpeed * turnScale * Math.min(delta, 0.1)));
           } else if (
             Boolean(cc.turnInPlace) &&
             grounded &&
@@ -8494,7 +8731,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
           }
           // Strafe: always face the camera yaw so the character can move in all 8 directions (2D blend).
-          if (cc.strafe && cc.mouseLook) {
+          if (cc.strafe && cc.mouseLook && !lockOnPos) {
             rotation[1] = mouseCameraYaw(cc.mouseSensitivity) + cc.modelYawOffset;
           }
         }
@@ -8503,11 +8740,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           rotation[1] = mouseCameraYaw(cc.mouseSensitivity) + cc.modelYawOffset;
         }
 
-        // Roll dash: travel forward (the character's facing) regardless of input mode.
+        // Roll dash: travel along the dodge direction captured at roll start (input direction, else facing).
+        // Free dodges turn the body into the dash; locked-on dodges keep facing the target (souls-style).
         if (rolling) {
           const facing = rotation[1] - cc.modelYawOffset;
-          position[0] += Math.sin(facing) * cc.rollSpeed * delta;
-          position[2] += Math.cos(facing) * cc.rollSpeed * delta;
+          const dir = nextRollDir[object.id] ?? [Math.sin(facing), Math.cos(facing)];
+          position[0] += dir[0] * cc.rollSpeed * delta;
+          position[2] += dir[1] * cc.rollSpeed * delta;
+          if (!lockOnPos) {
+            rotation[1] = lerpAngle(rotation[1], Math.atan2(dir[0], dir[1]) + cc.modelYawOffset, 1 - Math.exp(-14 * Math.min(delta, 0.1)));
+          }
           rollRemaining = Math.max(0, rollRemaining - delta);
         }
         if (rollRemaining > 0) nextRoll[object.id] = rollRemaining;
@@ -8562,7 +8804,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Vertical motion: gravity + jump. Grounded comes from the physics character controller
           // (last frame) so the character can stand on real colliders, not just the ground plane.
           let verticalVelocity = nextVelocities[object.id]?.[1] ?? 0;
-          const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]);
+          // Jump buffering: a press while still airborne is remembered for jumpBufferTime and fires on
+          // touchdown — the twin of coyote time below. Together they make jumping feel reliable.
+          let jumpBuffer = Math.max(0, (state.runtimeJumpBuffer[object.id] ?? 0) - delta);
+          if (!scripted && keyPressedThisTick(cc.keyJump)) jumpBuffer = cc.jumpBufferTime ?? 0.15;
+          const wantsJump = scripted ? characterJumpRequests.has(object.id) : Boolean(currentKeys[cc.keyJump]) || jumpBuffer > 0;
           if (grounded && verticalVelocity < 0) verticalVelocity = 0;
           // Coyote time: top up the grace window while grounded; otherwise count it down. Lets a jump pressed a
           // few frames after running off a ledge still fire — a big responsiveness win.
@@ -8571,8 +8817,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (wantsJump && (grounded || coyote > 0) && verticalVelocity <= 0.0001) {
             verticalVelocity = cc.jumpStrength;
             coyote = 0; // consume the grace so one press = one jump
+            jumpBuffer = 0; // consume the buffered press too
             if (cc.jumpSoundId) pushSound(cc.jumpSoundId, [...object.transform.position] as Vector3Tuple);
           }
+          if (jumpBuffer > 0) nextJumpBuffer[object.id] = jumpBuffer;
           // Launch (jump pad / blast): a one-shot velocity from action.applyForce. Works mid-air and overrides a
           // fall, so the pad always pops you up; horizontal displaces the capsule (collide-and-slide via physics).
           const launch = characterLaunch[object.id];
@@ -8586,8 +8834,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (!scripted && verticalVelocity > 0 && !currentKeys[cc.keyJump] && previousKeys[cc.keyJump]) {
             verticalVelocity *= cc.jumpCutMultiplier ?? 0.45;
           }
-          // Asymmetric gravity: fall faster than you rose so the arc feels snappy, not floaty.
-          const g = cc.gravity * (verticalVelocity < 0 ? cc.fallMultiplier ?? 1.9 : 1);
+          // Asymmetric gravity: fall faster than you rose so the arc feels snappy, not floaty. Near the
+          // APEX (small |vy| while airborne) gravity eases off briefly — a hang that makes the jump feel
+          // controllable at its peak without slowing the descent (fallMultiplier still rules the fall).
+          const nearApex = !grounded && Math.abs(verticalVelocity) < 1.6;
+          const g =
+            cc.gravity *
+            (nearApex ? cc.apexHang ?? 0.65 : verticalVelocity < 0 ? cc.fallMultiplier ?? 1.9 : 1);
           verticalVelocity -= g * delta;
           position[1] += verticalVelocity * delta;
           // Over TERRAIN, do NOT clamp the vertical here — let the Rapier kinematic controller resolve the
@@ -8612,7 +8865,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const stepped = Math.hypot(position[0] - start[0], position[2] - start[2]);
           let acc = (nextFootstep[object.id] ?? 0) + stepped;
           const stride = 2.1; // world units between footstep sounds
-          if (grounded && acc >= stride) {
+          if (grounded && !sliding && acc >= stride) {
             pushSound(stepSound, [position[0], position[1], position[2]]);
             acc = 0;
           }
@@ -8977,6 +9230,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   if (object.id === vehiclePlayerId) cameraShake = Math.min(1, cameraShake + Math.min(0.55, 0.1 + sev * 0.025));
                 }
               }
+              // SCRAPE SPARKS: grinding along a wall/guardrail (still touching solid scenery after the initial
+              // hit, moving, but below the hard-impact threshold) streams sparks from the scraping flank.
+              // Contact events are enter/exit edges, so a touch latch carries the "still against it" state.
+              {
+                let wallTouch = toNumber(mutable.__wallTouch ?? 0) > 0.5;
+                for (const c of result.collisions) {
+                  if (c.objectId !== object.id) continue;
+                  const other = byIdNow.get(c.otherObjectId);
+                  if (other && other.kind !== 'terrain' && other.physics?.bodyType !== 'dynamic') { wallTouch = true; break; }
+                }
+                if (result.collisionsExit.some((c) => c.objectId === object.id)) wallTouch = false;
+                mutable.__wallTouch = wallTouch ? 1 : 0;
+                if (wallTouch && !hardImpact && Math.abs(cs.speed) > 5) {
+                  const key = `${object.id}:scrapeFx`;
+                  if ((nextCooldowns[key] ?? 0) <= 0) {
+                    nextCooldowns[key] = 0.14;
+                    // The wall sits on the side the car is sliding toward; remember it while grinding straight.
+                    const side = Math.abs(cs.lateralSpeed) > 0.4 ? Math.sign(cs.lateralSpeed) : toNumber(mutable.__scrapeSide ?? 1) || 1;
+                    mutable.__scrapeSide = side;
+                    const yawSc = cs.chassis.rotation[1];
+                    spawned.push(
+                      makeImpactObject([pos[0] + Math.cos(yawSc) * side * 1.05, pos[1] + 0.3, pos[2] - Math.sin(yawSc) * side * 1.05], '#ffd9a0'),
+                    );
+                  }
+                }
+              }
               // LOOSE PARTS: a hard enough hit TEARS OFF the cosmetic part facing the impact — the bumper
               // on a head-on, a skirt on a side swipe, two parts on a violent crash. Queued here; after
               // this pass the part becomes a free dynamic prop that tumbles away with the car's momentum.
@@ -9054,15 +9333,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   }
                 }
               }
-              // OFFROAD DUST: each wheel on a loose surface (published per-wheel grip < 0.8) kicks up
-              // surface-coloured dust at speed — sandy tan when very loose, earthier on grass/dirt.
+              // OFFROAD KICK-UP + RAIN SPRAY: each wheel reports the actual `surface` tag it's rolling on,
+              // so the puff matches the ground — green-flecked grass, bright sand, grey gravel, white snow.
+              // A WET track (the rain toggle's "Wet" var slicking untagged tarmac) throws blue-grey water
+              // spray off the tires instead of dirt — the rooster-tail look that sells driving in rain.
               if (Math.abs(cs.speed) > 6) {
                 const key = `${object.id}:dustFx`;
                 if ((nextCooldowns[key] ?? 0) <= 0) {
+                  const wetVarRef = variableByName.get('Wet');
+                  const wetNow = wetVarRef ? toNumber(nextVariableValues[wetVarRef.id] ?? wetVarRef.defaultValue) : 0;
                   let any = false;
                   for (const w of cs.wheels) {
                     if (!w.inContact || (w.grip ?? 1) >= 0.8) continue;
-                    spawned.push(makeDustPuff(wheelGround(w), (w.grip ?? 1) < 0.5 ? '#d8c08a' : '#9a8d6b', 9, 0.9));
+                    const color =
+                      SURFACE_DUST[w.surface] ??
+                      (wetNow > 0.3 ? '#a8c6dd' : (w.grip ?? 1) < 0.5 ? '#d8c08a' : '#9a8d6b');
+                    spawned.push(makeDustPuff(wheelGround(w), color, 9, 0.9));
                     any = true;
                   }
                   if (any) nextCooldowns[key] = 0.2;
@@ -9108,30 +9394,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 const key = `${object.id}:hornSfx`;
                 if ((nextCooldowns[key] ?? 0) <= 0) { pushSound(veh.hornSoundId, pos); nextCooldowns[key] = 0.5; }
               }
-              // DRIFT & STUNT SCORING: points for sliding (lateral slip) + big air (airtime), into a "Score" var;
-              // a "Stunt" var (0/1/2) flashes a DRIFT!/BIG AIR! banner. Engine-level — any car with those vars scores.
+              // DRIFT & STUNT SCORING with a COMBO BANK: style points (drift slip + big air) build up as a
+              // PENDING combo first — drive clean for a second and they bank into "Score"; crash while the
+              // combo is alive and the pending points are LOST (the crash already plays its own FX, the HUD
+              // chip vanishing is the punishment). "Combo" mirrors the live pending points for the HUD; the
+              // "Stunt" var (0 none / 1 DRIFT / 2 BIG AIR / 3 PERFECT LAUNCH) flashes the banner. Engine-level —
+              // any car with those project vars scores.
               const grounded = cs.wheels.some((w) => w.inContact);
               let airtime = toNumber(mutable.__airtime ?? 0);
               let stuntTimer = Math.max(0, toNumber(mutable.__stuntTimer ?? 0) - delta);
               let stuntKind = stuntTimer > 0 ? toNumber(mutable.__stuntKind ?? 0) : 0;
-              let scoreAdd = 0;
+              let pending = Math.max(0, toNumber(mutable.__stuntPending ?? 0));
+              let lapse = toNumber(mutable.__stuntLapse ?? 0) + delta;
               if (!grounded) {
                 if (Math.abs(cs.speed) > 2) airtime += delta;
               } else {
-                if (airtime > 0.45) { scoreAdd += Math.round(airtime * 140); stuntKind = 2; stuntTimer = 1.4; } // BIG AIR on landing
+                if (airtime > 0.45) { pending += Math.round(airtime * 140); lapse = 0; stuntKind = 2; stuntTimer = 1.4; } // BIG AIR on landing
                 airtime = 0;
               }
               const drifting = grounded && Math.abs(cs.lateralSpeed) > 4 && Math.abs(cs.speed) > 6;
               if (drifting) {
-                scoreAdd += Math.abs(cs.lateralSpeed) * delta * 4; // drift points while sliding
-                if (stuntKind !== 2) { stuntKind = 1; stuntTimer = Math.max(stuntTimer, 0.25); }
+                pending += Math.abs(cs.lateralSpeed) * delta * 4; // drift points while sliding
+                lapse = 0;
+                if (stuntKind !== 2 && stuntKind !== 3) { stuntKind = 1; stuntTimer = Math.max(stuntTimer, 0.25); }
               }
+              let scoreAdd = 0;
+              if (hardImpact && pending > 0) pending = 0; // wrecked the combo — pending style points are lost
+              else if (pending >= 1 && lapse > 1) { scoreAdd = Math.round(pending); pending = 0; } // banked clean
               mutable.__airtime = airtime;
               mutable.__stuntTimer = stuntTimer;
               mutable.__stuntKind = stuntKind;
+              mutable.__stuntPending = pending;
+              mutable.__stuntLapse = lapse;
               if (object.id === vehiclePlayerId) {
                 const scoreVar = variableByName.get('Score');
                 if (scoreVar && scoreAdd > 0) nextVariableValues[scoreVar.id] = Math.round(toNumber(nextVariableValues[scoreVar.id] ?? scoreVar.defaultValue) + scoreAdd);
+                const comboVar = variableByName.get('Combo');
+                if (comboVar) nextVariableValues[comboVar.id] = Math.round(pending);
                 const stuntVar = variableByName.get('Stunt');
                 if (stuntVar) nextVariableValues[stuntVar.id] = stuntKind;
                 // BURNOUT-STYLE LOOP: drifting + big air CHARGE the Nitro bar (so style → boost → more style).
@@ -9233,6 +9532,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         groundedIds = [...groundedSet];
       }
       recordRuntimeSection('physics', performance.now() - physicsStart);
+      // RACE LIGHT TREE (name convention, like "Checkpoint <n>"): cubes named "Start Light 1..3" follow the
+      // "Count" project var that countdown blueprints write — 3/2/1 light them red one by one, GO! (0) flips
+      // the row green, and -1 (countdown hidden) dims the tree. Identity-guarded: a lamp only re-clones on
+      // the countdown steps themselves, never per frame.
+      {
+        const countVarRef = variableByName.get('Count');
+        if (countVarRef) {
+          const countNow = Math.round(toNumber(nextVariableValues[countVarRef.id] ?? countVarRef.defaultValue));
+          resolvedObjects = resolvedObjects.map((object) => {
+            if (!object.renderer || !object.name.startsWith('Start Light ')) return object;
+            const lampIdx = Number(object.name.slice('Start Light '.length));
+            if (!Number.isInteger(lampIdx)) return object;
+            const go = countNow === 0;
+            const lit = countNow >= 1 && countNow <= 3 && lampIdx <= 4 - countNow;
+            const emissiveColor = go ? '#2ecf6f' : '#ff3b30';
+            const emissiveIntensity = go ? 3.5 : lit ? 3 : 0.12;
+            const cur = object.renderer.materialOverrides;
+            if (cur?.emissiveColor === emissiveColor && cur?.emissiveIntensity === emissiveIntensity) return object;
+            return { ...object, renderer: { ...object.renderer, materialOverrides: { ...cur, emissiveColor, emissiveIntensity } } };
+          });
+        }
+      }
       const combatStart = performance.now();
       const resolvedObjectById = new Map(resolvedObjects.map((object) => [object.id, object]));
       // Auto-fracture: a destructible object shatters when it (or the thing it hit) is moving fast enough on
@@ -9314,13 +9635,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Landing sound: a character that became grounded this frame after falling (downward velocity last
       // frame) plays its land sound. The velocity check skips the play-start frame (rests at rest).
+      // Hard landings also seed the LANDING-RECOVERY timer (impact-scaled): the next ticks sap move speed,
+      // dip the follow camera, and drive the "landing" animator source — jumps gain consequence and weight.
       for (const id of groundedIds) {
         if (runtimeGroundedSet.has(id)) continue;
-        const wasFalling = (state.runtimeVelocities[id]?.[1] ?? 0) < -1;
-        if (!wasFalling) continue;
+        const impactVy = state.runtimeVelocities[id]?.[1] ?? 0;
+        if (impactVy >= -1) continue;
         const landObj = resolvedObjectById.get(id);
-        const landSound = landObj?.character?.landSoundId;
-        if (landSound) pushSound(landSound, [...landObj!.transform.position] as Vector3Tuple);
+        if (!landObj?.character) continue;
+        const landSound = landObj.character.landSoundId;
+        if (landSound) pushSound(landSound, [...landObj.transform.position] as Vector3Tuple);
+        const recovery = landObj.character.landingRecovery ?? 0.4;
+        if (recovery > 0 && impactVy < -9) {
+          nextLanding[id] = Math.min(0.4, Math.max(0.1, -impactVy / 45));
+        }
       }
 
       // While a cinematic plays the player is locked in the cutscene (no input/camera control), so it must be
@@ -9865,6 +10193,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           else if (param.source === 'mantling') params[param.id] = Boolean(nextMantle[sourceId]);
           else if (param.source === 'turning') params[param.id] = (nextTurnInPlace[sourceId] ?? 0) > 0.05;
           else if (param.source === 'rolling') params[param.id] = (nextRoll[sourceId] ?? 0) > 0;
+          else if (param.source === 'sliding') params[param.id] = Boolean(nextSlide[sourceId]);
+          else if (param.source === 'landing') params[param.id] = (nextLanding[sourceId] ?? 0) > 0;
+          else if (param.source === 'rollX') {
+            // Local sideways component of the active dodge (−1 left … +1 right), 0 when not rolling —
+            // drives the directional roll blend space (Dodge_Left ↔ Roll ↔ Dodge_Right).
+            const rollDir = nextRollDir[sourceId];
+            if (rollDir && (nextRoll[sourceId] ?? 0) > 0) {
+              const facing = sourceObj.transform.rotation[1] - (sourceObj.character?.modelYawOffset ?? 0);
+              params[param.id] = rollDir[0] * Math.cos(facing) - rollDir[1] * Math.sin(facing);
+            } else params[param.id] = 0;
+          }
           else if (param.source === 'attacking') params[param.id] = (nextAttack[sourceId] ?? 0) > 0;
           else if (param.source === 'aiming') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyAim]);
           else if (param.source === 'reloading') params[param.id] = (nextReload[sourceId] ?? 0) > 0;
@@ -9990,6 +10329,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeSwimming: [],
             runtimeClimbing: [],
             runtimeRoll: {},
+            runtimeLockOn: {},
+            runtimeJumpBuffer: {},
+            runtimeLanding: {},
+            runtimeSlide: {},
+            runtimeRollDir: {},
             runtimeMantle: {},
             runtimeTurnInPlace: {},
             runtimeCoyote: {},
@@ -10054,6 +10398,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeWaterWake: keepRecord(state.runtimeWaterWake, nextWaterWake),
         runtimeClimbing: keepArray(state.runtimeClimbing, climbingIds),
         runtimeRoll: keepRecord(state.runtimeRoll, nextRoll),
+        runtimeLockOn: keepRecord(state.runtimeLockOn, nextLockOn),
+        runtimeJumpBuffer: keepRecord(state.runtimeJumpBuffer, nextJumpBuffer),
+        runtimeLanding: keepRecord(state.runtimeLanding, nextLanding),
+        runtimeSlide: keepRecord(state.runtimeSlide, nextSlide),
+        runtimeRollDir: keepRecord(state.runtimeRollDir, nextRollDir),
         runtimeMantle: keepRecord(state.runtimeMantle, nextMantle),
         runtimeTurnInPlace: keepRecord(state.runtimeTurnInPlace, nextTurnInPlace),
         runtimeCoyote: keepRecord(state.runtimeCoyote, nextCoyote),
@@ -10310,6 +10659,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSwimming: [],
         runtimeClimbing: [],
         runtimeRoll: {},
+        runtimeLockOn: {},
+        runtimeJumpBuffer: {},
+        runtimeLanding: {},
+        runtimeSlide: {},
+        runtimeRollDir: {},
         runtimeMantle: {},
         runtimeTurnInPlace: {},
         runtimeCoyote: {},

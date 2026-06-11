@@ -228,7 +228,7 @@ const createFpsHud = (): UIDocument => {
     wrap.children = [cap, lab];
     return wrap;
   };
-  controls.children = [chip('WASD', 'Move'), chip('LMB', 'Fire'), chip('RMB', 'Aim'), chip('R', 'Reload'), chip('1-5', 'Weapons'), chip('SPACE', 'Jump')];
+  controls.children = [chip('WASD', 'Move'), chip('SHIFT', 'Sprint'), chip('SPACE', 'Jump'), chip('LMB', 'Fire'), chip('RMB', 'Aim'), chip('R', 'Reload'), chip('1-5', 'Weapons'), chip('E', 'Interact')];
 
   root.children = [weaponBox, controls];
   const css = '@keyframes nf-controls-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }';
@@ -503,8 +503,11 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     if (w.reloadFile) await loadSound(w.reloadFile);
   }
   const grenadeBoomId = await loadSound('fps_grenade_explode.mp3');
+  const healthPickupSfxId = await loadSound('fps_health_pickup.mp3');
   const footstepSound = await importAudio('fps_footstep.mp3', audioFolder);
   const ambientSound = await importPublicAudio('ambient.mp3', audioFolder);
+  // Weapon-swap click (shared engine clip) — played by the 1–5 picker so switching reads instantly.
+  const swapSound = await importPublicAudio('weapon-switch.mp3', audioFolder);
   // Player feedback one-shots the controller plays automatically: a hurt sting when health drops (pairs
   // with the engine's red hurt-flash), plus jump/land for movement weight.
   const hurtSound = await importPublicAudio('hurt.mp3', audioFolder);
@@ -584,6 +587,10 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
     });
     const base = 300 + built.length * 50;
     const draw = add('Set Anim Trigger', 'Runtime', base, { nodeKind: 'animator.setTrigger', targetObjectId: w.armsId, paramName: 'Draw', description: `Play ${w.name} draw.` });
+    if (swapSound) {
+      const click = add('Play Sound', 'Audio', base + 110, { nodeKind: 'action.playSound', assetId: swapSound.id, description: 'Weapon-swap click.' });
+      edges.push(execEdge(draw, click));
+    }
     const setName = add('Set Variable', 'Variables', base + 220, { nodeKind: 'variable.set', variableId: weaponVarId, valueType: 'string', stringValue: w.name });
     const setSlot = add('Set Variable', 'Variables', base + 440, { nodeKind: 'variable.set', variableId: slotVarId, valueType: 'number', numberValue: i + 1 });
     const setMag = add('Set Variable', 'Variables', base + 660, { nodeKind: 'variable.set', variableId: magVarId, valueType: 'number', numberValue: w.mag, description: `${w.name} magazine size.` });
@@ -1352,6 +1359,43 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   guardSpots.forEach(([x, z], i) => makeGuard(`Hostile ${i + 1}`, x, z));
   const guardCount = guardSpots.length;
 
+  // --- MEDKITS — one glowing green pickup per room. Walking over one while hurt heals +35 (clamped to 100),
+  //     plays a chime, and removes itself; at full integrity it stays put (the branch gates consumption).
+  //     The pickup IS its own trigger (a rendered cube with sensor physics), so the whole recipe — trigger →
+  //     write a var on the player → destroy self — lives in one small reusable Blueprint. ---
+  const medkitBp = miniBlueprint('Health Pickup', '#39ff9e', (n, e) => {
+    const node = (label: string, cat: GraphNodeCategory, x: number, y: number, data: Partial<NodeForgeNodeData>): string => {
+      const i = makeId('node'); n.push(graphNode(i, label, cat, x, y, data)); return i;
+    };
+    const tin = node('Trigger Enter', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', otherObjectId: pawnId, hasInput: false, description: 'Player walks over the medkit.' });
+    const getHp = node('Get Object Var', 'Variables', 40, 200, { nodeKind: 'variable.getObject', objectKey: 'health', targetObjectId: pawnId, hasInput: false, description: "Player's integrity." });
+    const cmp = node('Compare', 'Logic', 280, 180, { nodeKind: 'logic.compare', compareOp: '<', numberValue: 100, description: 'Hurt at all?' });
+    const br = node('Branch', 'Logic', 500, 40, { nodeKind: 'logic.branch', description: 'Only consume when it heals.' });
+    const getHp2 = node('Get Object Var', 'Variables', 500, 320, { nodeKind: 'variable.getObject', objectKey: 'health', targetObjectId: pawnId, hasInput: false });
+    const heal = node('Add', 'Math', 720, 320, { nodeKind: 'math.add', amount: 35, description: '+35 integrity.' });
+    const cap = node('Clamp', 'Math', 940, 320, { nodeKind: 'math.clamp', amount: 100, description: 'Never above 100.' });
+    const setHp = node('Set Object Var', 'Variables', 720, 40, { nodeKind: 'variable.setObject', objectKey: 'health', targetObjectId: pawnId, description: 'Heal the player.' });
+    e.push(execEdge(tin, br), valueEdge(getHp, cmp, 'a'), valueEdge(cmp, br, 'condition'), execEdge(br, setHp), valueEdge(getHp2, heal, 'a'), valueEdge(heal, cap, 'value'), valueEdge(cap, setHp, 'value'));
+    let tail = setHp;
+    if (healthPickupSfxId) {
+      const snd = node('Play Sound', 'Audio', 940, 40, { nodeKind: 'action.playSound', assetId: healthPickupSfxId, description: 'Pickup chime.' });
+      e.push(execEdge(tail, snd));
+      tail = snd;
+    }
+    const die = node('Destroy Object', 'Runtime', 1160, 40, { nodeKind: 'action.destroyObject', description: 'Consumed — remove the medkit.' });
+    e.push(execEdge(tail, die));
+  });
+  const medkitSpots: Array<[number, number]> = [[-11, 18.5], [11, 27], [-10, 36.5]];
+  medkitSpots.forEach(([x, z], i) =>
+    missionObjects.push({
+      id: makeId('obj'), name: `Medkit ${i + 1}`, kind: 'cube',
+      transform: { position: [x, 0.5, z], rotation: [0, Math.PI / 4, 0], scale: [0.6, 0.6, 0.6] },
+      renderer: { ...defaultRenderer('cube', '#0c2418'), metalness: 0.2, roughness: 0.35, materialOverrides: { emissiveColor: '#39ff9e', emissiveIntensity: 1.6 } },
+      physics: triggerBox(),
+      script: { blueprintId: medkitBp.blueprintId, graphId: medkitBp.graphId, enabled: true },
+    }),
+  );
+
   // Trigger volumes (sensors): breach at the entrance, extraction at the LZ.
   missionObjects.push({ id: makeId('obj'), name: 'Breach Zone', kind: 'empty', transform: { position: [0, 1.5, 10], rotation: [0, 0, 0], scale: [6, 3, 2] }, physics: triggerBox(), script: { blueprintId: entryBp.blueprintId, graphId: entryBp.graphId, enabled: true } });
   missionObjects.push({ id: makeId('obj'), name: 'Extraction Zone', kind: 'empty', transform: { position: [0, 1.2, 38], rotation: [0, 0, 0], scale: [4.4, 3, 4.4] }, physics: triggerBox(), script: { blueprintId: exitBp.blueprintId, graphId: exitBp.graphId, enabled: true } });
@@ -1364,7 +1408,7 @@ export async function createFirstPersonTemplate(): Promise<string | undefined> {
   block('Deploy Pad', [9, 0.06, 6.5], [2.6, 0.12, 2.6], '#ff2bd6', { emissive: '#ff2bd6', intensity: 1.7, solid: false });
   tutorialObjects.push({ id: makeId('obj'), name: 'Deploy Trigger', kind: 'empty', transform: { position: [9, 0.8, 6.5], rotation: [0, 0, 0], scale: [2.6, 1.6, 2.6] }, physics: triggerBox(), script: { blueprintId: deployBp.blueprintId, graphId: deployBp.graphId, enabled: true } });
   tutorialObjects.push({ id: makeId('obj'), name: 'Base Director', kind: 'empty', transform: { position: [0, 4, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, script: { blueprintId: baseDir.blueprintId, graphId: baseDir.graphId, enabled: true } });
-  makeSign('Deploy', 'Step onto the MAGENTA pad (right) to deploy into the\nBREACH & CLEAR mission — clear every hostile, then extract.', [9, 0, 4.2], '#ff2bd6', 2);
+  makeSign('Deploy', 'Step onto the MAGENTA pad (right) to deploy into the\nBREACH & CLEAR mission — clear every hostile, then extract.\nGreen MEDKITS restore your integrity.', [9, 0, 4.2], '#ff2bd6', 2);
 
   // --- Mission HUD docs (global, gated by InMission so the training room stays clean). ---
   // Objective banner — one bound line drives the whole flow from MissionStage + GuardsLeft.

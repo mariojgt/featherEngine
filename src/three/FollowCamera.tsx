@@ -262,6 +262,13 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   // looks back. Rigid mounts — glued to the chassis with full roll/pitch, so they feel properly "sim".
   const vehicleView = useRef(0);
   const prevCamKey = useRef(false);
+  // Shoulder swap (characters): tapping keySwapShoulder flips the mirror sign; the smoothed blend sweeps
+  // the camera across the character's back instead of teleporting it to the other side.
+  const shoulderFlip = useRef(1);
+  const shoulderBlend = useRef(1);
+  const prevSwapKey = useRef(false);
+  // Lock-on framing: a smoothed offset easing the look point toward the locked target (zero when free).
+  const lockLook = useRef(new THREE.Vector3());
   const onboardQuat = useRef(new THREE.Quaternion());
   const onboardEuler = useRef(new THREE.Euler());
 
@@ -470,7 +477,18 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     lastMouseDy.current = mouseLook.dy;
     mouseIdle.current = mouseMoved ? 0 : mouseIdle.current + delta;
     const speed = Math.hypot(smoothedVelocity.current.x, smoothedVelocity.current.z);
-    if (cc.mouseLook && useMouse && !aiming && !lookBack && speed > 0.6 && mouseIdle.current > 0.35) {
+    // Lock-on: while the runtime holds a lock for this character, the locked target's live position.
+    const lockId = preview ? undefined : state.runtimeLockOn[liveTarget.id];
+    const lockObject = lockId ? selectActiveObjects(state).find((object) => object.id === lockId) : undefined;
+    const lockPos = lockObject ? (readTransform(lockObject.id) ?? lockObject.transform).position : undefined;
+    if (cc.mouseLook && useMouse && lockPos) {
+      // Steer the shared yaw to settle behind the player looking toward the target — firmer than the
+      // auto-follow below so circling keeps the target framed; manual mouse-look still layers on top.
+      const heading = Math.atan2(lockPos[0] - x, lockPos[2] - z);
+      const curYaw = -mouseLook.dx * cc.mouseSensitivity;
+      const diff = Math.atan2(Math.sin(heading - curYaw), Math.cos(heading - curYaw));
+      mouseLook.dx = -(curYaw + diff * smooth(6)) / cc.mouseSensitivity;
+    } else if (cc.mouseLook && useMouse && !aiming && !lookBack && speed > 0.6 && mouseIdle.current > 0.35) {
       const heading = Math.atan2(smoothedVelocity.current.x, smoothedVelocity.current.z);
       const curYaw = -mouseLook.dx * cc.mouseSensitivity;
       const diff = Math.atan2(Math.sin(heading - curYaw), Math.cos(heading - curYaw));
@@ -482,10 +500,21 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // wheel scales the distance (zoom), smoothed so a scroll glides in/out instead of jumping.
     zoom.current = THREE.MathUtils.lerp(zoom.current, zoomTarget.current, smooth(12));
     const override = overrides[liveTarget.id];
-    const baseSide = cc.cameraOffset[0] * zoom.current;
-    const up = override?.height ?? cc.cameraOffset[1];
+    // Shoulder swap (characters only — V is the vehicles' look-back key): tapping the key mirrors the
+    // side offset AND the ADS shoulder shift; the smoothed blend sweeps across the back, never snaps.
+    if (liveTarget.character?.enabled && !preview) {
+      const swapHeld = Boolean(state.runtimeKeys[cc.keySwapShoulder ?? 'KeyV']);
+      if (swapHeld && !prevSwapKey.current) shoulderFlip.current *= -1;
+      prevSwapKey.current = swapHeld;
+    }
+    shoulderBlend.current = THREE.MathUtils.lerp(shoulderBlend.current, shoulderFlip.current, smooth(8));
+    const baseSide = cc.cameraOffset[0] * zoom.current * shoulderBlend.current;
+    // Landing recovery: a hard touchdown dips the camera briefly (the runtime timer decays each tick,
+    // so the dip eases itself back out). Sells the impact without any keyframed camera work.
+    const landDip = preview ? 0 : Math.min(0.45, (state.runtimeLanding[liveTarget.id] ?? 0) * 1.4);
+    const up = (override?.height ?? cc.cameraOffset[1]) - landDip;
     const baseBack = (override ? -Math.abs(override.distance) : cc.cameraOffset[2]) * zoom.current;
-    const side = THREE.MathUtils.lerp(baseSide, baseSide + 0.7, ads); // shift to the shoulder
+    const side = THREE.MathUtils.lerp(baseSide, baseSide + 0.7 * shoulderBlend.current, ads); // shift to the shoulder
     const back = THREE.MathUtils.lerp(baseBack, baseBack * 0.5, ads); // pull in
 
     // Velocity feed-forward: an exponential follow lags a moving target by ~speed/k, which reads as the
@@ -557,6 +586,19 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // — turns, stops, wall pull-ins — without leaving a steady trail while moving at constant speed).
     camera.position.lerp(desired.current, smooth(followK));
     lookTarget.current.set(x + lookAhead.current.x, y + up * 0.42, z + lookAhead.current.z);
+    // Lock-on framing: ease the look point partway toward the locked target so player AND target stay in
+    // frame. Smoothed through lockLook so engaging/releasing the lock sweeps instead of snapping.
+    if (lockPos) {
+      rawTarget.current.set(
+        (lockPos[0] - x) * 0.3,
+        THREE.MathUtils.clamp((lockPos[1] + 1.1 - lookTarget.current.y) * 0.25, -0.6, 0.9),
+        (lockPos[2] - z) * 0.3,
+      );
+      lockLook.current.lerp(rawTarget.current, smooth(5));
+    } else {
+      lockLook.current.lerp(ZERO, smooth(5));
+    }
+    lookTarget.current.add(lockLook.current);
     camera.lookAt(lookTarget.current);
     // Vehicle speed-feel: ramp the FOV out toward +10° as the car approaches its top speed (cc.moveSpeed is
     // the vehicle's maxSpeed). Characters never trip this (speedFovTarget stays 0), so their FOV is unchanged.
@@ -582,5 +624,42 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
           ))
         : null}
     </PerspectiveCamera>
+  );
+}
+
+/**
+ * A spinning diamond floating over the player's current lock-on target (Z-targeting). Renders nothing
+ * while no lock is held, so it's safe to mount unconditionally next to FollowCamera. Position is read
+ * imperatively each frame (transform buffer first) so it tracks moving targets without store churn.
+ */
+export function LockOnMarker() {
+  const targetId = useFollowTargetId();
+  const lockId = useEditorStore((state) => (targetId ? state.runtimeLockOn[targetId] : undefined));
+  const groupRef = useRef<THREE.Group>(null);
+
+  useFrame(({ clock }) => {
+    const group = groupRef.current;
+    if (!group || !lockId) return;
+    const lockObject = selectActiveObjects(useEditorStore.getState()).find((object) => object.id === lockId);
+    if (!lockObject) return;
+    const transform = readTransform(lockId) ?? lockObject.transform;
+    group.position.set(
+      transform.position[0],
+      transform.position[1] + Math.max(transform.scale[1], 1) * 1.1 + 0.9,
+      transform.position[2],
+    );
+    group.rotation.y = clock.elapsedTime * 2.4;
+    group.scale.setScalar(1 + Math.sin(clock.elapsedTime * 6) * 0.08);
+  });
+
+  if (!lockId) return null;
+  return (
+    <group ref={groupRef}>
+      <mesh>
+        <octahedronGeometry args={[0.22]} />
+        {/* Bright enough to catch the bloom pass, so the marker reads at a glance. */}
+        <meshBasicMaterial color="#ff5238" toneMapped={false} />
+      </mesh>
+    </group>
   );
 }

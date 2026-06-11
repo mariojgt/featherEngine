@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { ModelAsset, useAssetTexture, useModelUrl } from '../three/ModelAsset';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
-import { FollowCamera, useFollowTarget } from '../three/FollowCamera';
+import { FollowCamera, LockOnMarker, useFollowTarget } from '../three/FollowCamera';
 import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkidMarks } from '../three/SkidMarks';
 import { ShaderPrewarm } from '../three/ShaderPrewarm';
@@ -391,6 +391,8 @@ function GameScene() {
     <>
       <SceneEnvironment environment={sceneEnvironment} shadows />
 
+      {/* Marker over the player's lock-on target — renders nothing while no lock is held. */}
+      <LockOnMarker />
       {cinematicCamera ? (
         <CinematicCamera />
       ) : followTarget ? (

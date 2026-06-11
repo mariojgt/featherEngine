@@ -81,6 +81,13 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   fallMultiplier: 1.9,
   jumpCutMultiplier: 0.45,
   coyoteTime: 0.12,
+  jumpBufferTime: 0.15,
+  landingRecovery: 0.4,
+  apexHang: 0.65,
+  sprintTurnFactor: 0.55,
+  slideEnabled: true,
+  slideDuration: 0.9,
+  slideSpeedBoost: 1.2,
   acceleration: 60,
   deceleration: 70,
   airControl: 0.35,
@@ -115,6 +122,13 @@ export const defaultCharacter = (): CharacterControllerComponent => ({
   keyInteract: 'KeyE',
   keyEmote: 'KeyF',
   keyRagdoll: 'KeyP',
+  // Lock-on targeting works out of the box: T locks the nearest living target (health/enemy-tagged),
+  // the character strafes facing it, and the camera keeps both in frame. A no-op without a valid target.
+  lockOnEnabled: true,
+  keyLockOn: 'KeyT',
+  lockOnRange: 16,
+  lockOnBreakDistance: 22,
+  keySwapShoulder: 'KeyV',
   cameraMode: 'thirdPerson',
   cameraFollow: true,
   // Behind (-Z) and above a +Z-forward character.
@@ -224,6 +238,10 @@ export const defaultVehicle = (): VehicleComponent => ({
   absEnabled: true,
   tcsEnabled: true,
   surfaceGripEnabled: true,
+  // Driving feel: lift-off engine braking, weight-transfer grip balance, and catchable slides.
+  engineBrakeForce: 600,
+  loadSensitivity: 0.6,
+  counterSteerAssist: 0.5,
 });
 
 /** Default ragdoll tuning — the same conservative values RagdollRig was hardcoded with. */
