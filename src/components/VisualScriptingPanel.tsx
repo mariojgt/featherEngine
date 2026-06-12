@@ -78,7 +78,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Tween', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Tween', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Set Time Scale', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -88,7 +88,7 @@ export const nodeGroups: Array<{
   {
     title: 'Persistence',
     icon: Save,
-    nodes: ['Save Game', 'Load Game', 'Clear Save'],
+    nodes: ['Save Game', 'Load Game', 'Clear Save', 'Has Save'],
   },
   {
     title: 'UI',
@@ -528,7 +528,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'event.update' ||
     node.data.nodeKind === 'event.timer' ||
     node.data.nodeKind === 'logic.cooldown' ||
-    node.data.nodeKind === 'logic.delay';
+    node.data.nodeKind === 'logic.delay' ||
+    node.data.nodeKind === 'action.setTimeScale';
   const updatesParamName =
     node.data.nodeKind === 'animator.setFloat' ||
     node.data.nodeKind === 'animator.setBool' ||
@@ -536,7 +537,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'animator.getParam';
   const updatesStringValue = node.data.nodeKind === 'value.string';
   const updatesVectorValue = node.data.nodeKind === 'value.vector3' || node.data.nodeKind === 'action.spawnParticleSystem';
-  const updatesSaveSlot = node.data.nodeKind === 'save.write' || node.data.nodeKind === 'save.load' || node.data.nodeKind === 'save.clear';
+  const updatesSaveSlot =
+    node.data.nodeKind === 'save.write' ||
+    node.data.nodeKind === 'save.load' ||
+    node.data.nodeKind === 'save.clear' ||
+    node.data.nodeKind === 'save.has';
   const updatesMaterialColor = node.data.nodeKind === 'action.setMaterialColor';
   const updatesMaterialProperty =
     node.data.nodeKind === 'action.setMaterialProperty' || node.data.nodeKind === 'action.getMaterialProperty';
@@ -797,6 +802,8 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                       ? 'Interval (seconds)'
                     : node.data.nodeKind === 'logic.cooldown' || node.data.nodeKind === 'logic.delay'
                       ? 'Seconds'
+                    : node.data.nodeKind === 'action.setTimeScale'
+                      ? 'Time scale (1 normal · 0 paused · 0.2 slow-mo)'
                       : 'Number'}
             </span>
             <input

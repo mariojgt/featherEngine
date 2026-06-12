@@ -124,8 +124,10 @@ export const nodeDescriptions: Record<string, string> = {
   Jump: 'Makes the owning character jump (needs a Character Controller for height/gravity).',
   'Is Grounded': 'Outputs true when the owning character is on the ground.',
   'Set Camera': 'Overrides the follow-camera distance/height at runtime.',
-  'Save Game': 'Writes persistent variables into local save storage.',
+  'Save Game': 'Writes persistent variables into local save storage (saves ALL project variables when none are flagged persistent).',
   'Load Game': 'Restores persistent variables from local save storage.',
+  'Has Save': 'Outputs true when the save slot holds data — gate a "Continue" button or skip an intro.',
+  'Set Time Scale': 'Sets global game speed: 1 = normal, 0 = paused (input/UI keep running), 0.2 = slow-mo.',
   'Clear Save': 'Deletes a local save slot.',
   Print: 'Logs a message to the on-screen console during Play.',
   'Set Quality': 'Sets the game quality preset (Low/Medium/High/Epic) at runtime — adjusts resolution, shadows, and post-FX.',
@@ -260,6 +262,8 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Save Game': 'save.write',
   'Load Game': 'save.load',
   'Clear Save': 'save.clear',
+  'Has Save': 'save.has',
+  'Set Time Scale': 'action.setTimeScale',
   Print: 'action.print',
   'Show UI': 'ui.show',
   'Hide UI': 'ui.hide',
@@ -435,6 +439,13 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return { label: `Load Game: ${data.saveSlot || 'slot1'}`, description: 'Restores persistent variables from a local save slot.' };
     case 'save.clear':
       return { label: `Clear Save: ${data.saveSlot || 'slot1'}`, description: 'Deletes a local save slot.' };
+    case 'save.has':
+      return { label: `Has Save: ${data.saveSlot || 'slot1'}`, description: 'True when the save slot holds data. Wire into a Branch to gate a Continue path or skip an intro.' };
+    case 'action.setTimeScale':
+      return {
+        label: `Set Time Scale: ${Number(data.numberValue ?? 1)}`,
+        description: 'Sets the global game speed. 1 = normal, 0 = paused (scripts still receive input so they can unpause), values between = slow motion. Resets to 1 when a scene loads.',
+      };
     case 'material.output':
       return { label: 'Material Output', description: 'Final surface — connected pins override the material\'s base fields.' };
     case 'material.color':
@@ -965,8 +976,12 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.numberValue = 1.2; // arrival radius (units)
   }
 
-  if (nodeKind === 'save.write' || nodeKind === 'save.load' || nodeKind === 'save.clear') {
+  if (nodeKind === 'save.write' || nodeKind === 'save.load' || nodeKind === 'save.clear' || nodeKind === 'save.has') {
     if (!normalized.saveSlot) normalized.saveSlot = 'slot1';
+  }
+
+  if (nodeKind === 'action.setTimeScale' && typeof normalized.numberValue !== 'number') {
+    normalized.numberValue = 1;
   }
 
   if (nodeKind === 'action.setMaterialColor' && typeof normalized.materialColor !== 'string') {
@@ -1040,6 +1055,7 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     nodeKind === 'query.raycast' ||
     nodeKind === 'query.velocity' ||
     nodeKind === 'query.grounded' ||
+    nodeKind === 'save.has' ||
     nodeKind === 'animator.getParam' ||
     nodeKind === 'animator.getState' ||
     nodeKind === 'variable.getObject';

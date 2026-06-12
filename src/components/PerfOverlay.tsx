@@ -37,6 +37,7 @@ const ZERO_SNAPSHOT: PerfSnapshot = {
   },
   render: { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 },
   hitches: { over33: 0, over100: 0 },
+  stalls: [],
 };
 
 function readCounts(): Counts {
@@ -203,6 +204,17 @@ export function PerfOverlay() {
           <Row label="frame" value={`${fmt(frameMs.avg)} / p95 ${fmt(frameMs.p95)}ms`} />
           {/* Smoothness, not speed: dropped 2-frame budgets + outright stalls since Play started. */}
           <Row label="hitches" value={`${snap.hitches.over33} >33ms · ${snap.hitches.over100} >100ms`} />
+          {snap.stalls.length > 0 && (() => {
+            // Attribution for the LAST stall — "tick" = game logic/physics, "render" = GPU submission,
+            // "other" = GC / React / shader compile / browser. The biggest number is the culprit.
+            const s = snap.stalls[snap.stalls.length - 1];
+            return (
+              <Row
+                label="last stall"
+                value={`${s.frameMs.toFixed(0)}ms @${s.at.toFixed(0)}s — tick ${s.tickMs.toFixed(0)} · render ${s.renderMs.toFixed(0)} · other ${s.other.toFixed(0)}`}
+              />
+            );
+          })()}
           <Row label="tick (sim)" value={`${fmt(tickMs.avg)} / max ${fmt(tickMs.max)}ms`} />
           {/* gl.render = three traversal + draw submission; react/other = everything else in the frame
               (React reconciliation, r3f, browser). The residual is the re-render-storm signal. */}

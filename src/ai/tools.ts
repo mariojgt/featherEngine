@@ -412,6 +412,8 @@ const NODE_LABELS = [
   'Save Game',
   'Load Game',
   'Clear Save',
+  'Has Save',
+  'Set Time Scale',
   'Print',
   'Show UI',
   'Hide UI',
@@ -542,6 +544,8 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Save Game': 'Persistence',
   'Load Game': 'Persistence',
   'Clear Save': 'Persistence',
+  'Has Save': 'Persistence',
+  'Set Time Scale': 'Runtime',
   Print: 'Runtime',
   'Show UI': 'UI',
   'Hide UI': 'UI',
@@ -1352,6 +1356,7 @@ const rawEngineTools = {
       linearDamping: z.number().optional(),
       angularDamping: z.number().optional(),
       windInfluence: z.number().min(0).optional().describe('How strongly global scene wind pushes this DYNAMIC body (0 = ignores wind). Set the wind itself via set_environment.'),
+      knockOverThreshold: z.number().min(0).optional().describe('BREAKAWAY PROP (GTA streetlight): on a FIXED body, an impact faster than this speed (u/s) converts it to a dynamic body that tumbles with the hit — lamp posts, signs, fences, bollards. 0/omit = solid.'),
     }),
     execute: async ({ id, ...patch }) => {
       const object = findObject(id);
@@ -2024,11 +2029,11 @@ const rawEngineTools = {
 
   create_film_mode_template: tool({
     description:
-      'Build the Film Mode cinematic template: THE FALL — a self-running 32s God-of-War-style opening that doubles as a tour of the cinematic system, with generated orchestral music + SFX and a neon FEATHER ENGINE wordmark reveal. Builds a dusk seascape from plain primitives: a 14-slab basalt cliff (deterministic jitter) rising ~84m from a dark ocean, outcrop ledges, a ruined cliff-top (platform, leaning pillars, fallen lintel, ember brazier + warm light), 6 emissive cliff runes down the fall path, sea stacks, circling bird silhouettes (keyframed loops), mist bands + sea-spray dust emitters, the bundled UAL rigged character as the hero (four manual-animator model children under one Hero empty — idle / walk / jump take-off / falling loop — swapped by visibility beats so he idles, walks to the lip, leaps, then falls; primitive fallback if the bundle is missing), a hidden impact kit (splash sparks burst + splash mist + cyan impact light + flattened-sphere shockwave disc), and a stroke-based pixel-font 3D wordmark over the water (unlit until the reveal). Imports audio from public/templates/fall/ (fall_music.wav 32s orchestral bed, wind_rush.mp3, water_impact.mp3; monolith-kit fallbacks) plus portal_approach/arrival_chime, wired as `sound` beats. The 32s autoplay cinematic: a wide establishing push, a follow-rig walk shot to the lip, a low-angle locked leap shot (aim constraint tracks the hero past the lens), then chained followObjectId dive shots (above / below / ground-rush / slow-mo orbit) with lookAtObjectId + focusObjectId auto rack-focus and per-shot shake; the hero fall is ONE transform track whose key spacing authors the slow-mo (playback speed never changes, so music stays synced); runes flare via material tracks as the hero passes; at t=24 a white-flash fadeDip + visibility-revealed splash/light + expanding shockwave + violent shake; then a crane up to the neon-flicker wordmark ignition. Film-style text overlay cards ride the fall; restrained teal-orange grade + 2.39 letterbox with light motion blur/grain/vignette so the scene stays readable. Final fade-out + cinematic_finished event. Returns cinematicId.',
+      'Build the Film Mode cinematic template: THE SUMMIT — a self-running 32s cold-dawn opening that doubles as a tour of the cinematic system AND the cloth/wind/volumetric stack, with orchestral music + SFX and a neon FEATHER ENGINE wordmark reveal. Builds a mountain peak above a sea of clouds from plain primitives: a summit plateau + ascending ridge (slab tops match the hero\'s walk keys), a widening mountain mass dropping into cloud-sea dust emitters, distant silhouette peaks for parallax, cracked paving + rubble, and a dark monolith with 5 carved rune glyphs + a full-height core seam (cold cyan emissive, all dark at start). The wind story: THREE ridge flags (left-edge-pinned cloth on poles), TWO hanging summit banners (top-edge-pinned on crossbar frames) and a cape pinned to the hero — every sheet a real ClothComponent with per-cloth wind [0,0,0], so the ONE global scene wind ([2.2,0,5.2] + turbulence 0.55) is the only thing moving them. Volumetric height fog forms the cloud sea and the low dawn sun (elevation 7) drives god-ray in-scattering (quality High). The hero is the bundled UAL rig (idle/walk model children under one Hero empty, swapped by visibility beats; primitive fallback). The 32s autoplay cinematic: a macro rack-focus opening ON RIPPLING CLOTH, a wide establishing push, a follow-rig ascent shot past the streaming flags, an arrival low shot, a crane up the monolith as runes ignite bottom-up (material tracks), a slow keyframed orbit while the core seam pulse-overloads, a tightening push-in — then at t=24 (the music hit) a white-cyan fadeDip flash + the monolith visibility-swaps to 9 keyframed debris shards + explosion/sparks bursts + an expanding shockwave disc + violent shake, and the 51 wordmark strokes fly in from deterministic scattered offsets on per-stroke transform tracks, snap into the logo, and do the per-stroke neon flicker ignition under a settling reveal crane. Imports audio from public/templates/fall/ + monolith/ (fall_music.wav 32s bed whose hit lands on the shatter, wind_rush, portal_approach swell, lightning_crack + awakening_impact shatter, arrival_chime). Film-style text overlay cards ride the ascent; restrained cool grade + 2.39 letterbox with light motion blur/grain/vignette so the scene stays readable. Final fade-out + cinematic_finished event. Returns cinematicId.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createFilmModeTemplate();
-      return id ? `Created "The Fall" cinematic with cinematicId ${id}. Press Play to watch the 32s cliff-dive opening with synced orchestral music + wind/impact SFX. Open the Cinematic panel to scrub the beat markers (leap, slow-mo, impact, reveal), and use Export WebM or Export MP4 (lazy ffmpeg.wasm transcode) to render the sequence to disk.` : `Couldn't build the Film Mode template.`;
+      return id ? `Created "The Summit" cinematic with cinematicId ${id}. Press Play to watch the 32s mountain-peak opening — cloth banners + cape riding one global wind, dawn god rays, the monolith rune overload, and the t=24 shatter that converges into the wordmark — with synced orchestral music + SFX. Open the Cinematic panel to scrub the beat markers (ascent, runes wake, overload, shatter, reveal), and use Export WebM or Export MP4 (lazy ffmpeg.wasm transcode) to render the sequence to disk.` : `Couldn't build the Film Mode template.`;
     },
   }),
 
@@ -2126,6 +2131,10 @@ const rawEngineTools = {
       engineBrakeForce: z.number().optional().describe('(raycast) Engine braking N at the driven wheels when coasting off-throttle in gear — scales with gear ratio + RPM, so lifting/downshifting slows the car into corners. 0 = freewheel. Default 600.'),
       loadSensitivity: z.number().optional().describe('(raycast) 0..1 weight-transfer grip balance: braking loads the fronts (sharper turn-in, lift-off oversteer on a closed throttle), throttle loads the rears (planted exits). Average grip unchanged. 0 = off. Default 0.6.'),
       counterSteerAssist: z.number().optional().describe('(raycast) 0..1 automatic opposite lock toward the slip angle once the car genuinely slides — keeps drifts/snap-oversteer catchable. 0 for a raw sim feel. Default 0.5.'),
+      aiDriver: z.boolean().optional().describe('Self-driving car: steers itself around the scene\'s "Checkpoint <n>" gates with no blueprint. Race rivals AND ambient city traffic both use this — pick the behavior with aiMode.'),
+      aiMode: z.enum(['race', 'wander']).optional().describe('AI driving behavior. "race" (default): laps the checkpoints IN ORDER at racing pace with rubber-banding. "wander": ambient TRAFFIC — treats the checkpoints as a road network, picks a random nearby gate at each one, cruises at city pace.'),
+      aiSkill: z.number().min(0).max(1).optional().describe('AI pace 0..1 (corner speed, commitment, steering aggression). Default 0.7; use ~0.2-0.35 for calm city traffic.'),
+      aiRubberBand: z.number().min(0).max(1).optional().describe('(race mode) 0..1 keep-the-pack-close assist: slows when ahead of the player, pushes when behind. 0 = honest pace. Default 0.5.'),
       wheels: z
         .array(
           z.object({

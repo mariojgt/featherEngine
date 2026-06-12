@@ -443,7 +443,11 @@ export function GameView() {
       performance={{ min: 0.5 }}
       camera={{ position: [6, 4.2, 7], fov: 50 }}
     >
-      <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => { setDpr(1.5); autoQualityStep(1); }} />
+      {/* DPR drops once and STAYS dropped: each flip reallocates the framebuffer + every post-FX
+          target (~0.1s stall), and at any sustained load that sits on the monitor's boundary the
+          old setDpr(1)/setDpr(1.5) pair flapped — a periodic mid-game hitch that only appeared
+          above a certain speed/scene load. autoQualityStep has its own hysteresis + session latch. */}
+      <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => autoQualityStep(1)} />
       <CompressedTextureSupport />
       <AudioListenerSync />
       <SkidMarks />

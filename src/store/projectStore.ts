@@ -13,6 +13,7 @@ import {
 } from '../project/package';
 import type { AssetItem } from '../types';
 import { useEditorStore } from './editorStore';
+import { setSaveNamespace } from './editor/objectFactory';
 import { clearHistory } from './history';
 
 /** Caller-supplied package metadata; the rest (id, createdAt, engineVersion) is filled in. */
@@ -464,3 +465,9 @@ export const useProjectStore = create<ProjectState>()(
     { name: 'nodeforge.projects', partialize: (state) => ({ recentProjects: state.recentProjects }) },
   ),
 );
+
+// Keep game-save slots scoped to the open project, whatever path set the name (new/open/save-as/demo).
+// loadProject covers the standalone player; this covers the editor's project lifecycle.
+useProjectStore.subscribe((state, prev) => {
+  if (state.projectName !== prev.projectName) setSaveNamespace(state.projectName);
+});

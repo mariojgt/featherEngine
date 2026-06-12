@@ -96,7 +96,7 @@ export function Launcher() {
           onClick={() => void createTemplateProject(createFilmModeTemplate)}
         >
           <Clapperboard size={16} aria-hidden />
-          <span>New "The Fall" cinematic</span>
+          <span>New "The Summit" cinematic</span>
         </button>
 
         <div className="launcher-actions">

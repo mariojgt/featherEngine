@@ -94,6 +94,7 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'logic.or': 'boolean',
   'logic.not': 'boolean',
   'query.grounded': 'boolean',
+  'save.has': 'boolean',
   'query.raycast': 'boolean',
   'math.abs': 'number',
   'math.min': 'number',
@@ -248,6 +249,8 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'save.write': Save,
   'save.load': Database,
   'save.clear': Trash2,
+  'save.has': Database,
+  'action.setTimeScale': Timer,
   'action.print': Terminal,
   'ui.show': LayoutDashboard,
   'ui.hide': LayoutDashboard,
@@ -311,6 +314,7 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'input.driveInput',
   'query.vehicleSpeed',
   'query.grounded',
+  'save.has',
   'animator.getParam',
   'animator.getState',
   'ai.playerLocation',
@@ -517,6 +521,8 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
       ];
     case 'action.cameraShake':
       return [{ id: 'amount', label: 'Amount' }];
+    case 'action.setTimeScale':
+      return [{ id: 'scale', label: 'Scale' }];
     case 'action.applyTorque':
       return [
         { id: 'target', label: 'Target' },
@@ -609,7 +615,10 @@ function nodeDetail(
     case 'save.write':
     case 'save.load':
     case 'save.clear':
+    case 'save.has':
       return data.saveSlot ?? 'slot1';
+    case 'action.setTimeScale':
+      return `${Number(data.numberValue ?? 1)}×`;
     case 'action.print':
       return `“${data.message ?? ''}”`;
     case 'action.setQuality':

@@ -176,6 +176,7 @@ export type GraphNodeKind =
   | 'save.write'
   | 'save.load'
   | 'save.clear'
+  | 'save.has'
   | 'action.print'
   | 'ui.show'
   | 'ui.hide'
@@ -194,6 +195,7 @@ export type GraphNodeKind =
   | 'action.enterVehicle'
   | 'action.exitVehicle'
   | 'action.setQuality'
+  | 'action.setTimeScale'
   | 'action.setEnvironment';
 
 export interface NodeForgeNodeData extends Record<string, unknown> {
@@ -1018,6 +1020,10 @@ export interface PhysicsComponent {
   angularDamping: number;
   /** How strongly global scene wind pushes this DYNAMIC body (0 = ignores wind, the default). */
   windInfluence?: number;
+  /** BREAKAWAY PROP (GTA streetlight): a FIXED body with this set converts to a DYNAMIC body and tumbles
+   *  when something moving faster than this speed (units/sec) slams into it — lamp posts, signs, fences,
+   *  bollards. The impactor's momentum carries into the falling prop. 0/undefined = solid as ever. */
+  knockOverThreshold?: number;
 }
 
 export type PhysicsMaterialPresetId = 'default' | 'rubber' | 'slime' | 'ice' | 'metal' | 'stone' | 'wood' | 'mud';
@@ -1604,6 +1610,10 @@ export interface VehicleComponent {
   /** Rubber-banding, 0..1: rivals quietly slow when ahead of the player and push when behind, keeping the
    *  race close (default 0.5; 0 = honest pace). */
   aiRubberBand?: number;
+  /** How the AI driver uses the "Checkpoint <n>" gates. 'race' (default): laps them IN ORDER at racing
+   *  pace. 'wander': ambient TRAFFIC — on reaching a gate it picks a random nearby gate next (treating
+   *  the checkpoints as a road network), cruises at city pace, ignores rubber-banding and the race grid. */
+  aiMode?: 'race' | 'wander';
 }
 
 export interface SceneObject {

@@ -918,6 +918,27 @@ function VehicleSection({
             </select>
           </label>
 
+          <label className="field-row">
+            <span>AI driver</span>
+            <input type="checkbox" checked={Boolean(v.aiDriver)} onChange={(event) => onChange({ aiDriver: event.target.checked })} />
+          </label>
+          {v.aiDriver && (
+            <>
+              <label className="field-row">
+                <span>AI mode</span>
+                <select value={v.aiMode ?? 'race'} onChange={(event) => onChange({ aiMode: event.target.value as 'race' | 'wander' })}>
+                  <option value="race">Race (lap checkpoints in order)</option>
+                  <option value="wander">Wander (ambient traffic)</option>
+                </select>
+              </label>
+              <RangeField label="AI skill" value={v.aiSkill ?? 0.7} onChange={(aiSkill) => onChange({ aiSkill })} />
+              <p className="field-hint">
+                Self-driving around the scene's "Checkpoint &lt;n&gt;" gates — Race laps them in order (a rival);
+                Wander treats them as a road network and roams it at city pace (traffic).
+              </p>
+            </>
+          )}
+
           {v.physicsModel === 'raycast' ? (
             <>
               <p className="field-hint">
@@ -2289,6 +2310,18 @@ function PhysicsSection({
             <NumberInput value={physics.windInfluence ?? 0} min={0} step={0.1} onChange={(windInfluence) => onChange({ windInfluence })} />
           </label>
           <p className="field-hint">How strongly global scene Wind pushes this body. 0 = ignores wind. Set the wind itself in Scene Settings.</p>
+        </>
+      )}
+      {physics.bodyType === 'fixed' && (
+        <>
+          <label className="field-row">
+            <span>Knock-over speed</span>
+            <NumberInput value={physics.knockOverThreshold ?? 0} min={0} step={1} onChange={(knockOverThreshold) => onChange({ knockOverThreshold })} />
+          </label>
+          <p className="field-hint">
+            Breakaway prop: hit faster than this (units/sec) and the body turns dynamic and tumbles, carrying the
+            impact — lamp posts, signs, fences. 0 = never breaks away.
+          </p>
         </>
       )}
     </section>

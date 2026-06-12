@@ -97,7 +97,10 @@ const SURFACE_GRIP: Record<string, number> = {
  * into engineForce so holding a gear matters: short-shifting or banging the limiter both lose drive.
  */
 function engineTorqueCurve(rpm: number, idleRpm: number, maxRpm: number): number {
-  if (rpm >= maxRpm * 1.02) return 0; // rev limiter
+  // SOFT rev limiter: taper torque to zero across the over-rev band instead of a hard 0.7→0 flip —
+  // a car pinned at its aero-limited top speed used to oscillate around the cut (drive force flapping
+  // full-on/full-off every few frames), which read as rhythmic surging/jerking at high speed.
+  if (rpm >= maxRpm) return Math.max(0, 0.7 * (1 - (rpm - maxRpm) / Math.max(1, maxRpm * 0.04)));
   const n = Math.min(Math.max((rpm - idleRpm) / Math.max(1, maxRpm - idleRpm), 0), 1);
   // Strong low end (0.72 at idle) so the throttle answers NOW — the old 0.6 floor read as turbo lag.
   if (n < 0.5) return 0.72 + 0.28 * (n / 0.5); // climb to peak torque
@@ -372,6 +375,10 @@ export interface VehicleWheelState {
 export interface PhysicsContactEvent {
   objectId: string;
   otherObjectId: string;
+  /** Horizontal speed (u/s) of the FASTER body at the moment of impact, measured BEFORE the solver
+   *  resolved the hit — post-step velocity reads near zero exactly when something slams a wall.
+   *  Drives impact-severity consumers (breakaway props). Absent on exit events. */
+  speed?: number;
 }
 
 /** A capsule sized to a (feet-origin) humanoid, scaled by the object. */
@@ -503,6 +510,8 @@ class PhysicsRuntime {
   private world: World;
   private events = new RAPIER.EventQueue(true);
   private entries = new Map<string, BodyEntry>();
+  /** Horizontal speed of every awake dynamic body BEFORE this frame's step — see PhysicsContactEvent.speed. */
+  private preStepSpeed = new Map<string, number>();
   private handleToId = new Map<number, string>();
   private handleToTrigger = new Map<number, boolean>();
   private charEntries = new Map<string, CharacterEntry>();
@@ -1085,6 +1094,21 @@ class PhysicsRuntime {
     windTurbulence = 0,
     vehicleInputs: Record<string, VehicleInput> = {},
   ): PhysicsFrameResult {
+    // Paused (Set Time Scale 0): skip the step entirely — the dt clamp below would otherwise creep the
+    // world forward at 1/240s per frame. The empty result freezes every body exactly where it is; contact
+    // state resumes on the next live step.
+    if (delta <= 0) {
+      return {
+        transforms: new Map(),
+        collisions: [],
+        triggers: [],
+        triggersExit: [],
+        collisionsExit: [],
+        grounded: [],
+        velocities: new Map(),
+        vehicles: new Map(),
+      };
+    }
     const dt = Math.min(Math.max(delta, 1 / 240), 1 / 20);
     // Per-frame gust factor for wind (shared by every wind-affected body this step).
     const hasWind = wind[0] !== 0 || wind[1] !== 0 || wind[2] !== 0;
@@ -1458,6 +1482,20 @@ class PhysicsRuntime {
       }
     }
 
+    // Snapshot every awake dynamic body's horizontal speed BEFORE stepping: contact events report this
+    // as the IMPACT speed. Reading velocity after the step undercounts exactly when it matters — the
+    // solver has already stopped the body against whatever it hit.
+    this.preStepSpeed.clear();
+    for (const [id, entry] of this.vehicleEntries) {
+      const lv = entry.body.linvel();
+      this.preStepSpeed.set(id, Math.hypot(lv.x, lv.z));
+    }
+    for (const [id, entry] of this.entries) {
+      if (!entry.body.isDynamic() || entry.body.isSleeping()) continue;
+      const lv = entry.body.linvel();
+      this.preStepSpeed.set(id, Math.hypot(lv.x, lv.z));
+    }
+
     // Fixed-timestep substepping: advance the full frame time `dt` in chunks of at most 1/60s. Wheel forces
     // were set once above (they persist on the controller); each substep re-runs the vehicle raycast update
     // then steps the world. Capped at 6 substeps to avoid a spiral of death on a very long hitch.
@@ -1542,11 +1580,18 @@ class PhysicsRuntime {
         return;
       }
       const list = isTrigger ? triggers : collisions;
-      list.push({ objectId: a, otherObjectId: b }, { objectId: b, otherObjectId: a });
+      const speed = Math.max(this.preStepSpeed.get(a) ?? 0, this.preStepSpeed.get(b) ?? 0);
+      list.push({ objectId: a, otherObjectId: b, speed }, { objectId: b, otherObjectId: a, speed });
     });
 
     const transforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
     const velocities = new Map<string, Vector3Tuple>();
+    // Raycast-vehicle chassis are dynamic bodies too — publish their velocity so Get Velocity works on
+    // sim cars AND impact-speed consumers (breakaway props, contact damage) see how fast a car hit them.
+    for (const [id, entry] of this.vehicleEntries) {
+      const lv = entry.body.linvel();
+      velocities.set(id, [lv.x, lv.y, lv.z]);
+    }
     for (const [id, entry] of this.entries) {
       const object = byId.get(id);
       if (entry.body.isDynamic()) {

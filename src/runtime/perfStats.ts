@@ -86,6 +86,18 @@ export interface PerfSnapshot {
   /** Frame-pacing reliability since Play started: frames that blew the 2-frame budget (>33ms) and
    *  outright stalls (>100ms — shader compiles, GC pauses, composer rebuilds). The smoothness metric. */
   hitches: { over33: number; over100: number };
+  /** The last few stalls (>50ms frames) WITH attribution — the "what was slow" answer.
+   *  `other` ≈ frame − tick − render: GC pauses, React commits, shader compiles, browser work. */
+  stalls: StallRecord[];
+}
+
+export interface StallRecord {
+  /** Seconds since Play started. */
+  at: number;
+  frameMs: number;
+  tickMs: number;
+  renderMs: number;
+  other: number;
 }
 
 export type RuntimeSection = 'scripts' | 'physics' | 'combat' | 'animator';
@@ -103,11 +115,15 @@ const render: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0
 
 let hitch33 = 0;
 let hitch100 = 0;
+const stallLog: StallRecord[] = [];
+let playStartedAt = 0;
 
 /** Zero the hitch counters — called when Play starts so the numbers describe THIS session. */
 export const resetHitches = () => {
   hitch33 = 0;
   hitch100 = 0;
+  stallLog.length = 0;
+  playStartedAt = performance.now();
 };
 
 /** Called once per rAF from the runtime loop. `frameMs` is wall-clock between frames; `tickMs` is the cost of `tickRuntime`. */
@@ -116,6 +132,24 @@ export const recordFrame = (frameMs: number, tickMs: number) => {
   tickRing.push(tickMs);
   if (frameMs > 100) hitch100 += 1;
   else if (frameMs > 33.4) hitch33 += 1;
+  // Stall attribution: anything over ~3 frames gets logged with WHERE the time went, so "the game
+  // keeps micro-freezing" stops being a guessing game — F8 shows the breakdown, console keeps history.
+  if (frameMs > 50) {
+    const renderMs = renderRing.last;
+    const entry: StallRecord = {
+      at: (performance.now() - playStartedAt) / 1000,
+      frameMs,
+      tickMs,
+      renderMs,
+      other: Math.max(0, frameMs - tickMs - renderMs),
+    };
+    stallLog.push(entry);
+    if (stallLog.length > 10) stallLog.shift();
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[stall] ${frameMs.toFixed(0)}ms frame at ${entry.at.toFixed(1)}s — tick ${tickMs.toFixed(1)}ms · render ${renderMs.toFixed(1)}ms · other ${entry.other.toFixed(0)}ms (GC / React / shader compile / browser)`,
+    );
+  }
 };
 
 export const recordRuntimeSection = (section: RuntimeSection, ms: number) => {
@@ -161,5 +195,6 @@ export const getPerfSnapshot = (): PerfSnapshot => {
     },
     render: { ...render },
     hitches: { over33: hitch33, over100: hitch100 },
+    stalls: [...stallLog],
   };
 };

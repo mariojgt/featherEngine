@@ -204,6 +204,7 @@ import {
   makeSplashObject,
   objectDefaults,
   readSaveSlot,
+  setSaveNamespace,
   seedBlueprintInstanceVars,
   toBoolean,
   toNumber,
@@ -549,6 +550,9 @@ interface EditorState {
   selectedCinematicKeyframe?: { actionId: string; index: number };
   runtimeStarted: boolean;
   runtimeTime: number;
+  /** Global game speed (Set Time Scale node): 1 = normal, 0 = paused, <1 = slow-mo. Scales the tick delta
+   *  (scripts, timers, physics); input + UI keep running so a paused game can still unpause itself. */
+  runtimeTimeScale: number;
   assetSearch: string;
   selectedGraphNodeId?: string;
   activeScene: () => Scene | undefined;
@@ -1017,6 +1021,25 @@ const cloneObjectTree = (
     if (clone.joint?.connectedObjectId) {
       clone.joint = { ...clone.joint, connectedObjectId: remap(clone.joint.connectedObjectId) };
     }
+    // Vehicles reference their rig by OBJECT ID (wheels, anchors, lights, emitters, loose parts) — a
+    // cloned car must point at its own cloned parts, or a spawned/duplicated vehicle has a dead rig.
+    // (garageBodyIds are ASSET ids — shared, never remapped.)
+    if (clone.vehicle) {
+      const v = clone.vehicle;
+      const remapAll = (ids: string[] | undefined) => ids?.map((id) => remap(id)!) ?? ids;
+      clone.vehicle = {
+        ...v,
+        wheelObjectIds: remapAll(v.wheelObjectIds) ?? [],
+        steeredWheelIds: remapAll(v.steeredWheelIds) ?? [],
+        wheels: v.wheels?.map((w) => ({ ...w, objectId: remap(w.objectId)! })),
+        tireMarkIds: remapAll(v.tireMarkIds) ?? [],
+        headlightIds: remapAll(v.headlightIds) ?? [],
+        brakeLightIds: remapAll(v.brakeLightIds) ?? [],
+        brakeDiscIds: remapAll(v.brakeDiscIds),
+        boostFlameIds: remapAll(v.boostFlameIds),
+        loosePartIds: remapAll(v.loosePartIds),
+      };
+    }
     return clone;
   });
   return { objects, rootId: idMap.get(rootId)! };
@@ -1044,13 +1067,37 @@ const prevTransformEntryPool = new Map<string, { position: Vector3Tuple; rotatio
  * the per-tick race-support scan does a Map lookup per object instead of a regex exec. Bounded by the
  * number of distinct object names ever seen, so it never needs clearing.
  */
-/** `new Map(arr.map(...))` allocates N intermediate tuples — the tick builds several of these maps
- *  over fresh arrays every frame, so they're filled with a plain loop instead. */
-const buildObjectIdMap = (objects: readonly SceneObject[]): Map<string, SceneObject> => {
-  const map = new Map<string, SceneObject>();
-  for (const object of objects) map.set(object.id, object);
-  return map;
+/**
+ * Per-tick object-index Maps, POOLED at module level and refilled with clear() + set() each frame.
+ * The tick used to mint ~5 of these (one per pass, N entries each) every frame — at 60fps in a
+ * ~250-object scene that's tens of thousands of Map-entry allocations per second, and the live
+ * profiler attributed the user-visible periodic ~60ms stalls to exactly this kind of GC pressure
+ * (stalls with tick≈3ms, render≈2ms, other≈55ms). clear() keeps the backing storage, so steady-state
+ * frames allocate nothing here. ⚠️ STRICTLY tick-local: each pool is valid only between its fill and
+ * the end of that tick — never retain one across ticks (closures created inside the tick are fine).
+ */
+const fillObjectIdMap = (pool: Map<string, SceneObject>, objects: readonly SceneObject[]): Map<string, SceneObject> => {
+  pool.clear();
+  for (const object of objects) pool.set(object.id, object);
+  return pool;
 };
+const tickMappedById = new Map<string, SceneObject>();
+const tickResolvedById = new Map<string, SceneObject>();
+const tickVehicleById = new Map<string, SceneObject>();
+const tickRemainingById = new Map<string, SceneObject>();
+const tickPrevTransforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+
+/**
+ * Continuous heading (rotation about +Y; atan2 of the rotated forward vector) from an XYZ euler.
+ * `rotation[1]` alone is WRONG for half of all headings: euler decomposition confines Y to ±90° and
+ * represents flipped headings as (π, π−θ, π), so anything steering off the raw Y (the AI driver) drove
+ * the wrong way whenever the car faced -Z. fwd = Rx·Ry·Rz·(0,0,1) = (sinY, −cosY·sinX, cosY·cosX).
+ */
+const headingFromEuler = (rotation: Vector3Tuple): number =>
+  Math.atan2(Math.sin(rotation[1]), Math.cos(rotation[1]) * Math.cos(rotation[0]));
+
+/** Reused exclusion set for the AI driver's obstacle feeler rays (single-threaded tick). */
+const aiFeelerExclude = new Set<string>();
 
 const checkpointIdxByName = new Map<string, number>();
 const checkpointIndexForName = (name: string): number => {
@@ -1372,6 +1419,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selectedCinematicKeyframe: undefined,
   runtimeStarted: false,
   runtimeTime: 0,
+  runtimeTimeScale: 1,
   assetSearch: '',
   activeScene: () => get().scenes.find((scene) => scene.id === get().activeSceneId),
   selectedObject: () => selectActiveObjects(get()).find((object) => object.id === get().selectedObjectId),
@@ -5287,6 +5335,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         return {
           isPlaying,
           runtimeTime: 0,
+          runtimeTimeScale: 1,
           runtimeVelocities: makeRuntimeVelocityMap(objects),
           runtimeKeys: {},
           runtimePreviousKeys: {},
@@ -5395,6 +5444,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return {
         isPlaying,
         runtimeTime: 0,
+        runtimeTimeScale: 1,
         runtimeVelocities: {},
         runtimeKeys: {},
         runtimePreviousKeys: {},
@@ -5483,6 +5533,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   tickRuntime: (delta) =>
     set((state) => {
       if (!state.isPlaying) return state;
+      // Global time scale (Set Time Scale node): scales scripts, timers, physics and motion in one place.
+      // At 0 (paused) the tick still RUNS — key/UI events keep firing so the pause menu can unpause —
+      // but nothing advances and the physics step is skipped (physics.frame early-outs on dt <= 0).
+      delta *= state.runtimeTimeScale ?? 1;
       beginPerceptionFrame(); // advance the AI perception clock (throttled line-of-sight cache)
       const activeObjects = selectActiveObjects(state);
       const activeObjectById = indexSceneObjectsById(activeObjects);
@@ -5598,7 +5652,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const keyPressedThisTick = (code: string) => (currentKeyPresses[code] ?? 0) > (previousKeyPresses[code] ?? 0);
       // Transforms at the start of the tick — the diff after scripts run is the motion a
       // script applied, which the physics world turns into body inputs (velocity/teleport).
-      const prevTransforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+      // Map AND entries pooled (physicsWorld only reads it synchronously within this tick).
+      const prevTransforms = tickPrevTransforms;
+      prevTransforms.clear();
       for (const object of activeObjects) {
         let entry = prevTransformEntryPool.get(object.id);
         if (entry) {
@@ -5638,6 +5694,47 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // post-script transform). Last write wins. Keyed by target object id.
       const nextTransforms: Record<string, { position?: Vector3Tuple; rotation?: Vector3Tuple; scale?: Vector3Tuple }> = {};
       const nextPhysics: Record<string, Partial<PhysicsComponent>> = {};
+      // BREAKAWAY PROPS (GTA streetlights): a FIXED body with physics.knockOverThreshold converts to a
+      // DYNAMIC body and tumbles when something faster than the threshold slams it. Uses LAST frame's
+      // contacts (the same one-frame delay as event.collisionEnter); the inherited kick is queued through
+      // pendingPartKicks so it lands once the rebuilt dynamic body exists (next frame's physics sync).
+      for (const contact of state.runtimeCollisions) {
+        for (let side = 0; side < 2; side++) {
+          const propId = side === 0 ? contact.objectId : contact.otherObjectId;
+          const otherId = side === 0 ? contact.otherObjectId : contact.objectId;
+          const prop = activeObjectById.get(propId);
+          const threshold = prop?.physics?.knockOverThreshold ?? 0;
+          if (!prop || threshold <= 0 || prop.physics?.bodyType !== 'fixed' || nextPhysics[propId]) continue;
+          // Impact severity: the event's PRE-IMPACT speed (the solver has already stopped the impactor
+          // against this very prop by the time post-step velocity is readable).
+          const vel = state.runtimeVelocities[otherId];
+          const speed = contact.speed ?? (vel ? Math.hypot(vel[0], vel[2]) : 0);
+          if (speed < threshold) continue;
+          // Kick direction: the impactor's (possibly deflected) velocity if it's still meaningful,
+          // else straight from the impactor toward the prop — scaled back up to the impact speed.
+          let dirX = vel?.[0] ?? 0;
+          let dirZ = vel?.[2] ?? 0;
+          const dirLen = Math.hypot(dirX, dirZ);
+          if (dirLen > 0.5) {
+            dirX = (dirX / dirLen) * speed;
+            dirZ = (dirZ / dirLen) * speed;
+          } else {
+            const other = activeObjectById.get(otherId);
+            if (!other) continue;
+            const dx = prop.transform.position[0] - other.transform.position[0];
+            const dz = prop.transform.position[2] - other.transform.position[2];
+            const len = Math.hypot(dx, dz) || 1;
+            dirX = (dx / len) * speed;
+            dirZ = (dz / len) * speed;
+          }
+          nextPhysics[propId] = { bodyType: 'dynamic' };
+          pendingPartKicks.set(propId, {
+            // Carried along with the impactor + popped slightly up; the spin tips it over the impact axis.
+            vel: [dirX * 0.55, 1.6 + speed * 0.1, dirZ * 0.55],
+            spin: [dirZ * 0.35, (Math.random() - 0.5) * 1.2, -dirX * 0.35],
+          });
+        }
+      }
       // Targeted custom events (Fire Event with a Target) → delivered to that actor NEXT frame (one-frame
       // delay, like runtimeCollisions), since each object runs its own graph in its own context.
       const nextActorEvents: Record<string, string[]> = {};
@@ -5654,6 +5751,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let pendingSceneId: string | undefined;
       // A Set Quality node fired this frame → apply the new scalability preset at the end of the tick.
       let pendingQuality: QualityLevel | undefined;
+      // A Set Time Scale node fired this frame → applied at the end of the tick (next frame runs at the new speed).
+      let pendingTimeScale: number | undefined;
       // action.setEnvironment patches accumulated this frame — sky/fog/sun overrides applied to the active
       // scene's environment at the end of the tick. Each successive node overlays on top.
       let pendingEnvironment: Partial<SceneEnvironmentSettings> | undefined;
@@ -6174,6 +6273,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'query.grounded') {
               return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
+            }
+
+            // Has Save: true when the slot holds saved data — gate a "Continue" button / skip-intro branch.
+            if (node.data.nodeKind === 'save.has') {
+              return readSaveSlot(node.data.saveSlot ?? 'slot1') !== null;
             }
 
             // Find Actor (Unreal Get Actor Of Class / With Tag): scan the live scene for an actor matching a
@@ -7041,13 +7145,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             if (node.data.nodeKind === 'save.write') {
+              // Variables flagged `persistent` define the save set; a project that never flagged any
+              // saves ALL project variables instead — so Save Game is never a silent no-op ("easy by
+              // default, precise when you opt in"). Keyed by NAME (stable across re-imports/copies).
+              const anyFlagged = state.variables.some((variable) => variable.persistent);
+              const pool = anyFlagged ? state.variables.filter((variable) => variable.persistent) : state.variables;
               const saved = Object.fromEntries(
-                state.variables
-                  .filter((variable) => variable.persistent)
-                  .map((variable) => [
-                    variable.id,
-                    coerceGraphValue(nextVariableValues[variable.id] ?? variable.defaultValue, variable.type),
-                  ]),
+                pool.map((variable) => [
+                  variable.name,
+                  coerceGraphValue(nextVariableValues[variable.id] ?? variable.defaultValue, variable.type),
+                ]),
               ) as Record<string, GraphValue>;
               writeSaveSlot(node.data.saveSlot ?? 'slot1', saved);
               prints.push(`${object.name}: Saved ${Object.keys(saved).length} variables`);
@@ -7056,11 +7163,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (node.data.nodeKind === 'save.load') {
               const saved = readSaveSlot(node.data.saveSlot ?? 'slot1');
               if (saved) {
-                state.variables
-                  .filter((variable) => variable.persistent && saved[variable.id] !== undefined)
-                  .forEach((variable) => {
-                    nextVariableValues[variable.id] = coerceGraphValue(saved[variable.id], variable.type);
-                  });
+                // Apply whatever the save holds — name-keyed (current format) or id-keyed (legacy saves).
+                state.variables.forEach((variable) => {
+                  const value = saved[variable.name] ?? saved[variable.id];
+                  if (value !== undefined) nextVariableValues[variable.id] = coerceGraphValue(value, variable.type);
+                });
                 prints.push(`${object.name}: Loaded save slot ${node.data.saveSlot ?? 'slot1'}`);
               } else {
                 prints.push(`${object.name}: No save data in ${node.data.saveSlot ?? 'slot1'}`);
@@ -7145,6 +7252,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 dmg: Math.max(0, toNumber(valueInput(node, 'damage', Number(node.data.explodeDamage ?? 50)))),
                 force: Math.max(0, toNumber(valueInput(node, 'force', Number(node.data.explodeForce ?? 16)))),
               });
+            }
+
+            if (node.data.nodeKind === 'action.setTimeScale') {
+              // Clamped 0..4: 0 pauses (tick keeps running so the graph can unpause), <1 slow-mo, >1 fast-forward.
+              pendingTimeScale = Math.min(4, Math.max(0, toNumber(valueInput(node, 'scale', Number(node.data.numberValue ?? 1)))));
             }
 
             if (node.data.nodeKind === 'action.setQuality') {
@@ -7704,7 +7816,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           };
         });
       }
-      const mappedObjectById = buildObjectIdMap(mappedObjects);
+      const mappedObjectById = fillObjectIdMap(tickMappedById, mappedObjects);
       // One terrain sampler for the whole tick: filters terrain objects once and memoizes
       // height queries on a grid (terrain transforms are identical across the mapped/moved/
       // resolved arrays, so this is valid for every pass below).
@@ -7764,7 +7876,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           id: o.id,
           x: o.transform.position[0],
           z: o.transform.position[2],
-          yaw: typeof yawRaw === 'number' && Number.isFinite(yawRaw) ? yawRaw : o.transform.rotation[1],
+          yaw: typeof yawRaw === 'number' && Number.isFinite(yawRaw) ? yawRaw : headingFromEuler(o.transform.rotation),
           speed: toNumber(bag.__vehicleSpeed ?? 0),
         });
       }
@@ -7850,7 +7962,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const dynamic = object.physics?.bodyType === 'dynamic';
         const vehicleVars = mutableObjectVars(object.id, object.variables);
         if (!Array.isArray(vehicleVars.__vehicleBaseScale)) vehicleVars.__vehicleBaseScale = object.transform.scale;
-        const authoredYaw = object.transform.rotation[1];
+        const authoredYaw = headingFromEuler(object.transform.rotation);
         const storedYaw = typeof vehicleVars.__vehicleYaw === 'number' ? vehicleVars.__vehicleYaw : undefined;
         const yaw: number = storedYaw !== undefined && Number.isFinite(storedYaw) ? storedYaw : Number(authoredYaw ?? 0);
         let crashTimer = Math.max(0, toNumber(vehicleVars.__vehicleCrashTimer ?? 0) - delta);
@@ -7881,20 +7993,52 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         let aiHandbrake = false;
         if (aiDriving && raceCpCount) {
           const skill = clamp(veh.aiSkill ?? 0.7, 0, 1);
+          // 'wander' = ambient TRAFFIC: the gates are a road network, not a racing line — on reaching one,
+          // pick a random NEARBY gate next (avoiding an immediate U-turn), cruise at city pace, and ignore
+          // the race-only behaviors (lap counting, rubber-band, grid hold).
+          const wander = veh.aiMode === 'wander';
           let nextCp = toNumber(vehicleVars.__aiNextCp ?? 0) % raceCpCount;
           const pos = object.transform.position;
-          const target = raceCheckpoints.find((c) => c.idx === nextCp) ?? raceCheckpoints[0];
+          let target = raceCheckpoints.find((c) => c.idx === nextCp) ?? raceCheckpoints[0];
           const dist = Math.hypot(target.pos[0] - pos[0], target.pos[2] - pos[2]);
-          if (dist < 16) {
-            // Same gate radius + ordering rules as the player's lap timer, so rivals bank laps fairly.
-            if (nextCp === 0) vehicleVars.__aiLap = toNumber(vehicleVars.__aiLap ?? 0) + 1;
-            nextCp = (nextCp + 1) % raceCpCount;
-            vehicleVars.__aiNextCp = nextCp;
+          if (dist < (wander ? 11 : 16)) {
+            if (wander) {
+              const fromIdx = nextCp;
+              const cameFrom = toNumber(vehicleVars.__aiPrevCp ?? -1);
+              const nearby = raceCheckpoints
+                .filter((c) => c.idx !== fromIdx)
+                .map((c) => ({ idx: c.idx, d: Math.hypot(c.pos[0] - target.pos[0], c.pos[2] - target.pos[2]) }))
+                .sort((a, b) => a.d - b.d)
+                .slice(0, 3);
+              const forward = nearby.length > 1 ? nearby.filter((c) => c.idx !== cameFrom) : nearby;
+              const pick = forward[Math.floor(Math.random() * forward.length)] ?? nearby[0];
+              if (pick) {
+                vehicleVars.__aiPrevCp = fromIdx;
+                nextCp = pick.idx;
+                vehicleVars.__aiNextCp = nextCp;
+                target = raceCheckpoints.find((c) => c.idx === nextCp) ?? target;
+              }
+            } else {
+              // Same gate radius + ordering rules as the player's lap timer, so rivals bank laps fairly.
+              if (nextCp === 0) vehicleVars.__aiLap = toNumber(vehicleVars.__aiLap ?? 0) + 1;
+              nextCp = (nextCp + 1) % raceCpCount;
+              vehicleVars.__aiNextCp = nextCp;
+            }
           }
-          const after = raceCheckpoints.find((c) => c.idx === (nextCp + 1) % raceCpCount) ?? target;
+          // Traffic aims straight at its gate (no race-line cutting through corners).
+          const after = wander ? target : raceCheckpoints.find((c) => c.idx === (nextCp + 1) % raceCpCount) ?? target;
           const blend = clamp(1 - dist / 34, 0, 0.6);
-          const aimX = target.pos[0] + (after.pos[0] - target.pos[0]) * blend;
-          const aimZ = target.pos[2] + (after.pos[2] - target.pos[2]) * blend;
+          let aimX = target.pos[0] + (after.pos[0] - target.pos[0]) * blend;
+          let aimZ = target.pos[2] + (after.pos[2] - target.pos[2]) * blend;
+          if (wander) {
+            // Drive on the RIGHT: shift the aim point sideways off the gate-to-gate line, so opposing
+            // traffic passes instead of meeting head-on in the middle of the road.
+            const toAimX = aimX - pos[0];
+            const toAimZ = aimZ - pos[2];
+            const toAimLen = Math.hypot(toAimX, toAimZ) || 1;
+            aimX += (toAimZ / toAimLen) * 2.4;
+            aimZ += (-toAimX / toAimLen) * 2.4;
+          }
           const desired = angleDelta(yaw, Math.atan2(aimX - pos[0], aimZ - pos[2]));
           aiSteer = clamp(desired * (1.6 + skill * 0.8), -1, 1);
           const spd = Math.abs(toNumber(vehicleVars.__vehicleSpeed ?? prevSpeed));
@@ -7906,12 +8050,53 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ),
           );
           const cornerBrake = clamp(1 - dist / 40, 0, 1) * clamp(corner / 1.6, 0, 1);
-          let targetSpeed = (16 + 18 * skill) * (1 - 0.62 * cornerBrake) * (1 - 0.5 * Math.abs(aiSteer));
+          // City traffic cruises; racers commit.
+          let targetSpeed = wander
+            ? (8 + 7 * skill) * (1 - 0.5 * Math.abs(aiSteer))
+            : (16 + 18 * skill) * (1 - 0.62 * cornerBrake) * (1 - 0.5 * Math.abs(aiSteer));
           // RUBBER-BAND: quietly breathe when ahead of the player, push when behind — keeps the pack close.
-          if (playerRaceProgress !== undefined) {
+          if (!wander && playerRaceProgress !== undefined) {
             const rubber = clamp(veh.aiRubberBand ?? 0.5, 0, 1);
             const gap = raceProgress(toNumber(vehicleVars.__aiLap ?? 0), nextCp, pos[0], pos[2]) - playerRaceProgress;
             targetSpeed *= 1 - clamp(gap * 0.1, -0.3, 0.22) * rubber;
+          }
+          // --- WANDER competence: queue behind cars and feel for obstacles instead of ramming them. ---
+          if (wander) {
+            // Car ahead (incl. the player): match its pace, stop short when close — traffic queues.
+            const fAx = Math.sin(yaw);
+            const fAz = Math.cos(yaw);
+            for (const p of vehiclePoses) {
+              if (p.id === object.id) continue;
+              const ox = p.x - pos[0];
+              const oz = p.z - pos[2];
+              const d = Math.hypot(ox, oz);
+              if (d < 0.001 || d > 11) continue;
+              if ((ox * fAx + oz * fAz) / d > 0.8) {
+                targetSpeed = Math.min(targetSpeed, d < 5.5 ? 0 : Math.max(0, Math.abs(p.speed) * 0.9));
+              }
+            }
+            // Feelers: three short rays sweep ahead; steer toward the clearer side, slow when boxed in.
+            // (positive steer turns RIGHT, so a blocked right side pushes the correction negative/left.)
+            const phys = getActivePhysics();
+            if (phys) {
+              aiFeelerExclude.clear();
+              aiFeelerExclude.add(object.id);
+              const reach = clamp(5 + spd * 0.9, 5, 13);
+              const origin: Vector3Tuple = [pos[0], pos[1] + 0.55, pos[2]];
+              const clearance = (offset: number) => {
+                const a = yaw + offset;
+                const hit = phys.castRay(origin, [Math.sin(a), 0, Math.cos(a)], reach, aiFeelerExclude);
+                return hit ? hit.distance / reach : 1;
+              };
+              const cLeft = clearance(-0.45);
+              const cMid = clearance(0);
+              const cRight = clearance(0.45);
+              if (cMid < 1 || cLeft < 1 || cRight < 1) {
+                aiSteer = clamp(aiSteer + (cRight - cLeft) * 1.5, -1, 1);
+                if (cMid < 0.4) targetSpeed = 0; // boxed in — stop; the unstick below reverses out if it stays stuck
+                else if (cMid < 0.75) targetSpeed = Math.min(targetSpeed, 4);
+              }
+            }
           }
           aiThrottle = clamp((targetSpeed - spd) * 0.35, -1, 1);
           // Unstick: nosed into a wall (commanding throttle, not moving) → back out with opposite lock.
@@ -7930,8 +8115,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }
           vehicleVars.__aiStuck = stuck;
           vehicleVars.__aiReverse = Math.max(0, reverseT);
-          if (!drivingActive) {
-            // Grid hold: lights aren't green yet — park on the handbrake.
+          if (!drivingActive && !wander) {
+            // Grid hold: lights aren't green yet — park on the handbrake. (Traffic ignores the race grid.)
             aiThrottle = 0;
             aiHandbrake = true;
           }
@@ -9176,7 +9361,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           for (const [, st] of result.vehicles) for (const w of st.wheels) wheelStates.set(w.objectId, w);
           // Each wheel mesh's PARENT is its steering anchor — map anchorId → wheel state so the anchor carries
           // steer + the suspension bob. (A wheel parented directly to the car has no anchor → handled inline.)
-          const byIdNow = buildObjectIdMap(resolvedObjects);
+          const byIdNow = fillObjectIdMap(tickVehicleById, resolvedObjects);
           const anchorStates = new Map<string, VehicleWheelState>();
           for (const ws of wheelStates.values()) {
             const parentId = byIdNow.get(ws.objectId)?.parentId;
@@ -9223,7 +9408,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (cs) {
               const mutable = mutableObjectVars(object.id, object.variables);
               const prevSpeed = toNumber(mutable.__vehicleSpeed ?? 0);
-              mutable.__vehicleYaw = cs.chassis.rotation[1];
+              mutable.__vehicleYaw = headingFromEuler(cs.chassis.rotation);
               mutable.__vehicleSpeed = cs.speed;
               const veh = resolveVehicle(object.vehicle);
               const input = vehicleInputs[object.id];
@@ -9625,7 +9810,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
       }
       const combatStart = performance.now();
-      const resolvedObjectById = buildObjectIdMap(resolvedObjects);
+      const resolvedObjectById = fillObjectIdMap(tickResolvedById, resolvedObjects);
       // Auto-fracture: a destructible object shatters when it (or the thing it hit) is moving fast enough on
       // contact. No contact-force readout exists, so approximate the impact with this-frame speed.
       if (collisions.length) {
@@ -10169,7 +10354,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const remainingObjectIds = new Set(allObjects.map((object) => object.id));
       const attachedOwnerIds = new Set(allObjects.map((object) => object.attachment?.targetObjectId).filter(Boolean) as string[]);
       const remainingResolvedObjects = resolvedObjects.filter((object) => remainingObjectIds.has(object.id));
-      const remainingResolvedObjectById = buildObjectIdMap(remainingResolvedObjects);
+      const remainingResolvedObjectById = fillObjectIdMap(tickRemainingById, remainingResolvedObjects);
       const groundedIdSet = new Set(groundedIds);
       const swimmingIdSet = new Set(swimmingIds);
       const climbingIdSet = new Set(climbingIds);
@@ -10376,6 +10561,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeSceneSnapshots: snaps,
             runtimeStarted: false,
             runtimeTime: 0,
+            runtimeTimeScale: 1, // a freshly loaded scene starts at normal speed (a pause carried across a load would soft-lock it)
             runtimeVelocities: makeRuntimeVelocityMap(freshObjects),
             // Project variables persist across the load — this is how run state survives a floor change.
             runtimeVariableValues: nextVariableValues,
@@ -10519,6 +10705,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...(pendingQuality && pendingQuality !== state.renderSettings.quality
           ? { renderSettings: { ...state.renderSettings, quality: pendingQuality } }
           : {}),
+        // A Set Time Scale node fired → the next tick runs at the new speed (0 = paused; see tick entry).
+        ...(pendingTimeScale !== undefined && pendingTimeScale !== state.runtimeTimeScale
+          ? { runtimeTimeScale: pendingTimeScale }
+          : {}),
       };
     }),
   onNodesChange: (changes) =>
@@ -10635,6 +10825,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
   loadProject: (project) =>
     set(() => {
+      // Scope game-save slots to this game (the standalone player loads through here too).
+      setSaveNamespace(project.name ?? 'project');
       // Backfill component defaults so older saves load safely.
       const rawScenes = project.scenes.length ? project.scenes : [{ id: 'scene-main', name: 'Main', objects: [] }];
       const normalizeSceneObject = (object: SceneObject): SceneObject => ({

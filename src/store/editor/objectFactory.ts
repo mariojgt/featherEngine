@@ -87,12 +87,27 @@ export const inferGraphType = (value: GraphValue | undefined): GraphValueType =>
   return 'number';
 };
 
-const saveKeyForSlot = (slot: string) => `nodeforge.save.${slot.trim() || 'slot1'}`;
+// --- Game save slots --------------------------------------------------------------------------
+// Slots are NAMESPACED PER GAME (set from the project name on new/open and in the exported player),
+// so two games on the same browser origin can't read or clobber each other's saves. Values are
+// keyed by VARIABLE NAME (stable across template re-imports and project copies — variable ids are
+// random per project); readers fall back to the legacy un-namespaced, id-keyed format.
+let saveNamespace = 'project';
+
+/** Scope all save slots to one game. Call when a project is created/opened/renamed and in the player. */
+export const setSaveNamespace = (name: string) => {
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  saveNamespace = slug || 'project';
+};
+
+const saveKeyForSlot = (slot: string) => `nodeforge.save.${saveNamespace}.${slot.trim() || 'slot1'}`;
+/** Pre-namespace key — old saves live here; read-only fallback so they keep loading. */
+const legacySaveKeyForSlot = (slot: string) => `nodeforge.save.${slot.trim() || 'slot1'}`;
 
 export const readSaveSlot = (slot: string): Record<string, GraphValue> | null => {
   if (typeof localStorage === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(saveKeyForSlot(slot));
+    const raw = localStorage.getItem(saveKeyForSlot(slot)) ?? localStorage.getItem(legacySaveKeyForSlot(slot));
     return raw ? (JSON.parse(raw) as Record<string, GraphValue>) : null;
   } catch {
     return null;
@@ -107,7 +122,10 @@ export const writeSaveSlot = (slot: string, values: Record<string, GraphValue>) 
 export const clearSaveSlot = (slot: string) => {
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(saveKeyForSlot(slot));
+  localStorage.removeItem(legacySaveKeyForSlot(slot));
 };
+
+export const hasSaveSlot = (slot: string): boolean => readSaveSlot(slot) !== null;
 
 export const toNumber = (value: GraphValue | undefined): number => {
   if (typeof value === 'number') return value;

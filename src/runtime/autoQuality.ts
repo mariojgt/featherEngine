@@ -16,6 +16,11 @@ const ORDER: QualityLevel[] = ['Low', 'Medium', 'High', 'Epic'];
 let baseline: QualityLevel | null = null;
 let lastStepAt = 0;
 let lastDownAt = 0;
+// Quality levels that ALREADY caused a decline this Play session. Climbing back into one re-creates
+// the exact load that forced the down-step → another rebuild stall → another decline — an endless
+// stall cycle pinned at whatever speed/scene-load sits on the boundary. Once a level proves too
+// heavy, stay below it until Play stops (one stall at the boundary, then permanently smooth).
+const declinedLevels = new Set<QualityLevel>();
 
 export function autoQualityStep(direction: -1 | 1) {
   const state = useEditorStore.getState();
@@ -34,8 +39,12 @@ export function autoQualityStep(direction: -1 | 1) {
   const ceiling = ORDER.indexOf(baseline);
   const next = Math.min(Math.max(index + direction, 0), ceiling < 0 ? ORDER.length - 1 : ceiling);
   if (next === index) return;
+  if (direction === 1 && declinedLevels.has(ORDER[next])) return; // that level already proved too heavy this session
   lastStepAt = now;
-  if (direction === -1) lastDownAt = now;
+  if (direction === -1) {
+    lastDownAt = now;
+    declinedLevels.add(current);
+  }
   // Direct setState (not updateRenderSettings): an automatic perf adaptation must not dirty the project.
   useEditorStore.setState({ renderSettings: { ...settings, quality: ORDER[next] } });
 }
@@ -51,4 +60,5 @@ export function resetAutoQuality() {
   }
   lastStepAt = 0;
   lastDownAt = 0;
+  declinedLevels.clear();
 }

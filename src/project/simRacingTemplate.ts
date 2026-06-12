@@ -13,6 +13,7 @@ import type {
   NodeForgeNode,
   NodeForgeNodeData,
   PhysicsComponent,
+  Prefab,
   ProjectGraph,
   ProjectVariable,
   SceneEnvironmentSettings,
@@ -735,7 +736,8 @@ function buildSpeedMenu(): {
   hud: UIDocument;
 } {
   const now = Date.now();
-  const speedLevelVar: ProjectVariable = { id: makeId('var'), name: 'SpeedLevel', type: 'number', defaultValue: 2, persistent: false, createdAt: now };
+  // persistent: Save Game stores it — upgrades survive across runs via the Save Station.
+  const speedLevelVar: ProjectVariable = { id: makeId('var'), name: 'SpeedLevel', type: 'number', defaultValue: 2, persistent: true, createdAt: now };
   const speedVar: ProjectVariable = { id: makeId('var'), name: 'Speed', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   // The speed-setup panel is hidden until this is flipped true (by pressing P) — its `visible` binding reads it.
   const menuOpenVar: ProjectVariable = { id: makeId('var'), name: 'MenuOpen', type: 'boolean', defaultValue: false, persistent: false, createdAt: now };
@@ -852,7 +854,7 @@ function buildBoostBlueprint(nitroVarId: string): { blueprint: ScriptBlueprint; 
  *  garageBodyIds list maps that index to a body model the runtime swaps onto the chassis live. */
 function buildGarage(): { carBodyVar: ProjectVariable; garageOpenVar: ProjectVariable; blueprint: ScriptBlueprint; graph: ProjectGraph; hud: UIDocument } {
   const now = Date.now();
-  const carBodyVar: ProjectVariable = { id: makeId('var'), name: 'CarBody', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const carBodyVar: ProjectVariable = { id: makeId('var'), name: 'CarBody', type: 'number', defaultValue: 0, persistent: true, createdAt: now };
   const garageOpenVar: ProjectVariable = { id: makeId('var'), name: 'GarageOpen', type: 'boolean', defaultValue: false, persistent: false, createdAt: now };
   const graphId = makeId('graph');
   const bpId = makeId('bp');
@@ -964,7 +966,7 @@ function buildTrackConditions(rainEmitterId: string): { wetVar: ProjectVariable;
  *  DRIFT!/BIG AIR!/PERFECT LAUNCH! banner. The runtime writes the Score/Combo/Stunt vars — no blueprint. */
 function buildScoreHud(): { scoreVar: ProjectVariable; stuntVar: ProjectVariable; comboVar: ProjectVariable; hud: UIDocument } {
   const now = Date.now();
-  const scoreVar: ProjectVariable = { id: makeId('var'), name: 'Score', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
+  const scoreVar: ProjectVariable = { id: makeId('var'), name: 'Score', type: 'number', defaultValue: 0, persistent: true, createdAt: now };
   const stuntVar: ProjectVariable = { id: makeId('var'), name: 'Stunt', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   const comboVar: ProjectVariable = { id: makeId('var'), name: 'Combo', type: 'number', defaultValue: 0, persistent: false, createdAt: now };
   const score = uiText('Score', {
@@ -1175,6 +1177,366 @@ function buildCircuit(boost: { blueprint: ScriptBlueprint; graph: ProjectGraph }
 }
 
 /** Build the SIM-RACING "Proving Ground" into the (already-created) active project. */
+// ============================================================================================================
+//  NEON CITY — the portal world. A drivable open city block: avenues with lane markings, a working signalled
+//  intersection, crashable street furniture (mailboxes, hydrants, bins), neon buildings, two autopilot traffic
+//  cars looping the ring road, a save station, and a portal back to the Proving Ground. Reached by driving
+//  into the portal ring on the sandbox pad — a demo of multi-scene games + persistence on the same save file.
+// ============================================================================================================
+
+/** Drive-through portal: trigger volume → Load Scene. One blueprint per destination. */
+function buildPortalBlueprint(name: string, targetSceneId: string, description: string): { blueprint: ScriptBlueprint; graph: ProjectGraph } {
+  const graphId = makeId('graph');
+  const ev = graphNode(makeId('node'), 'On Drive In', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', hasInput: false });
+  const load = graphNode(makeId('node'), 'Load Scene', 'Runtime', 320, 40, { nodeKind: 'action.loadScene', targetSceneId, description });
+  const graph: ProjectGraph = { id: graphId, name, nodes: [ev, load], edges: [execEdge(ev.id, load.id)] };
+  const blueprint: ScriptBlueprint = { id: makeId('bp'), name, description, graphId, color: '#22e0ff', createdAt: Date.now() };
+  return { blueprint, graph };
+}
+
+/** Traffic-signal lamp pair. Lamps attach one of TWO blueprints, both flipping on the same 6s timer:
+ *  phase A lamps start VISIBLE and hide on the first flip; phase B lamps start HIDDEN and show. Assigning
+ *  green=A/red=B on one street and the opposite on the cross street makes a working signalled intersection
+ *  from two tiny self-targeted graphs (timers all start with Play, so every signal stays in sync). */
+function buildSignalBlueprints(): { a: { blueprint: ScriptBlueprint; graph: ProjectGraph }; b: { blueprint: ScriptBlueprint; graph: ProjectGraph } } {
+  const make = (name: string, firstVisible: boolean) => {
+    const graphId = makeId('graph');
+    const ev = graphNode(makeId('node'), 'Every 6s', 'Events', 40, 40, { nodeKind: 'event.timer', numberValue: 6, hasInput: false });
+    const ff = graphNode(makeId('node'), 'Flip Flop', 'Logic', 280, 40, { nodeKind: 'logic.flipFlop' });
+    const hide = graphNode(makeId('node'), firstVisible ? 'Lamp Off' : 'Lamp On', 'Runtime', 540, 0, { nodeKind: 'action.setVisible', visible: !firstVisible });
+    const show = graphNode(makeId('node'), firstVisible ? 'Lamp On' : 'Lamp Off', 'Runtime', 540, 140, { nodeKind: 'action.setVisible', visible: firstVisible });
+    const graph: ProjectGraph = {
+      id: graphId,
+      name,
+      nodes: [ev, ff, hide, show],
+      edges: [execEdge(ev.id, ff.id), execEdgeFrom(ff.id, 'flip-a', hide.id), execEdgeFrom(ff.id, 'flip-b', show.id)],
+    };
+    const blueprint: ScriptBlueprint = {
+      id: makeId('bp'),
+      name,
+      description: 'Traffic-signal lamp phase — flips this lamp every 6 seconds (attach to the lamp itself).',
+      graphId,
+      color: firstVisible ? '#27e06a' : '#ff3b30',
+      createdAt: Date.now(),
+    };
+    return { blueprint, graph };
+  };
+  return { a: make('Signal Phase A', true), b: make('Signal Phase B', false) };
+}
+
+/** Save station pad: drive on → Save Game (slot1) with a cooldown so sitting on it doesn't spam writes. */
+function buildSaveStationBlueprint(): { blueprint: ScriptBlueprint; graph: ProjectGraph } {
+  const graphId = makeId('graph');
+  const ev = graphNode(makeId('node'), 'On Drive On', 'Events', 40, 40, { nodeKind: 'event.triggerEnter', hasInput: false });
+  const cd = graphNode(makeId('node'), 'Cooldown 2s', 'Logic', 280, 40, { nodeKind: 'logic.cooldown', numberValue: 2 });
+  const save = graphNode(makeId('node'), 'Save Game', 'Persistence', 520, 40, { nodeKind: 'save.write', saveSlot: 'slot1' });
+  const note = graphNode(makeId('node'), 'Print', 'Runtime', 760, 40, { nodeKind: 'action.print', message: 'Progress saved ✔ (Score, upgrades, car body)' });
+  const graph: ProjectGraph = {
+    id: graphId,
+    name: 'Save Station',
+    nodes: [ev, cd, save, note],
+    edges: [execEdge(ev.id, cd.id), execEdge(cd.id, save.id), execEdge(save.id, note.id)],
+  };
+  const blueprint: ScriptBlueprint = {
+    id: makeId('bp'),
+    name: 'Save Station',
+    description: 'Drive onto the pad → saves progress to slot1 (persistent project variables).',
+    graphId,
+    color: '#27e06a',
+    createdAt: Date.now(),
+  };
+  return { blueprint, graph };
+}
+
+/** Continue-from-save: on Play start, if slot1 holds data, load it (Branch gates on Has Save). */
+function buildAutoloadBlueprint(): { blueprint: ScriptBlueprint; graph: ProjectGraph } {
+  const graphId = makeId('graph');
+  const ev = graphNode(makeId('node'), 'Start', 'Events', 40, 40, { nodeKind: 'event.start', hasInput: false });
+  const has = graphNode(makeId('node'), 'Has Save', 'Persistence', 40, 200, { nodeKind: 'save.has', saveSlot: 'slot1', hasInput: false });
+  const br = graphNode(makeId('node'), 'Branch', 'Logic', 300, 40, { nodeKind: 'logic.branch' });
+  const load = graphNode(makeId('node'), 'Load Game', 'Persistence', 560, 40, { nodeKind: 'save.load', saveSlot: 'slot1' });
+  const graph: ProjectGraph = {
+    id: graphId,
+    name: 'Continue From Save',
+    nodes: [ev, has, br, load],
+    edges: [execEdge(ev.id, br.id), valueEdge(has.id, br.id, 'condition'), execEdge(br.id, load.id)],
+  };
+  const blueprint: ScriptBlueprint = {
+    id: makeId('bp'),
+    name: 'Continue From Save',
+    description: 'On Play start: if save slot1 exists, restore Score / upgrades / car body.',
+    graphId,
+    color: '#9a7bff',
+    createdAt: Date.now(),
+  };
+  return { blueprint, graph };
+}
+
+/** Ambient-traffic spawner: every few seconds, while fewer than `cap` spawned cars exist (tracked in a
+ *  TrafficCount project var), instantiate the Traffic Car prefab at this spawner's position. Wander-mode
+ *  AI takes over from there — cars appear over time and join the road network, GTA-style. */
+function buildTrafficSpawnerBlueprint(
+  prefabId: string,
+  countVar: ProjectVariable,
+  cap: number,
+): { blueprint: ScriptBlueprint; graph: ProjectGraph } {
+  const graphId = makeId('graph');
+  const ev = graphNode(makeId('node'), 'Every 9s', 'Events', 40, 40, { nodeKind: 'event.timer', numberValue: 9, hasInput: false });
+  const getCount = graphNode(makeId('node'), 'Get TrafficCount', 'Variables', 40, 220, { nodeKind: 'variable.get', variableId: countVar.id, valueType: 'number', hasInput: false });
+  const below = graphNode(makeId('node'), `Compare < ${cap}`, 'Logic', 280, 220, { nodeKind: 'logic.compare', compareOp: '<', numberValue: cap, hasInput: false });
+  const gate = graphNode(makeId('node'), 'Branch', 'Logic', 300, 40, { nodeKind: 'logic.branch' });
+  const spawn = graphNode(makeId('node'), 'Spawn Traffic Car', 'Runtime', 560, 40, { nodeKind: 'action.spawnPrefab', prefabId });
+  const bump = graphNode(makeId('node'), 'TrafficCount + 1', 'Variables', 820, 40, { nodeKind: 'variable.set', variableId: countVar.id, valueType: 'number' });
+  const add = graphNode(makeId('node'), '+ 1', 'Math', 820, 220, { nodeKind: 'math.add', amount: 1, hasInput: false });
+  const graph: ProjectGraph = {
+    id: graphId,
+    name: 'Traffic Spawner',
+    nodes: [ev, getCount, below, gate, spawn, bump, add],
+    edges: [
+      execEdge(ev.id, gate.id),
+      valueEdge(getCount.id, below.id, 'a'),
+      valueEdge(below.id, gate.id, 'condition'),
+      execEdge(gate.id, spawn.id),
+      execEdge(spawn.id, bump.id),
+      valueEdge(getCount.id, add.id, 'a'),
+      valueEdge(add.id, bump.id, 'value'),
+    ],
+  };
+  const blueprint: ScriptBlueprint = {
+    id: makeId('bp'),
+    name: 'Traffic Spawner',
+    description: `Spawns a wander-AI Traffic Car here every 9s until ${cap} exist (TrafficCount).`,
+    graphId,
+    color: '#ffd34d',
+    createdAt: Date.now(),
+  };
+  return { blueprint, graph };
+}
+
+/** A drive-through portal gateway (glowing ring segments + base pad + the Load Scene trigger). */
+function portalObjects(name: string, center: Vector3Tuple, color: string, bp: { blueprint: ScriptBlueprint; graph: ProjectGraph }): SceneObject[] {
+  const out: SceneObject[] = [];
+  const [px, , pz] = center;
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    out.push(staticBox(`${name} Ring ${i}`, [px + Math.cos(a) * 3.4, 3.4 + Math.sin(a) * 3.4, pz], [0.55, 0.55, 0.45], color, { emissive: color, emissiveIntensity: 2.2 }));
+  }
+  out.push(staticBox(`${name} Pad`, [px, 0.05, pz], [7, 0.1, 4], '#11131a', { emissive: color, emissiveIntensity: 0.5 }));
+  out.push({
+    id: makeId('obj'),
+    name: `${name} Trigger`,
+    kind: 'cube',
+    transform: { position: [px, 2.2, pz], rotation: [0, 0, 0], scale: [5.6, 4.4, 1.6] },
+    renderer: { ...renderer(color, { opacity: 0.08 }), hideInPlay: true },
+    physics: triggerBox(),
+    script: { blueprintId: bp.blueprint.id, graphId: bp.graph.id, enabled: true },
+  });
+  return out;
+}
+
+/** A glowing save-station pad wired to the Save Station blueprint. */
+function saveStationObjects(center: Vector3Tuple, bp: { blueprint: ScriptBlueprint; graph: ProjectGraph }): SceneObject[] {
+  const [px, , pz] = center;
+  const pad = staticBox('Save Station Pad', [px, 0.06, pz], [5, 0.12, 5], '#0d2418', { emissive: '#27e06a', emissiveIntensity: 1.6 });
+  return [
+    pad,
+    {
+      id: makeId('obj'),
+      name: 'Save Station',
+      kind: 'cube',
+      transform: { position: [px, 1.2, pz], rotation: [0, 0, 0], scale: [4.6, 2.4, 4.6] },
+      renderer: { ...renderer('#27e06a', { opacity: 0.06 }), hideInPlay: true },
+      physics: triggerBox(),
+      script: { blueprintId: bp.blueprint.id, graphId: bp.graph.id, enabled: true },
+    },
+  ];
+}
+
+/** Build the Neon City's static world (roads, signals, buildings, breakable street furniture, checkpoints). */
+function buildCityObjects(signals: ReturnType<typeof buildSignalBlueprints>): SceneObject[] {
+  const out: SceneObject[] = [];
+
+  // Ground + the two avenues and the ring road (slightly raised strips over the base pad).
+  out.push(staticBox('City Ground', [0, -0.5, 0], [240, 1, 240], '#171a21', { friction: 1.2, roughness: 0.95 }));
+  out.push(staticBox('Avenue NS', [0, 0.01, 0], [14, 0.02, 240], '#262a33', { roughness: 0.9 }));
+  out.push(staticBox('Avenue EW', [0, 0.012, 0], [240, 0.02, 14], '#262a33', { roughness: 0.9 }));
+  for (const s of [-55, 55]) {
+    out.push(staticBox(`Ring Road X${s}`, [s, 0.011, 0], [14, 0.02, 124], '#23262e', { roughness: 0.9 }));
+    out.push(staticBox(`Ring Road Z${s}`, [0, 0.013, s], [124, 0.02, 14], '#23262e', { roughness: 0.9 }));
+  }
+  // Lane dashes down both avenues (skip the intersection box).
+  for (let z = -112; z <= 112; z += 12) {
+    if (Math.abs(z) < 12) continue;
+    out.push(staticBox(`Dash NS ${z}`, [0, 0.03, z], [0.35, 0.02, 3], '#ffd34d', { emissive: '#ffd34d', emissiveIntensity: 0.6 }));
+  }
+  for (let x = -112; x <= 112; x += 12) {
+    if (Math.abs(x) < 12) continue;
+    out.push(staticBox(`Dash EW ${x}`, [x, 0.032, 0], [3, 0.02, 0.35], '#ffd34d', { emissive: '#ffd34d', emissiveIntensity: 0.6 }));
+  }
+
+  // Crosswalks: zebra stripes across all four approaches to the signalled intersection.
+  for (const side of [-1, 1]) {
+    for (let s = -3; s <= 3; s++) {
+      out.push(staticBox(`Crosswalk NS ${side} ${s}`, [s * 1.9, 0.035, side * 10.5], [1.2, 0.02, 2.2], '#e8e8ee', { roughness: 0.85 }));
+      out.push(staticBox(`Crosswalk EW ${side} ${s}`, [side * 10.5, 0.036, s * 1.9], [2.2, 0.02, 1.2], '#e8e8ee', { roughness: 0.85 }));
+    }
+  }
+
+  // City blocks: a skyline of simple towers with neon trim, set back from the roads in each quadrant.
+  const towerPalette = ['#1c2230', '#232936', '#1a1f2b', '#272d3c'];
+  const neonPalette = ['#22e0ff', '#ff5d8f', '#c14df0', '#27e06a', '#ffd34d'];
+  const quadrants: Array<[number, number]> = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+  quadrants.forEach(([qx, qz], qi) => {
+    for (let i = 0; i < 5; i++) {
+      const bx = qx * (22 + (i % 3) * 13 + (qi % 2) * 5);
+      const bz = qz * (22 + Math.floor(i / 2) * 14 + ((qi + i) % 2) * 6);
+      const h = 8 + ((i * 7 + qi * 5) % 17);
+      const w = 8 + ((i + qi) % 3) * 3;
+      const neon = neonPalette[(qi + i) % neonPalette.length];
+      out.push(staticBox(`Tower Q${qi} ${i}`, [bx, h / 2, bz], [w, h, w], towerPalette[(qi + i) % towerPalette.length], { metalness: 0.3, roughness: 0.7 }));
+      // Neon roof trim + a window stripe — the bloom skyline.
+      out.push(staticBox(`Tower Trim Q${qi} ${i}`, [bx, h + 0.18, bz], [w + 0.3, 0.32, w + 0.3], neon, { emissive: neon, emissiveIntensity: 1.8 }));
+      out.push(staticBox(`Tower Stripe Q${qi} ${i}`, [bx, h * 0.55, bz + (qz > 0 ? -w / 2 - 0.06 : w / 2 + 0.06)], [w * 0.7, h * 0.5, 0.08], '#101521', { emissive: neon, emissiveIntensity: 0.7 }));
+    }
+  });
+
+  // Signalled intersection: four BREAKAWAY traffic lights (GTA-style — ram one and the whole pole
+  // tips over and tumbles, lamps still cycling). Each is ONE physics pole with the head + lamps as
+  // CHILDREN, so the assembly falls as a piece. Children inherit the parent group's (non-uniform)
+  // scale, so child transforms are expressed in pole-local units (divide by the pole scale).
+  const POLE_SCALE: Vector3Tuple = [0.3, 4.6, 0.3];
+  const POLE_Y = 2.3;
+  const inPole = (worldY: number): number => (worldY - POLE_Y) / POLE_SCALE[1];
+  const poleChildScale = (s: Vector3Tuple): Vector3Tuple => [s[0] / POLE_SCALE[0], s[1] / POLE_SCALE[1], s[2] / POLE_SCALE[2]];
+  const corners: Array<[number, number]> = [[9, 9], [-9, -9], [9, -9], [-9, 9]];
+  corners.forEach(([cx, cz], i) => {
+    const nsFacing = i < 2; // first two heads control the north-south avenue
+    const poleId = makeId('obj');
+    out.push({
+      id: poleId,
+      name: `Traffic Light ${i}`,
+      kind: 'cube',
+      transform: { position: [cx, POLE_Y, cz], rotation: [0, 0, 0], scale: POLE_SCALE },
+      renderer: renderer('#11141a', { metalness: 0.6, roughness: 0.4 }),
+      physics: { ...fixedBox(0.8), mass: 30, knockOverThreshold: 6 },
+    });
+    out.push({
+      id: makeId('obj'),
+      name: `Signal Head ${i}`,
+      kind: 'cube',
+      parentId: poleId,
+      transform: { position: [0, inPole(4.8), 0], rotation: [0, 0, 0], scale: poleChildScale([0.7, 1.5, 0.5]) },
+      renderer: renderer('#0c0e13', { metalness: 0.4, roughness: 0.6 }),
+    });
+    const red: SceneObject = {
+      id: makeId('obj'),
+      name: `Signal Red ${i}`,
+      kind: 'cube',
+      parentId: poleId,
+      transform: { position: [0, inPole(5.25), 0], rotation: [0, 0, 0], scale: poleChildScale([0.42, 0.42, 0.56]) },
+      renderer: renderer('#ff3b30', { materialOverrides: { emissiveColor: '#ff3b30', emissiveIntensity: 2.4 } }),
+      script: nsFacing
+        ? { blueprintId: signals.b.blueprint.id, graphId: signals.b.graph.id, enabled: true }
+        : { blueprintId: signals.a.blueprint.id, graphId: signals.a.graph.id, enabled: true },
+    };
+    const green: SceneObject = {
+      id: makeId('obj'),
+      name: `Signal Green ${i}`,
+      kind: 'cube',
+      parentId: poleId,
+      transform: { position: [0, inPole(4.4), 0], rotation: [0, 0, 0], scale: poleChildScale([0.42, 0.42, 0.56]) },
+      renderer: renderer('#27e06a', { materialOverrides: { emissiveColor: '#27e06a', emissiveIntensity: 2.4 } }),
+      script: nsFacing
+        ? { blueprintId: signals.a.blueprint.id, graphId: signals.a.graph.id, enabled: true }
+        : { blueprintId: signals.b.blueprint.id, graphId: signals.b.graph.id, enabled: true },
+    };
+    out.push(red, green);
+  });
+
+  // Street furniture you can crash through: mailboxes + hydrants SHATTER (fracture), bins just tumble.
+  const sidewalkSpots: Array<[number, number]> = [
+    [10.5, 24], [-10.5, 36], [10.5, -30], [-10.5, -44],
+    [24, 10.5], [40, -10.5], [-30, 10.5], [-46, -10.5],
+  ];
+  sidewalkSpots.forEach(([mx, mz], i) => {
+    if (i % 2 === 0) {
+      const mailbox = prop(`Mailbox ${i}`, [mx, 0.55, mz], [0.5, 1.1, 0.5], '#2f6fd6', 10, '#2f6fd6');
+      mailbox.fracture = { enabled: true, pattern: 'chunks', pieces: 3, jitter: 0.4, seed: 40 + i, strength: 3, impactThreshold: 6, focusImpact: true };
+      out.push(mailbox);
+    } else {
+      const hydrant = prop(`Hydrant ${i}`, [mx, 0.45, mz], [0.45, 0.9, 0.45], '#d92b2b', 14, '#d92b2b');
+      hydrant.fracture = { enabled: true, pattern: 'shatter', pieces: 4, jitter: 0.5, seed: 60 + i, strength: 4, impactThreshold: 8, focusImpact: true };
+      out.push(hydrant);
+    }
+    out.push(prop(`Bin ${i}`, [mx + (mx > 0 ? 1.2 : -1.2), 0.5, mz + 1.6], [0.6, 1, 0.6], '#3a414e', 6));
+  });
+
+  // Street lamps along the avenues (emissive heads everywhere, REAL lights only at the intersection corners).
+  const lampSpots: Array<[number, number]> = [
+    [10.5, 50], [-10.5, -50], [50, 10.5], [-50, -10.5],
+    [10.5, 95], [-10.5, -95], [95, 10.5], [-95, -10.5],
+  ];
+  lampSpots.forEach(([lx, lz], i) => {
+    // Breakaway like the traffic lights — the glowing head rides the falling pole.
+    const lampScale: Vector3Tuple = [0.22, 6, 0.22];
+    const lampId = makeId('obj');
+    out.push({
+      id: lampId,
+      name: `Street Lamp ${i}`,
+      kind: 'cube',
+      transform: { position: [lx, 3, lz], rotation: [0, 0, 0], scale: lampScale },
+      renderer: renderer('#11141a', { metalness: 0.6, roughness: 0.4 }),
+      physics: { ...fixedBox(0.8), mass: 22, knockOverThreshold: 6 },
+    });
+    out.push({
+      id: makeId('obj'),
+      name: `Street Lamp Head ${i}`,
+      kind: 'cube',
+      parentId: lampId,
+      transform: {
+        position: [0, (6.1 - 3) / lampScale[1], 0],
+        rotation: [0, 0, 0],
+        scale: [0.9 / lampScale[0], 0.2 / lampScale[1], 0.5 / lampScale[2]],
+      },
+      renderer: renderer('#fff4cf', { materialOverrides: { emissiveColor: '#fff4cf', emissiveIntensity: 2 } }),
+    });
+    if (i < 4) out.push(pointLight(`Street Light ${i}`, [lx, 6, lz], '#ffe9b8', 16, 40));
+  });
+
+  // Road-network gates — the wander-mode traffic's map. Corners + mid-edges define the ring road,
+  // the mid-edges + center gate connect THROUGH the signalled intersection along both avenues, so
+  // traffic both circulates the ring and crosses the middle of town.
+  const gates: Array<[number, number]> = [
+    [55, 55], [55, -55], [-55, -55], [-55, 55], // ring corners
+    [0, 55], [55, 0], [0, -55], [-55, 0],       // ring mid-edges = avenue junctions
+    [0, 0],                                     // the intersection itself
+  ];
+  gates.forEach(([gx, gz], i) => {
+    out.push({
+      id: makeId('obj'),
+      name: `Checkpoint ${i}`,
+      kind: 'empty',
+      transform: { position: [gx, 0.5, gz], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+  });
+
+  // Dumpsters (heavy, shovable) + traffic cones (light, scatter everywhere) round out the street clutter.
+  ([[14, 40, '#3d6b4f'], [-14, -64, '#54585f'], [40, 14, '#3d6b4f'], [-64, -14, '#54585f']] as Array<[number, number, string]>).forEach(([dx, dz, c], i) => {
+    out.push(prop(`Dumpster ${i}`, [dx, 0.7, dz], [2.2, 1.4, 1.2], c, 60));
+  });
+  ([[6, 18], [-5.5, -26], [18, -6], [-30, 5.5], [6.5, 60], [-60, -6.5]] as Array<[number, number]>).forEach(([cx2, cz2], i) => {
+    out.push(prop(`City Cone ${i}`, [cx2, 0.45, cz2], [0.45, 0.9, 0.45], '#ff7a18', 4, '#ff7a18'));
+  });
+
+  // Perimeter so nobody drives off the world.
+  out.push(staticBox('City Wall N', [0, 1.4, 119], [240, 2.8, 2], '#262c38'));
+  out.push(staticBox('City Wall S', [0, 1.4, -119], [240, 2.8, 2], '#262c38'));
+  out.push(staticBox('City Wall E', [119, 1.4, 0], [2, 2.8, 240], '#262c38'));
+  out.push(staticBox('City Wall W', [-119, 1.4, 0], [2, 2.8, 240], '#262c38'));
+
+  return out;
+}
+
 export async function createSimRacingTemplate(): Promise<string> {
   const { carId, rainEmitterId, objects: carObjects } = await buildSimCar();
   const menu = buildSpeedMenu();
@@ -1182,6 +1544,83 @@ export async function createSimRacingTemplate(): Promise<string> {
   const garage = buildGarage();
   const score = buildScoreHud();
   const conditions = buildTrackConditions(rainEmitterId);
+
+  // --- Neon City portal world: blueprints + its own player car and autopilot traffic. ---
+  const mainSceneId = useEditorStore.getState().activeSceneId;
+  const citySceneId = makeId('scene');
+  const portalToCity = buildPortalBlueprint('Portal: Neon City', citySceneId, 'Drive through → teleports to the Neon City world (Score/upgrades carry over).');
+  const portalToTrack = buildPortalBlueprint('Portal: Proving Ground', mainSceneId, 'Drive through → back to the Proving Ground sandbox.');
+  const signals = buildSignalBlueprints();
+  const saveStation = buildSaveStationBlueprint();
+  const autoload = buildAutoloadBlueprint();
+  const cityCar = await buildSimCar();
+  const cityCarRoot = cityCar.objects.find((o) => o.id === cityCar.carId);
+  // Spawn in the right-hand lane of the north-south avenue, rolling toward the signalled intersection.
+  if (cityCarRoot) cityCarRoot.transform = { ...cityCarRoot.transform, position: [3.5, cityCarRoot.transform.position[1], -50] };
+  // Pre-placed ambient traffic (wander AI roams the gate network at city pace, no rubber-banding).
+  const trafficA = await buildRivalCar('CarModel1_body.glb', 'CarModel1_wheel.glb', '#22e0ff', 'Traffic Alpha', 0.28, 55, 8);
+  const trafficB = await buildRivalCar('CarModel3_body.glb', 'CarModel3_wheel.glb', '#ff5d8f', 'Traffic Beta', 0.34, -55, -8);
+  const toWander = (carObjectsList: SceneObject[]) => {
+    const root = carObjectsList.find((o) => o.vehicle?.enabled);
+    if (root?.vehicle) root.vehicle = { ...root.vehicle, aiMode: 'wander', aiRubberBand: 0 };
+    return carObjectsList;
+  };
+  toWander(trafficA);
+  toWander(trafficB);
+  // Traffic Car PREFAB + spawners: more cars appear over time (Spawn Prefab re-ids the whole rig).
+  const prefabCarObjects = toWander(await buildRivalCar('Ban_body.glb', 'Ban_wheel.glb', '#ffd34d', 'Traffic Car', 0.3, 0, 0));
+  const prefabRoot = prefabCarObjects.find((o) => o.vehicle?.enabled);
+  const trafficPrefab: Prefab = {
+    id: makeId('prefab'),
+    name: 'Traffic Car',
+    objects: prefabCarObjects,
+    rootId: prefabRoot?.id ?? prefabCarObjects[0].id,
+    createdAt: Date.now(),
+  };
+  const trafficCountVar: ProjectVariable = { id: makeId('var'), name: 'TrafficCount', type: 'number', defaultValue: 0, persistent: false, createdAt: Date.now() };
+  const trafficSpawner = buildTrafficSpawnerBlueprint(trafficPrefab.id, trafficCountVar, 4);
+  const trafficSpawnY = prefabRoot?.transform.position[1] ?? 0.6;
+  const spawnerObjects: SceneObject[] = ([[55, -30], [-55, 30]] as Array<[number, number]>).map(([sx, sz], i) => ({
+    id: makeId('obj'),
+    name: `Traffic Spawner ${i}`,
+    kind: 'empty',
+    transform: { position: [sx, trafficSpawnY, sz], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    script: { blueprintId: trafficSpawner.blueprint.id, graphId: trafficSpawner.graph.id, enabled: true },
+  }));
+  // PARKED CARS: real car bodies as heavy dynamic props (convex hull, no vehicle controller) lining
+  // the avenues — they look like a lived-in city and get properly shoved/spun in crashes.
+  const parkedSpots: Array<[number, number, number, string, string]> = [
+    [5.6, 28, 0, 'CarModel1_body.glb', '#5e6a7a'],
+    [-5.6, -34, Math.PI, 'CarModel3_body.glb', '#7a4a52'],
+    [5.6, 70, 0, 'Furgon1_body.glb', '#4d5e54'],
+    [-5.6, 86, Math.PI, 'CarModel1_body.glb', '#6a6044'],
+    [34, -5.6, Math.PI / 2, 'Ban_body.glb', '#46586e'],
+    [-44, 5.6, -Math.PI / 2, 'CarModel3_body.glb', '#5a5f68'],
+  ];
+  const parkedCars: SceneObject[] = [];
+  for (let i = 0; i < parkedSpots.length; i++) {
+    const [px, pz, ry, file, color] = parkedSpots[i];
+    const asset = await importAsset(file, 'model');
+    parkedCars.push({
+      id: makeId('obj'),
+      name: `Parked Car ${i}`,
+      kind: 'cube',
+      transform: { position: [px, 0.55, pz], rotation: [0, ry, 0], scale: [1, 1, 1] },
+      renderer: renderer(color, { modelAssetId: asset?.id, metalness: 0.5, roughness: 0.5 }),
+      physics: { ...dynamicBox(620), collider: 'convex', friction: 0.9, linearDamping: 0.6, angularDamping: 0.9 },
+    });
+  }
+  const cityObjects: SceneObject[] = [
+    ...buildCityObjects(signals),
+    ...portalObjects('Portal Home', [20, 0, 24], '#ff8a3d', portalToTrack),
+    ...saveStationObjects([-20, 0, 24], saveStation),
+    ...parkedCars,
+    ...cityCar.objects,
+    ...trafficA,
+    ...trafficB,
+    ...spawnerObjects,
+  ];
+
   const objects: SceneObject[] = [];
 
   // --- Track surface: a big asphalt pad with a brighter racing strip down the middle. ---
@@ -1553,36 +1992,83 @@ export async function createSimRacingTemplate(): Promise<string> {
     transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
     script: { blueprintId: conditions.blueprint.id, graphId: conditions.graph.id, enabled: true },
   });
+
+  // --- PORTAL to the Neon City + the save loop (drive in → city; save stations persist progress;
+  //     "Continue From Save" restores Score/upgrades/CarBody on every Play start). ---
+  objects.push(...portalObjects('Portal: Neon City', [-40, 0, 55], '#22e0ff', portalToCity));
+  objects.push(...saveStationObjects([40, 0, -55], saveStation));
+  objects.push({
+    id: makeId('obj'),
+    name: 'Continue From Save',
+    kind: 'empty',
+    transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    script: { blueprintId: autoload.blueprint.id, graphId: autoload.graph.id, enabled: true },
+  });
+
   useEditorStore.setState((draft) => ({
-    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, score.comboVar, conditions.wetVar],
-    blueprints: [...draft.blueprints, menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp],
-    graphs: [...draft.graphs, menu.graph, boost.graph, garage.graph, conditions.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph],
+    variables: [...draft.variables, menu.speedLevelVar, menu.speedVar, menu.menuOpenVar, menu.nitroVar, menu.damageVar, menu.rpmVar, menu.gearVar, garage.carBodyVar, garage.garageOpenVar, score.scoreVar, score.stuntVar, score.comboVar, conditions.wetVar, trafficCountVar],
+    blueprints: [
+      ...draft.blueprints,
+      menu.blueprint, boost.blueprint, garage.blueprint, conditions.blueprint, barrelBp, goalBp, sweepBp, pistonBp, ringBp,
+      portalToCity.blueprint, portalToTrack.blueprint, signals.a.blueprint, signals.b.blueprint, saveStation.blueprint, autoload.blueprint,
+      trafficSpawner.blueprint,
+    ],
+    graphs: [
+      ...draft.graphs,
+      menu.graph, boost.graph, garage.graph, conditions.graph, barrelGraph, goalGraph, sweepGraph, pistonGraph, ringGraph,
+      portalToCity.graph, portalToTrack.graph, signals.a.graph, signals.b.graph, saveStation.graph, autoload.graph,
+      trafficSpawner.graph,
+    ],
+    prefabs: [...draft.prefabs, trafficPrefab],
     uiDocuments: [...draft.uiDocuments, menu.hud, garage.hud, score.hud],
     activeUIDocumentId: menu.hud.id,
-    scenes: draft.scenes.map((scene) =>
-      scene.id === draft.activeSceneId
-        ? {
-            ...scene,
-            objects: [...scene.objects, ...objects, ...carObjects],
-            environment: {
-              ...defaultSceneEnvironment(),
-              skyMode: 'procedural',
-              // Warm golden-hour dusk: low sun, faint haze — reads great with the emissive curbs + light towers.
-              skyTopColor: '#243b6b',
-              skyHorizonColor: '#ffb066',
-              skyGroundColor: '#1a1c22',
-              sunColor: '#ffd9a0',
-              sunIntensity: 2.4,
-              sunElevation: 0.18,
-              sunAzimuth: 2.2,
-              fogEnabled: true,
-              fogColor: '#caa9a7',
-              fogNear: 60,
-              fogFar: 320,
-            } as SceneEnvironmentSettings,
-          }
-        : scene,
-    ),
+    scenes: [
+      ...draft.scenes.map((scene) =>
+        scene.id === draft.activeSceneId
+          ? {
+              ...scene,
+              objects: [...scene.objects, ...objects, ...carObjects],
+              environment: {
+                ...defaultSceneEnvironment(),
+                skyMode: 'procedural',
+                // Warm golden-hour dusk: low sun, faint haze — reads great with the emissive curbs + light towers.
+                skyTopColor: '#243b6b',
+                skyHorizonColor: '#ffb066',
+                skyGroundColor: '#1a1c22',
+                sunColor: '#ffd9a0',
+                sunIntensity: 2.4,
+                sunElevation: 0.18,
+                sunAzimuth: 2.2,
+                fogEnabled: true,
+                fogColor: '#caa9a7',
+                fogNear: 60,
+                fogFar: 320,
+              } as SceneEnvironmentSettings,
+            }
+          : scene,
+      ),
+      {
+        id: citySceneId,
+        name: 'Neon City',
+        objects: cityObjects,
+        environment: {
+          ...defaultSceneEnvironment(),
+          skyMode: 'procedural',
+          // Deep night with a cold neon haze — the tower trims + signals carry the lighting.
+          skyTopColor: '#070b16',
+          skyHorizonColor: '#27406e',
+          skyGroundColor: '#0c0e14',
+          sunColor: '#9fb6ff',
+          sunIntensity: 0.7,
+          sunElevation: 0.32,
+          sunAzimuth: 4.1,
+          fogEnabled: true,
+          fogColor: '#0e1422',
+          fogNear: 55,
+          fogFar: 280,
+        } as SceneEnvironmentSettings,
+      },
+    ],
     selectedObjectId: carId,
     isDirty: true,
   }));
