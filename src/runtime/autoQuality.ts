@@ -15,6 +15,7 @@ const ORDER: QualityLevel[] = ['Low', 'Medium', 'High', 'Epic'];
 /** The quality the USER had chosen before we ever stepped down — the ceiling, and what Stop restores. */
 let baseline: QualityLevel | null = null;
 let lastStepAt = 0;
+let lastDownAt = 0;
 
 export function autoQualityStep(direction: -1 | 1) {
   const state = useEditorStore.getState();
@@ -22,6 +23,10 @@ export function autoQualityStep(direction: -1 | 1) {
   if (settings.autoQuality === false || !state.isPlaying) return;
   const now = performance.now();
   if (now - lastStepAt < 5000) return;
+  // Asymmetric hysteresis: recover quality only after the framerate has been healthy for a while.
+  // Stepping back up 5s after a down-step oscillates (each step rebuilds the post-FX pipeline —
+  // the rebuild hitch then triggers the next decline), so the way up is deliberately slower.
+  if (direction === 1 && now - lastDownAt < 15000) return;
   const current = settings.quality ?? 'High';
   const index = ORDER.indexOf(current);
   if (index < 0) return;
@@ -30,6 +35,7 @@ export function autoQualityStep(direction: -1 | 1) {
   const next = Math.min(Math.max(index + direction, 0), ceiling < 0 ? ORDER.length - 1 : ceiling);
   if (next === index) return;
   lastStepAt = now;
+  if (direction === -1) lastDownAt = now;
   // Direct setState (not updateRenderSettings): an automatic perf adaptation must not dirty the project.
   useEditorStore.setState({ renderSettings: { ...settings, quality: ORDER[next] } });
 }
@@ -44,4 +50,5 @@ export function resetAutoQuality() {
     baseline = null;
   }
   lastStepAt = 0;
+  lastDownAt = 0;
 }

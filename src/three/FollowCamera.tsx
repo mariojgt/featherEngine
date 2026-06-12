@@ -2,7 +2,7 @@ import { PerspectiveCamera } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { defaultCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { defaultCharacter, resolveCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useStableActiveObjects } from '../store/stableSelectors';
 import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLook } from '../runtime/mouseLook';
 import { readTransform } from '../runtime/transformBuffer';
@@ -15,27 +15,35 @@ import type { CharacterControllerComponent, SceneObject } from '../types';
  * vehicle's camera fields are mapped onto a character-shaped config (third-person, no camera-relative
  * movement); `moveSpeed` is set to the car's top speed so the sprint-FOV / look-ahead scale sensibly.
  */
+// Called per frame from useFrame — the mapped vehicle config is cached on the vehicle component's
+// identity (stable during Play) so the camera path doesn't allocate a ~60-key object every frame.
+const vehicleCameraConfigCache = new WeakMap<NonNullable<SceneObject['vehicle']>, CharacterControllerComponent>();
 export function resolveCameraConfig(object: SceneObject | undefined): CharacterControllerComponent | undefined {
   if (!object) return undefined;
-  if (object.character?.enabled && object.character.cameraFollow) return { ...defaultCharacter(), ...object.character };
+  if (object.character?.enabled && object.character.cameraFollow) return resolveCharacter(object.character);
   if (object.vehicle?.enabled && object.vehicle.cameraFollow) {
     const v = object.vehicle;
-    return {
-      ...defaultCharacter(),
-      enabled: true,
-      cameraMode: 'thirdPerson',
-      cameraFollow: true,
-      cameraOffset: v.cameraOffset,
-      cameraPitch: v.cameraPitch,
-      cameraMinPitch: v.cameraMinPitch,
-      cameraMaxPitch: v.cameraMaxPitch,
-      mouseLook: v.mouseLook,
-      mouseSensitivity: v.mouseSensitivity,
-      moveSpeed: v.maxSpeed,
-      sprintMultiplier: 1,
-      cameraRelativeMovement: false,
-      modelYawOffset: 0,
-    };
+    let mapped = vehicleCameraConfigCache.get(v);
+    if (!mapped) {
+      mapped = {
+        ...defaultCharacter(),
+        enabled: true,
+        cameraMode: 'thirdPerson',
+        cameraFollow: true,
+        cameraOffset: v.cameraOffset,
+        cameraPitch: v.cameraPitch,
+        cameraMinPitch: v.cameraMinPitch,
+        cameraMaxPitch: v.cameraMaxPitch,
+        mouseLook: v.mouseLook,
+        mouseSensitivity: v.mouseSensitivity,
+        moveSpeed: v.maxSpeed,
+        sprintMultiplier: 1,
+        cameraRelativeMovement: false,
+        modelYawOffset: 0,
+      };
+      vehicleCameraConfigCache.set(v, mapped);
+    }
+    return mapped;
   }
   return undefined;
 }
@@ -99,7 +107,7 @@ export interface CameraPose {
  * the Play / preview camera below, so the indicator and the real camera can never disagree.
  */
 export function computeRestingCameraPose(target: SceneObject): CameraPose {
-  const cc = resolveCameraConfig(target) ?? { ...defaultCharacter(), ...(target.character ?? {}) };
+  const cc = resolveCameraConfig(target) ?? resolveCharacter(target.character);
   const [x, y, z] = target.transform.position;
 
   if (cc.cameraMode === 'firstPerson') {
@@ -156,7 +164,7 @@ function CameraViewModelMount({ object, owner }: { object: SceneObject; owner: S
   useFrame(({ clock }) => {
     const group = groupRef.current;
     if (!group) return;
-    const cc = { ...defaultCharacter(), ...(owner.character ?? {}) };
+    const cc = resolveCharacter(owner.character);
     const moving = Boolean(
       runtimeKeys[cc.keyForward] ||
         runtimeKeys[cc.keyBackward] ||
@@ -616,7 +624,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   });
 
   if (!target) return null;
-  const cc = resolveCameraConfig(target) ?? { ...defaultCharacter(), ...target.character };
+  const cc = resolveCameraConfig(target) ?? resolveCharacter(target.character);
   return (
     <PerspectiveCamera ref={cameraRef} makeDefault fov={cc.cameraMode === 'firstPerson' ? 68 : 50} near={0.02} position={[0, 3, 6]}>
       {/* First-person view-model (arms/weapon) — shown in Play AND in the editor camera preview, so you

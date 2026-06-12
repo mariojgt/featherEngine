@@ -14,6 +14,7 @@ import { FollowCamera, LockOnMarker, useFollowTarget } from '../three/FollowCame
 import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkidMarks } from '../three/SkidMarks';
 import { ShaderPrewarm } from '../three/ShaderPrewarm';
+import { EffectLightPool } from '../three/effectLights';
 import { autoQualityStep } from '../runtime/autoQuality';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
@@ -447,6 +448,7 @@ export function GameView() {
       <AudioListenerSync />
       <SkidMarks />
       <ShaderPrewarm />
+      <EffectLightPool />
       <ShadowLOD />
       <MeshLOD />
       <GameScene />

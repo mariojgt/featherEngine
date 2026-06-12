@@ -1,6 +1,7 @@
 import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR, ChromaticAberration } from '@react-three/postprocessing';
 import { SMAAPreset } from 'postprocessing';
 import { Vector2 } from 'three';
+import { useMemo } from 'react';
 import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
 import { MotionBlur } from './MotionBlurEffect';
@@ -22,6 +23,9 @@ export function PostFx() {
   const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook ?? state.renderSettings.colorGrade);
   const environment = useEditorStore(selectActiveSceneEnvironment);
   const profile = qualityProfile(rs?.quality);
+  // Reused offset vector — PostFx re-renders every frame during a cinematic (live pose), so allocating
+  // a fresh Vector2 per render was steady churn. The effect reads the vector by reference.
+  const chromaOffset = useMemo(() => new Vector2(), []);
   const children = [];
   // Ambient occlusion FIRST so the contact-shadow darkening it adds in crevices/corners is in the
   // color buffer before bloom samples luminance. N8AO is a high-quality, depth+normal SSAO; it's
@@ -76,7 +80,11 @@ export function PostFx() {
   }
   // Cinematic rack-focus: focus on a world point `focusDistance` units ahead of the camera along its
   // look direction; `aperture` is the bokeh strength. Both are splined/blended by the cinematic system.
-  if (pose && pose.aperture && pose.aperture > 0.001 && pose.focusDistance && pose.focusDistance > 0) {
+  // The pass stays mounted for the WHOLE cinematic (any live pose), not just while aperture > 0:
+  // adding/removing a pass rebuilds the EffectComposer (framebuffers + shader compile), which landed a
+  // visible hitch on every shot transition that toggled DoF. bokehScale 0 renders neutrally instead.
+  if (pose) {
+    const focusDistance = pose.focusDistance && pose.focusDistance > 0 ? pose.focusDistance : 10;
     const [px, py, pz] = pose.position;
     const [lx, ly, lz] = pose.lookAt;
     const dx = lx - px;
@@ -84,12 +92,12 @@ export function PostFx() {
     const dz = lz - pz;
     const len = Math.hypot(dx, dy, dz) || 1;
     const target: [number, number, number] = [
-      px + (dx / len) * pose.focusDistance,
-      py + (dy / len) * pose.focusDistance,
-      pz + (dz / len) * pose.focusDistance,
+      px + (dx / len) * focusDistance,
+      py + (dy / len) * focusDistance,
+      pz + (dz / len) * focusDistance,
     ];
     children.push(
-      <DepthOfField key="dof" target={target} focalLength={0.02} bokehScale={pose.aperture} />,
+      <DepthOfField key="dof" target={target} focalLength={0.02} bokehScale={pose.aperture ?? 0} />,
     );
   }
   // Anamorphic bloom streak: bright neon/speculars smear into a horizontal lens flare. After bloom so it
@@ -117,8 +125,9 @@ export function PostFx() {
   // it fringes the final color. radialModulation keeps the center crisp and pushes the split to the edges.
   if (look?.chromaticAberration && look.chromaticAberration > 0.001) {
     const amt = Math.min(1, look.chromaticAberration) * 0.004;
+    chromaOffset.set(amt, amt);
     children.push(
-      <ChromaticAberration key="chroma" offset={new Vector2(amt, amt)} radialModulation modulationOffset={0.15} />,
+      <ChromaticAberration key="chroma" offset={chromaOffset} radialModulation modulationOffset={0.15} />,
     );
   }
   if (rs?.vignetteEnabled) {

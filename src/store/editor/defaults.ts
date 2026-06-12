@@ -244,6 +244,37 @@ export const defaultVehicle = (): VehicleComponent => ({
   counterSteerAssist: 0.5,
 });
 
+// --- Memoized "defaults backfilled" views -------------------------------------------------------
+// `{ ...defaultCharacter(), ...object.character }` in a per-object-per-frame loop allocates a ~60-key
+// object 60×/s for every character/vehicle — a steady GC drip that surfaces as periodic frame drops.
+// Component objects are identity-stable during Play (the tick's keepRecord guards reuse unchanged
+// objects), so the resolved view can be cached on the component's identity instead.
+// ⚠️ The returned object is SHARED — callers must treat it as read-only (clone first to tweak, the
+// way the player-vehicle upgrade scaling does).
+const resolvedCharacterCache = new WeakMap<CharacterControllerComponent, CharacterControllerComponent>();
+let bareDefaultCharacter: CharacterControllerComponent | undefined;
+export const resolveCharacter = (character?: CharacterControllerComponent): CharacterControllerComponent => {
+  if (!character) return (bareDefaultCharacter ??= defaultCharacter());
+  let resolved = resolvedCharacterCache.get(character);
+  if (!resolved) {
+    resolved = { ...defaultCharacter(), ...character };
+    resolvedCharacterCache.set(character, resolved);
+  }
+  return resolved;
+};
+
+const resolvedVehicleCache = new WeakMap<VehicleComponent, VehicleComponent>();
+let bareDefaultVehicle: VehicleComponent | undefined;
+export const resolveVehicle = (vehicle?: VehicleComponent): VehicleComponent => {
+  if (!vehicle) return (bareDefaultVehicle ??= defaultVehicle());
+  let resolved = resolvedVehicleCache.get(vehicle);
+  if (!resolved) {
+    resolved = { ...defaultVehicle(), ...vehicle };
+    resolvedVehicleCache.set(vehicle, resolved);
+  }
+  return resolved;
+};
+
 /** Default ragdoll tuning — the same conservative values RagdollRig was hardcoded with. */
 export const defaultRagdollSettings = (): RagdollSettings => ({
   capsuleRadius: 0.06,

@@ -11,6 +11,9 @@ import { RagdollRig } from './RagdollRig';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 import type { SceneObject } from '../types';
 
+/** Scratch for the mixer distance-LOD check (synchronous per-frame use; never retained). */
+const MIXER_LOD_SCRATCH = new THREE.Vector3();
+
 /**
  * Renders an imported skinned glTF/GLB model and plays one of its animation clips.
  *
@@ -132,6 +135,34 @@ export function SkinnedModel({
   useFrame(() => {
     const on = registerId ? isRagdoll(registerId) : false;
     if (on !== ragdoll) setRagdollLocal(on);
+  });
+
+  // Distance LOD for the animation mixer: skinning a far-away character at 60Hz is wasted CPU (drei's
+  // useAnimations updates the mixer every frame). Past 25m the pose advances every 2nd frame, past 50m
+  // every 3rd — the skipped frames' time is released in one update via timeScale, so playback SPEED is
+  // exact; only the pose sample rate drops (30/20Hz — imperceptible at those sizes on screen). Play-only:
+  // editor preview keeps full rate. The camera-follow pawn is always well inside 25m, so it's never touched.
+  const mixerLod = useRef(0);
+  useFrame((rtState) => {
+    if (ragdoll) return; // mixer is stopped; leave timeScale alone
+    if (!useEditorStore.getState().isPlaying) {
+      mixer.timeScale = speed;
+      return;
+    }
+    const d = MIXER_LOD_SCRATCH.setFromMatrixPosition(model.matrixWorld).distanceTo(rtState.camera.position);
+    const interval = d > 50 ? 3 : d > 25 ? 2 : 1;
+    if (interval === 1) {
+      mixer.timeScale = speed;
+      mixerLod.current = 0;
+      return;
+    }
+    mixerLod.current += 1;
+    if (mixerLod.current >= interval) {
+      mixer.timeScale = speed * interval; // release the skipped frames' time in one step
+      mixerLod.current = 0;
+    } else {
+      mixer.timeScale = 0; // hold the pose this frame
+    }
   });
 
   // Latest blend weights, read live in useFrame (weights change every tick within a blend).

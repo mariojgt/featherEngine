@@ -15,6 +15,7 @@ import { FragmentMesh } from '../three/FragmentMesh';
 import { AudioListenerSync } from '../three/AudioListenerSync';
 import { SkidMarks } from '../three/SkidMarks';
 import { ShaderPrewarm } from '../three/ShaderPrewarm';
+import { EffectLightPool } from '../three/effectLights';
 import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, LockOnMarker, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
@@ -1709,6 +1710,7 @@ export function ViewportPanel() {
               <AudioListenerSync />
               <SkidMarks />
               <ShaderPrewarm />
+              <EffectLightPool />
               <RenderStatsProbe />
               <LightBudget />
               <ShadowLOD />

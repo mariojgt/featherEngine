@@ -140,6 +140,8 @@ import {
   defaultVehicle,
   defaultWaterVolume,
   lerpAngle,
+  resolveCharacter,
+  resolveVehicle,
   syncTerrainLayerColors,
   titleCase,
   withPhysicsDefaults,
@@ -209,7 +211,7 @@ import {
   type ProjectileSetup,
 } from './editor/objectFactory';
 import { getGraphRuntimeMap, layoutGraphNodes } from './editor/graphRuntime';
-import { buildContactIndex, contactMatches, contactOthers, contactTouches, firstContactOther } from './editor/runtimeIndexes';
+import { buildContactIndex, contactMatches, contactOthers, contactTouches, firstContactOther, toIdSet, toLowerCaseSet } from './editor/runtimeIndexes';
 import { makeId, stripUndefined } from './editor/ids';
 import { createArrayIndexer } from './editor/arrayIndex';
 import { recordRuntimeSection } from '../runtime/perfStats';
@@ -271,6 +273,7 @@ const indexControllersById = createArrayIndexer((c: AnimatorController) => c.id)
 const indexAnimationsById = createArrayIndexer((a: AnimationAsset) => a.id);
 const indexAssetsByName = createArrayIndexer((a: AssetItem) => a.name);
 const indexBlueprintsById = createArrayIndexer((b: ScriptBlueprint) => b.id);
+const indexSceneObjectsById = createArrayIndexer((o: SceneObject) => o.id);
 // Data-table lookups, cached by the columns/rows array identity (those arrays are replaced only when
 // the table is edited). A `data.tableGet` node inside an Update loop previously re-scanned the whole
 // table every frame with two `.find()`s.
@@ -327,6 +330,8 @@ export {
   defaultRagdollSettings,
   defaultRenderSettings,
   defaultVehicle,
+  resolveCharacter,
+  resolveVehicle,
   type CreateObjectOptions,
   type RuntimeAnimator,
 } from './editor/defaults';
@@ -1024,6 +1029,39 @@ const cloneObjectTree = (
  * to know when to despawn. Cleared when Play starts.
  */
 const effectLife = new Map<string, number>();
+
+/**
+ * Pooled entries for tickRuntime's start-of-tick transform snapshot (`prevTransforms`). The Map handed
+ * to the tick/physics is rebuilt each frame (consumers may hold it only within the tick), but the
+ * per-object `{ position, rotation }` wrapper objects are reused across frames — that's N fewer
+ * allocations per frame, every frame. Entries are mutated in place at the top of each tick, so they
+ * must never be retained across ticks (physicsWorld only reads them synchronously). Cleared on Play start.
+ */
+const prevTransformEntryPool = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+
+/**
+ * "Checkpoint <n>" name → gate index (-1 = not a checkpoint), memoized by the (static) name string so
+ * the per-tick race-support scan does a Map lookup per object instead of a regex exec. Bounded by the
+ * number of distinct object names ever seen, so it never needs clearing.
+ */
+/** `new Map(arr.map(...))` allocates N intermediate tuples — the tick builds several of these maps
+ *  over fresh arrays every frame, so they're filled with a plain loop instead. */
+const buildObjectIdMap = (objects: readonly SceneObject[]): Map<string, SceneObject> => {
+  const map = new Map<string, SceneObject>();
+  for (const object of objects) map.set(object.id, object);
+  return map;
+};
+
+const checkpointIdxByName = new Map<string, number>();
+const checkpointIndexForName = (name: string): number => {
+  let idx = checkpointIdxByName.get(name);
+  if (idx === undefined) {
+    const m = /^Checkpoint\s*(\d+)/i.exec(name);
+    idx = m ? Number(m[1]) : -1;
+    checkpointIdxByName.set(name, idx);
+  }
+  return idx;
+};
 
 /**
  * LOOSE car parts (vehicle.loosePartIds): bookkeeping for parts torn off by crashes, all module-level
@@ -5242,6 +5280,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         clearPerception();
         clearVehicleDents(); // start each run with a pristine (undented) car
         effectLife.clear(); // drop any stale burst-lifetime entries from the previous run
+        prevTransformEntryPool.clear();
         detachedParts.clear();
         pendingPartKicks.clear();
         pendingPartRestores.clear();
@@ -5446,7 +5485,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (!state.isPlaying) return state;
       beginPerceptionFrame(); // advance the AI perception clock (throttled line-of-sight cache)
       const activeObjects = selectActiveObjects(state);
-      const activeObjectById = new Map(activeObjects.map((object) => [object.id, object]));
+      const activeObjectById = indexSceneObjectsById(activeObjects);
       // These index Maps are WeakMap-cached on their source array identity, so during
       // Play (when the arrays don't change) the same Map is reused every frame instead
       // of being rebuilt — see indexers defined near the top of this module.
@@ -5471,9 +5510,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
         return types.get(key);
       };
-      const runtimeGroundedSet = new Set(state.runtimeGrounded);
-      const runtimeSwimmingSet = new Set(state.runtimeSwimming);
-      const runtimeClimbingSet = new Set(state.runtimeClimbing);
+      const runtimeGroundedSet = toIdSet(state.runtimeGrounded);
+      const runtimeSwimmingSet = toIdSet(state.runtimeSwimming);
+      const runtimeClimbingSet = toIdSet(state.runtimeClimbing);
       const priorCollisionIndex = buildContactIndex(state.runtimeCollisions);
       const priorTriggerIndex = buildContactIndex(state.runtimeTriggers);
       const priorTriggerExitIndex = buildContactIndex(state.runtimeTriggersExit);
@@ -5540,7 +5579,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // UI runtime side effects this frame.
       const nextVisibleUI = { ...state.runtimeVisibleUI };
       const nextUITextOverrides = { ...state.runtimeUITextOverrides };
-      const firedEvents = new Set(state.runtimeEventQueue.map((eventName) => eventName.toLowerCase()));
+      const firedEvents = toLowerCaseSet(state.runtimeEventQueue);
       // Last payload carried by each custom event (lowercased name) — written by Fire Event's Payload
       // pin, read from the matching Custom Event's value-out. Persists until the same event fires again.
       const eventPayloads: Record<string, GraphValue> = { ...(state.runtimeEventPayloads ?? {}) };
@@ -5559,12 +5598,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const keyPressedThisTick = (code: string) => (currentKeyPresses[code] ?? 0) > (previousKeyPresses[code] ?? 0);
       // Transforms at the start of the tick — the diff after scripts run is the motion a
       // script applied, which the physics world turns into body inputs (velocity/teleport).
-      const prevTransforms = new Map(
-        activeObjects.map((object) => [
-          object.id,
-          { position: object.transform.position, rotation: object.transform.rotation },
-        ]),
-      );
+      const prevTransforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+      for (const object of activeObjects) {
+        let entry = prevTransformEntryPool.get(object.id);
+        if (entry) {
+          entry.position = object.transform.position;
+          entry.rotation = object.transform.rotation;
+        } else {
+          entry = { position: object.transform.position, rotation: object.transform.rotation };
+          prevTransformEntryPool.set(object.id, entry);
+        }
+        prevTransforms.set(object.id, entry);
+      }
       // Impulses requested by action.applyForce/applyImpulse this frame, applied to bodies post-step.
       const physicsImpulses: Record<string, Vector3Tuple> = {};
       // Angular impulses (torque kicks) requested by action.applyTorque — applied in physics.frame for
@@ -5824,7 +5869,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const interactKey = char.character.keyInteract ?? 'KeyE';
             // (keyPressedThisTick covers a tap that was already released before this tick ran.)
             if (!isFollow && !currentKeys[interactKey] && !keyPressedThisTick(interactKey)) continue;
-            const cc = { ...defaultCharacter(), ...char.character };
+            const cc = resolveCharacter(char.character);
             const range = Math.max(0.25, cc.interactRange ?? 3);
             const cp = char.transform.position;
             const yaw = cc.cameraFollow && cc.mouseLook ? mouseCameraYaw(cc.mouseSensitivity) : char.transform.rotation[1] - cc.modelYawOffset;
@@ -7462,7 +7507,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 debug: node.data.projectileDebug,
                 template,
               };
-              const cc = object.character ? { ...defaultCharacter(), ...object.character } : undefined;
+              const cc = object.character ? resolveCharacter(object.character) : undefined;
               const facing = cc?.cameraMode === 'firstPerson' && cc.mouseLook
                 ? mouseCameraYaw(cc.mouseSensitivity)
                 : rotation[1] - (cc?.modelYawOffset ?? 0);
@@ -7659,7 +7704,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           };
         });
       }
-      const mappedObjectById = new Map(mappedObjects.map((object) => [object.id, object]));
+      const mappedObjectById = buildObjectIdMap(mappedObjects);
       // One terrain sampler for the whole tick: filters terrain objects once and memoizes
       // height queries on a grid (terrain transforms are identical across the mapped/moved/
       // resolved arrays, so this is valid for every pass below).
@@ -7709,22 +7754,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         return best?.to;
       };
       // ---- Race support (AI rivals / slipstream / positions) -----------------------------------
-      // The scene's "Checkpoint <n>" gates double as the AI rivals' driving line — the same objects the
-      // lap timer reads, so authoring a circuit once gives both lap timing AND opponents a racing line.
-      const raceCheckpoints: Array<{ idx: number; pos: Vector3Tuple }> = [];
-      for (const o of mappedObjects) {
-        const m = /^Checkpoint\s*(\d+)/i.exec(o.name);
-        if (m) raceCheckpoints.push({ idx: Number(m[1]), pos: o.transform.position });
-      }
-      raceCheckpoints.sort((a, b) => a.idx - b.idx);
-      const raceCpCount = raceCheckpoints.length ? raceCheckpoints[raceCheckpoints.length - 1].idx + 1 : 0;
-      // Continuous race progress: laps + gates passed + how far toward the next gate. Comparable across
-      // every car, so it ranks the field and feeds the rivals' rubber-banding.
-      const raceProgress = (lap: number, nextIdx: number, x: number, z: number): number => {
-        const t = raceCheckpoints.find((c) => c.idx === nextIdx) ?? raceCheckpoints[0];
-        const frac = 1 - Math.min(1, Math.hypot(t.pos[0] - x, t.pos[2] - z) / 80);
-        return lap * raceCpCount + ((nextIdx - 1 + raceCpCount) % raceCpCount) + frac;
-      };
       // Last frame's pose of every vehicle — slipstream and the rivals' rubber-band read these.
       const vehiclePoses: Array<{ id: string; x: number; z: number; yaw: number; speed: number }> = [];
       for (const o of mappedObjects) {
@@ -7739,6 +7768,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           speed: toNumber(bag.__vehicleSpeed ?? 0),
         });
       }
+      // The scene's "Checkpoint <n>" gates double as the AI rivals' driving line — the same objects the
+      // lap timer reads, so authoring a circuit once gives both lap timing AND opponents a racing line.
+      // Every consumer is vehicle-bound (rivals, slipstream, lap timing), so the scan is skipped outright
+      // in scenes with no vehicles, and the name→index regex is memoized (names are static; this ran
+      // O(objects) regex execs every frame in every template).
+      const raceCheckpoints: Array<{ idx: number; pos: Vector3Tuple }> = [];
+      if (vehiclePoses.length) {
+        for (const o of mappedObjects) {
+          const idx = checkpointIndexForName(o.name);
+          if (idx >= 0) raceCheckpoints.push({ idx, pos: o.transform.position });
+        }
+        raceCheckpoints.sort((a, b) => a.idx - b.idx);
+      }
+      const raceCpCount = raceCheckpoints.length ? raceCheckpoints[raceCheckpoints.length - 1].idx + 1 : 0;
+      // Continuous race progress: laps + gates passed + how far toward the next gate. Comparable across
+      // every car, so it ranks the field and feeds the rivals' rubber-banding.
+      const raceProgress = (lap: number, nextIdx: number, x: number, z: number): number => {
+        const t = raceCheckpoints.find((c) => c.idx === nextIdx) ?? raceCheckpoints[0];
+        const frac = 1 - Math.min(1, Math.hypot(t.pos[0] - x, t.pos[2] - z) / 80);
+        return lap * raceCpCount + ((nextIdx - 1 + raceCpCount) % raceCpCount) + frac;
+      };
       let playerRaceProgress: number | undefined;
       if (raceCpCount && vehiclePlayerId) {
         const lapV = variableByName.get('Lap');
@@ -7755,13 +7805,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       for (const object of mappedObjects) {
         if (!object.vehicle?.enabled) continue;
-        const veh = { ...defaultVehicle(), ...object.vehicle };
+        let veh = resolveVehicle(object.vehicle);
         // UPGRADE SCALING (Need-for-Speed-style garage): optional project variables let an in-game shop tune the
         // DRIVEN car at runtime with no per-car code — each is an upgrade LEVEL (0 = stock) the runtime turns into
         // a small percentage step. SpeedLevel raises top speed, AccelLevel sharpens the launch, GripLevel tightens
         // cornering + handbrake grip. Absent vars = stock handling, so this is invisible to non-upgrade games. Only
         // the player car (camera-follow) is scaled (the menu's idle cars stay stock).
         if (object.id === vehiclePlayerId) {
+          // The upgrade/nitro scaling below mutates the player's copy — never the shared resolved view.
+          veh = { ...veh };
           const upgradeLevel = (name: string): number => {
             const v = variableByName.get(name);
             return v ? Math.max(0, toNumber(nextVariableValues[v.id] ?? v.defaultValue)) : 0;
@@ -8463,7 +8515,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           return rootPos ? { ...object, transform: { ...object.transform, position: rootPos } } : object;
         }
         // Backfill defaults so characters created before newer fields existed still work.
-        const cc = { ...defaultCharacter(), ...object.character };
+        const cc = resolveCharacter(object.character);
         // Scripted: a blueprint (Move/Jump nodes) drives horizontal motion + jump — Unreal Event-Graph
         // style. Auto (no blueprint): the built-in WASD/Space drives it. Vertical physics runs either way.
         const scripted = Boolean(object.script?.enabled);
@@ -8537,9 +8589,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (id === object.id || destroyedIds.has(id) || nextDisabled.has(id)) return undefined;
           const candidate = mappedObjectById.get(id);
           if (!candidate || state.runtimeHidden.includes(id)) return undefined;
-          const vars = { ...candidate.variables, ...nextObjectVariables[id] };
-          if (vars.health !== undefined && toNumber(vars.health) <= 0) return undefined;
-          if (vars.health === undefined && !vars.enemy) return undefined;
+          // Direct lookups instead of merging the two variable bags — this runs per candidate in the
+          // O(N) lock-on scan and per frame while a lock is held.
+          const bag = nextObjectVariables[id];
+          const health = bag && 'health' in bag ? bag.health : candidate.variables?.health;
+          const enemy = bag && 'enemy' in bag ? bag.enemy : candidate.variables?.enemy;
+          if (health !== undefined && toNumber(health) <= 0) return undefined;
+          if (health === undefined && !enemy) return undefined;
           const cp = candidate.transform.position;
           return { pos: cp, dist: Math.hypot(cp[0] - position[0], cp[2] - position[2]) };
         };
@@ -9120,7 +9176,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           for (const [, st] of result.vehicles) for (const w of st.wheels) wheelStates.set(w.objectId, w);
           // Each wheel mesh's PARENT is its steering anchor — map anchorId → wheel state so the anchor carries
           // steer + the suspension bob. (A wheel parented directly to the car has no anchor → handled inline.)
-          const byIdNow = new Map(resolvedObjects.map((o) => [o.id, o]));
+          const byIdNow = buildObjectIdMap(resolvedObjects);
           const anchorStates = new Map<string, VehicleWheelState>();
           for (const ws of wheelStates.values()) {
             const parentId = byIdNow.get(ws.objectId)?.parentId;
@@ -9134,7 +9190,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const rpmVarMirror = variableByName.get('RPM');
           const gearVarMirror = variableByName.get('Gear');
           for (const [carId, st] of result.vehicles) {
-            const veh = { ...defaultVehicle(), ...byIdNow.get(carId)?.vehicle };
+            const veh = resolveVehicle(byIdNow.get(carId)?.vehicle);
             const input = vehicleInputs[carId];
             const braking = Boolean(input && (input.throttle < -0.05 || input.handbrake));
             for (const lid of veh.brakeLightIds ?? []) brakeLightGlow.set(lid, braking ? 4 : 0.2);
@@ -9169,7 +9225,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const prevSpeed = toNumber(mutable.__vehicleSpeed ?? 0);
               mutable.__vehicleYaw = cs.chassis.rotation[1];
               mutable.__vehicleSpeed = cs.speed;
-              const veh = { ...defaultVehicle(), ...object.vehicle };
+              const veh = resolveVehicle(object.vehicle);
               const input = vehicleInputs[object.id];
               // SKID SOUND only on a real slide — moving sideways, or handbrake locking the rears at speed.
               // (Keying it off raw tire side-impulse made it screech on every normal grippy turn.)
@@ -9569,7 +9625,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
       }
       const combatStart = performance.now();
-      const resolvedObjectById = new Map(resolvedObjects.map((object) => [object.id, object]));
+      const resolvedObjectById = buildObjectIdMap(resolvedObjects);
       // Auto-fracture: a destructible object shatters when it (or the thing it hit) is moving fast enough on
       // contact. No contact-force readout exists, so approximate the impact with this-frame speed.
       if (collisions.length) {
@@ -9806,7 +9862,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const rangedParam = ctrl ? getAnimatorControllerRuntime(ctrl).paramsByName.get('RangedMode') : undefined;
         const isRanged = rangedParam ? Boolean(state.runtimeAnimators[attackerId]?.params?.[rangedParam.id]) : false;
         if (isRanged) continue; // the gun's projectiles deal the damage, not the swing
-        const acc = { ...defaultCharacter(), ...attacker.character };
+        const acc = resolveCharacter(attacker.character);
         const range = acc.meleeRange ?? 2.4;
         const dmg = acc.meleeDamage ?? 34;
         const ap = attacker.transform.position;
@@ -9924,13 +9980,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const nextIdxVar = variableByName.get('Checkpoint');
         const lapTimeVar = variableByName.get('LapTime');
         const bestVar = variableByName.get('BestLap');
-        const checkpoints = activeObjects
-          .map((o) => {
-            const m = /^Checkpoint\s*(\d+)/i.exec(o.name);
-            return m ? { idx: Number(m[1]), pos: o.transform.position } : null;
-          })
-          .filter((c): c is { idx: number; pos: Vector3Tuple } => Boolean(c))
-          .sort((a, b) => a.idx - b.idx);
+        // Reuse the race-support pass's extraction (same "Checkpoint <n>" objects; gates are static, and
+        // a driven car existing guarantees the vehicle-gated scan above actually ran).
+        const checkpoints = raceCheckpoints;
         const carPos = vehicleBody.get(vehiclePlayerId)?.position ?? activeObjectById.get(vehiclePlayerId)?.transform.position;
         if (checkpoints.length && carPos && nextIdxVar) {
           const maxIdx = checkpoints[checkpoints.length - 1].idx;
@@ -10117,7 +10169,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const remainingObjectIds = new Set(allObjects.map((object) => object.id));
       const attachedOwnerIds = new Set(allObjects.map((object) => object.attachment?.targetObjectId).filter(Boolean) as string[]);
       const remainingResolvedObjects = resolvedObjects.filter((object) => remainingObjectIds.has(object.id));
-      const remainingResolvedObjectById = new Map(remainingResolvedObjects.map((object) => [object.id, object]));
+      const remainingResolvedObjectById = buildObjectIdMap(remainingResolvedObjects);
       const groundedIdSet = new Set(groundedIds);
       const swimmingIdSet = new Set(swimmingIds);
       const climbingIdSet = new Set(climbingIds);

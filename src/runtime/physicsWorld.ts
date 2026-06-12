@@ -449,6 +449,9 @@ interface VehicleEntry {
   gear: number;
   rpm: number;
   shiftTimer: number;
+  /** Total duration of the in-progress shift (up/down differ) — lets the torque cut RAMP back in
+   *  instead of stepping 20%→100% when the timer expires (the step read as a jerk on every shift). */
+  shiftDuration: number;
   /** Edge-detect latches for manual shifting (input flags arrive level-style each frame). */
   shiftUpHeld: boolean;
   shiftDownHeld: boolean;
@@ -806,6 +809,7 @@ class PhysicsRuntime {
       gear: 1,
       rpm: v.idleRpm ?? 900,
       shiftTimer: 0,
+      shiftDuration: 0,
       shiftUpHeld: false,
       shiftDownHeld: false,
       surfaceGrip: wheelIds.map(() => 1),
@@ -1091,7 +1095,10 @@ class PhysicsRuntime {
     // Resolve parent chains in WORLD space: bodies are simulated in world coordinates, but objects
     // store LOCAL transforms. `byId` powers world-transform composition for parented bodies; `prevById`
     // does the same for last frame's transforms so the scripted-motion delta is also world-space.
-    const byId = new Map(objects.map((object) => [object.id, object]));
+    // Loop fill (not `new Map(objects.map(...))`) — this runs every frame; the .map() form allocates
+    // an intermediate tuple array per object per frame.
+    const byId = new Map<string, SceneObject>();
+    for (const object of objects) byId.set(object.id, object);
     this.frameById = byId;
     // prevById clones EVERY object's transform back to its start-of-tick value — but it's only read
     // when composing the parent chain of a PARENTED body, which most scenes have few or none of.
@@ -1293,7 +1300,14 @@ class PhysicsRuntime {
       const ratio = (entry.gear === -1 ? ratios[0] : ratios[Math.min(entry.gear, ratios.length) - 1]) * finalDrive;
       const wheelRps = Math.abs(speed) / (2 * Math.PI * radius);
       let rpm = wheelRps * 60 * ratio;
-      if (Math.abs(speed) < 3) rpm = Math.max(rpm, idleRpm + (maxRpm - idleRpm) * 0.3 * Math.abs(input.throttle));
+      if (Math.abs(speed) < 3) {
+        // Launch clutch-slip: near standstill the engine revs with the throttle, not the wheels. BLEND
+        // back to wheel-speed RPM as the car reaches 3 m/s — a hard handoff here stepped the RPM (and
+        // with it the torque curve → drive force) mid-launch, a visible jerk right as you accelerate.
+        const launchRpm = idleRpm + (maxRpm - idleRpm) * 0.3 * Math.abs(input.throttle);
+        const blend = Math.abs(speed) / 3;
+        rpm = Math.max(rpm, launchRpm * (1 - blend) + rpm * blend);
+      }
       rpm = Math.min(Math.max(rpm, idleRpm), maxRpm * 1.02);
       // Shifting: auto box moves on RPM thresholds; manual moves on key edges (level inputs, latched here).
       entry.shiftTimer = Math.max(0, entry.shiftTimer - dt);
@@ -1302,18 +1316,18 @@ class PhysicsRuntime {
         if ((v.transmission ?? 'auto') === 'manual') {
           if (input.shiftUp && !entry.shiftUpHeld && entry.gear < ratios.length) {
             entry.gear += 1;
-            entry.shiftTimer = shiftTime;
+            entry.shiftTimer = entry.shiftDuration = shiftTime;
           }
           if (input.shiftDown && !entry.shiftDownHeld && entry.gear > 1) {
             entry.gear -= 1;
-            entry.shiftTimer = shiftTime * 0.7;
+            entry.shiftTimer = entry.shiftDuration = shiftTime * 0.7;
           }
         } else if (input.throttle > 0.05 && rpm > (v.shiftUpRpm ?? 6500) && entry.gear < ratios.length) {
           entry.gear += 1;
-          entry.shiftTimer = shiftTime;
+          entry.shiftTimer = entry.shiftDuration = shiftTime;
         } else if (rpm < (v.shiftDownRpm ?? 2400) && entry.gear > 1) {
           entry.gear -= 1;
-          entry.shiftTimer = shiftTime * 0.7;
+          entry.shiftTimer = entry.shiftDuration = shiftTime * 0.7;
         }
       }
       entry.shiftUpHeld = Boolean(input.shiftUp);
@@ -1325,8 +1339,14 @@ class PhysicsRuntime {
       const torque = engineTorqueCurve(rpm, idleRpm, maxRpm);
       const gearScale = ratio / (ratios[0] * finalDrive);
       // Shifts cut torque to 20% rather than zero — the gear change still reads (RPM drop + backfire)
-      // without the dead quarter-second of throttle that made the box feel unresponsive.
-      const torqueCut = entry.shiftTimer > 0 ? 0.2 : 1;
+      // without the dead quarter-second of throttle that made the box feel unresponsive. The cut holds
+      // 20% for the first half of the shift, then RAMPS back to 100% (quadratic ease-in) — the old
+      // instant 20%→100% step at timer expiry was a longitudinal jerk on every gear change.
+      let torqueCut = 1;
+      if (entry.shiftTimer > 0 && entry.shiftDuration > 0) {
+        const p = 1 - entry.shiftTimer / entry.shiftDuration; // 0 = shift start, 1 = done
+        torqueCut = p < 0.5 ? 0.2 : 0.2 + 0.8 * ((p - 0.5) / 0.5) ** 2;
+      }
       let driveForce = (v.engineForce ?? 1800) * (input.engineScale ?? 1) * torque * gearScale * torqueCut;
       // TRACTION CONTROL (assist): tame wheelspin launches and catch power-oversteer. Tuned LIGHT —
       // the old 0.55 cuts answered the throttle with mush; these keep the nose responsive and only
