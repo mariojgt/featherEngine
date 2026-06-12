@@ -1099,6 +1099,29 @@ const headingFromEuler = (rotation: Vector3Tuple): number =>
 /** Reused exclusion set for the AI driver's obstacle feeler rays (single-threaded tick). */
 const aiFeelerExclude = new Set<string>();
 
+/**
+ * Comma-separated tag value → trimmed tokens, so per-actor tag queries don't split/trim/allocate on
+ * every evaluation. Tag vars are authored strings (a small, stable set); the size cap guards against
+ * a script writing ever-changing strings into a tag variable.
+ */
+const tagTokenCache = new Map<string, readonly string[]>();
+const tagTokens = (value: string): readonly string[] => {
+  let tokens = tagTokenCache.get(value);
+  if (!tokens) {
+    if (tagTokenCache.size > 512) tagTokenCache.clear();
+    tokens = value.split(',').map((token) => token.trim());
+    tagTokenCache.set(value, tokens);
+  }
+  return tokens;
+};
+
+/**
+ * Blueprint → declared-variable types. Keyed on blueprint object identity, which is stable during Play
+ * (editing a blueprint mints a new object), so the type Maps survive across ticks instead of being
+ * rebuilt per frame.
+ */
+const blueprintVarTypeCache = new WeakMap<ScriptBlueprint, Map<string, GraphValueType>>();
+
 const checkpointIdxByName = new Map<string, number>();
 const checkpointIndexForName = (name: string): number => {
   let idx = checkpointIdxByName.get(name);
@@ -5551,16 +5574,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const animationById = indexAnimationsById(state.animations);
       const assetByName = indexAssetsByName(state.assets);
       const blueprintById = indexBlueprintsById(state.blueprints);
-      const blueprintVariableTypes = new Map<string, Map<string, GraphValueType>>();
       const declaredObjectVarType = (targetObj: SceneObject | undefined, key: string): GraphValueType | undefined => {
         const blueprintId = targetObj?.script?.blueprintId;
         if (!blueprintId) return undefined;
-        let types = blueprintVariableTypes.get(blueprintId);
+        const blueprint = blueprintById.get(blueprintId);
+        if (!blueprint) return undefined;
+        let types = blueprintVarTypeCache.get(blueprint);
         if (!types) {
-          const blueprint = blueprintById.get(blueprintId);
-          if (!blueprint) return undefined;
           types = new Map((blueprint.variables ?? []).map((variable) => [variable.name, variable.type]));
-          blueprintVariableTypes.set(blueprintId, types);
+          blueprintVarTypeCache.set(blueprint, types);
         }
         return types.get(key);
       };
@@ -6017,6 +6039,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // (e.g. a Cast + two Get Object Vars all reading the same Find Actor pin). '' = computed, none found.
       const findActorCache = new Map<string, string>();
 
+      // Per-tick memo for "Has Save": readSaveSlot is a synchronous localStorage read + JSON.parse, so a
+      // Has Save pin read in per-frame logic must hit storage once per slot per TICK, not per evaluation.
+      // The Save/Clear Save action handlers update this cache in place so a same-tick check stays correct.
+      const saveSlotHasCache = new Map<string, boolean>();
+
       // Per-tick candidate lists for actor queries (Find Actor / For Each Actor), keyed by the QUERY
       // itself rather than the evaluating node. Previously N enemies each finding the player cost N
       // full-scene scans per frame; now each distinct query scans the scene once per tick and every
@@ -6050,7 +6077,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               //     or the whole value equals the tag.
               if (listed !== undefined) {
                 const sv = String(listed);
-                if (sv === tag || sv.split(',').some((token) => token.trim() === tag)) match = true;
+                if (sv === tag || tagTokens(sv).includes(tag)) match = true;
               }
               // (2) or the actor has a truthy instance variable literally NAMED the tag (flag idiom).
               if (!match) {
@@ -6152,7 +6179,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             Array.isArray(value)
               ? [Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0]
               : [0, 0, 0];
-          function valueInput(node: NodeForgeNode, handle: string, fallback?: GraphValue): GraphValue | undefined {
+          // ⚠️ The evaluator functions below are `const` arrows ON PURPOSE: `function` declarations are
+          // instantiated at scope ENTRY, so every object in the scene — including the scriptless scenery
+          // that early-returns above — paid four closure allocations per frame. As consts they only
+          // exist for objects that actually run a script this tick. (Mutual references between them are
+          // fine: nothing calls them until the event-root dispatch at the bottom, after all are defined.)
+          const valueInput = (node: NodeForgeNode, handle: string, fallback?: GraphValue): GraphValue | undefined => {
             const edge = runtime.incomingValueByHandle.get(node.id)?.get(handle);
             if (!edge) return fallback;
             valueVisited.clear();
@@ -6162,7 +6194,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return evaluateValue(edge.source, valueVisited, edge.sourceHandle ?? 'value-out');
           }
 
-          function evaluateValue(nodeId: string, visited: Set<string>, sourceHandle = 'value-out'): GraphValue | undefined {
+          const evaluateValue = (nodeId: string, visited: Set<string>, sourceHandle = 'value-out'): GraphValue | undefined => {
             if (visited.has(nodeId)) return undefined;
             visited.add(nodeId);
             const node = runtime.nodesById.get(nodeId);
@@ -6277,7 +6309,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             // Has Save: true when the slot holds saved data — gate a "Continue" button / skip-intro branch.
             if (node.data.nodeKind === 'save.has') {
-              return readSaveSlot(node.data.saveSlot ?? 'slot1') !== null;
+              const slot = node.data.saveSlot ?? 'slot1';
+              let has = saveSlotHasCache.get(slot);
+              if (has === undefined) {
+                has = readSaveSlot(slot) !== null;
+                saveSlotHasCache.set(slot, has);
+              }
+              return has;
             }
 
             // Find Actor (Unreal Get Actor Of Class / With Tag): scan the live scene for an actor matching a
@@ -6645,7 +6683,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return undefined;
           }
 
-          function executeFrom(nodeId: string, visited: Set<string>) {
+          const executeFrom = (nodeId: string, visited: Set<string>) => {
             if (visited.has(nodeId)) return;
             visited.add(nodeId);
             const node = runtime.nodesById.get(nodeId);
@@ -6799,7 +6837,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return (typeof wired === 'string' && wired ? wired : resolveTarget(node.data.targetObjectId)) || object.id;
           };
 
-          function applyAction(node: NodeForgeNode, visited: Set<string>): boolean {
+          const applyAction = (node: NodeForgeNode, visited: Set<string>): boolean => {
             if (node.data.nodeKind === 'logic.branch') {
               return toBoolean(valueInput(node, 'condition', node.data.booleanValue ?? true));
             }
@@ -7157,6 +7195,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 ]),
               ) as Record<string, GraphValue>;
               writeSaveSlot(node.data.saveSlot ?? 'slot1', saved);
+              saveSlotHasCache.set(node.data.saveSlot ?? 'slot1', true);
               prints.push(`${object.name}: Saved ${Object.keys(saved).length} variables`);
             }
 
@@ -7176,6 +7215,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'save.clear') {
               clearSaveSlot(node.data.saveSlot ?? 'slot1');
+              saveSlotHasCache.set(node.data.saveSlot ?? 'slot1', false);
               prints.push(`${object.name}: Cleared save slot ${node.data.saveSlot ?? 'slot1'}`);
             }
 
@@ -9918,8 +9958,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // tunnelling through a thin wall — so a shot that meets a wall splats THERE instead of carrying on to a
       // foe behind it. When several contacts register in one frame we resolve the NEAREST, so cover always
       // wins over a target standing behind it. Projectiles + corpses never block a shot (excluded below).
-      const shotPassThrough = new Set(resolvedObjects.filter((o) => o.projectile).map((o) => o.id));
-      for (const o of resolvedObjects) if (isRagdoll(o.id)) shotPassThrough.add(o.id);
+      const shotPassThrough = new Set<string>();
+      for (const o of resolvedObjects) if (o.projectile || isRagdoll(o.id)) shotPassThrough.add(o.id);
       for (const obj of resolvedObjects) {
         const proj = obj.projectile;
         if (!proj) continue;
@@ -10094,6 +10134,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // object in radius. A barrel/enemy killed by the blast that is itself `explosive` chains (re-queued); the
       // `exploded` guard + the count cap keep it bounded.
       let blastGuard = 0;
+      // The pool of objects a blast can damage (health var or Receive Damage listener) is the same for
+      // every blast this tick — build it once on the first blast so a chained detonation (barrel → barrel)
+      // re-scans this short list instead of the whole scene. Per-blast state (destroyed/ragdoll/current
+      // HP) is still checked inside the loop, so chain semantics are unchanged.
+      let blastCandidates: SceneObject[] | null = null;
       while (explodeQueue.length && blastGuard++ < 64) {
         const blast = explodeQueue.shift()!;
         spawned.push(makeExplosion(blast.pos));
@@ -10108,11 +10153,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const bd = Math.hypot(pp[0] - blast.pos[0], pp[1] - blast.pos[1], pp[2] - blast.pos[2]);
           cameraShake = Math.min(1, cameraShake + 0.6 * Math.max(0, 1 - bd / (blast.radius * 4)));
         }
-        for (const o of resolvedObjects) {
-          if (o.projectile || o.effect || destroyedIds.has(o.id) || isRagdoll(o.id)) continue;
+        if (!blastCandidates) {
+          blastCandidates = [];
+          for (const o of resolvedObjects) {
+            if (o.projectile || o.effect) continue;
+            const hasHp = nextObjectVariables[o.id]?.health !== undefined || o.variables?.health !== undefined;
+            // Damageable if it has a health var OR listens for On Receive Damage (auto — no var needed).
+            if (hasHp || listensForReceiveDamage.has(o.id)) blastCandidates.push(o);
+          }
+        }
+        for (const o of blastCandidates) {
+          if (destroyedIds.has(o.id) || isRagdoll(o.id)) continue;
           const hasHp = nextObjectVariables[o.id]?.health !== undefined || o.variables?.health !== undefined;
-          // Damageable if it has a health var OR listens for On Receive Damage (auto — no var needed).
-          if (!hasHp && !listensForReceiveDamage.has(o.id)) continue;
           const dx = o.transform.position[0] - blast.pos[0];
           const dy = o.transform.position[1] - blast.pos[1];
           const dz = o.transform.position[2] - blast.pos[2];

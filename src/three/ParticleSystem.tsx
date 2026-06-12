@@ -314,10 +314,20 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
     const sizes = pool.sizeAttr.array as Float32Array;
     const dragFactor = Math.max(0, 1 - cfg.drag * delta);
     let alive = 0;
+    // Track the touched slot range so the GPU upload below covers only changed slots, not the whole
+    // pool — a couple dozen live particles in a 900-slot pool were re-uploading all 900 slots across
+    // three attributes every frame.
+    let dirtyMin = n;
+    let dirtyMax = -1;
     for (let i = 0; i < n; i++) {
       if (pool.life[i] <= 0) {
-        sizes[i] = 0;
-        colors[i * 4 + 3] = 0;
+        // A long-dead slot is already zeroed in the GPU buffer — leave it untouched (and un-uploaded).
+        if (sizes[i] !== 0 || colors[i * 4 + 3] !== 0) {
+          sizes[i] = 0;
+          colors[i * 4 + 3] = 0;
+          if (i < dirtyMin) dirtyMin = i;
+          if (i > dirtyMax) dirtyMax = i;
+        }
         continue;
       }
       pool.age[i] += delta;
@@ -325,9 +335,13 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
         pool.life[i] = 0;
         sizes[i] = 0;
         colors[i * 4 + 3] = 0;
+        if (i < dirtyMin) dirtyMin = i;
+        if (i > dirtyMax) dirtyMax = i;
         continue;
       }
       alive++;
+      if (i < dirtyMin) dirtyMin = i;
+      if (i > dirtyMax) dirtyMax = i;
       pool.vy[i] -= cfg.gravity * delta;
       pool.vx[i] *= dragFactor; pool.vy[i] *= dragFactor; pool.vz[i] *= dragFactor;
       pool.px[i] += pool.vx[i] * delta;
@@ -348,9 +362,21 @@ export function ParticleSystem({ object }: { object: SceneObject }) {
       sizes[i] = size;
     }
     aliveRef.current = alive;
-    pool.posAttr.needsUpdate = true;
-    pool.colorAttr.needsUpdate = true;
-    pool.sizeAttr.needsUpdate = true;
+    // Upload only the touched slot range (bufferSubData instead of a full re-upload); a frame that
+    // touched nothing uploads nothing.
+    if (dirtyMax >= dirtyMin) {
+      const start = dirtyMin;
+      const count = dirtyMax - dirtyMin + 1;
+      pool.posAttr.clearUpdateRanges();
+      pool.posAttr.addUpdateRange(start * 3, count * 3);
+      pool.posAttr.needsUpdate = true;
+      pool.colorAttr.clearUpdateRanges();
+      pool.colorAttr.addUpdateRange(start * 4, count * 4);
+      pool.colorAttr.needsUpdate = true;
+      pool.sizeAttr.clearUpdateRanges();
+      pool.sizeAttr.addUpdateRange(start, count);
+      pool.sizeAttr.needsUpdate = true;
+    }
     // No computeBoundingSphere — the points draw with frustumCulled={false}.
 
     // Project world size → screen pixels (matches PointsMaterial sizeAttenuation feel).

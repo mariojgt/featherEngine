@@ -854,7 +854,10 @@ function VehicleSection({
   const assets = useEditorStore((state) => state.assets);
   const updateRenderer = useEditorStore((state) => state.updateRenderer);
   const modelAssets = useMemo(() => assets.filter((a) => a.type === 'model'), [assets]);
-  const objects = useEditorStore(selectActiveObjects);
+  // Structurally-stable: this section only reads model ids, and subscribing to the raw objects array
+  // re-rendered the whole vehicle-tuning panel 60×/s during Play (the array identity changes whenever
+  // the car moves — i.e. always). Model swaps/garage edits still bump the structural token.
+  const objects = useStableActiveObjects();
   const carObject = objects.find((o) => o.id === objectId);
   const bodyModelId = carObject?.renderer?.modelAssetId ?? '';
   const firstWheelId = v?.wheelObjectIds?.[0];

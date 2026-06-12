@@ -202,6 +202,10 @@ export const VolumetricFog = forwardRef<VolumetricFogEffect, VolumetricParams>((
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const { scene } = useThree();
+  // Cached sun pick for the shaft pass: the full scene.traverse to find the best-matching directional
+  // light ran EVERY frame (a whole-graph walk on big scenes). The winner barely ever changes, so keep
+  // it and re-scan on a slow cadence (or immediately when the cached light dies/loses its shadow map).
+  const sunCache = useRef<{ light: THREE.DirectionalLight | null; cooldown: number }>({ light: null, cooldown: 0 });
 
   // Static look params (cheap to set on render; also re-applied each frame below for runtime env tweaks).
   const u = effect.uniforms;
@@ -231,19 +235,27 @@ export const VolumetricFog = forwardRef<VolumetricFogEffect, VolumetricParams>((
     // with a live shadow map qualify. Null-safe — until a map exists we just skip shafts this frame.
     let shaft = 0;
     if (p.shaftStrength > 0) {
-      let best: THREE.DirectionalLight | undefined;
-      let bestDot = -2;
-      scene.traverse((o) => {
-        const light = o as THREE.DirectionalLight;
-        if (!light.isDirectionalLight || !light.castShadow || !light.shadow?.map?.texture) return;
-        // Light points from its position toward its target; our sunDirection points toward the sun.
-        const dir = TMP_DIR.copy(light.position).sub(light.target.position).normalize();
-        const d = dir.dot(p.sunDirection);
-        if (d > bestDot) {
-          bestDot = d;
-          best = light;
-        }
-      });
+      const cache = sunCache.current;
+      cache.cooldown -= 1;
+      let best = cache.light ?? undefined;
+      const stillValid = best && best.parent && best.castShadow && best.shadow?.map?.texture;
+      if (!stillValid || cache.cooldown <= 0) {
+        best = undefined;
+        let bestDot = -2;
+        scene.traverse((o) => {
+          const light = o as THREE.DirectionalLight;
+          if (!light.isDirectionalLight || !light.castShadow || !light.shadow?.map?.texture) return;
+          // Light points from its position toward its target; our sunDirection points toward the sun.
+          const dir = TMP_DIR.copy(light.position).sub(light.target.position).normalize();
+          const d = dir.dot(p.sunDirection);
+          if (d > bestDot) {
+            bestDot = d;
+            best = light;
+          }
+        });
+        cache.light = best ?? null;
+        cache.cooldown = 30; // ~0.5s at 60Hz — bounds staleness if a better-matching sun appears
+      }
       if (best) {
         uu.get('shadowMap')!.value = best.shadow.map!.texture;
         (uu.get('shadowMatrix')!.value as Matrix4).copy(best.shadow.matrix);

@@ -3,6 +3,7 @@ import { useGLTF } from '@react-three/drei';
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { useEditorStore, selectActiveObjects, selectActiveSceneEnvironment } from '../store/editorStore';
+import { useStableActiveObjects } from '../store/stableSelectors';
 import { useAssetUrl } from './ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
 import {
@@ -527,7 +528,9 @@ export function TerrainBrushCursor() {
   const brush = useEditorStore((state) => state.terrainBrush);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
-  const objects = useEditorStore(selectActiveObjects);
+  // Structurally-stable: the cursor only needs terrain objects (terrain edits bump the token); the raw
+  // array subscription re-rendered this 60×/s during Play when anything moved.
+  const objects = useStableActiveObjects();
   const groupRef = useRef<THREE.Group>(null);
 
   const terrainObject = useMemo(() => {

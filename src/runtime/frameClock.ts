@@ -21,20 +21,35 @@
 
 const REST = 1 / 60;
 let average = REST;
+// Game time the clamp denied (positive = the sim is behind the wall clock). Instead of DROPPING a
+// spike's backlog outright — which freezes game time for the spike and reads as a "freeze then snap"
+// at speed — we bank it and replay it a sliver per frame. Caps keep a giant stall from turning into
+// a long fast-forward: at worst the sim runs ~15% fast for a handful of frames, which is invisible,
+// while the old behavior lost the time forever (visible hesitation on every GC/compile hitch).
+let backlog = 0;
 
 export function smoothFrameDelta(rawSeconds: number): number {
   // A tab switch / debugger pause isn't motion — restart the cadence estimate instead of "catching up".
   if (rawSeconds > 0.25 || rawSeconds <= 0) {
     average = REST;
+    backlog = 0;
     return REST;
   }
   // Track the recent cadence with a slow EMA; clamp the sample so a single spike can't yank it up.
   average += (Math.min(rawSeconds, average * 2) - average) * 0.08;
   // One simulation step may deviate at most -40%/+40% from the recent cadence.
-  return Math.min(0.05, Math.max(average * 0.6, Math.min(average * 1.4, rawSeconds)));
+  const base = Math.min(0.05, Math.max(average * 0.6, Math.min(average * 1.4, rawSeconds)));
+  // Bank what the clamp denied (or granted early, when a short frame got clamped UP — negative drift),
+  // then drain at most 15% of a frame per step so the catch-up itself can never look like a teleport.
+  // Steady-state frames sit inside the clamp band (base === raw, drift 0) — behavior unchanged there.
+  backlog = Math.min(0.08, Math.max(-0.05, backlog + (rawSeconds - base)));
+  const release = backlog >= 0 ? Math.min(backlog, average * 0.15) : Math.max(backlog, -average * 0.15);
+  backlog -= release;
+  return Math.min(0.05, base + release);
 }
 
 /** Call when Play starts so the first frames of a session aren't shaped by the previous one. */
 export function resetFrameClock(): void {
   average = REST;
+  backlog = 0;
 }

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
-import { useStableActiveObjects } from '../store/stableSelectors';
+import { useThrottledActiveObjects } from '../store/stableSelectors';
 import { useProjectStore } from '../store/projectStore';
 import { focusWorkspacePanel } from './workspacePanels';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
@@ -126,7 +126,9 @@ export function HierarchyPanel() {
   // changes when the tree actually changes; the object list is then a stable ref derived from it.
   // (Shared structurally-stable hook — its token signature is also far cheaper per tick than the
   // per-object string this used to build on every frame.)
-  const sceneObjects = useStableActiveObjects();
+  // Throttled (~4Hz in Play): gameplay VFX spawns are real objects, so every drift puff/explosion was
+  // a structural change re-rendering all rows — the hierarchy is display-only, 250ms latency is fine.
+  const sceneObjects = useThrottledActiveObjects();
   const activeSceneName = useEditorStore((state) => state.activeScene()?.name ?? 'Scene');
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const createObject = useEditorStore((state) => state.createObject);

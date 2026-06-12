@@ -168,6 +168,9 @@ function collisionGroups(layer: number | undefined, mask: number | undefined): n
   return ((membership & 0xffff) << 16) | ((mask ?? DEFAULT_COLLISION_MASK) & DEFAULT_COLLISION_MASK);
 }
 
+/** Filter groups every character controller moves with — constant, so computed once, not per character per frame. */
+const CHARACTER_FILTER_GROUPS = collisionGroups(0, DEFAULT_COLLISION_MASK);
+
 /** Cached model vertices (local space) baked to the object's scale, for mesh/convex colliders. */
 function scaledMeshVertices(object: SceneObject) {
   const geo = getModelGeometry(object.renderer?.modelAssetId);
@@ -1244,7 +1247,7 @@ class PhysicsRuntime {
         entry.collider,
         desired,
         RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
-        collisionGroups(0, DEFAULT_COLLISION_MASK),
+        CHARACTER_FILTER_GROUPS,
       );
       if (entry.controller.computedGrounded()) grounded.add(object.id);
       const move = entry.controller.computedMovement();

@@ -14,6 +14,9 @@ import type { SceneObject } from '../types';
 /** Scratch for the mixer distance-LOD check (synchronous per-frame use; never retained). */
 const MIXER_LOD_SCRATCH = new THREE.Vector3();
 
+/** Scratch for blend-weight summing (cleared and consumed within one useFrame callback; never retained). */
+const BLEND_WEIGHT_SCRATCH = new Map<THREE.AnimationAction, number>();
+
 /**
  * Renders an imported skinned glTF/GLB model and plays one of its animation clips.
  *
@@ -207,7 +210,8 @@ export function SkinnedModel({
   useFrame(() => {
     const b = blendRef.current;
     if (ragdoll || !b) return;
-    const byAction = new Map<THREE.AnimationAction, number>();
+    const byAction = BLEND_WEIGHT_SCRATCH;
+    byAction.clear();
     for (const sample of b) {
       const action = resolveAction(sample.name);
       if (action) byAction.set(action, (byAction.get(action) ?? 0) + sample.weight);

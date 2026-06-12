@@ -220,7 +220,18 @@ export function ModelAsset({
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(cloneMat) : cloneMat(mesh.material);
     });
 
-    return normalizeModelScale(root);
+    const normalized = normalizeModelScale(root);
+    // A static model's INTERIOR nodes never move relative to each other — but three.js recomposes
+    // every auto-update node's local matrix on every frame's updateMatrixWorld walk, so a city of
+    // multi-hundred-node GLBs burns CPU re-deriving matrices that never change. Bake them once and
+    // freeze. The root stays auto-updating (the scene-object group above carries the live transform,
+    // and a moving parent still propagates matrixWorld through frozen children — only the LOCAL
+    // recompose is skipped). Dents/damage deform vertex buffers, not node transforms, so they're safe.
+    normalized.updateMatrixWorld(true);
+    normalized.traverse((node) => {
+      if (node !== normalized) node.matrixAutoUpdate = false;
+    });
+    return normalized;
   }, [scene]);
 
   // Cache the merged geometry (in the clone's local space, so the normalization

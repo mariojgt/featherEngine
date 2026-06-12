@@ -82,7 +82,11 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
       velocities[i * 3 + 2] = muzzle ? -(0.5 + Math.random() * 2) : Math.sin(phi) * Math.sin(theta) * speed;
     }
     geometry.setDrawRange(0, count);
-    geometry.getAttribute('position').needsUpdate = true;
+    // Only the first `count` slots are drawn — upload just those, not the whole MAX_BURST pool.
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+    posAttr.clearUpdateRanges();
+    posAttr.addUpdateRange(0, count * 3);
+    posAttr.needsUpdate = true;
     material.color.set(effect.color);
     material.size = dust ? 0.34 : muzzle ? 0.14 : splash ? 0.16 : 0.1;
     material.opacity = dust ? 0.5 : 1;
@@ -122,7 +126,10 @@ export function ImpactParticles({ effect }: { effect: EffectComponent }) {
       positions[i * 3 + 1] = velocities[i * 3 + 1] * t - gravity * t * t;
       positions[i * 3 + 2] = velocities[i * 3 + 2] * t;
     }
-    geometry.getAttribute('position').needsUpdate = true;
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+    posAttr.clearUpdateRanges();
+    posAttr.addUpdateRange(0, count * 3);
+    posAttr.needsUpdate = true;
     // Dust billows GROW as they fade (smoke expanding) instead of shrinking like sparks, and start
     // semi-transparent so they read soft, not glowing.
     material.opacity = dust ? 0.5 * (1 - progress) : 1 - progress;

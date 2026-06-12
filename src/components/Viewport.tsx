@@ -1123,12 +1123,19 @@ function RenderStatsProbe() {
   // (post-fx passes, shadow updates happen inside), so sum all calls between two useFrames. The
   // pre-render useFrame below then publishes the PREVIOUS frame's total — same 1-frame lag as gl.info.
   const renderAccum = useRef(0);
+  // gl.info auto-resets at the START of every render call, and the post-fx composer issues several
+  // per frame — so sampling info once per frame only ever saw the LAST pass (the fullscreen copy:
+  // 1 call, 1 triangle). Sum each call's counters right after it completes instead.
+  const callsAccum = useRef(0);
+  const trianglesAccum = useRef(0);
   useEffect(() => {
     const original = gl.render.bind(gl);
     (gl as { render: typeof gl.render }).render = (...args: Parameters<typeof gl.render>) => {
       const start = performance.now();
       original(...args);
       renderAccum.current += performance.now() - start;
+      callsAccum.current += gl.info.render.calls;
+      trianglesAccum.current += gl.info.render.triangles;
     };
     return () => {
       (gl as { render: typeof gl.render }).render = original;
@@ -1139,12 +1146,14 @@ function RenderStatsProbe() {
     renderAccum.current = 0;
     const info = gl.info;
     recordRender({
-      calls: info.render.calls,
-      triangles: info.render.triangles,
+      calls: callsAccum.current,
+      triangles: trianglesAccum.current,
       programs: info.programs?.length ?? 0,
       geometries: info.memory.geometries,
       textures: info.memory.textures,
     });
+    callsAccum.current = 0;
+    trianglesAccum.current = 0;
   });
   return null;
 }
@@ -1162,6 +1171,7 @@ function LightBudget() {
   const scene = useThree((state) => state.scene);
   const evaluatedCount = useRef(-1);
   const evaluatedQuality = useRef<string | undefined>(undefined);
+  const frameCounter = useRef(0);
   useFrame(({ camera }) => {
     const editorState = useEditorStore.getState();
     if (!editorState.isPlaying) {
@@ -1169,6 +1179,11 @@ function LightBudget() {
       evaluatedQuality.current = undefined;
       return;
     }
+    // The caster-count check below needs a full scene traversal — far too heavy to run per frame for
+    // a count that almost never changes (the effect-light pool keeps it constant during gameplay).
+    // Poll at ~4Hz; a light added mid-Play gets budgeted within a quarter second.
+    frameCounter.current += 1;
+    if (frameCounter.current % 15 !== 1) return;
     const quality = editorState.renderSettings.quality;
     const maxCasters = qualityProfile(quality).maxShadowCasters;
     const casters: THREE.Light[] = [];

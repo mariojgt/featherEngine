@@ -112,6 +112,38 @@ export function useStableActiveObjects(): SceneObject[] {
   return useMemo(() => selectActiveObjects(useEditorStore.getState()), [sig]);
 }
 
+let throttledSig = '';
+let throttledSigBlockedUntil = 0;
+
+/**
+ * Like `structuralObjectsSignature`, but capped at ~4Hz during Play. Gameplay constantly spawns and
+ * despawns REAL scene objects (drift puffs, muzzle flashes, projectiles, explosions), and each one is
+ * a structural change — so a panel on the plain structural signature still re-rendered its whole tree
+ * on every VFX spawn (effectively per-frame in combat/driving). For display-only trees that don't
+ * need frame-exact membership (the Hierarchy), batching those updates to 250ms keeps the panel live
+ * while cutting the re-render storm. Edit mode is untouched (updates stay immediate).
+ */
+export const throttledObjectsSignature = (state: EditorState): string => {
+  const sig = structuralObjectsSignature(state);
+  if (!state.isPlaying) {
+    throttledSig = sig;
+    throttledSigBlockedUntil = 0;
+    return sig;
+  }
+  if (sig !== throttledSig && performance.now() >= throttledSigBlockedUntil) {
+    throttledSig = sig;
+    throttledSigBlockedUntil = performance.now() + 250;
+  }
+  return throttledSig;
+};
+
+/** `useStableActiveObjects`, throttled to ~4Hz during Play — for display-only panels (Hierarchy). */
+export function useThrottledActiveObjects(): SceneObject[] {
+  const sig = useEditorStore(throttledObjectsSignature);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => selectActiveObjects(useEditorStore.getState()), [sig]);
+}
+
 const sceneTokens = new Map<string, TokenEntry<Scene>>();
 let prevSceneSig = '';
 let prevSceneSigParts = '';
