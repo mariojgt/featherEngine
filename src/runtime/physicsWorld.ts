@@ -159,6 +159,58 @@ function worldToLocalUnder(
   return { position: [wtPos.x, wtPos.y, wtPos.z], rotation: [wtEuler.x, wtEuler.y, wtEuler.z] };
 }
 
+/** Wrap an angle delta into [-π, π] so an Euler component lerp takes the short way across the ±π seam. */
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+
+/**
+ * Interpolate between two LOCAL poses for render smoothing. Position is a straight component lerp;
+ * rotation lerps per Euler component with seam-aware angle wrapping. A single 1/60s physics step turns
+ * a body only a little, so component-wise Euler interpolation is stable here (no full slerp needed).
+ */
+function lerpPosRot(a: PosRot, b: PosRot, t: number): PosRot {
+  if (t <= 0) return { position: a.position, rotation: a.rotation };
+  if (t >= 1) return { position: b.position, rotation: b.rotation };
+  return {
+    position: [
+      a.position[0] + (b.position[0] - a.position[0]) * t,
+      a.position[1] + (b.position[1] - a.position[1]) * t,
+      a.position[2] + (b.position[2] - a.position[2]) * t,
+    ],
+    rotation: [
+      lerpAngle(a.rotation[0], b.rotation[0], t),
+      lerpAngle(a.rotation[1], b.rotation[1], t),
+      lerpAngle(a.rotation[2], b.rotation[2], t),
+    ],
+  };
+}
+
+/**
+ * Wheel visuals use Rapier's accumulated spin angle on X. Do not seam-wrap that axis: at racing speed a
+ * wheel can legitimately rotate more than π radians in one fixed step, and wrapping would make it spin
+ * backward. Steering/bob still uses the normal shortest-path interpolation on Y/Z.
+ */
+function lerpVehicleRigPosRot(a: PosRot, b: PosRot, t: number): PosRot {
+  if (t <= 0) return { position: a.position, rotation: a.rotation };
+  if (t >= 1) return { position: b.position, rotation: b.rotation };
+  return {
+    position: [
+      a.position[0] + (b.position[0] - a.position[0]) * t,
+      a.position[1] + (b.position[1] - a.position[1]) * t,
+      a.position[2] + (b.position[2] - a.position[2]) * t,
+    ],
+    rotation: [
+      a.rotation[0] + (b.rotation[0] - a.rotation[0]) * t,
+      lerpAngle(a.rotation[1], b.rotation[1], t),
+      lerpAngle(a.rotation[2], b.rotation[2], t),
+    ],
+  };
+}
+
 function clampCollisionLayer(layer: number | undefined): number {
   return Math.min(Math.max(Math.trunc(layer ?? 0), 0), 15);
 }
@@ -295,6 +347,14 @@ interface TerrainEntry extends BodyEntry {
 export interface PhysicsFrameResult {
   /** Post-step world transforms for every physics body, keyed by object id. */
   transforms: Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>;
+  /**
+   * Smoothed RENDER transforms (incl. raycast-vehicle chassis), keyed by object id. The world steps on
+   * a fixed 1/60 timestep; these interpolate each moving body between its two most recent sim states by
+   * the leftover-time alpha, so the rendered mesh stays smooth at any refresh rate while `transforms`
+   * (above) stays authoritative for game logic. Only contains entries that actually differ from the
+   * authoritative transform — bodies with no prior sim state to interpolate from are omitted.
+   */
+  renderTransforms: Map<string, { position: Vector3Tuple; rotation: Vector3Tuple; scale?: Vector3Tuple }>;
   /** Solid-contact pairs that started this step (drives event.collisionEnter). */
   collisions: PhysicsContactEvent[];
   /** Sensor/trigger pairs that started this step (drives event.triggerEnter). */
@@ -523,6 +583,16 @@ class PhysicsRuntime {
   private vehicleEntries = new Map<string, VehicleEntry>();
   /** All active objects this frame, keyed by id — lets body creation resolve parent-chain world transforms. */
   private frameById = new Map<string, SceneObject>();
+  /**
+   * Fixed-timestep accumulator (seconds of game time not yet simulated). The frame banks `delta` here
+   * and drains it in whole FIXED_STEP chunks, so every world.step advances exactly 1/60s regardless of
+   * the (variable) display cadence — Rapier's integrator and the vehicle suspension are NOT
+   * timestep-invariant, and feeding them a wobbling step is what made a car at speed jitter/"snap".
+   * The leftover < FIXED_STEP drives the render interpolation alpha.
+   */
+  private simAccumulator = 0;
+  /** Per-moving-body LOCAL transform captured just before the LAST fixed step — the "from" pose for render interpolation. */
+  private simPrev = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
@@ -1103,6 +1173,7 @@ class PhysicsRuntime {
     if (delta <= 0) {
       return {
         transforms: new Map(),
+        renderTransforms: new Map(),
         collisions: [],
         triggers: [],
         triggersExit: [],
@@ -1116,9 +1187,10 @@ class PhysicsRuntime {
     // Per-frame gust factor for wind (shared by every wind-affected body this step).
     const hasWind = wind[0] !== 0 || wind[1] !== 0 || wind[2] !== 0;
     const gust = 1 + (Math.random() - 0.5) * 2 * Math.min(Math.max(windTurbulence, 0), 1);
-    // NOTE: world.timestep is set per-substep below (fixed-timestep substepping). A long frame is advanced in
-    // <=1/60 chunks instead of one giant step, so a fast body (e.g. a speeding car) can't lurch on a hitch —
-    // which previously read as a camera freeze/stutter at speed.
+    // NOTE: the world is stepped on a TRUE fixed timestep below — `dt` is banked into this.simAccumulator
+    // and drained in whole 1/60s chunks, so every world.step advances exactly 1/60s regardless of the
+    // display cadence. The leftover drives render interpolation. This is what keeps a fast body (a speeding
+    // car) smooth: a variable step made Rapier's integrator + the vehicle suspension jitter/"snap" at speed.
     // Resolve parent chains in WORLD space: bodies are simulated in world coordinates, but objects
     // store LOCAL transforms. `byId` powers world-transform composition for parented bodies; `prevById`
     // does the same for last frame's transforms so the scripted-motion delta is also world-space.
@@ -1499,15 +1571,25 @@ class PhysicsRuntime {
       this.preStepSpeed.set(id, Math.hypot(lv.x, lv.z));
     }
 
-    // Fixed-timestep substepping: advance the full frame time `dt` in chunks of at most 1/60s. Wheel forces
-    // were set once above (they persist on the controller); each substep re-runs the vehicle raycast update
-    // then steps the world. Capped at 6 substeps to avoid a spiral of death on a very long hitch.
+    // TRUE fixed-timestep: bank the frame time and drain it in WHOLE 1/60s chunks (no variable trailing
+    // substep). Every world.step now advances exactly 1/60s, so Rapier's integrator and the vehicle
+    // suspension see a constant step — the variable step was what made a car at speed jitter/"snap". The
+    // leftover (< FIXED_STEP) is carried to next frame and drives the render-interpolation alpha below.
+    // A long hitch is capped at MAX_STEPS chunks (rest of the backlog dropped) to avoid a spiral of death.
     const FIXED_STEP = 1 / 60;
-    let remaining = dt;
-    let substeps = 0;
-    do {
-      const h = Math.min(FIXED_STEP, remaining);
-      this.world.timestep = h;
+    const MAX_STEPS = 6;
+    this.simAccumulator += dt;
+    let nSteps = Math.floor(this.simAccumulator / FIXED_STEP);
+    if (nSteps > MAX_STEPS) {
+      this.simAccumulator -= (nSteps - MAX_STEPS) * FIXED_STEP; // drop the excess backlog
+      nSteps = MAX_STEPS;
+    }
+    const h = FIXED_STEP;
+    this.world.timestep = FIXED_STEP;
+    for (let step = 0; step < nSteps; step++) {
+      // Just before the FINAL step, snapshot every moving body's pre-step pose — the "from" the render
+      // transform interpolates out of (the post-step pose, read below, is the authoritative "to").
+      if (step === nSteps - 1) this.snapshotSimTransforms(objects, byId);
       for (const [vid, entry] of this.vehicleEntries) {
         const veh = byId.get(vid)?.vehicle;
         // Exclude sensors + the chassis's own collider from the wheel suspension rays (else a wheel ray can hit
@@ -1562,9 +1644,8 @@ class PhysicsRuntime {
         }
       }
       this.world.step(this.events);
-      remaining -= h;
-      substeps++;
-    } while (remaining > 1e-4 && substeps < 6);
+      this.simAccumulator -= FIXED_STEP;
+    }
 
     const collisions: PhysicsContactEvent[] = [];
     const triggers: PhysicsContactEvent[] = [];
@@ -1677,7 +1758,99 @@ class PhysicsRuntime {
       });
     }
 
-    return { transforms, collisions, triggers, triggersExit, collisionsExit, grounded: [...grounded], velocities, vehicles };
+    // Render interpolation: blend each moving body from its pre-last-step pose (this.simPrev) to its
+    // authoritative post-step pose by the leftover-time alpha. On a 0-step frame (display faster than
+    // 60Hz) simPrev is unchanged and alpha keeps climbing, so the mesh glides between the two latest sim
+    // states instead of holding still then jumping. Only bodies with a recorded prior pose are emitted;
+    // everything else renders at its authoritative transform (no entry → buffer keeps the store value).
+    const renderAlpha = Math.min(1, Math.max(0, this.simAccumulator / FIXED_STEP));
+    const renderTransforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+    if (this.simPrev.size) {
+      for (const [id, cur] of transforms) {
+        const prev = this.simPrev.get(id);
+        if (prev) renderTransforms.set(id, lerpPosRot(prev, cur, renderAlpha));
+      }
+      for (const [id, vs] of vehicles) {
+        const prev = this.simPrev.get(id);
+        if (prev) renderTransforms.set(id, lerpPosRot(prev, vs.chassis, renderAlpha));
+      }
+      const rigTransforms = new Map<string, PosRot>();
+      for (const [id, entry] of this.vehicleEntries) this.collectVehicleRigTransforms(id, entry, byId, rigTransforms);
+      for (const [id, cur] of rigTransforms) {
+        const prev = this.simPrev.get(id);
+        if (prev) renderTransforms.set(id, lerpVehicleRigPosRot(prev, cur, renderAlpha));
+      }
+    }
+
+    return { transforms, renderTransforms, collisions, triggers, triggersExit, collisionsExit, grounded: [...grounded], velocities, vehicles };
+  }
+
+  /**
+   * Capture the LOCAL transform of every render-interpolated body (dynamic non-sleeping rigid bodies +
+   * raycast-vehicle chassis) into `this.simPrev` — the "from" pose for render interpolation. Character
+   * controllers are deliberately EXCLUDED: a first-person camera reads its target straight from this
+   * buffer, and interpolation would add ~1 frame of look/aim latency for no visible gain (the kinematic
+   * controller already moves smoothly). Kinematic/fixed bodies are scripted or static and never jitter.
+   */
+  private snapshotSimTransforms(_objects: SceneObject[], byId: Map<string, SceneObject>) {
+    this.simPrev.clear();
+    for (const [id, entry] of this.entries) {
+      if (!entry.body.isDynamic() || entry.body.isSleeping()) continue;
+      const object = byId.get(id);
+      const t = entry.body.translation();
+      const q = entry.body.rotation();
+      reuseQuat.set(q.x, q.y, q.z, q.w);
+      reuseEuler.setFromQuaternion(reuseQuat, 'XYZ');
+      const position: Vector3Tuple = [t.x, t.y, t.z];
+      const rotation: Vector3Tuple = [reuseEuler.x, reuseEuler.y, reuseEuler.z];
+      this.simPrev.set(id, object?.parentId ? worldToLocalUnder(byId, object.parentId, position, rotation) : { position, rotation });
+    }
+    for (const [id, entry] of this.vehicleEntries) {
+      const object = byId.get(id);
+      const t = entry.body.translation();
+      const q = entry.body.rotation();
+      reuseQuat.set(q.x, q.y, q.z, q.w);
+      reuseEuler.setFromQuaternion(reuseQuat, 'XYZ');
+      const position: Vector3Tuple = [t.x, t.y, t.z];
+      const rotation: Vector3Tuple = [reuseEuler.x, reuseEuler.y, reuseEuler.z];
+      this.simPrev.set(id, object?.parentId ? worldToLocalUnder(byId, object.parentId, position, rotation) : { position, rotation });
+      this.collectVehicleRigTransforms(id, entry, byId, this.simPrev);
+    }
+  }
+
+  /**
+   * Build the local render poses for a raycast vehicle's visual wheel rig. The chassis is simulated in
+   * Rapier, but anchors/wheel meshes are store children driven from controller readback, so they need the
+   * same fixed-step interpolation as the chassis or the body and wheels render on different sim frames.
+   */
+  private collectVehicleRigTransforms(
+    vehicleId: string,
+    entry: VehicleEntry,
+    byId: Map<string, SceneObject>,
+    out: Map<string, PosRot>,
+  ) {
+    const vehicle = byId.get(vehicleId);
+    const restLength = vehicle?.vehicle?.suspensionRestLength ?? 0.35;
+    for (let i = 0; i < entry.wheelIds.length; i++) {
+      const wheelId = entry.wheelIds[i];
+      const wheel = byId.get(wheelId);
+      if (!wheel) continue;
+      const steer = entry.controller.wheelSteering(i) ?? 0;
+      const spin = entry.controller.wheelRotation(i) ?? 0;
+      const suspension = entry.controller.wheelSuspensionLength(i) ?? restLength;
+      const wheelCenter: Vector3Tuple = [
+        entry.connectionX[i] ?? 0,
+        (entry.connectionY[i] ?? 0) - suspension,
+        entry.connectionZ[i] ?? 0,
+      ];
+      const anchorId = wheel.parentId && wheel.parentId !== vehicleId && byId.has(wheel.parentId) ? wheel.parentId : undefined;
+      if (anchorId) {
+        out.set(anchorId, { position: wheelCenter, rotation: [0, steer, 0] });
+        out.set(wheelId, { position: wheel.transform.position, rotation: [spin, 0, 0] });
+      } else {
+        out.set(wheelId, { position: wheelCenter, rotation: [spin, steer, 0] });
+      }
+    }
   }
 
   /**

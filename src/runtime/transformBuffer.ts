@@ -29,5 +29,20 @@ export const publishTransforms = (objects: SceneObject[]) => {
 
 export const readTransform = (id: string): BufferedTransform | undefined => buffer.get(id);
 
+/**
+ * Override the render transform of specific objects AFTER publishTransforms.
+ *
+ * The physics step runs on a FIXED timestep (see physicsWorld.frame), so a body's authoritative
+ * post-step transform — which `publishTransforms` wrote from the store, and which game logic reads —
+ * advances in discrete 1/60 jumps. Rendering that raw makes a fast body (a car at speed) visibly
+ * stutter against the smoothed follow camera. The physics frame also produces an INTERPOLATED render
+ * transform per moving body (lerped between the two most recent sim states by the leftover-time alpha);
+ * this swaps those in so the MESH renders smoothly at any refresh rate while the store keeps the
+ * authoritative value for logic/Inspector/save.
+ */
+export const publishRenderTransforms = (renderTransforms: Map<string, BufferedTransform>) => {
+  for (const [id, t] of renderTransforms) buffer.set(id, t);
+};
+
 /** Cleared on Stop so a fresh Play session doesn't read stale positions. */
 export const clearTransformBuffer = () => buffer.clear();

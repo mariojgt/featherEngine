@@ -282,6 +282,21 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   const lockLook = useRef(new THREE.Vector3());
   const onboardQuat = useRef(new THREE.Quaternion());
   const onboardEuler = useRef(new THREE.Euler());
+  // Dedicated racing chase rig: separate from the character spring-arm camera so fast cars don't inherit
+  // wall-pull, velocity-heading noise, or double target smoothing.
+  const vehicleRigTargetId = useRef<string | undefined>(undefined);
+  const vehicleCameraPos = useRef(new THREE.Vector3());
+  const vehicleLookAt = useRef(new THREE.Vector3());
+  const vehicleDesiredPos = useRef(new THREE.Vector3());
+  const vehicleDesiredLook = useRef(new THREE.Vector3());
+  const vehicleForward = useRef(new THREE.Vector3());
+  const vehicleRight = useRef(new THREE.Vector3());
+  const vehicleYaw = useRef(0);
+  const vehiclePitch = useRef(0);
+  // Velocity feed-forward lead: a damped chase cam steady-state trails a moving target by ~v/stiffness,
+  // so it floats further behind the faster the car goes. We lead the desired pose by the smoothed travel
+  // velocity to cancel that trail (and absorb the ~1-step render-interp lag the body now carries).
+  const vehicleLead = useRef(new THREE.Vector3());
 
   // Normalize so a controller created before `mouseLook` existed still enables the camera.
   // In `preview` mode (editor, not playing) we deliberately ignore mouse-look so tuning the camera
@@ -347,6 +362,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const ccResolved = resolveCameraConfig(liveTarget);
     if (!camera || !liveTarget || !ccResolved) return;
     const liveTransform = readTransform(liveTarget.id) ?? liveTarget.transform;
+    const isVehicleTarget = Boolean(liveTarget.vehicle?.enabled);
     const cc = ccResolved;
     const [rawX, rawY, rawZ] = liveTransform.position;
     // Framerate-independent smoothing factor for a given responsiveness `k` (higher = snappier).
@@ -383,6 +399,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       prevCamKey.current = camKey;
       lookBack = Boolean(state.runtimeKeys['KeyV']);
       if (vehicleView.current !== 0) {
+        vehicleRigTargetId.current = undefined;
         // Rigid onboard mount: car-local offset rotated by the FULL chassis orientation (roll + pitch come
         // through — that's what makes hood/cockpit feel bolted on), no smoothing, no spring arm.
         const v = liveTarget.vehicle;
@@ -441,6 +458,90 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       return;
     }
 
+    if (isVehicleTarget) {
+      const rvv = preview ? undefined : state.runtimeVelocities[liveTarget.id];
+      const vehicleSpeed = rvv ? Math.hypot(rvv[0], rvv[2]) : 0;
+      const speed01 = Math.min(1, vehicleSpeed / Math.max(0.001, cc.moveSpeed));
+      // Smoothed HORIZONTAL travel velocity for the feed-forward lead below (raw velocity chatters with
+      // the tires; vertical motion shouldn't lift the camera lead). Reset on rig init so a fresh follow
+      // doesn't inherit a stale lead.
+      if (rvv) smoothedVelocity.current.lerp(rawTarget.current.set(rvv[0], 0, rvv[2]), smooth(6));
+      else smoothedVelocity.current.lerp(ZERO, smooth(6));
+
+      const mouseMoved = Math.abs(mouseLook.dx - lastMouseDx.current) > 0.5 || Math.abs(mouseLook.dy - lastMouseDy.current) > 0.5;
+      lastMouseDx.current = mouseLook.dx;
+      lastMouseDy.current = mouseLook.dy;
+      mouseIdle.current = mouseMoved ? 0 : mouseIdle.current + delta;
+      if (cc.mouseLook && useMouse && !lookBack && mouseIdle.current > 0.55) {
+        // Recenter the orbit relative to the car instead of steering an absolute world yaw from velocity.
+        // That keeps a straight-line run locked behind the chassis even if the tires have tiny lateral slip.
+        mouseLook.dx = THREE.MathUtils.damp(mouseLook.dx, 0, 1.7, Math.min(delta, 0.1));
+      }
+
+      const orbitYaw = cc.mouseLook && useMouse ? lookYaw(cc.mouseSensitivity) : 0;
+      const targetYaw = liveTransform.rotation[1] + orbitYaw + (lookBack ? Math.PI : 0);
+      const targetPitch = cc.mouseLook && useMouse
+        ? lookPitch(cc.cameraPitch, cc.mouseSensitivity, cc.cameraMinPitch, cc.cameraMaxPitch)
+        : cc.cameraPitch;
+      const initRig = vehicleRigTargetId.current !== liveTarget.id || preview;
+      if (initRig) {
+        vehicleYaw.current = targetYaw;
+        vehiclePitch.current = targetPitch;
+        vehicleRigTargetId.current = liveTarget.id;
+        smoothedVelocity.current.set(0, 0, 0);
+      } else {
+        const yawDelta = Math.atan2(Math.sin(targetYaw - vehicleYaw.current), Math.cos(targetYaw - vehicleYaw.current));
+        vehicleYaw.current += yawDelta * smooth(10);
+        vehiclePitch.current = THREE.MathUtils.damp(vehiclePitch.current, targetPitch, 10, Math.min(delta, 0.1));
+      }
+
+      zoom.current = THREE.MathUtils.damp(zoom.current, zoomTarget.current, 12, Math.min(delta, 0.1));
+      const side = cc.cameraOffset[0] * zoom.current;
+      const up = cc.cameraOffset[1] + speed01 * 0.2;
+      const back = cc.cameraOffset[2] * zoom.current * (1 + speed01 * 0.06);
+      const pitchLift = Math.sin(vehiclePitch.current) * Math.hypot(side, back);
+      const horizontalScale = Math.cos(vehiclePitch.current);
+      vehicleForward.current.set(Math.sin(vehicleYaw.current), 0, Math.cos(vehicleYaw.current));
+      vehicleRight.current.set(Math.cos(vehicleYaw.current), 0, -Math.sin(vehicleYaw.current));
+      vehicleDesiredPos.current
+        .set(rawX, rawY + up + pitchLift, rawZ)
+        .addScaledVector(vehicleRight.current, side * horizontalScale)
+        .addScaledVector(vehicleForward.current, back * horizontalScale);
+      vehicleDesiredLook.current
+        .set(rawX, rawY + up * 0.42, rawZ)
+        .addScaledVector(vehicleForward.current, 1.6 + speed01 * 3.2);
+
+      // Feed-forward: shift the WHOLE rig (cam + look point) forward by ~v/stiffness so the damped follow
+      // settles at its intended offset instead of trailing. Same vector on both keeps the framing identical
+      // — it just stops the camera floating behind at speed. 1/18 matches the position damper's rate.
+      vehicleLead.current.copy(smoothedVelocity.current).multiplyScalar(1 / 18);
+      vehicleDesiredPos.current.add(vehicleLead.current);
+      vehicleDesiredLook.current.add(vehicleLead.current);
+
+      if (initRig) {
+        vehicleCameraPos.current.copy(vehicleDesiredPos.current);
+        vehicleLookAt.current.copy(vehicleDesiredLook.current);
+      } else {
+        vehicleCameraPos.current.x = THREE.MathUtils.damp(vehicleCameraPos.current.x, vehicleDesiredPos.current.x, 18, Math.min(delta, 0.1));
+        vehicleCameraPos.current.y = THREE.MathUtils.damp(vehicleCameraPos.current.y, vehicleDesiredPos.current.y, 14, Math.min(delta, 0.1));
+        vehicleCameraPos.current.z = THREE.MathUtils.damp(vehicleCameraPos.current.z, vehicleDesiredPos.current.z, 18, Math.min(delta, 0.1));
+        vehicleLookAt.current.x = THREE.MathUtils.damp(vehicleLookAt.current.x, vehicleDesiredLook.current.x, 22, Math.min(delta, 0.1));
+        vehicleLookAt.current.y = THREE.MathUtils.damp(vehicleLookAt.current.y, vehicleDesiredLook.current.y, 16, Math.min(delta, 0.1));
+        vehicleLookAt.current.z = THREE.MathUtils.damp(vehicleLookAt.current.z, vehicleDesiredLook.current.z, 22, Math.min(delta, 0.1));
+      }
+
+      camera.position.copy(vehicleCameraPos.current);
+      camera.lookAt(vehicleLookAt.current);
+      speedFovBlend.current = THREE.MathUtils.damp(speedFovBlend.current, speed01, 3, Math.min(delta, 0.1));
+      const vehicleFov = 50 + speedFovBlend.current * 8;
+      if (Math.abs(camera.fov - vehicleFov) > 0.05) {
+        camera.fov = vehicleFov;
+        camera.updateProjectionMatrix();
+      }
+      applyShake();
+      return;
+    }
+
     rawTarget.current.set(rawX, rawY, rawZ);
     if (smoothedTargetId.current !== liveTarget.id || preview) {
       smoothedTarget.current.copy(rawTarget.current);
@@ -448,8 +549,8 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       smoothedTargetId.current = liveTarget.id;
       springArmDistance.current = undefined;
     } else {
-      const horizontalT = smooth(liveTarget.vehicle?.enabled ? 24 : 18);
-      const verticalT = smooth(liveTarget.vehicle?.enabled ? 18 : 6);
+      const horizontalT = smooth(18);
+      const verticalT = smooth(6);
       smoothedTarget.current.x = THREE.MathUtils.lerp(smoothedTarget.current.x, rawTarget.current.x, horizontalT);
       smoothedTarget.current.y = THREE.MathUtils.lerp(smoothedTarget.current.y, rawTarget.current.y, verticalT);
       smoothedTarget.current.z = THREE.MathUtils.lerp(smoothedTarget.current.z, rawTarget.current.z, horizontalT);
@@ -472,8 +573,8 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const rv = preview ? undefined : state.runtimeVelocities[liveTarget.id];
     if (rv) {
       rawTarget.current.set(rv[0], 0, rv[2]).clampLength(0, cc.moveSpeed * cc.sprintMultiplier);
-      smoothedVelocity.current.lerp(rawTarget.current, smooth(liveTarget.vehicle?.enabled ? 10 : 8));
-      const lead = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(liveTarget.vehicle?.enabled ? 0.14 : 0.08);
+      smoothedVelocity.current.lerp(rawTarget.current, smooth(8));
+      const lead = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(0.08);
       lookAhead.current.lerp(lead, smooth(4));
     } else {
       smoothedVelocity.current.lerp(ZERO, smooth(8));
@@ -528,13 +629,10 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     const side = THREE.MathUtils.lerp(baseSide, baseSide + 0.7 * shoulderBlend.current, ads); // shift to the shoulder
     const back = THREE.MathUtils.lerp(baseBack, baseBack * 0.5, ads); // pull in
 
-    // Velocity feed-forward: an exponential follow lags a moving target by ~speed/k, which reads as the
-    // character constantly sliding toward the front of frame — the "camera always trailing" feel. Add that
-    // predicted lag back into the target (off the ALREADY-SMOOTHED velocity, so it never snaps) so the camera
-    // lands ON the moving character and keeps its resting framing while walking/sprinting. (followK also
-    // sets the follow stiffness below — raised from 12 so the catch-up is a touch snappier, not rubber-bandy.)
+    // Character follow stiffness. The vehicle chase rig above owns its own racing-specific feed-forward;
+    // character framing stays conservative so strafing, lock-on, and wall pull-ins remain predictable.
     const followK = 16;
-    const feedFwd = rawTarget.current.copy(smoothedVelocity.current).multiplyScalar(liveTarget.vehicle?.enabled ? 1 / followK : 0);
+    const feedFwd = ZERO;
 
     // Horizontal radius + base azimuth from the offset, then add mouse yaw; pitch raises/pulls in.
     // A held look-back (V, vehicles) mirrors the azimuth — the camera swings to the nose looking back.
@@ -611,9 +709,7 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     }
     lookTarget.current.add(lockLook.current);
     camera.lookAt(lookTarget.current);
-    // Vehicle speed-feel: ramp the FOV out toward +10° as the car approaches its top speed (cc.moveSpeed is
-    // the vehicle's maxSpeed). Characters never trip this (speedFovTarget stays 0), so their FOV is unchanged.
-    const speedFovTarget = liveTarget.vehicle?.enabled ? Math.min(1, speed / Math.max(0.001, cc.moveSpeed)) : 0;
+    const speedFovTarget = 0;
     speedFovBlend.current = THREE.MathUtils.lerp(speedFovBlend.current, speedFovTarget, smooth(3));
     const tpFov = THREE.MathUtils.lerp(50, 40, ads) + sprintBlend.current * 7 + speedFovBlend.current * 10;
     if (Math.abs(camera.fov - tpFov) > 0.05) {

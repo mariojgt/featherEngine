@@ -5,7 +5,7 @@ import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { effectiveSelection, selectActiveObjects, useEditorStore } from '../store/editorStore';
-import { structuralObjectsSignature } from '../store/stableSelectors';
+import { isTransientVfx, nonVfxObjectsSignature, useVfxObjects } from '../store/stableSelectors';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
 import { recordRender, recordRenderTime } from '../runtime/perfStats';
@@ -148,8 +148,10 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   const renderer = object.renderer;
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.
-  const interactFocusId = useEditorStore((state) => state.runtimeInteractFocusId);
-  const focusGlow = interactFocusId === object.id;
+  // Subscribe to the DERIVED boolean, not the raw focus id: when focus moves between objects the id
+  // changes for every Primitive's selector, but the boolean only flips for the two objects whose
+  // highlight actually toggles — so the rest don't re-render (this component renders once per object).
+  const focusGlow = useEditorStore((state) => state.runtimeInteractFocusId === object.id);
   // Combat hit-flash: a brief white-hot emissive blink when this object takes damage. `runtimeDamageEvents`
   // already carries per-object damage each tick; subscribing to just THIS object's entry keeps the re-render
   // local to the struck object (the value is undefined on no-damage frames, so quiet frames never re-render).
@@ -610,6 +612,39 @@ function renderObjectTree(objects: SceneObject[], opts: TreeRenderOpts): ReactNo
   return roots.map(renderNode);
 }
 
+// Transient VFX are never selectable or gizmo-targeted, so they don't register their group node.
+// These no-ops are module-level (stable references) so SceneObjectView's memo comparator doesn't
+// re-render every VFX whenever the editor's selection changes.
+const NOOP_REGISTER = () => {};
+const NOOP_GIZMO = () => false;
+
+/**
+ * Renders the scene's transient runtime VFX — impact sparks, muzzle flashes, dust, splashes, floating
+ * damage numbers and projectiles — as a flat list on its OWN store subscription (`useVfxObjects`).
+ *
+ * This is the render-layer half of the VFX split. The data model is unchanged: tickRuntime still emits
+ * one objects array. But by rendering VFX here instead of inside the authored-object tree, their
+ * constant spawn/despawn (and per-frame projectile life-ticks) reconcile only this short list, leaving
+ * the ~hundreds of authored objects untouched. Each VFX still renders through the exact same
+ * SceneObjectView → Primitive path, so visuals and motion (via the transform buffer) are identical.
+ */
+function VfxLayer() {
+  const vfx = useVfxObjects();
+  return (
+    <>
+      {vfx.map((object) => (
+        <SceneObjectView
+          key={object.id}
+          object={object}
+          selected={false}
+          registerObject={NOOP_REGISTER}
+          isGizmoEngaged={NOOP_GIZMO}
+        />
+      ))}
+    </>
+  );
+}
+
 /** A draggable handle for placing a character's follow-camera offset, with a line back to the pawn. */
 /**
  * A live wireframe frustum showing where the selected character's follow camera sits and looks,
@@ -744,8 +779,17 @@ function SceneContent({
   // Shared token-based structural signature (see stableSelectors): same decoupling as the bespoke
   // field-string signature this used before, but the per-tick selector cost is integer compares
   // instead of building a multi-KB string from ~30 fields × every object on every frame.
-  const sceneSignature = useEditorStore(structuralObjectsSignature);
-  const allSceneObjects = useMemo(() => selectActiveObjects(useEditorStore.getState()), [sceneSignature]);
+  // Subscribe to the AUTHORED-object signature only: transient VFX (impacts, muzzle flashes, dust,
+  // damage numbers, projectiles) are excluded here and rendered by <VfxLayer/> below on their own
+  // subscription. So a burst spawning mid-combat — or a projectile ticking its life every frame — no
+  // longer re-renders this whole component (and re-reconciles the entire authored scene); it only
+  // touches the small VFX list. The authored geometry is what's expensive to reconcile, and now it
+  // re-renders only on real structural edits (spawn/destroy/reparent/component change).
+  const sceneSignature = useEditorStore(nonVfxObjectsSignature);
+  const allSceneObjects = useMemo(
+    () => selectActiveObjects(useEditorStore.getState()).filter((object) => !isTransientVfx(object)),
+    [sceneSignature],
+  );
   const sceneEnvironment = useEditorStore((state) => state.scenes.find((scene) => scene.id === state.activeSceneId)?.environment);
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
@@ -1004,6 +1048,10 @@ function SceneContent({
           registerObject,
           isGizmoEngaged,
         })}
+        {/* Transient runtime VFX (impacts/muzzle/dust/splash/damage numbers/projectiles) render here on
+            their OWN store subscription, so their constant spawn/despawn churn never re-reconciles the
+            authored objects above. Same components/visuals — just an isolated React list. */}
+        <VfxLayer />
       </group>
       </InstancedIdsContext.Provider>
       {/* World-space UI widgets anchored to objects (edit + play). Use the UNFILTERED list so signs on

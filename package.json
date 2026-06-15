@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build:player": "node scripts/build-player.mjs",
     "build:player:fast": "node scripts/build-player.mjs --skip-typecheck",
     "export:web": "node scripts/export-production.mjs",
@@ -63,10 +65,12 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "jsdom": "^25.0.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.3",
     "vite": "^6.0.3",
+    "vitest": "^2.1.9",
     "ws": "^8.21.0"
   }
 }

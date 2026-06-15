@@ -112,6 +112,75 @@ export function useStableActiveObjects(): SceneObject[] {
   return useMemo(() => selectActiveObjects(useEditorStore.getState()), [sig]);
 }
 
+/**
+ * A runtime-spawned transient effect (impact spark, muzzle flash, dust puff, splash, floating damage
+ * number) or a flying projectile. These spawn and despawn constantly during combat/driving and a
+ * projectile mutates its `projectile.life` every tick — so each one is a structural change. Folded into
+ * the single scene-objects array, they made the whole authored scene re-reconcile on every spawn (and
+ * every frame a projectile flew). Splitting them out lets the viewport render authored geometry and
+ * VFX as two independent React lists, so VFX churn only touches the small VFX list.
+ */
+export const isTransientVfx = (object: SceneObject): boolean => Boolean(object.effect || object.projectile);
+
+let prevNonVfxTokens: number[] = [];
+let prevNonVfxSig = '';
+/**
+ * Structural signature of the AUTHORED objects only (transient VFX excluded). Stays the same string
+ * instance while effects spawn/despawn and projectiles fly, so a consumer subscribed to it does NOT
+ * re-render on VFX activity — the core of the render-layer split.
+ */
+export const nonVfxObjectsSignature = (state: EditorState): string => {
+  const objects = selectActiveObjects(state);
+  const playing = state.isPlaying;
+  const tokens: number[] = [];
+  for (let i = 0; i < objects.length; i += 1) {
+    if (isTransientVfx(objects[i])) continue;
+    tokens.push(objectStructuralToken(objects[i], playing));
+  }
+  let changed = tokens.length !== prevNonVfxTokens.length;
+  if (!changed) for (let i = 0; i < tokens.length; i += 1) if (tokens[i] !== prevNonVfxTokens[i]) { changed = true; break; }
+  if (changed) {
+    prevNonVfxTokens = tokens;
+    prevNonVfxSig = tokens.join(',');
+  }
+  return prevNonVfxSig;
+};
+
+let prevVfxTokens: number[] = [];
+let prevVfxSig = '';
+/** Structural signature of the transient VFX objects only — changes when an effect spawns/despawns or
+ *  a projectile's per-tick `life` mutates its token; unaffected by authored-scene changes. */
+export const vfxObjectsSignature = (state: EditorState): string => {
+  const objects = selectActiveObjects(state);
+  const playing = state.isPlaying;
+  const tokens: number[] = [];
+  for (let i = 0; i < objects.length; i += 1) {
+    if (!isTransientVfx(objects[i])) continue;
+    tokens.push(objectStructuralToken(objects[i], playing));
+  }
+  let changed = tokens.length !== prevVfxTokens.length;
+  if (!changed) for (let i = 0; i < tokens.length; i += 1) if (tokens[i] !== prevVfxTokens[i]) { changed = true; break; }
+  if (changed) {
+    prevVfxTokens = tokens;
+    prevVfxSig = tokens.join(',');
+  }
+  return prevVfxSig;
+};
+
+/** The authored scene objects (transient VFX excluded), stable across Play ticks AND across VFX spawns. */
+export function useStableNonVfxObjects(): SceneObject[] {
+  const sig = useEditorStore(nonVfxObjectsSignature);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => selectActiveObjects(useEditorStore.getState()).filter((object) => !isTransientVfx(object)), [sig]);
+}
+
+/** Just the transient VFX objects — re-derives only when an effect/projectile is added, removed, or ticks. */
+export function useVfxObjects(): SceneObject[] {
+  const sig = useEditorStore(vfxObjectsSignature);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => selectActiveObjects(useEditorStore.getState()).filter(isTransientVfx), [sig]);
+}
+
 let throttledSig = '';
 let throttledSigBlockedUntil = 0;
 

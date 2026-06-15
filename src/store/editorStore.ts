@@ -99,7 +99,7 @@ import { addSkidMark } from '../runtime/skidMarks';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
 import { addVehicleDent, clearVehicleDents, clearVehicleDentsFor } from '../runtime/vehicleDamageBus';
-import { publishTransforms, clearTransformBuffer } from '../runtime/transformBuffer';
+import { publishTransforms, publishRenderTransforms, clearTransformBuffer, type BufferedTransform } from '../runtime/transformBuffer';
 import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSight } from '../runtime/aiPerception';
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
 import { applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
@@ -1052,6 +1052,16 @@ const cloneObjectTree = (
  * to know when to despawn. Cleared when Play starts.
  */
 const effectLife = new Map<string, number>();
+
+/**
+ * Per-Play-session dedup of script runtime errors. A blueprint node that throws during a tick (null
+ * ref, bad cast, etc.) would otherwise re-throw 60×/s and flood the runtime console; we report each
+ * unique `objectId:message` once per session and swallow the rest. The set is cleared whenever Play
+ * toggles (see setPlaying), so a fixed script reports fresh on the next run. The throw itself is
+ * caught at the per-object dispatch in tickRuntime so one bad script can't kill the whole frame loop.
+ */
+const reportedScriptErrors = new Set<string>();
+const resetReportedScriptErrors = () => reportedScriptErrors.clear();
 
 /**
  * Pooled entries for tickRuntime's start-of-tick transform snapshot (`prevTransforms`). The Map handed
@@ -5342,6 +5352,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (isPlaying === state.isPlaying) return state;
       // Play runs the game scene, not a prefab being edited — block it while the prefab editor is open.
       if (isPlaying && state.editingPrefabId) return state;
+      // Fresh run = fresh error reporting: a script fixed since the last run should report again.
+      resetReportedScriptErrors();
       if (isPlaying) {
         const objects = selectActiveObjects(state);
         const autoplay = state.scenes.find((scene) => scene.id === state.activeSceneId)?.cinematics?.find((cinematic) => cinematic.autoplay);
@@ -7783,26 +7795,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return true;
           }
 
-          runtime.eventRoots
-            .filter((node) => eventRootFires(node, object.id))
-            .forEach((node) => executeFrom(node.id, new Set()));
+          // Per-object script error isolation: a throwing blueprint node (null ref, bad cast, divide
+          // error in user logic) must not take down the whole frame loop and freeze Play. We catch it
+          // here, report it once per session to the runtime console (see reportedScriptErrors), and let
+          // every other object keep ticking. Partial transform writes made before the throw still commit
+          // via the `changed` return below — same as a node chain that simply stops early.
+          try {
+            runtime.eventRoots
+              .filter((node) => eventRootFires(node, object.id))
+              .forEach((node) => executeFrom(node.id, new Set()));
 
-          // Resume latent Delay nodes whose timer elapsed this frame: fire each delay node's exec-out
-          // (the continuation that was held back when the Delay was first reached).
-          const elapsedHere = elapsedDelaysByObject.get(object.id);
-          if (elapsedHere) {
-            for (const delayNodeId of elapsedHere) {
-              (runtime.outgoing.get(delayNodeId) ?? []).forEach((targetId) => executeFrom(targetId, new Set()));
+            // Resume latent Delay nodes whose timer elapsed this frame: fire each delay node's exec-out
+            // (the continuation that was held back when the Delay was first reached).
+            const elapsedHere = elapsedDelaysByObject.get(object.id);
+            if (elapsedHere) {
+              for (const delayNodeId of elapsedHere) {
+                (runtime.outgoing.get(delayNodeId) ?? []).forEach((targetId) => executeFrom(targetId, new Set()));
+              }
             }
-          }
 
-          // Resume Tween Property "Done" pins for tweens that finished this frame (exec-done handle).
-          const tweensDoneHere = elapsedTweensByObject.get(object.id);
-          if (tweensDoneHere) {
-            for (const tweenNodeId of tweensDoneHere) {
-              (runtime.outgoingByHandle.get(tweenNodeId)?.get('exec-done') ?? []).forEach((targetId) =>
-                executeFrom(targetId, new Set()),
-              );
+            // Resume Tween Property "Done" pins for tweens that finished this frame (exec-done handle).
+            const tweensDoneHere = elapsedTweensByObject.get(object.id);
+            if (tweensDoneHere) {
+              for (const tweenNodeId of tweensDoneHere) {
+                (runtime.outgoingByHandle.get(tweenNodeId)?.get('exec-done') ?? []).forEach((targetId) =>
+                  executeFrom(targetId, new Set()),
+                );
+              }
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const key = `${object.id}:${message}`;
+            if (!reportedScriptErrors.has(key)) {
+              reportedScriptErrors.add(key);
+              prints.push(`⚠️ Script error in "${object.name}": ${message}`);
+              if (typeof console !== 'undefined') {
+                console.error(`[NodeForge] Script error in "${object.name}" (${object.id}):`, error);
+              }
             }
           }
 
@@ -9180,6 +9209,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let triggersExit: PhysicsContactEvent[] = [];
       let collisionsExit: PhysicsContactEvent[] = [];
       let groundedIds: string[] = [];
+      // Smoothed render transforms from the fixed-timestep physics step (interpolated between the two
+      // most recent sim states). Applied to the render buffer AFTER publishTransforms so the mesh glides
+      // while the store keeps the authoritative pose. Null when physics didn't run this frame.
+      let physicsRenderTransforms: Map<string, BufferedTransform> | null = null;
       let resolvedObjects = movedObjects;
       // Fracture chunks carry a one-shot outward kick; apply it the frame their body first exists, then clear it.
       const kickedChunkIds = new Set<string>();
@@ -9327,6 +9360,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           sceneEnv?.windTurbulence ?? 0,
           vehicleInputs,
         );
+        if (result.renderTransforms.size) {
+          // The buffer's BufferedTransform needs a scale; physics never changes scale, so reuse each
+          // object's authored scale and only swap in the smoothed position/rotation.
+          const renderMap = new Map<string, BufferedTransform>();
+          for (const o of movedObjects) {
+            const rt = result.renderTransforms.get(o.id);
+            if (rt) renderMap.set(o.id, { position: rt.position, rotation: rt.rotation, scale: o.transform.scale });
+          }
+          physicsRenderTransforms = renderMap;
+        }
         collisions = result.collisions;
         triggers = result.triggers;
         triggersExit = result.triggersExit;
@@ -10430,6 +10473,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // them imperatively in useFrame, so moving objects don't reconcile their React subtree each
       // frame (see transformBuffer.ts). The store copy above still drives Inspector/gizmo/save.
       publishTransforms(allObjects);
+      // Then swap in the fixed-step physics bodies' SMOOTHED render poses (cars, props, characters) so
+      // they don't stutter against the interpolated follow camera. Store/Inspector keep the authoritative
+      // transform written above; only the high-frequency render path reads these.
+      if (physicsRenderTransforms) publishRenderTransforms(physicsRenderTransforms);
 
       // --- Animator pass: feed object state into parameters, then run the state machine. ---
       // Runs after physics so "speed"/"verticalSpeed" reflect the object's final motion this frame.
