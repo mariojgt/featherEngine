@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { type UITemplateKind, type UIThemeKind } from '../store/editor/ui';
 import { undo as undoHistory, redo as redoHistory } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
 import type {
@@ -2803,15 +2804,32 @@ const rawEngineTools = {
 
   create_ui_template: tool({
     description:
-      'Create a polished screen UI template in one call. Use for beautiful HUDs, main menus, dialogue boxes, inventory panels, and quick UI mockups.',
+      'Create a polished screen UI in one call. Generic mockups: "hud", "mainMenu", "dialogue", "inventory". Ready-made GAME HUDs/menus (assemble corner-anchored, data-bound widgets AND auto-create the project variables they bind to, so they show live data immediately): "shooterHud" (health bar + ammo + score + crosshair), "platformerHud" (lives + score + coins), "racingHud" (speed + lap + position), "pauseMenu" (Resume/Restart/Quit buttons firing resumeGame/restartGame/quitGame events, hidden on start), "gameOver" (score + Retry firing restartGame, hidden on start). Prefer the game kinds when the user names a genre HUD; tweak afterward with the other ui tools / set_ui_render_mode.',
     inputSchema: z.object({
-      template: z.enum(['hud', 'mainMenu', 'dialogue', 'inventory']).optional().describe('Defaults to hud.'),
+      template: z
+        .enum(['hud', 'mainMenu', 'dialogue', 'inventory', 'shooterHud', 'platformerHud', 'racingHud', 'pauseMenu', 'gameOver'])
+        .optional()
+        .describe('Defaults to hud.'),
       name: z.string().optional(),
       title: z.string().optional(),
       themeColor: z.string().optional().describe('Primary accent hex color. Defaults to #3DDC97.'),
       folderId: z.string().optional(),
     }),
     execute: async ({ template = 'hud', name, title, themeColor, folderId }) => {
+      // Ready-made game HUDs/menus route to the shared editor factory (same as the UI panel's
+      // template gallery), which also provisions their bound variables.
+      const gameTemplate: Partial<Record<string, UITemplateKind>> = {
+        shooterHud: 'shooter',
+        platformerHud: 'platformer',
+        racingHud: 'racing',
+        pauseMenu: 'pauseMenu',
+        gameOver: 'gameOver',
+      };
+      const gameKind = gameTemplate[template];
+      if (gameKind) {
+        const id = store().createUIFromTemplate(gameKind, folderId);
+        return `Created the ${template} (UI document ${id}) with its bound variables auto-created. Refine it in the UI panel or with set_ui_render_mode.`;
+      }
       const accent = themeColor ?? '#3DDC97';
       const documentId = store().createUIDocument(name ?? `${title ?? template} UI`, 'screen', folderId);
       const doc = findUIDocument(documentId);
@@ -3299,6 +3317,21 @@ const rawEngineTools = {
     execute: async ({ level }) => {
       store().updateRenderSettings({ quality: level });
       return `Set game quality to ${level}.`;
+    },
+  }),
+
+  apply_ui_theme: tool({
+    description:
+      'Restyle an ENTIRE UI document with a one-click visual theme (skin) — colours, borders, glow and fonts only; layout/size/position/anchors are preserved. Themes: "sciFi" (neon cyan glow + mono type), "minimal" (clean glass, soft edges), "arcade" (bold, chunky, high-contrast). Great right after create_ui_template to set the look.',
+    inputSchema: z.object({
+      documentId: z.string(),
+      theme: z.enum(['sciFi', 'minimal', 'arcade']),
+    }),
+    execute: async ({ documentId, theme }) => {
+      const doc = findUIDocument(documentId);
+      if (!doc) return `No UI document with id ${documentId}.`;
+      store().applyUITheme(documentId, theme as UIThemeKind);
+      return `Applied the ${theme} theme to "${doc.name}".`;
     },
   }),
 

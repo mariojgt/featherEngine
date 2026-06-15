@@ -313,6 +313,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Created ${String(input.template ?? 'HUD')} UI`;
     case 'set_ui_render_mode':
       return input.renderMode === 'webgl' ? 'UI → WebGL renderer' : 'UI → DOM renderer';
+    case 'apply_ui_theme':
+      return `Applied ${String(input.theme ?? 'UI')} theme`;
     case 'add_ui_element':
       return `Added ${String(input.kind ?? 'UI')} element`;
     case 'add_ui_preset':

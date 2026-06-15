@@ -4,7 +4,9 @@ import {
   Boxes,
   Camera,
   Check,
+  ChevronDown,
   Circle,
+  Command,
   Copy,
   FolderOpen,
   Gamepad2,
@@ -127,6 +129,49 @@ function AddMenu() {
   );
 }
 
+function ExportMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const exportGame = useProjectStore((state) => state.exportGame);
+  const exportProduction = useProjectStore((state) => state.exportProduction);
+  const busy = useProjectStore((state) => state.busy);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const run = (fn: () => void) => () => {
+    setOpen(false);
+    void fn();
+  };
+
+  return (
+    <div className="file-menu" ref={ref}>
+      <button className="export-button" disabled={busy} title="Export your game" onClick={() => setOpen((value) => !value)}>
+        <Package size={16} aria-hidden />
+        <span>Export</span>
+        <ChevronDown size={13} aria-hidden />
+      </button>
+      {open && (
+        <div className="file-menu-popover add-popover export-popover">
+          <button onClick={run(exportGame)}>
+            <Package size={15} aria-hidden />
+            <span>Game bundle (game.json)</span>
+          </button>
+          <button onClick={run(exportProduction)}>
+            <Rocket size={15} aria-hidden />
+            <span>Production — web + native app</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -178,6 +223,7 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
             </>
           )}
           <hr />
+          <button onClick={run(() => window.dispatchEvent(new CustomEvent('nf:open-command-palette')))}>Command palette (⌘K)</button>
           <button onClick={run(resetWorkspaceLayout)}>Reset layout</button>
           <button onClick={run(() => window.dispatchEvent(new CustomEvent('nf:open-shortcuts')))}>Keyboard shortcuts (?)</button>
           <button onClick={run(onOpenPrefs)}>Preferences…</button>
@@ -326,8 +372,6 @@ export function Toolbar() {
   const isDirty = useEditorStore((state) => state.isDirty);
   const projectName = useProjectStore((state) => state.projectName);
   const save = useProjectStore((state) => state.save);
-  const exportGame = useProjectStore((state) => state.exportGame);
-  const exportProduction = useProjectStore((state) => state.exportProduction);
   const busy = useProjectStore((state) => state.busy);
   const [prefsOpen, setPrefsOpen] = useState(false);
 
@@ -356,6 +400,14 @@ export function Toolbar() {
       <FileMenu />
       <ViewMenu onOpenPrefs={() => setPrefsOpen(true)} />
       <AddMenu />
+      <button
+        className="cmdk-launch"
+        title="Command palette — run any command (⌘K)"
+        onClick={() => window.dispatchEvent(new CustomEvent('nf:open-command-palette'))}
+      >
+        <Command size={13} aria-hidden />
+        <span>K</span>
+      </button>
       <SceneSwitcher />
 
       <div className="tool-group" aria-label="History">
@@ -440,24 +492,7 @@ export function Toolbar() {
           <Save size={16} aria-hidden />
           <span>Save</span>
         </button>
-        <button
-          className="export-button"
-          title="Export standalone game bundle (game.json)"
-          onClick={() => void exportGame()}
-          disabled={busy}
-        >
-          <Package size={16} aria-hidden />
-          <span>Export</span>
-        </button>
-        <button
-          className="export-button"
-          title="Export to Production — stage the game for a portable web build and a native Windows/Mac/Linux app"
-          onClick={() => void exportProduction()}
-          disabled={busy}
-        >
-          <Rocket size={16} aria-hidden />
-          <span>Production</span>
-        </button>
+        <ExportMenu />
       </div>
 
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />

@@ -17,6 +17,7 @@ import { resetFrameClock, smoothFrameDelta } from './runtime/frameClock';
 import { resetGamepadInput, sampleGamepads } from './runtime/gamepadInput';
 import { PerfOverlay } from './components/PerfOverlay';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
+import { CommandPalette } from './components/CommandPalette';
 import { initHistory } from './store/history';
 import { initAutosave } from './store/autosave';
 
@@ -162,6 +163,7 @@ export default function App() {
       <PrefabThumbnailHost />
       <PerfOverlay />
       <ShortcutsOverlay />
+      <CommandPalette />
     </div>
   );
 }

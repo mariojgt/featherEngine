@@ -1,26 +1,41 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box as PanelIcon,
+  Car,
   ChevronDown,
   ChevronUp,
   Copy,
+  Crosshair,
   Gauge,
   Hash,
   Image as ImageIcon,
   LayoutDashboard,
+  MonitorPlay,
   MousePointerClick,
+  Pause,
+  PersonStanding,
   Plus,
   RectangleHorizontal,
   ScrollText,
+  Skull,
   Trash2,
   Type as TextIcon,
   Workflow,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
+import { UI_TEMPLATES, UI_THEMES, type UITemplateKind } from '../store/editor/ui';
 import { UIEditLayer } from '../ui/UIEditLayer';
 import { UILogicGraph } from './UILogicGraph';
 import type { UIBinding, UIDocument, UIElement, UIElementKind, UIPresetKind } from '../types';
+
+const TEMPLATE_ICON: Record<UITemplateKind, typeof PanelIcon> = {
+  shooter: Crosshair,
+  platformer: PersonStanding,
+  racing: Car,
+  pauseMenu: Pause,
+  gameOver: Skull,
+};
 
 type Mode = 'design' | 'logic';
 
@@ -416,8 +431,62 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
   );
 }
 
+/** Header "+" dropdown: start a blank doc or drop in a complete HUD/menu template. */
+function UINewMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const createUIDocument = useEditorStore((state) => state.createUIDocument);
+  const createUIFromTemplate = useEditorStore((state) => state.createUIFromTemplate);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const pick = (fn: () => void) => () => {
+    setOpen(false);
+    fn();
+  };
+
+  return (
+    <div className="file-menu" ref={ref}>
+      <button className="icon-button compact" title="New UI — blank or from a template" onClick={() => setOpen((value) => !value)}>
+        <Plus size={15} aria-hidden />
+      </button>
+      {open && (
+        <div className="file-menu-popover add-popover ui-new-popover">
+          <button onClick={pick(() => createUIDocument(undefined, 'screen'))}>
+            <LayoutDashboard size={15} aria-hidden />
+            <span>Blank Screen HUD</span>
+          </button>
+          <button onClick={pick(() => createUIDocument(undefined, 'world'))}>
+            <MonitorPlay size={15} aria-hidden />
+            <span>Blank World UI</span>
+          </button>
+          <hr />
+          <div className="file-menu-section">Templates</div>
+          {UI_TEMPLATES.map((template) => {
+            const Icon = TEMPLATE_ICON[template.kind];
+            return (
+              <button key={template.kind} title={template.blurb} onClick={pick(() => createUIFromTemplate(template.kind))}>
+                <Icon size={15} aria-hidden />
+                <span>{template.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function UIEditorPanel() {
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
+  const createUIFromTemplate = useEditorStore((state) => state.createUIFromTemplate);
+  const applyUITheme = useEditorStore((state) => state.applyUITheme);
   const activeUIDocumentId = useEditorStore((state) => state.activeUIDocumentId);
   const setActiveUIDocument = useEditorStore((state) => state.setActiveUIDocument);
   const createUIDocument = useEditorStore((state) => state.createUIDocument);
@@ -446,9 +515,7 @@ export function UIEditorPanel() {
             ))}
           </select>
         )}
-        <button className="icon-button compact" title="Create screen UI" onClick={() => createUIDocument(undefined, 'screen')}>
-          <Plus size={15} aria-hidden />
-        </button>
+        <UINewMenu />
       </div>
 
       {doc && (
@@ -462,8 +529,29 @@ export function UIEditorPanel() {
         <div className="empty-state wide">
           <LayoutDashboard size={18} aria-hidden />
           <span>No UI yet</span>
-          <button className="full-button" onClick={() => createUIDocument(undefined, 'screen')}>Create Screen HUD</button>
-          <button className="full-button" onClick={() => createUIDocument(undefined, 'world')}>Create World UI</button>
+          <small>Start blank, or drop in a ready-made HUD you can tweak.</small>
+          <div className="ui-template-grid">
+            <button className="ui-template-card" onClick={() => createUIDocument(undefined, 'screen')}>
+              <LayoutDashboard size={18} aria-hidden />
+              <strong>Blank Screen HUD</strong>
+              <small>Empty full-screen overlay</small>
+            </button>
+            <button className="ui-template-card" onClick={() => createUIDocument(undefined, 'world')}>
+              <MonitorPlay size={18} aria-hidden />
+              <strong>Blank World UI</strong>
+              <small>Floats over a 3D object</small>
+            </button>
+            {UI_TEMPLATES.map((template) => {
+              const Icon = TEMPLATE_ICON[template.kind];
+              return (
+                <button key={template.kind} className="ui-template-card" onClick={() => createUIFromTemplate(template.kind)}>
+                  <Icon size={18} aria-hidden />
+                  <strong>{template.label}</strong>
+                  <small>{template.blurb}</small>
+                </button>
+              );
+            })}
+          </div>
         </div>
       ) : mode === 'logic' ? (
         <UILogicGraph doc={doc} />
@@ -490,6 +578,17 @@ export function UIEditorPanel() {
                   <span>{label}</span>
                 </button>
               ))}
+            </div>
+
+            <div className="ui-surface">
+              <span className="ui-surface-label">Theme</span>
+              <div className="ui-theme-row">
+                {UI_THEMES.map((theme) => (
+                  <button key={theme.kind} title={theme.blurb} onClick={() => applyUITheme(doc.id, theme.kind)}>
+                    {theme.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="ui-section">

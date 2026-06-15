@@ -17,6 +17,7 @@ const GROUPS: Group[] = [
   {
     title: 'General',
     items: [
+      { keys: [MOD, 'K'], label: 'Command palette' },
       { keys: [MOD, 'S'], label: 'Save project' },
       { keys: [MOD, 'Z'], label: 'Undo' },
       { keys: [MOD, '⇧', 'Z'], label: 'Redo' },

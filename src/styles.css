@@ -580,6 +580,128 @@ button {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
+/* Labeled transform-tool segmented (Move/Rotate/Scale, with the shortcut key on the active tool). */
+.segmented.labeled button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: 28px;
+  padding: 0 9px;
+}
+
+.segmented.labeled button span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.segmented.labeled kbd {
+  display: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.segmented.labeled button.active kbd {
+  display: inline-grid;
+}
+
+/* Quality popover trigger — sits in the topbar like a single segmented control. */
+.viewport-tool-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(8, 10, 15, 0.46);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--motion) var(--ease);
+}
+
+.viewport-tool-trigger:hover,
+.viewport-tool-trigger.active {
+  border-color: var(--border-strong);
+}
+
+.viewport-tool-trigger > svg:first-child {
+  color: var(--muted);
+}
+
+.quality-popover {
+  right: 0;
+  left: auto;
+  min-width: 160px;
+}
+
+.quality-popover button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.quality-auto {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Floating Play/Stop control on the viewport canvas (so it's right where you're looking). */
+.viewport-play {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 18px;
+  transform: translateX(-50%);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 26%, rgba(8, 10, 15, 0.72));
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  transition:
+    transform var(--motion) var(--ease),
+    background var(--motion) var(--ease),
+    border-color var(--motion) var(--ease);
+}
+
+.viewport-play:hover {
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.viewport-play.active {
+  border-color: rgba(255, 107, 107, 0.6);
+  background: color-mix(in srgb, var(--danger) 30%, rgba(8, 10, 15, 0.72));
+}
+
+/* Toolbar Export dropdown popover hangs off the right edge. */
+.export-popover {
+  right: 0;
+  left: auto;
+}
+
 .segmented .snap-step {
   height: 28px;
   margin-left: 2px;
@@ -1377,6 +1499,59 @@ button {
 .empty-state small strong {
   color: var(--text);
   font-weight: 600;
+}
+
+/* Game-UI template gallery (empty state) + the header "+ New" template menu. */
+.ui-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.ui-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-light);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease);
+}
+
+.ui-template-card svg {
+  color: var(--accent);
+  margin-bottom: 3px;
+}
+
+.ui-template-card strong {
+  font-size: 12.5px;
+}
+
+.ui-template-card small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ui-template-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The UI panel's new-menu popover hangs off the right edge of the header. */
+.ui-new-popover {
+  right: 0;
+  left: auto;
 }
 
 .scripting-body {
@@ -4961,6 +5136,33 @@ button {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
+/* One-click visual theme (skin) picker. */
+.ui-theme-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.ui-theme-row button {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease);
+}
+
+.ui-theme-row button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
 /* Sections (Layers / element properties / document) */
 .ui-section {
   display: flex;
@@ -6677,6 +6879,147 @@ button {
 .shortcut-sep {
   color: var(--muted);
   font-size: 11px;
+}
+
+/* Toolbar launcher chip for the command palette. */
+.cmdk-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-light);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--motion) var(--ease), color var(--motion) var(--ease);
+}
+
+.cmdk-launch:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ---------- Command palette (⌘K) ---------- */
+.cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgba(2, 4, 8, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+.cmdk-card {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 92vw);
+  max-height: 60vh;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.cmdk-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.cmdk-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.cmdk-input kbd {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+}
+
+.cmdk-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.cmdk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cmdk-row.active {
+  background: var(--accent-soft);
+}
+
+.cmdk-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmdk-row-group {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cmdk-row-enter {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.cmdk-empty {
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.cmdk-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cmdk-footer-hint {
+  margin-left: auto;
 }
 
 /* Build Report dialog (pre-export audit) — shares the prefs modal frame. */

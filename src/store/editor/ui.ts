@@ -1,4 +1,4 @@
-import type { UIDocument, UIComponent, UIElement, UIElementKind, UIPresetKind, UISurface } from '../../types';
+import type { UIAnchor, UIDocument, UIComponent, UIElement, UIElementKind, UIPresetKind, UIStyle, UISurface } from '../../types';
 
 import { makeId } from './ids';
 
@@ -152,4 +152,155 @@ export const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElem
       return panel;
     }
   }
+};
+
+// --- Full HUD / menu templates --------------------------------------------
+// One click drops in a complete, good-looking, data-bound screen — instead of assembling widgets
+// element by element. Each returns a whole document plus the project variables it binds to (created
+// by the store if missing) so it works out of the box.
+export type UITemplateKind = 'shooter' | 'platformer' | 'racing' | 'pauseMenu' | 'gameOver';
+
+export const UI_TEMPLATES: Array<{ kind: UITemplateKind; label: string; blurb: string }> = [
+  { kind: 'shooter', label: 'Shooter HUD', blurb: 'Health · ammo · score · crosshair' },
+  { kind: 'platformer', label: 'Platformer HUD', blurb: 'Lives · score · coins' },
+  { kind: 'racing', label: 'Racing HUD', blurb: 'Speed · lap · position' },
+  { kind: 'pauseMenu', label: 'Pause Menu', blurb: 'Resume · Restart · Quit' },
+  { kind: 'gameOver', label: 'Game Over', blurb: 'Score readout · Retry' },
+];
+
+export type UITemplateVar = { name: string; defaultValue: number };
+export type UITemplateResult = { doc: UIDocument; vars: UITemplateVar[] };
+
+const anchor = (el: UIElement, h: UIAnchor['h'], v: UIAnchor['v'], offsetX = 24, offsetY = 22): UIElement => {
+  el.anchor = { h, v, offsetX, offsetY };
+  return el;
+};
+
+const text = (name: string, content: string, style: UIElement['style'], expression?: string): UIElement => {
+  const el = makeUIElement('text', name);
+  el.text = content;
+  el.style = style;
+  if (expression) el.bindings = [{ target: 'text', expression }];
+  return el;
+};
+
+const menuButton = (label: string, event: string): UIElement => {
+  const button = makeUIElement('button', label);
+  button.text = label;
+  button.onClickEvent = event;
+  button.style = { padding: '12px 18px', background: '#5B8CFF', color: '#fff', borderRadius: '10px', fontWeight: '700', fontSize: '15px', textAlign: 'center' };
+  return button;
+};
+
+/** Build a complete UI document from a template, plus the variables it expects to exist. */
+export const makeUITemplate = (kind: UITemplateKind): UITemplateResult => {
+  switch (kind) {
+    case 'shooter': {
+      const doc = makeUIDocument('Shooter HUD', 'screen');
+      doc.root.style = {};
+      const health = makeUIElement('panel', 'Health');
+      health.style = { display: 'flex', flexDirection: 'column', gap: '4px', width: '220px' };
+      const hLabel = text('Label', 'HEALTH', { color: '#fff', fontSize: '11px', fontWeight: '700', custom: { letterSpacing: '0.08em' } });
+      const hBar = makeUIElement('bar', 'Bar');
+      hBar.style = { width: '220px', height: '18px', background: 'rgba(0,0,0,0.45)', borderRadius: '9px' };
+      hBar.bindings = [{ target: 'fill', expression: 'health / 100' }];
+      health.children = [hLabel, hBar];
+      const ammo = text('Ammo', '30', { color: '#fff', fontSize: '34px', fontWeight: '800' }, 'ammo');
+      const score = text('Score', 'Score: 0', { color: '#fff', fontSize: '18px', fontWeight: '700' }, "'Score: ' + score");
+      const crosshair = makeUIElement('panel', 'Crosshair');
+      crosshair.style = { width: '8px', height: '8px', background: 'rgba(255,255,255,0.85)', borderRadius: '50%' };
+      doc.root.children = [anchor(health, 'left', 'bottom'), anchor(ammo, 'right', 'bottom', 30, 20), anchor(score, 'right', 'top'), anchor(crosshair, 'center', 'middle', 0, 0)];
+      return { doc, vars: [{ name: 'health', defaultValue: 100 }, { name: 'ammo', defaultValue: 30 }, { name: 'score', defaultValue: 0 }] };
+    }
+    case 'platformer': {
+      const doc = makeUIDocument('Platformer HUD', 'screen');
+      doc.root.style = {};
+      const lives = text('Lives', 'Lives: 3', { color: '#fff', fontSize: '18px', fontWeight: '700' }, "'Lives: ' + lives");
+      const score = text('Score', 'Score: 0', { color: '#fff', fontSize: '20px', fontWeight: '800' }, "'Score: ' + score");
+      const coins = text('Coins', 'Coins: 0', { color: '#ffd34d', fontSize: '18px', fontWeight: '700' }, "'Coins: ' + coins");
+      doc.root.children = [anchor(lives, 'left', 'top'), anchor(score, 'center', 'top'), anchor(coins, 'right', 'top')];
+      return { doc, vars: [{ name: 'lives', defaultValue: 3 }, { name: 'score', defaultValue: 0 }, { name: 'coins', defaultValue: 0 }] };
+    }
+    case 'racing': {
+      const doc = makeUIDocument('Racing HUD', 'screen');
+      doc.root.style = {};
+      const speed = text('Speed', '0 km/h', { color: '#fff', fontSize: '36px', fontWeight: '900' }, "speed + ' km/h'");
+      const lap = text('Lap', 'Lap 1', { color: '#fff', fontSize: '18px', fontWeight: '700' }, "'Lap ' + lap");
+      const position = text('Position', 'P1', { color: '#fff', fontSize: '22px', fontWeight: '800' }, "'P' + position");
+      doc.root.children = [anchor(speed, 'right', 'bottom', 30, 24), anchor(lap, 'left', 'top'), anchor(position, 'right', 'top')];
+      return { doc, vars: [{ name: 'speed', defaultValue: 0 }, { name: 'lap', defaultValue: 1 }, { name: 'position', defaultValue: 1 }] };
+    }
+    case 'pauseMenu': {
+      const doc = makeUIDocument('Pause Menu', 'screen');
+      doc.visibleOnStart = false;
+      doc.root.style = { background: 'rgba(5,7,11,0.6)' };
+      const menu = makeUIElement('panel', 'Menu');
+      menu.style = { display: 'flex', flexDirection: 'column', gap: '12px', padding: '28px 32px', background: 'rgba(17,20,28,0.96)', borderRadius: '16px', custom: { minWidth: '260px' } };
+      const title = text('Title', 'Paused', { color: '#fff', fontSize: '26px', fontWeight: '800', textAlign: 'center' });
+      menu.children = [title, menuButton('Resume', 'resumeGame'), menuButton('Restart', 'restartGame'), menuButton('Quit', 'quitGame')];
+      doc.root.children = [anchor(menu, 'center', 'middle', 0, 0)];
+      return { doc, vars: [] };
+    }
+    case 'gameOver':
+    default: {
+      const doc = makeUIDocument('Game Over', 'screen');
+      doc.visibleOnStart = false;
+      doc.root.style = { background: 'rgba(5,7,11,0.72)' };
+      const card = makeUIElement('panel', 'Card');
+      card.style = { display: 'flex', flexDirection: 'column', gap: '14px', padding: '30px 36px', background: 'rgba(17,20,28,0.96)', borderRadius: '16px', alignItems: 'center', custom: { minWidth: '280px' } };
+      const title = text('Title', 'Game Over', { color: '#ff6b6b', fontSize: '30px', fontWeight: '900' });
+      const score = text('Score', 'Score: 0', { color: '#fff', fontSize: '18px' }, "'Score: ' + score");
+      card.children = [title, score, menuButton('Retry', 'restartGame')];
+      doc.root.children = [anchor(card, 'center', 'middle', 0, 0)];
+      return { doc, vars: [{ name: 'score', defaultValue: 0 }] };
+    }
+  }
+};
+
+// --- One-click visual themes (skins) --------------------------------------
+// Restyle a whole UI document's LOOK (colours, borders, glow, fonts) in one click while preserving
+// LAYOUT (size/position/anchor/flex/padding/fontSize). Pairs with the HUD templates: template = shape
+// + data, theme = style. Patches are merged per element KIND so any tree restyles consistently.
+export type UIThemeKind = 'sciFi' | 'minimal' | 'arcade';
+
+export const UI_THEMES: Array<{ kind: UIThemeKind; label: string; blurb: string }> = [
+  { kind: 'sciFi', label: 'Sci-Fi', blurb: 'Neon cyan glow, mono type' },
+  { kind: 'minimal', label: 'Minimal', blurb: 'Clean glass, soft edges' },
+  { kind: 'arcade', label: 'Arcade', blurb: 'Bold, chunky, high-contrast' },
+];
+
+/** Visual-only style patch for an element kind under a theme (merged over its existing style). */
+export const uiThemeStyleFor = (theme: UIThemeKind, kind: UIElementKind): Partial<UIStyle> => {
+  const themes: Record<UIThemeKind, Partial<Record<UIElementKind | 'default', Partial<UIStyle>>>> = {
+    sciFi: {
+      panel: { background: 'rgba(10,20,30,0.72)', border: '1px solid rgba(90,220,255,0.35)', borderRadius: '6px', custom: { boxShadow: '0 0 18px rgba(90,220,255,0.18)', backdropFilter: 'blur(6px)' } },
+      scroll: { background: 'rgba(10,20,30,0.72)', border: '1px solid rgba(90,220,255,0.35)', borderRadius: '6px' },
+      text: { color: '#dff7ff', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', custom: { textShadow: '0 0 8px rgba(90,220,255,0.45)' } },
+      button: { background: 'rgba(90,220,255,0.16)', color: '#dff7ff', border: '1px solid rgba(90,220,255,0.55)', borderRadius: '6px' },
+      bar: { background: 'rgba(5,12,20,0.75)', border: '1px solid rgba(90,220,255,0.4)', borderRadius: '6px' },
+    },
+    minimal: {
+      panel: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', custom: { boxShadow: 'none', backdropFilter: 'blur(10px)' } },
+      scroll: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' },
+      text: { color: '#f3f4f6', fontFamily: 'Inter, system-ui, sans-serif', custom: { textShadow: 'none' } },
+      button: { background: 'rgba(255,255,255,0.12)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '10px' },
+      bar: { background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: '999px' },
+    },
+    arcade: {
+      panel: { background: '#1b0f2e', border: '3px solid #ff3d8b', borderRadius: '14px', custom: { boxShadow: '0 6px 0 rgba(0,0,0,0.4)', backdropFilter: 'none' } },
+      scroll: { background: '#1b0f2e', border: '3px solid #ff3d8b', borderRadius: '14px' },
+      text: { color: '#ffe14d', fontWeight: '800', custom: { textShadow: '2px 2px 0 rgba(0,0,0,0.5)' } },
+      button: { background: '#ff8a3d', color: '#1b0f2e', border: '3px solid #ffe14d', borderRadius: '10px', fontWeight: '800' },
+      bar: { background: '#2a1840', border: '2px solid #ffe14d', borderRadius: '8px' },
+    },
+  };
+  return themes[theme][kind] ?? themes[theme].default ?? {};
+};
+
+/** Merge a theme's style over an element's existing style (custom keys merged, layout preserved). */
+export const applyUIThemeToElement = (element: UIElement, theme: UIThemeKind): UIElement => {
+  const patch = uiThemeStyleFor(theme, element.kind);
+  const merged: UIStyle = { ...element.style, ...patch };
+  if (patch.custom) merged.custom = { ...element.style.custom, ...patch.custom };
+  return { ...element, style: merged, children: element.children.map((child) => applyUIThemeToElement(child, theme)) };
 };

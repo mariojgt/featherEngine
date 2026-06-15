@@ -156,9 +156,13 @@ import {
   findUIParent,
   makeUIDocument,
   makeUIPreset,
+  makeUITemplate,
+  applyUIThemeToElement,
   mapUIElement,
   removeUIElementFromTree,
   uiVariableRef,
+  type UITemplateKind,
+  type UIThemeKind,
 } from './editor/ui';
 import {
   cloneGraphValue,
@@ -863,6 +867,10 @@ interface EditorState {
   setObjectParticleSystem: (objectId: string, systemId?: string) => void;
   // --- Game UI documents (HUD + world-space widgets). AI-friendly: explicit params, return ids. ---
   createUIDocument: (name?: string, surface?: UISurface, folderId?: string) => string;
+  /** Create a complete ready-made HUD/menu from a template, auto-provisioning the variables it binds to. Returns the new document id. */
+  createUIFromTemplate: (template: UITemplateKind, folderId?: string) => string;
+  /** Restyle a whole UI document with a visual theme (sci-fi/minimal/arcade) — colours/borders/glow only, layout preserved. */
+  applyUITheme: (docId: string, theme: UIThemeKind) => void;
   renameUIDocument: (id: string, name: string) => void;
   updateUIDocument: (id: string, patch: Partial<Pick<UIDocument, 'name' | 'surface' | 'css' | 'visibleOnStart' | 'logicBlueprintId' | 'renderMode'>>) => void;
   deleteUIDocument: (id: string) => void;
@@ -4778,6 +4786,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }));
     return doc.id;
   },
+  createUIFromTemplate: (template, folderId) => {
+    const { doc, vars } = makeUITemplate(template);
+    if (folderId) doc.folderId = folderId;
+    set((state) => {
+      // Auto-provision (only) the variables this template binds to but the project doesn't have yet,
+      // so the HUD shows live data immediately instead of zeros that look broken.
+      const existing = new Set(state.variables.map((variable) => variable.name));
+      const created = vars
+        .filter((variable) => !existing.has(variable.name))
+        .map((variable) => ({
+          id: makeId('var'),
+          name: variable.name,
+          type: 'number' as const,
+          defaultValue: variable.defaultValue,
+          persistent: true,
+          createdAt: Date.now(),
+        }));
+      return {
+        uiDocuments: [...state.uiDocuments, doc],
+        activeUIDocumentId: doc.id,
+        selectedUIElementId: doc.root.id,
+        variables: [...state.variables, ...created],
+        isDirty: true,
+      };
+    });
+    return doc.id;
+  },
+  applyUITheme: (docId, theme) =>
+    set((state) => ({
+      uiDocuments: state.uiDocuments.map((doc) =>
+        doc.id === docId ? { ...doc, root: applyUIThemeToElement(doc.root, theme) } : doc,
+      ),
+      isDirty: true,
+    })),
   renameUIDocument: (id, name) =>
     set((state) => ({
       uiDocuments: state.uiDocuments.map((doc) => (doc.id === id ? { ...doc, name } : doc)),

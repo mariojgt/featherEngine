@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, PerformanceMonitor, TransformControls } from '@react-three/drei';
-import { Camera, Globe, Gauge, Magnet, Move3D, Rotate3D, Scaling, View } from 'lucide-react';
+import { Camera, ChevronDown, Globe, Gauge, Magnet, Move3D, Pause, Play, Rotate3D, Scaling, View } from 'lucide-react';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -1331,6 +1331,56 @@ function DropController({ contextRef }: { contextRef: MutableRefObject<DropConte
 
 const SNAP_STEPS = [0.25, 0.5, 1, 2];
 
+/** Quality preset + Auto toggle, tucked into a popover so the topbar shows only frequent controls. */
+function QualityControl() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const quality = useEditorStore((state) => state.renderSettings.quality) ?? 'High';
+  const autoQuality = useEditorStore((state) => state.renderSettings.autoQuality !== false);
+  const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, []);
+
+  return (
+    <div className="file-menu" ref={ref}>
+      <button
+        className={open ? 'viewport-tool-trigger active' : 'viewport-tool-trigger'}
+        title="Game quality (scalability) — resolution, shadows, post-FX"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Gauge size={15} aria-hidden />
+        <span>{quality}</span>
+        <ChevronDown size={12} aria-hidden />
+      </button>
+      {open && (
+        <div className="file-menu-popover quality-popover">
+          <div className="file-menu-section">Game quality</div>
+          {QUALITY_LEVELS.map((level) => (
+            <button
+              key={level}
+              className={quality === level ? 'active' : undefined}
+              onClick={() => updateRenderSettings({ quality: level })}
+            >
+              {level}
+            </button>
+          ))}
+          <hr />
+          <label className="quality-auto">
+            <input type="checkbox" checked={autoQuality} onChange={(event) => updateRenderSettings({ autoQuality: event.target.checked })} />
+            <span>Auto — drop under load while playing</span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ViewportPanel() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   // Snap + coordinate space persist across reloads (browser-only viewport prefs).
@@ -1350,6 +1400,7 @@ export function ViewportPanel() {
   const [dpr, setDpr] = useState(1.5);
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
+  const setPlaying = useEditorStore((state) => state.setPlaying);
   // Adaptive quality only degrades DURING Play — give the user back their authored preset on Stop.
   useEffect(() => {
     if (!isPlaying) resetAutoQuality();
@@ -1652,17 +1703,22 @@ export function ViewportPanel() {
             {isPlaying ? 'Preview Running' : 'Edit Mode'}
           </span>
         )}
-        <div className="segmented" aria-label="Transform mode">
-          {modes.map(({ mode, label, icon: Icon }) => (
-            <button
-              key={mode}
-              className={transformMode === mode ? 'active' : undefined}
-              title={`${label} (${mode === 'translate' ? 'W' : mode === 'rotate' ? 'E' : 'R'})`}
-              onClick={() => setTransformMode(mode)}
-            >
-              <Icon size={15} aria-hidden />
-            </button>
-          ))}
+        <div className="segmented labeled" aria-label="Transform mode">
+          {modes.map(({ mode, label, icon: Icon }) => {
+            const key = mode === 'translate' ? 'W' : mode === 'rotate' ? 'E' : 'R';
+            return (
+              <button
+                key={mode}
+                className={transformMode === mode ? 'active' : undefined}
+                title={`${label} tool (${key})`}
+                onClick={() => setTransformMode(mode)}
+              >
+                <Icon size={15} aria-hidden />
+                <span>{label}</span>
+                <kbd>{key}</kbd>
+              </button>
+            );
+          })}
         </div>
         <div className="segmented" aria-label="Camera preview">
           <button
@@ -1713,30 +1769,18 @@ export function ViewportPanel() {
             ))}
           </select>
         </div>
-        <div className="segmented" aria-label="Game quality">
-          <Gauge size={15} aria-hidden style={{ marginLeft: 6, opacity: 0.8 }} />
-          <select
-            className="snap-step"
-            value={quality ?? 'High'}
-            title="Game quality (scalability) — resolution, shadows, and post-FX. Lower = faster."
-            onChange={(event) => updateRenderSettings({ quality: event.target.value as (typeof QUALITY_LEVELS)[number] })}
-          >
-            {QUALITY_LEVELS.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
-          <button
-            className={`snap-step ${autoQuality ? 'active' : ''}`}
-            title="Auto quality: while playing, sustained low framerate steps the preset down (and back up) — never above your chosen preset. Restored on Stop."
-            style={{ opacity: autoQuality ? 1 : 0.55 }}
-            onClick={() => updateRenderSettings({ autoQuality: !autoQuality })}
-          >
-            Auto
-          </button>
-        </div>
+        <QualityControl />
       </div>
+      {!editingPrefabId && (
+        <button
+          className={isPlaying ? 'viewport-play active' : 'viewport-play'}
+          title={isPlaying ? 'Stop preview — back to Edit Mode' : 'Play preview'}
+          onClick={() => setPlaying(!isPlaying)}
+        >
+          {isPlaying ? <Pause size={15} aria-hidden /> : <Play size={15} aria-hidden />}
+          <span>{isPlaying ? 'Stop' : 'Play'}</span>
+        </button>
+      )}
       <div
         ref={dropZoneRef}
         className="scene-drop-zone"
