@@ -15,6 +15,7 @@ import type { AssetItem } from '../types';
 import { useEditorStore } from './editorStore';
 import { setSaveNamespace } from './editor/objectFactory';
 import { clearHistory } from './history';
+import { clearRecovery, type RecoverySnapshot } from './autosave';
 
 /** Caller-supplied package metadata; the rest (id, createdAt, engineVersion) is filled in. */
 export type PackageMetaInput = Partial<Omit<PackageMeta, 'engineVersion' | 'createdAt'>>;
@@ -96,6 +97,8 @@ interface ProjectState {
   importPackageFromFile: () => Promise<void>;
   useDemo: () => void;
   closeProject: () => void;
+  /** Load an autosaved recovery snapshot back into the editor (from the Launcher's restore prompt). */
+  restoreRecovery: (snapshot: RecoverySnapshot) => void;
   clearError: () => void;
 }
 
@@ -237,6 +240,7 @@ export const useProjectStore = create<ProjectState>()(
             if (!opened) return;
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
+            clearRecovery(); // starting fresh discards any prior session's unsaved recovery
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
           } catch (error) {
@@ -254,6 +258,7 @@ export const useProjectStore = create<ProjectState>()(
             if (!opened) return;
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
+            clearRecovery(); // opening a project discards any prior session's unsaved recovery
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
           } catch (error) {
@@ -271,6 +276,7 @@ export const useProjectStore = create<ProjectState>()(
             if (!opened) return;
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
+            clearRecovery(); // opening a project discards any prior session's unsaved recovery
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
             addRecent(opened.dir, opened.name);
           } catch (error) {
@@ -456,9 +462,25 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         // Continue with the built-in starter scene without a saved project (Save acts as Save As).
-        useDemo: () => set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)' }),
+        useDemo: () => {
+          clearRecovery();
+          set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)' });
+        },
 
-        closeProject: () => set({ hasProject: false, projectDir: null, projectName: 'Untitled Project' }),
+        restoreRecovery: (snapshot) => {
+          useEditorStore.getState().loadProject(snapshot.project);
+          clearHistory();
+          // The restored state is exactly the unsaved work, so flag it dirty (and clear the snapshot
+          // now that it's live) — the user still needs to Save it to disk/download.
+          useEditorStore.setState({ isDirty: true });
+          clearRecovery();
+          set({ hasProject: true, projectDir: snapshot.dir, projectName: snapshot.name });
+        },
+
+        closeProject: () => {
+          clearRecovery();
+          set({ hasProject: false, projectDir: null, projectName: 'Untitled Project' });
+        },
         clearError: () => set({ error: null }),
       };
     },

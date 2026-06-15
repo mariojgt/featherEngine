@@ -25,6 +25,39 @@
   --warning: #f7b955;
   --danger: #ff6b6b;
   --shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+  /* Soft + strong accent washes derived from the (user-tunable) --accent, so every
+     control tints consistently no matter which accent the user picks. */
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-strong: color-mix(in srgb, var(--accent) 88%, white 12%);
+  /* Unified radius + motion scale — one place to dial the whole UI's roundness/feel. */
+  --radius-sm: 7px;
+  --radius: 9px;
+  --radius-lg: 14px;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --motion: 150ms;
+  --ring: 0 0 0 2px var(--background), 0 0 0 4px var(--accent);
+}
+
+/* One consistent, accessible focus ring for everything keyboard-reachable. Mouse
+   clicks stay clean (:focus-visible only), so this is pure polish + a11y — no layout cost. */
+:where(button, input, select, textarea, [tabindex], a):focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
+}
+
+/* Respect the OS "reduce motion" setting: collapse the hover-lifts, caret spins, and
+   transitions/animations introduced across the editor to near-instant. (Targeted
+   cinematic decorative animations keep their own prefers-reduced-motion rules too.) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Midnight: same vibe as the default dark but deeper blacks for OLED + focus. */
@@ -102,6 +135,52 @@
 
 :root[data-theme="light"] .viewport-panel {
   background: #e9ecf3;
+}
+
+/* Inputs/fields hardcode a dark fill for the dark themes; in light theme that reads as black
+   blocks. Repaint them white (matching the icon-button light override) — light theme only. */
+:root[data-theme="light"] .node-field input,
+:root[data-theme="light"] .node-field select,
+:root[data-theme="light"] .field-row input,
+:root[data-theme="light"] .field-row select,
+:root[data-theme="light"] .name-input,
+:root[data-theme="light"] .search-field,
+:root[data-theme="light"] .launcher-new,
+:root[data-theme="light"] .axis-input,
+:root[data-theme="light"] .key-capture,
+:root[data-theme="light"] .tree-rename,
+:root[data-theme="light"] .vec-inline input,
+:root[data-theme="light"] .table-cell-editor select,
+:root[data-theme="light"] .blueprint-select,
+:root[data-theme="light"] .node-vector-field label,
+:root[data-theme="light"] .layer-mask-field label,
+:root[data-theme="light"] .library-check,
+:root[data-theme="light"] .ui-bind-head select,
+:root[data-theme="light"] .ui-bind-expr,
+:root[data-theme="light"] .ui-bind-newvar,
+:root[data-theme="light"] .seq-search {
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 17, 23, 0.04) inset;
+}
+
+/* Light-theme: nested UI-chrome surfaces (chips, pills, list buttons, modal headers, cards on
+   normal panels) — flip from the dark wash to a faint grey so they read as subtle raised
+   surfaces. Intentionally-dark areas (node graphs, 3D thumbnails, console, code) are left dark. */
+:root[data-theme="light"] .segmented,
+:root[data-theme="light"] .project-pill,
+:root[data-theme="light"] .socket-item,
+:root[data-theme="light"] .ai-settings,
+:root[data-theme="light"] .launcher-recent button,
+:root[data-theme="light"] .terrain-layer-list button,
+:root[data-theme="light"] .terrain-brush-toggle,
+:root[data-theme="light"] .ui-add-menu button,
+:root[data-theme="light"] .ui-seg,
+:root[data-theme="light"] .cinematic-action-card,
+:root[data-theme="light"] .preset-chip-grid button,
+:root[data-theme="light"] .asset-remove,
+:root[data-theme="light"] .prefs-header,
+:root[data-theme="light"] .report-footer {
+  background: #f4f6fb;
 }
 
 /* Density: compact tightens the chrome around the toolbar + panel headers + popovers.
@@ -186,7 +265,7 @@ button {
   width: 100%;
   height: 100%;
   background:
-    linear-gradient(135deg, rgba(91, 140, 255, 0.08), transparent 36%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 36%),
     linear-gradient(225deg, rgba(61, 220, 151, 0.06), transparent 34%),
     var(--background);
 }
@@ -220,10 +299,10 @@ button {
   width: 34px;
   height: 34px;
   padding: 8px;
-  border: 1px solid rgba(91, 140, 255, 0.28);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: 8px;
   color: var(--primary);
-  background: rgba(91, 140, 255, 0.12);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .brand div {
@@ -261,14 +340,15 @@ button {
 .segmented button,
 .node-palette button {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(29, 34, 48, 0.78);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset;
   transition:
-    transform 160ms ease,
-    border-color 160ms ease,
-    background 160ms ease,
-    color 160ms ease;
+    transform var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    box-shadow var(--motion) var(--ease),
+    background var(--motion) var(--ease),
+    color var(--motion) var(--ease);
 }
 
 .icon-button {
@@ -323,8 +403,8 @@ button {
 }
 
 .export-button {
-  border-color: rgba(91, 140, 255, 0.35);
-  background: linear-gradient(135deg, rgba(91, 140, 255, 0.24), rgba(91, 140, 255, 0.1));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, transparent), color-mix(in srgb, var(--accent) 10%, transparent));
 }
 
 .selection-pill {
@@ -497,7 +577,7 @@ button {
 
 .segmented button.active {
   color: var(--primary);
-  background: rgba(91, 140, 255, 0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .segmented .snap-step {
@@ -547,7 +627,7 @@ button {
   z-index: 6;
   pointer-events: none;
   border: 1px solid var(--primary);
-  background: rgba(91, 140, 255, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-radius: 2px;
 }
 
@@ -587,7 +667,7 @@ button {
   justify-content: center;
   width: 52px;
   height: 52px;
-  border: 1px solid rgba(91, 140, 255, 0.5);
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
   background: rgba(20, 26, 40, 0.82);
   color: var(--muted);
   font-size: 9px;
@@ -598,7 +678,7 @@ button {
 }
 
 .view-cube-face:hover {
-  background: rgba(91, 140, 255, 0.45);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
   color: #fff;
 }
 
@@ -621,7 +701,7 @@ button {
 .view-cube-presets button:hover {
   color: #fff;
   border-color: var(--primary);
-  background: rgba(91, 140, 255, 0.3);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .viewport-fallback {
@@ -633,7 +713,7 @@ button {
   background:
     linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    radial-gradient(circle at 50% 38%, rgba(91, 140, 255, 0.16), transparent 34%),
+    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 34%),
     #0d1018;
   background-size: 42px 42px, 42px 42px, auto, auto;
 }
@@ -669,7 +749,7 @@ button {
 
 .fallback-stage button:hover {
   transform: translateY(-2px);
-  border-color: rgba(91, 140, 255, 0.42);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   color: var(--text);
 }
 
@@ -765,11 +845,11 @@ button {
 .hierarchy-row:hover,
 .hierarchy-row.selected {
   color: var(--text);
-  background: rgba(91, 140, 255, 0.12);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .hierarchy-row.selected {
-  border-color: rgba(91, 140, 255, 0.34);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 /* Expand/collapse twisty for rows that have nested children. */
@@ -915,6 +995,32 @@ button {
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
+}
+
+.inspector-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.inspector-section-caret {
+  color: var(--muted);
+  transition: transform var(--motion, 150ms) var(--ease, ease);
+  flex: 0 0 auto;
+}
+
+.inspector-section:not(.collapsed) .inspector-section-caret {
+  transform: rotate(90deg);
+}
+
+.inspector-section.collapsed {
+  padding-bottom: 10px;
+}
+
+.inspector-section-head:hover {
+  color: var(--accent);
 }
 
 .title-section {
@@ -1114,6 +1220,21 @@ button {
   background: transparent;
 }
 
+/* Hierarchy name filter. */
+.hierarchy-search {
+  margin: 4px 10px 6px;
+  height: 32px;
+}
+
+/* Node-palette quick-filter: sticky at the top of the scrolling palette. */
+.palette-search {
+  position: sticky;
+  top: -10px;
+  z-index: 2;
+  margin: 4px 0 10px;
+  backdrop-filter: blur(8px);
+}
+
 .asset-panel.dragging {
   border-color: rgba(61, 220, 151, 0.45);
   box-shadow: 0 0 0 1px rgba(61, 220, 151, 0.2), var(--shadow);
@@ -1217,12 +1338,45 @@ button {
 .empty-state.wide {
   grid-column: 1 / -1;
   align-content: center;
+  width: 100%;
+  margin: auto;
+  padding: 36px 24px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.empty-state.wide svg {
+  color: var(--accent);
+  opacity: 0.7;
 }
 
 .empty-state.compact {
   height: auto;
   min-height: 92px;
   border-bottom: 1px solid var(--border);
+}
+
+.empty-state svg {
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.empty-state > span {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.empty-state small {
+  max-width: 260px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.empty-state small strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .scripting-body {
@@ -1368,7 +1522,7 @@ button {
   padding: 10px 9px 12px;
   border-right: 1px solid var(--border);
   background:
-    linear-gradient(180deg, rgba(91, 140, 255, 0.06), transparent 220px),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 220px),
     rgba(8, 10, 15, 0.34);
 }
 
@@ -1378,10 +1532,10 @@ button {
   gap: 7px;
   min-width: 0;
   padding: 10px;
-  border: 1px solid rgba(91, 140, 255, 0.26);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgba(91, 140, 255, 0.14), rgba(61, 220, 151, 0.06)),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent), rgba(61, 220, 151, 0.06)),
     rgba(8, 10, 15, 0.34);
 }
 
@@ -1800,6 +1954,30 @@ button {
   gap: 6px;
 }
 
+/* Collapsible palette groups. */
+.palette-group-head {
+  cursor: pointer;
+  user-select: none;
+}
+
+.palette-group-head:hover {
+  color: var(--text);
+}
+
+.palette-group-caret {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform var(--motion) var(--ease);
+}
+
+.palette-group:not(.collapsed) .palette-group-caret {
+  transform: rotate(90deg);
+}
+
+.palette-group.collapsed h3 {
+  margin-bottom: 9px;
+}
+
 .node-palette button {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
@@ -1816,8 +1994,8 @@ button {
 }
 
 .node-palette button:hover {
-  border-color: rgba(91, 140, 255, 0.34);
-  background: rgba(91, 140, 255, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .node-palette-icon {
@@ -1825,10 +2003,10 @@ button {
   width: 24px;
   height: 24px;
   place-items: center;
-  border: 1px solid rgba(91, 140, 255, 0.22);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
   border-radius: 6px;
   color: var(--primary);
-  background: rgba(91, 140, 255, 0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .node-palette-copy {
@@ -2213,14 +2391,14 @@ button {
 
 .react-flow {
   --xy-background-color: rgba(8, 10, 15, 0.3);
-  --xy-edge-stroke-default: rgba(91, 140, 255, 0.75);
+  --xy-edge-stroke-default: color-mix(in srgb, var(--accent) 75%, transparent);
   --xy-edge-stroke-width-default: 2;
   width: 100%;
   height: 100%;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    radial-gradient(circle at 50% 0%, rgba(91, 140, 255, 0.08), transparent 34%),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
     #0d1018;
   background-size: 24px 24px, 24px 24px, auto, auto;
 }
@@ -2988,8 +3166,8 @@ button {
   height: 36px;
   border-radius: 8px;
   color: var(--primary);
-  background: rgba(91, 140, 255, 0.12);
-  border: 1px solid rgba(91, 140, 255, 0.18);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .ai-empty h3 {
@@ -3198,7 +3376,7 @@ button {
   height: 100vh;
   padding: 24px;
   background:
-    radial-gradient(1200px 600px at 50% -10%, rgba(91, 140, 255, 0.16), transparent),
+    radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent),
     var(--background);
 }
 
@@ -3206,7 +3384,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  width: min(460px, 100%);
+  width: min(540px, 100%);
   padding: 26px;
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -3245,6 +3423,77 @@ button {
   background: rgba(8, 10, 15, 0.36);
 }
 
+/* Crash/close recovery banner — offers to restore the last autosaved snapshot. */
+.launcher-recovery {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+.launcher-recovery > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.launcher-recovery-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.launcher-recovery-text strong {
+  font-size: 13px;
+}
+
+.launcher-recovery-text small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launcher-recovery-restore {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.launcher-recovery-restore:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.launcher-recovery-dismiss {
+  display: grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.launcher-recovery-dismiss:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .launcher-primary {
   display: inline-flex;
   align-items: center;
@@ -3261,6 +3510,64 @@ button {
 }
 
 .launcher-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Template gallery — a friendly card grid instead of a stack of look-alike buttons. */
+.launcher-templates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* Theme-aware wash (matches the launcher action buttons) so cards stay clean in light theme
+     instead of reading as a muddy dark-grey block on the white card. */
+  background: var(--panel-light);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease);
+}
+
+.template-card svg {
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.template-card strong {
+  font-size: 13px;
+}
+
+.template-card small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.template-card:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.template-card:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -3379,7 +3686,29 @@ button {
 }
 
 .file-menu-popover button:hover {
-  background: rgba(91, 140, 255, 0.16);
+  background: var(--accent-soft);
+}
+
+/* "Add" object menu — icon + label trigger, and icon-leading rows in the popover. */
+.add-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.add-popover button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.add-popover button svg {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.add-popover button:hover svg {
+  color: var(--accent);
 }
 
 .file-menu-popover hr {
@@ -3496,7 +3825,7 @@ button {
 }
 
 .tree-row.selected {
-  background: rgba(91, 140, 255, 0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .tree-row.active {
@@ -3504,7 +3833,7 @@ button {
 }
 
 .tree-row.drop {
-  background: rgba(91, 140, 255, 0.22);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
   box-shadow: inset 0 0 0 1px var(--primary);
 }
 
@@ -3522,7 +3851,7 @@ button {
   padding: 4px 10px;
   border: 1px solid var(--primary);
   border-radius: 7px;
-  background: rgba(91, 140, 255, 0.92);
+  background: color-mix(in srgb, var(--accent) 92%, transparent);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
@@ -3694,15 +4023,15 @@ button {
   z-index: 5;
   pointer-events: none;
   border: 1px solid var(--primary);
-  background: rgba(91, 140, 255, 0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-radius: 2px;
 }
 
 .asset-view.drop {
-  outline: 1px dashed var(--primary);
-  outline-offset: -4px;
-  border-radius: 8px;
-  background: rgba(91, 140, 255, 0.06);
+  outline: 2px dashed var(--accent);
+  outline-offset: -5px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
 }
 
 .asset-view.grid {
@@ -3725,21 +4054,26 @@ button {
   gap: 5px;
   padding: 6px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   cursor: pointer;
   text-align: center;
+  transition:
+    transform var(--motion) var(--ease),
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease);
 }
 
 .asset-tile:hover {
+  transform: translateY(-2px);
   background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-strong);
 }
 
 .asset-tile.selected {
-  background: rgba(91, 140, 255, 0.16);
-  border-color: var(--primary);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .asset-tile.active {
@@ -3777,7 +4111,7 @@ button {
 }
 
 .asset-tile.folder-tile .asset-tile-thumb {
-  background: rgba(91, 140, 255, 0.08);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .asset-tile.folder-tile .asset-tile-thumb svg {
@@ -3834,7 +4168,7 @@ button {
 }
 
 .context-menu button:hover {
-  background: rgba(91, 140, 255, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .context-menu button.danger {
@@ -3941,7 +4275,7 @@ button {
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(91, 140, 255, 0.08), transparent 142px),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 142px),
     var(--panel);
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -4014,8 +4348,8 @@ button {
 
 .node-search-list button.active,
 .node-search-list button:hover {
-  border-color: rgba(91, 140, 255, 0.32);
-  background: rgba(91, 140, 255, 0.16);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .node-search-result-main {
@@ -4347,8 +4681,8 @@ button {
   cursor: pointer;
 }
 .ui-tabbar button.active {
-  background: rgba(91, 140, 255, 0.16);
-  border-color: rgba(91, 140, 255, 0.4);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   color: var(--text);
 }
 
@@ -4362,7 +4696,7 @@ button {
   padding-right: 4px;
 }
 .ui-tree-row.selected {
-  background: rgba(91, 140, 255, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .ui-tree-label {
   display: flex;
@@ -4449,7 +4783,7 @@ button {
 }
 .ui-select-box {
   position: absolute;
-  outline: 1.5px solid #5b8cff;
+  outline: 1.5px solid var(--accent);
   cursor: move;
   z-index: 5;
 }
@@ -4458,7 +4792,7 @@ button {
   width: 9px;
   height: 9px;
   background: #fff;
-  border: 1.5px solid #5b8cff;
+  border: 1.5px solid var(--accent);
   border-radius: 2px;
 }
 .ui-resize-handle.h-nw { left: -5px; top: -5px; cursor: nwse-resize; }
@@ -4599,7 +4933,7 @@ button {
   cursor: pointer;
 }
 .ui-seg button.active {
-  background: rgba(91, 140, 255, 0.2);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--text);
 }
 
@@ -4623,8 +4957,8 @@ button {
   cursor: pointer;
 }
 .ui-presets button:hover {
-  background: rgba(91, 140, 255, 0.14);
-  border-color: rgba(91, 140, 255, 0.4);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* Sections (Layers / element properties / document) */
@@ -4668,7 +5002,7 @@ button {
   background: rgba(255, 255, 255, 0.04);
 }
 .ui-node.selected {
-  background: rgba(91, 140, 255, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .ui-node-main {
   flex: 1;
@@ -4796,7 +5130,7 @@ button {
   transform: translateX(-50%);
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(91, 140, 255, 0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text);
   font-size: 11px;
   white-space: nowrap;
@@ -4945,16 +5279,29 @@ button {
 }
 
 .cinematic-panel .panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   margin: 0 -10px;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
 }
 
 .cinematic-empty {
   display: grid;
   gap: 12px;
   place-items: center;
-  padding: 28px 14px;
+  margin: 14px 0;
+  padding: 40px 20px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
   color: var(--muted);
   text-align: center;
+}
+
+.cinematic-empty svg {
+  color: var(--accent);
+  opacity: 0.7;
 }
 
 .cinematic-list,
@@ -4972,15 +5319,23 @@ button {
   width: 100%;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(8, 10, 15, 0.32);
   color: var(--text);
   text-align: left;
+  transition:
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease);
+}
+
+.cinematic-list-item:hover,
+.cinematic-action-card:hover {
+  border-color: var(--border-strong);
 }
 
 .cinematic-list-item.active {
-  border-color: rgba(91, 140, 255, 0.65);
-  background: rgba(91, 140, 255, 0.14);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .cinematic-list-item span,
@@ -5022,10 +5377,14 @@ button {
   height: 32px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   background: rgba(29, 34, 48, 0.78);
   cursor: pointer;
+  transition:
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease),
+    color var(--motion) var(--ease);
 }
 
 .cinematic-transport button:first-child {
@@ -5180,8 +5539,8 @@ button {
 .cinematic-camera-list button.active,
 .cinematic-shot-strip button:hover,
 .cinematic-shot-strip button.active {
-  border-color: rgba(91, 140, 255, 0.55);
-  background: rgba(91, 140, 255, 0.13);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
 .cinematic-camera-list span,
@@ -5210,7 +5569,7 @@ button {
   width: 20px;
   height: 20px;
   border-radius: 999px;
-  background: rgba(91, 140, 255, 0.2);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--accent, #5b8cff);
   font-size: 11px;
   font-weight: 700;
@@ -5735,9 +6094,9 @@ button {
   background: rgba(255, 255, 255, 0.03);
 }
 .mini-toggle.active {
-  border-color: rgba(91, 140, 255, 0.55);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   color: var(--text);
-  background: rgba(91, 140, 255, 0.12);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .cinematic-marker-list {
@@ -5835,7 +6194,7 @@ button {
   z-index: 3;
   width: 2px;
   background: #ffffff;
-  box-shadow: 0 0 12px rgba(91, 140, 255, 0.75);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 75%, transparent);
   pointer-events: none;
 }
 
@@ -5867,7 +6226,7 @@ button {
   white-space: nowrap;
 }
 
-.cinematic-clip.camera { background: rgba(91, 140, 255, 0.72); }
+.cinematic-clip.camera { background: color-mix(in srgb, var(--accent) 72%, transparent); }
 .cinematic-clip.transform { background: rgba(61, 220, 151, 0.7); }
 .cinematic-clip.animation { background: rgba(247, 185, 85, 0.72); }
 .cinematic-clip.spawn,
@@ -6247,6 +6606,77 @@ button {
 .prefs-saved-delete:hover {
   border-color: rgba(255, 107, 107, 0.45);
   color: var(--danger);
+}
+
+/* ---------- Keyboard shortcuts overlay (shares the prefs modal frame) ---------- */
+.shortcuts-card {
+  width: min(720px, 94vw);
+}
+
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 22px;
+  padding: 18px 20px;
+  overflow-y: auto;
+}
+
+.shortcuts-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shortcuts-group h3 {
+  margin: 6px 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.shortcut-label {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.shortcut-keys kbd {
+  display: inline-grid;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--panel-light);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.shortcut-sep {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* Build Report dialog (pre-export audit) — shares the prefs modal frame. */

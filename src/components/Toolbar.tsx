@@ -6,7 +6,6 @@ import {
   Check,
   Circle,
   Copy,
-  FilePlus2,
   FolderOpen,
   Gamepad2,
   LampDesk,
@@ -89,6 +88,45 @@ function FileMenu() {
   );
 }
 
+function AddMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const createObject = useEditorStore((state) => state.createObject);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, []);
+
+  return (
+    <div className="file-menu" ref={ref}>
+      <button className="file-menu-trigger add-trigger" onClick={() => setOpen((value) => !value)}>
+        <Plus size={15} aria-hidden />
+        <span>Add</span>
+      </button>
+      {open && (
+        <div className="file-menu-popover add-popover">
+          {creationTools.map(({ kind, label, icon: Icon }) => (
+            <button
+              key={kind}
+              onClick={() => {
+                setOpen(false);
+                createObject(kind);
+              }}
+            >
+              <Icon size={15} aria-hidden />
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -141,6 +179,7 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
           )}
           <hr />
           <button onClick={run(resetWorkspaceLayout)}>Reset layout</button>
+          <button onClick={run(() => window.dispatchEvent(new CustomEvent('nf:open-shortcuts')))}>Keyboard shortcuts (?)</button>
           <button onClick={run(onOpenPrefs)}>Preferences…</button>
         </div>
       )}
@@ -271,7 +310,6 @@ function SceneSwitcher() {
 }
 
 export function Toolbar() {
-  const createObject = useEditorStore((state) => state.createObject);
   const duplicateSelectedObject = useEditorStore((state) => state.duplicateSelectedObject);
   const deleteSelectedObject = useEditorStore((state) => state.deleteSelectedObject);
   const createPrefabFromObject = useEditorStore((state) => state.createPrefabFromObject);
@@ -317,18 +355,8 @@ export function Toolbar() {
 
       <FileMenu />
       <ViewMenu onOpenPrefs={() => setPrefsOpen(true)} />
+      <AddMenu />
       <SceneSwitcher />
-
-      <div className="tool-group" aria-label="Create scene object">
-        {creationTools.map(({ kind, label, icon: Icon }) => (
-          <button key={kind} className="icon-button" title={`Create ${label}`} onClick={() => createObject(kind)}>
-            <Icon size={17} aria-hidden />
-          </button>
-        ))}
-        <button className="icon-button" title="Create empty object" onClick={() => createObject('empty')}>
-          <FilePlus2 size={17} aria-hidden />
-        </button>
-      </div>
 
       <div className="tool-group" aria-label="History">
         <button className="icon-button" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>

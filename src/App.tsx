@@ -16,7 +16,9 @@ import { recordFrame, resetHitches } from './runtime/perfStats';
 import { resetFrameClock, smoothFrameDelta } from './runtime/frameClock';
 import { resetGamepadInput, sampleGamepads } from './runtime/gamepadInput';
 import { PerfOverlay } from './components/PerfOverlay';
+import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { initHistory } from './store/history';
+import { initAutosave } from './store/autosave';
 
 /**
  * Mirror the user's appearance preferences onto <html> so the global CSS variables
@@ -123,9 +125,10 @@ function PrefabEditGuard() {
 export default function App() {
   const hasProject = useProjectStore((state) => state.hasProject);
 
-  // Attach the undo/redo capture subscription once, for the lifetime of the editor.
+  // Attach the undo/redo capture + autosave-recovery subscriptions once, for the lifetime of the editor.
   useEffect(() => {
     initHistory();
+    initAutosave();
   }, []);
 
   if (!hasProject) {
@@ -158,6 +161,7 @@ export default function App() {
       {profiled('ai-chat', <AIChatWidget />)}
       <PrefabThumbnailHost />
       <PerfOverlay />
+      <ShortcutsOverlay />
     </div>
   );
 }

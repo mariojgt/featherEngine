@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type Connection, type Edge, type NodeTypes } from '@xyflow/react';
-import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2, Plus, Save, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
+import { Boxes, Database, GitBranch, LayoutDashboard, LayoutGrid, MousePointer2, Plus, Save, Search, Send, Sigma, Table2, Trash2, Waypoints, Zap } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { useSceneOptions, useStableActiveObjects, useStableActiveScene } from '../store/stableSelectors';
 import { nodeDescriptions, nodeKindByLabel } from '../store/editor/graph';
 import { NodeForgeGraphNode, outputTypeOf, VALUE_TYPE_COLORS, EXEC_WIRE_COLOR } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
+import { PaletteGroup } from './PaletteGroup';
 import type { GraphNodeCategory, GraphNodeKind, GraphValue, GraphValueType, NodeForgeNode, NodeForgeNodeData, QualityLevel, UIElement, Vector3Tuple } from '../types';
 import { QUALITY_LEVELS } from '../three/quality';
 import { KEY_CODE_OPTIONS, keyLabelByCode } from '../utils/keyboardCodes';
@@ -2155,6 +2156,24 @@ export function VisualScriptingPanel() {
   // Multi-node clipboard: the copied nodes plus the wires running between them (other wires don't travel).
   const [clipboard, setClipboard] = useState<{ nodes: NodeForgeNode[]; edges: Edge[] } | null>(null);
 
+  // Palette quick-filter: type to narrow the node list by name, description, or category.
+  const [paletteFilter, setPaletteFilter] = useState('');
+  const filteredNodeGroups = useMemo(() => {
+    const query = paletteFilter.trim().toLowerCase();
+    if (!query) return nodeGroups;
+    return nodeGroups
+      .map((group) => ({
+        ...group,
+        nodes: group.nodes.filter(
+          (node) =>
+            node.toLowerCase().includes(query) ||
+            group.title.toLowerCase().includes(query) ||
+            (nodeDescriptions[node] ?? '').toLowerCase().includes(query),
+        ),
+      }))
+      .filter((group) => group.nodes.length > 0);
+  }, [paletteFilter]);
+
   // Exec-flow visualization (Unreal-style): while Play runs with this editor open, the runtime marks
   // every exec node it runs (see runtime/execTrace); we poll that trace and pulse the nodes + wires
   // that executed within the last ~⅓ second.
@@ -2347,7 +2366,11 @@ export function VisualScriptingPanel() {
   if (!graph || !activeBlueprint) {
     return (
       <section className="panel scripting-panel">
-        <div className="empty-state">No Blueprint selected</div>
+        <div className="empty-state">
+          <Waypoints size={22} aria-hidden />
+          <span>No Blueprint open</span>
+          <small>Double-click an object in the Hierarchy to edit its visual script, or select one that already has a Blueprint.</small>
+        </div>
       </section>
     );
   }
@@ -2401,33 +2424,38 @@ export function VisualScriptingPanel() {
               <span>{graph.edges.length} wires</span>
             </div>
           </div>
-          {nodeGroups.map(({ title, icon: Icon, nodes }) => (
-            <section key={title}>
-              <h3>
-                <Icon size={14} aria-hidden />
-                <span>{title}</span>
-                <small>{nodes.length}</small>
-              </h3>
-              <div>
-                {nodes.map((node) => (
-                  <button
-                    key={node}
-                    draggable
-                    onDragStart={(event) => onPaletteDragStart(event, node, title)}
-                    onClick={() => addPaletteNode(node, title)}
-                    title={`Add ${node} (or drag onto the canvas)`}
-                  >
-                    <span className="node-palette-icon">
-                      <Plus size={12} aria-hidden />
-                    </span>
-                    <span className="node-palette-copy">
-                      <span>{node}</span>
-                      <small>{nodeDescriptions[node] ?? `${title} node`}</small>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
+          <label className="search-field palette-search">
+            <Search size={14} aria-hidden />
+            <input
+              value={paletteFilter}
+              onChange={(event) => setPaletteFilter(event.target.value)}
+              placeholder="Search nodes…"
+              spellCheck={false}
+            />
+          </label>
+          {filteredNodeGroups.length === 0 && (
+            <div className="empty-state compact">No nodes match “{paletteFilter}”</div>
+          )}
+          {filteredNodeGroups.map(({ title, icon: Icon, nodes }) => (
+            <PaletteGroup key={title} title={title} icon={Icon} count={nodes.length} forceOpen={paletteFilter.trim() !== ''}>
+              {nodes.map((node) => (
+                <button
+                  key={node}
+                  draggable
+                  onDragStart={(event) => onPaletteDragStart(event, node, title)}
+                  onClick={() => addPaletteNode(node, title)}
+                  title={`Add ${node} (or drag onto the canvas)`}
+                >
+                  <span className="node-palette-icon">
+                    <Plus size={12} aria-hidden />
+                  </span>
+                  <span className="node-palette-copy">
+                    <span>{node}</span>
+                    <small>{nodeDescriptions[node] ?? `${title} node`}</small>
+                  </span>
+                </button>
+              ))}
+            </PaletteGroup>
           ))}
         </aside>
 

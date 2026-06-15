@@ -1,5 +1,6 @@
-import { Link2, Palette, Settings2, Unlink } from 'lucide-react';
+import { ChevronRight, Link2, MousePointer2, Palette, Settings2, Unlink } from 'lucide-react';
 import { Suspense, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { defaultCharacter, defaultLight, defaultVehicle, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { objectToken, useStableActiveObjects } from '../store/stableSelectors';
@@ -15,6 +16,41 @@ import { WATER_STYLE_PRESETS } from '../three/presets';
 import { withTerrainDefaults } from '../terrain/terrain';
 
 const axes = ['X', 'Y', 'Z'] as const;
+
+function InspectorSection({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
+  const storageKey = `nf.inspector.section.${title}`;
+  const [open, setOpen] = useState(() => {
+    const saved = localStorage.getItem(storageKey);
+    return saved === null ? defaultOpen : saved === '1';
+  });
+  const toggle = () => {
+    setOpen((v) => {
+      localStorage.setItem(storageKey, v ? '0' : '1');
+      return !v;
+    });
+  };
+  return (
+    <section className={open ? 'inspector-section' : 'inspector-section collapsed'}>
+      <h3
+        className="inspector-section-head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <ChevronRight size={13} className="inspector-section-caret" aria-hidden />
+        {title}
+      </h3>
+      {open && children}
+    </section>
+  );
+}
 
 const toDegrees = (value: number) => Math.round((value * 180) / Math.PI);
 const toRadians = (value: number) => (value * Math.PI) / 180;
@@ -194,8 +230,7 @@ function RendererSection({
   );
 
   return (
-    <section className="inspector-section">
-      <h3>Renderer</h3>
+    <InspectorSection title="Renderer">
       <label className="field-row">
         <span>Hide in Play</span>
         <input
@@ -331,7 +366,7 @@ function RendererSection({
           )}
         </>
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -385,8 +420,7 @@ function AnimatorSection({
   const activeController = controllers.find((c) => c.id === animator?.controllerId);
   const liveParams = runtimeAnimators[objectId]?.params;
   return (
-    <section className="inspector-section">
-      <h3>Animation</h3>
+    <InspectorSection title="Animation">
       {!modelUrl ? (
         <p className="field-hint">Assign an imported model in the Renderer to play its animations.</p>
       ) : (
@@ -498,7 +532,7 @@ function AnimatorSection({
           ) : null}
         </>
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -524,8 +558,7 @@ function AttachmentSection({ objectId }: { objectId: string }) {
   const sockets = targetSkeleton?.sockets ?? [];
 
   return (
-    <section className="inspector-section">
-      <h3>Attachment (bone socket)</h3>
+    <InspectorSection title="Attachment (bone socket)" defaultOpen={false}>
       {targets.length === 0 && !attachment ? (
         <p className="field-hint">Add a rigged character to the scene to attach this object to one of its bones.</p>
       ) : (
@@ -615,7 +648,7 @@ function AttachmentSection({ objectId }: { objectId: string }) {
           onClose={() => setPicking(false)}
         />
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -637,8 +670,7 @@ function UISection({ objectId }: { objectId: string }) {
   const variables = object?.variables ?? {};
 
   return (
-    <section className="inspector-section">
-      <h3>UI (world widget)</h3>
+    <InspectorSection title="UI (world widget)">
       {worldDocs.length === 0 ? (
         <p className="field-hint">Create a “world” UI document in the UI panel to anchor a widget (e.g. a health bar) over this object.</p>
       ) : (
@@ -786,7 +818,7 @@ function UISection({ objectId }: { objectId: string }) {
           Add
         </button>
       </div>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -879,8 +911,7 @@ function VehicleSection({
     </label>
   );
   return (
-    <section className="inspector-section">
-      <h3>Vehicle Controller</h3>
+    <InspectorSection title="Vehicle Controller">
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={v?.enabled ?? false} onChange={onToggle} />
@@ -1236,7 +1267,7 @@ function VehicleSection({
           {num('Camera Pitch', 'cameraPitch', 0.02, 0.24)}
         </>
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -1292,8 +1323,7 @@ function CharacterSection({
     </label>
   );
   return (
-    <section className="inspector-section">
-      <h3>Character Controller</h3>
+    <InspectorSection title="Character Controller">
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={cc?.enabled ?? false} onChange={onToggle} />
@@ -1520,7 +1550,7 @@ function CharacterSection({
           )}
         </>
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -1528,8 +1558,7 @@ function CharacterSection({
 function LightSection({ light, onChange }: { light: LightComponent | undefined; onChange: (patch: Partial<LightComponent>) => void }) {
   const l = { ...defaultLight(), ...light };
   return (
-    <section className="inspector-section">
-      <h3>Light</h3>
+    <InspectorSection title="Light">
       <label className="field-row">
         <span>Type</span>
         <select value={l.type} onChange={(e) => onChange({ type: e.target.value as LightComponent['type'] })}>
@@ -1562,7 +1591,7 @@ function LightSection({ light, onChange }: { light: LightComponent | undefined; 
         <span>Cast Shadow</span>
         <input type="checkbox" checked={l.castShadow} onChange={(e) => onChange({ castShadow: e.target.checked })} />
       </label>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -1571,8 +1600,7 @@ function RenderSettingsSection() {
   const rs = useEditorStore((state) => state.renderSettings);
   const update = useEditorStore((state) => state.updateRenderSettings);
   return (
-    <section className="inspector-section">
-      <h3>Post-Processing</h3>
+    <InspectorSection title="Post-Processing" defaultOpen={false}>
       <p className="field-hint">Project-wide bloom + vignette — applies in Play and the exported game. Bloom makes neon/tracers glow.</p>
       <label className="field-row">
         <span>Bloom</span>
@@ -1614,7 +1642,7 @@ function RenderSettingsSection() {
           </label>
         </>
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -1661,8 +1689,7 @@ function ParticleSection({
 
   if (!particles) {
     return (
-      <section className="inspector-section">
-        <h3>Particles</h3>
+      <InspectorSection title="Particles">
         <p className="field-hint">Fire, smoke, sparks, magic, fountains — a live emitter that previews here and plays in-game. Pick a reusable asset or add an inline emitter.</p>
         {sourceRow}
         <label className="field-row">
@@ -1686,7 +1713,7 @@ function ParticleSection({
         <button className="full-button" onClick={() => addParticles(objectId)}>
           Add Inline Emitter
         </button>
-      </section>
+      </InspectorSection>
     );
   }
 
@@ -1696,8 +1723,7 @@ function ParticleSection({
   if (particles.systemId) {
     const asset = particleSystems.find((p) => p.id === particles.systemId);
     return (
-      <section className="inspector-section">
-        <h3>Particles</h3>
+      <InspectorSection title="Particles">
         {sourceRow}
         <p className="field-hint">{asset ? `Using particle system "${asset.name}". Edit it once to update every object that uses it.` : 'Referenced particle system was removed.'}</p>
         <label className="field-row">
@@ -1718,13 +1744,12 @@ function ParticleSection({
         <button className="full-button" onClick={() => removeParticles(objectId)}>
           Remove Emitter
         </button>
-      </section>
+      </InspectorSection>
     );
   }
 
   return (
-    <section className="inspector-section">
-      <h3>Particles</h3>
+    <InspectorSection title="Particles">
       {sourceRow}
       <label className="field-row">
         <span>Enabled</span>
@@ -1847,7 +1872,7 @@ function ParticleSection({
       <button className="full-button" onClick={() => removeParticles(objectId)}>
         Remove Emitter
       </button>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -1862,8 +1887,7 @@ function TerrainSection({
   const patchFoliage = (patch: Partial<TerrainComponent['foliage']>) =>
     onChange({ foliage: { ...t.foliage, ...patch } });
   return (
-    <section className="inspector-section">
-      <h3>Terrain</h3>
+    <InspectorSection title="Terrain">
       <button className="full-button" onClick={() => focusWorkspacePanel('terrain')}>
         Terrain Tools
       </button>
@@ -1952,7 +1976,7 @@ function TerrainSection({
         <span>Tree Color</span>
         <input type="color" value={t.foliage.treeColor} onChange={(event) => patchFoliage({ treeColor: event.target.value })} />
       </label>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -1982,14 +2006,13 @@ function JointSection({
 }) {
   if (!joint) {
     return (
-      <section className="inspector-section">
-        <h3>Joint</h3>
+      <InspectorSection title="Joint">
         <p className="field-hint">
           Constrain this body to another (or pin it in the world): hinge doors &amp; wheels, sliding lifts,
           springs, ropes, ball-and-socket chains, or rigid welds. Adds a physics body if missing.
         </p>
         <button className="full-button" onClick={onAdd}>Add Joint</button>
-      </section>
+      </InspectorSection>
     );
   }
 
@@ -2005,8 +2028,7 @@ function JointSection({
   const connected = joint.connectedObjectId ? sceneObjects.find((o) => o.id === joint.connectedObjectId) : undefined;
 
   return (
-    <section className="inspector-section">
-      <h3>Joint</h3>
+    <InspectorSection title="Joint">
       <label className="field-row">
         <span>Type</span>
         <select value={joint.type} onChange={(event) => onChange({ type: event.target.value as JointType })}>
@@ -2106,7 +2128,7 @@ function JointSection({
       </label>
 
       <button className="full-button" onClick={onRemove}>Remove Joint</button>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -2133,19 +2155,17 @@ function ClothSection({
 }) {
   if (!cloth) {
     return (
-      <section className="inspector-section">
-        <h3>Cloth</h3>
+      <InspectorSection title="Cloth">
         <p className="field-hint">
           Turn this object into a real-time cloth sheet (Verlet sim, separate from rigid-body physics):
           flags, banners, curtains, capes, hanging cloth. Wind + gravity + collision, pinned per the mode you pick.
         </p>
         <button className="full-button" onClick={onAdd}>Add Cloth</button>
-      </section>
+      </InspectorSection>
     );
   }
   return (
-    <section className="inspector-section">
-      <h3>Cloth</h3>
+    <InspectorSection title="Cloth">
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={cloth.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
@@ -2222,7 +2242,7 @@ function ClothSection({
       <RangeField label="Tear" value={cloth.tearFactor} max={5} onChange={(tearFactor) => onChange({ tearFactor })} />
       <p className="field-hint">0 = never tears; &gt;1 lets seams snap when stretched past that ratio.</p>
       <button className="full-button" onClick={onRemove}>Remove Cloth</button>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -2235,8 +2255,7 @@ function PhysicsSection({
 }) {
   const selectedPreset = PHYSICS_MATERIAL_PRESETS.find((preset) => preset.id === (physics.materialPreset ?? 'default'));
   return (
-    <section className="inspector-section">
-      <h3>Physics</h3>
+    <InspectorSection title="Physics">
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={physics.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
@@ -2327,7 +2346,7 @@ function PhysicsSection({
           </p>
         </>
       )}
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -2342,17 +2361,15 @@ function WaterSection({
 }) {
   if (!water?.enabled) {
     return (
-      <section className="inspector-section">
-        <h3>Water Volume</h3>
+      <InspectorSection title="Water Volume">
         <p className="field-hint">Adds swim mode for characters and buoyancy, drag, wave lift, and surface bounce for dynamic physics bodies.</p>
         <button className="full-button" onClick={onToggle}>Add Water Volume</button>
-      </section>
+      </InspectorSection>
     );
   }
 
   return (
-    <section className="inspector-section">
-      <h3>Water Volume</h3>
+    <InspectorSection title="Water Volume">
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={water.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
@@ -2411,7 +2428,7 @@ function WaterSection({
       <p className="field-hint">Current &gt; 0 makes a river: the surface flows and dynamic bodies drift along the angle. Floating bodies ride the visible crest and tilt with the waves.</p>
       <p className="field-hint">Use a box/cube scale for the volume size. Dynamic bodies inside float and bob; characters enter swimming mode.</p>
       <button className="full-button" onClick={onToggle}>Remove Water Volume</button>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -2420,8 +2437,7 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
 
   if (!fracture?.enabled) {
     return (
-      <section className="inspector-section">
-        <h3>Destructible</h3>
+      <InspectorSection title="Destructible">
         <p className="field-hint">
           Make this object shatter into physics pieces — automatically when it takes a hard hit or is destroyed by
           damage, or from the "Fracture" Blueprint node.
@@ -2429,14 +2445,13 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
         <button className="full-button" onClick={() => setObjectFracture(objectId, { enabled: true })}>
           Make Destructible
         </button>
-      </section>
+      </InspectorSection>
     );
   }
 
   const isGrid = fracture.pattern === 'uniform';
   return (
-    <section className="inspector-section">
-      <h3>Destructible</h3>
+    <InspectorSection title="Destructible">
       <label className="field-row">
         <span>Pattern</span>
         <select value={fracture.pattern} onChange={(e) => setObjectFracture(objectId, { pattern: e.target.value as import('../types').FracturePattern })}>
@@ -2477,7 +2492,7 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
       <button className="full-button" onClick={() => setObjectFracture(objectId, { enabled: false })}>
         Not Destructible
       </button>
-    </section>
+    </InspectorSection>
   );
 }
 
@@ -2586,7 +2601,11 @@ export function InspectorPanel() {
 
       {!object ? (
         <div className="inspector-content">
-          <div className="empty-state">No object selected</div>
+          <div className="empty-state">
+            <MousePointer2 size={20} aria-hidden />
+            <span>No object selected</span>
+            <small>Click an object in the Hierarchy or viewport to edit it — or use <strong>+ Add</strong> in the toolbar to create one. Scene-wide settings are below.</small>
+          </div>
           <RenderSettingsSection />
         </div>
       ) : (
@@ -2596,8 +2615,7 @@ export function InspectorPanel() {
             <span className="kind-label">{object.kind}</span>
           </section>
 
-          <section className="inspector-section">
-            <h3>Transform</h3>
+          <InspectorSection title="Transform">
             {transformValues.map(({ field, label, value }) => (
               <VectorField
                 key={field}
@@ -2611,7 +2629,7 @@ export function InspectorPanel() {
                 onChange={(nextValue) => updateTransform(object.id, field, nextValue)}
               />
             ))}
-          </section>
+          </InspectorSection>
 
           {object.kind === 'light' && (
             <LightSection light={object.light} onChange={(patch) => setObjectLight(object.id, patch)} />
@@ -2685,8 +2703,7 @@ export function InspectorPanel() {
           {object.physics ? (
             <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />
           ) : (
-            <section className="inspector-section">
-              <h3>Physics</h3>
+            <InspectorSection title="Physics">
               <p className="field-hint">Static = an immovable wall/floor with collision (doesn’t fall). Dynamic = simulated (falls, gets pushed).</p>
               <button
                 className="full-button"
@@ -2706,7 +2723,7 @@ export function InspectorPanel() {
               >
                 Add Dynamic Body
               </button>
-            </section>
+            </InspectorSection>
           )}
 
           <JointSection
@@ -2732,8 +2749,7 @@ export function InspectorPanel() {
 
           <ParticleSection objectId={object.id} particles={object.particles} imageAssets={imageAssets} />
 
-          <section className="inspector-section">
-            <h3>Scripts</h3>
+          <InspectorSection title="Scripts">
             <label className="field-row">
               <span>Blueprint</span>
               <select
@@ -2771,7 +2787,7 @@ export function InspectorPanel() {
                 </div>
               </div>
             )}
-          </section>
+          </InspectorSection>
         </div>
       )}
     </aside>

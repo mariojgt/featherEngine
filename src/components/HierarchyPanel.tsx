@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Square, Trash2 } from 'lucide-react';
+import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { useThrottledActiveObjects } from '../store/stableSelectors';
@@ -149,6 +149,15 @@ export function HierarchyPanel() {
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
+
+  // When filtering, we show a FLAT list of name matches (nesting is irrelevant when hunting for an
+  // object by name) — much clearer than trying to preserve the tree around scattered matches.
+  const filterText = query.trim().toLowerCase();
+  const filteredObjects = useMemo(
+    () => (filterText ? sceneObjects.filter((object) => object.name.toLowerCase().includes(filterText)) : []),
+    [filterText, sceneObjects],
+  );
 
   const toggleCollapse = (id: string) =>
     setCollapsed((prev) => {
@@ -275,11 +284,16 @@ export function HierarchyPanel() {
         </div>
       </div>
 
+      <label className="search-field hierarchy-search">
+        <Search size={14} aria-hidden />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search objects…" spellCheck={false} />
+      </label>
+
       <div className="scene-root">
         <span className="root-dot" />
         {editingPrefabId ? <Boxes size={14} aria-hidden /> : null}
         <strong>{activeSceneName}</strong>
-        <small>{sceneObjects.length} objects</small>
+        <small>{filterText ? `${filteredObjects.length} of ${sceneObjects.length}` : `${sceneObjects.length} objects`}</small>
       </div>
 
       {/* Dropping a dragged row onto the empty list area detaches it to the scene root. */}
@@ -299,7 +313,25 @@ export function HierarchyPanel() {
           }
         }}
       >
-        {renderRows(undefined, 0)}
+        {filterText ? (
+          filteredObjects.length > 0 ? (
+            filteredObjects.map((object) => (
+              <HierarchyRow
+                key={object.id}
+                object={object}
+                depth={0}
+                childCount={0}
+                collapsed={false}
+                onToggleCollapse={toggleCollapse}
+                onContextMenu={openRowMenu}
+              />
+            ))
+          ) : (
+            <div className="empty-state compact">No objects match “{query}”</div>
+          )
+        ) : (
+          renderRows(undefined, 0)
+        )}
       </div>
 
       <ContextMenu state={menu} onClose={() => setMenu(null)} />

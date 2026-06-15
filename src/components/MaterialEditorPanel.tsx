@@ -16,6 +16,7 @@ import { useAssetTexture, useAssetUrl } from '../three/ModelAsset';
 import { useResolvedMaterial } from '../three/resolveMaterial';
 import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
+import { PaletteGroup } from './PaletteGroup';
 import { RangeField } from './InspectorPanel';
 import type { AssetItem, GraphNodeCategory, MaterialDefinition, MeshRendererComponent, NodeForgeNode } from '../types';
 import { MATERIAL_PRESETS } from '../three/presets';
@@ -269,20 +270,14 @@ function MaterialFlow({ material }: { material: MaterialDefinition }) {
           <span>Wire nodes into Material Output to override the base surface.</span>
         </div>
         {paletteGroups.map(({ title, icon: Icon, nodes }) => (
-          <section key={title}>
-            <h3>
-              <Icon size={14} aria-hidden />
-              <span>{title}</span>
-            </h3>
-            <div>
-              {nodes.map((node) => (
-                <button key={node.key} onClick={() => selectGraphNode(addMaterialNode(node.key, 'Material'))} title={`Add ${node.label}`}>
-                  <Plus size={13} aria-hidden />
-                  <span>{node.label}</span>
-                </button>
-              ))}
-            </div>
-          </section>
+          <PaletteGroup key={title} title={title} icon={Icon} count={nodes.length}>
+            {nodes.map((node) => (
+              <button key={node.key} onClick={() => selectGraphNode(addMaterialNode(node.key, 'Material'))} title={`Add ${node.label}`}>
+                <Plus size={13} aria-hidden />
+                <span>{node.label}</span>
+              </button>
+            ))}
+          </PaletteGroup>
         ))}
       </aside>
 
