@@ -84,7 +84,7 @@ export const nodeGroups: Array<{
   {
     title: 'Physics',
     icon: Boxes,
-    nodes: ['Apply Force', 'Apply Impulse', 'Apply Torque', 'Set Physics', 'Set Velocity', 'Get Velocity', 'Fracture'],
+    nodes: ['Apply Force', 'Apply Impulse', 'Apply Torque', 'Set Physics', 'Set Velocity', 'Get Velocity', 'Overlap Sphere', 'Cut Cable', 'Set Cable Length', 'Get Cable Tension', 'Fracture'],
   },
   {
     title: 'Persistence',

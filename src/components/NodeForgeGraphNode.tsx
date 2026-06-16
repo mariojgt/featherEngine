@@ -33,11 +33,13 @@ import {
   Play,
   Plus,
   Power,
+  Radar,
   Radio,
   RefreshCw,
   RotateCw,
   Save,
   ScanLine,
+  Scissors,
   Search,
   Send,
   Sigma,
@@ -96,6 +98,8 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'query.grounded': 'boolean',
   'save.has': 'boolean',
   'query.raycast': 'boolean',
+  'query.overlapSphere': 'boolean',
+  'query.cableTension': 'number',
   'math.abs': 'number',
   'math.min': 'number',
   'math.max': 'number',
@@ -181,6 +185,10 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'query.findActorByBlueprint': Search,
   'query.findActorByTag': Search,
   'query.raycast': ScanLine,
+  'query.overlapSphere': Radar,
+  'action.cutCable': Scissors,
+  'action.setCableLength': Ruler,
+  'query.cableTension': Gauge,
   'action.setPosition': Move,
   'action.setRotation': RotateCw,
   'action.setScale': Scaling,
@@ -440,6 +448,13 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
         { id: 'direction', label: 'Direction' },
         { id: 'distance', label: 'Distance' },
       ];
+    case 'query.overlapSphere':
+      return [
+        { id: 'location', label: 'Location' },
+        { id: 'radius', label: 'Radius' },
+      ];
+    case 'action.setCableLength':
+      return [{ id: 'length', label: 'Length' }];
     case 'logic.cast':
       return [{ id: 'object', label: 'Object' }];
     case 'logic.forLoop':
@@ -681,6 +696,8 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   if (data.nodeKind === 'logic.cast') pinBottom = Math.max(pinBottom, 122);
   // Raycast has 4 stacked outputs (Hit/Actor/Point/Distance).
   if (data.nodeKind === 'query.raycast') pinBottom = Math.max(pinBottom, pinTop + 3 * pinStep + 30);
+  // Overlap Sphere has 3 stacked outputs (Hit/Actor/Count).
+  if (data.nodeKind === 'query.overlapSphere') pinBottom = Math.max(pinBottom, pinTop + 2 * pinStep + 30);
   // Switch stacks one exec pin per case; Sequence 3; Flip Flop 2; Function entry 3 arg value-outs.
   const switchCases = data.nodeKind === 'logic.switch' ? data.switchCases ?? [] : [];
   if (data.nodeKind === 'logic.switch') pinBottom = Math.max(pinBottom, pinTop + switchCases.length * pinStep + 30);
@@ -692,8 +709,9 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   const inputPinCount = (data.hasInput !== false && !isValueProducer ? 1 : 0) + valueInputs.length;
   const outputPinCount =
     (data.hasOutput !== false && !isValueProducer ? 1 : 0) +
-    (isValueProducer && outType && data.nodeKind !== 'query.raycast' ? 1 : 0) +
+    (isValueProducer && outType && data.nodeKind !== 'query.raycast' && data.nodeKind !== 'query.overlapSphere' ? 1 : 0) +
     (data.nodeKind === 'query.raycast' ? 4 : 0) +
+    (data.nodeKind === 'query.overlapSphere' ? 3 : 0) +
     (data.nodeKind === 'logic.cast' ? 1 : 0) +
     (data.nodeKind === 'event.receiveDamage' ? 1 : 0) +
     (data.nodeKind === 'action.tweenProperty' ? 1 : 0) +
@@ -797,6 +815,29 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
             { id: 'actor', label: 'Actor', type: 'any' as const },
             { id: 'point', label: 'Point', type: 'vector3' as const },
             { id: 'distance', label: 'Distance', type: 'number' as const },
+          ]
+        ).map((out, index) => (
+          <span key={out.id}>
+            <Handle
+              id={out.id}
+              className={`node-port value-port value-${out.type} source`}
+              type="source"
+              position={Position.Right}
+              style={{ top: pinTop + index * pinStep }}
+            />
+            <span className="nfn-port-label out" style={{ top: pinTop + index * pinStep }}>
+              {out.label}
+            </span>
+          </span>
+        ))}
+
+      {/* Overlap Sphere: three stacked outputs — Hit (bool), Actor (nearest reference), Count (number). */}
+      {data.nodeKind === 'query.overlapSphere' &&
+        (
+          [
+            { id: 'value-out', label: 'Hit', type: 'boolean' as const },
+            { id: 'actor', label: 'Actor', type: 'any' as const },
+            { id: 'count', label: 'Count', type: 'number' as const },
           ]
         ).map((out, index) => (
           <span key={out.id}>

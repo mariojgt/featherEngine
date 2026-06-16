@@ -461,6 +461,8 @@ export function remapPackageForImport(
     }
     // Physics joints link to another body by object id — without this an imported jointed rig falls apart.
     if (o.joint?.connectedObjectId) o.joint.connectedObjectId = remap(maps.object, o.joint.connectedObjectId);
+    // A cable's far end attaches to another object by id — remap it so an imported cable stays connected.
+    if (o.cable?.endObjectId) o.cable.endObjectId = remap(maps.object, o.cable.endObjectId);
     if (o.terrain) {
       for (const layer of o.terrain.materialLayers ?? []) {
         layer.id = newId('layer');

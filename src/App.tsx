@@ -106,11 +106,13 @@ function RuntimePreviewLoop() {
 }
 
 /**
- * Closing/reloading the tab while the PREFAB EDITOR is open silently loses those edits — the
- * transient edit scene is never persisted (serialize strips it). Warn before unload in that state.
+ * Warn before closing/reloading the tab when work would be lost: either the PREFAB EDITOR is open
+ * (its transient edit scene is never persisted — serialize strips it) or the project has unsaved
+ * changes (`isDirty`). Autosave recovery is a safety net, but a standard confirm dialog is what
+ * users expect. Play mode never sets `isDirty`, so previewing a game won't trigger the prompt.
  */
 function PrefabEditGuard() {
-  const editing = useEditorStore((state) => Boolean(state.editingPrefabId));
+  const editing = useEditorStore((state) => Boolean(state.editingPrefabId) || state.isDirty);
   useEffect(() => {
     if (!editing) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {

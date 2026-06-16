@@ -329,6 +329,7 @@ function bodySignature(object: SceneObject): string {
     p?.isTrigger,
     p?.collisionLayer,
     p?.collisionMask,
+    p?.ccd,
   ].join('|');
   bodySignatureCache.set(object, { sig, meshToken });
   return sig;
@@ -469,6 +470,20 @@ interface JointEntry {
   signature: string;
 }
 
+/** A rope joint auto-managed by a PHYSICAL cable (cable.physics). Links the cable owner's body to its
+ *  end object's body, so the dynamic end swings (wrecking ball / pendulum) while the cable draws it. */
+interface CableJointEntry {
+  joint: ImpulseJoint;
+  endObjectId: string;
+  signature: string;
+}
+
+/** Everything that, if changed, requires rebuilding a physical cable's rope joint. */
+function cableJointSignature(object: SceneObject, body1Present: boolean, body2Present: boolean): string {
+  const c = object.cable;
+  return [c?.endObjectId ?? '', c?.length, c?.endOffset?.join(','), c?.physicsMode, c?.springStiffness, c?.springDamping, body1Present, body2Present].join('|');
+}
+
 /** Everything that, if changed, requires tearing down and rebuilding the joint. */
 function jointSignature(object: SceneObject, body1Present: boolean, body2Present: boolean): string {
   const j = object.joint;
@@ -580,6 +595,10 @@ class PhysicsRuntime {
   private charEntries = new Map<string, CharacterEntry>();
   private terrainEntries = new Map<string, TerrainEntry>();
   private jointEntries = new Map<string, JointEntry>();
+  private cableJointEntries = new Map<string, CableJointEntry>();
+  /** Endpoint pairs severed at runtime by the Cut Cable node — neither a cable rope nor a plain joint
+   *  between them rebuilds, so the dynamic end stays free. Lives on the runtime, so it resets each Play. */
+  private severedPairs = new Set<string>();
   private vehicleEntries = new Map<string, VehicleEntry>();
   /** All active objects this frame, keyed by id — lets body creation resolve parent-chain world transforms. */
   private frameById = new Map<string, SceneObject>();
@@ -615,7 +634,7 @@ class PhysicsRuntime {
     // Bullets are small and fast — without continuous collision detection they tunnel straight through a
     // thin wall in a single step and strike whatever is behind it. CCD makes a projectile sweep its motion
     // each step so it stops at the first surface it crosses (cover blocks the shot, as expected).
-    if (object.projectile) body.enableCcd(true);
+    if (object.projectile || object.physics?.ccd) body.enableCcd(true);
     const collider = this.world.createCollider(colliderDescFor(object), body);
     this.entries.set(object.id, { body, collider, signature: bodySignature(object) });
     this.handleToId.set(collider.handle, object.id);
@@ -1055,6 +1074,11 @@ class PhysicsRuntime {
       if (entry.anchorBody) this.world.removeRigidBody(entry.anchorBody);
       this.jointEntries.delete(owner);
     }
+    // Physical-cable rope joints touching this body are likewise auto-detached by Rapier — just forget
+    // the entry (no removeImpulseJoint on a dead handle) so syncCableJoints rebuilds it next frame.
+    for (const [owner, entry] of [...this.cableJointEntries]) {
+      if (owner === id || entry.endObjectId === id) this.cableJointEntries.delete(owner);
+    }
   }
 
   /** Build/rebuild/drop joints so the world matches the current jointed objects. */
@@ -1062,6 +1086,8 @@ class PhysicsRuntime {
     const present = new Set<string>();
     for (const object of objects) {
       if (!object.joint?.enabled || !object.physics?.enabled) continue;
+      // A Cut Cable severed this pair — leave it unbuilt so the freed end stays free.
+      if (object.joint.connectedObjectId && this.severedPairs.has(this.pairKey(object.id, object.joint.connectedObjectId))) continue;
       const body2Present = this.entries.has(object.id);
       const body1Present = object.joint.connectedObjectId
         ? this.entries.has(object.joint.connectedObjectId)
@@ -1079,6 +1105,78 @@ class PhysicsRuntime {
     }
     for (const id of this.jointEntries.keys()) {
       if (!present.has(id)) this.removeJoint(id);
+    }
+  }
+
+  /** Create the rope impulse joint for a PHYSICAL cable: owner body ↔ end-object body, capped at the
+   *  cable's length (slack until taut, then it swings). Both bodies must already exist. */
+  private createCableJoint(object: SceneObject, signature: string) {
+    const c = object.cable;
+    if (!c?.endObjectId) return;
+    const body1 = this.entries.get(object.id)?.body; // cable START (owner)
+    const body2 = this.entries.get(c.endObjectId)?.body; // cable END (the swinging body)
+    if (!body1 || !body2) return; // a body isn't built yet — retry next frame (signature unchanged).
+    const off = c.endOffset ?? [0, 0, 0];
+    const so = c.startOffset ?? [0, 0, 0];
+    const a1 = { x: so[0], y: so[1], z: so[2] }; // anchored at the owner's origin (+ start offset)
+    const a2 = { x: off[0], y: off[1], z: off[2] }; // and at the end object's origin (+ offset)
+    const len = Math.max(c.length, 0.05);
+    // 'spring' = an elastic bungee that pulls toward `length`; 'rope' (default) = slack then taut.
+    const params =
+      c.physicsMode === 'spring'
+        ? RAPIER.JointData.spring(len, c.springStiffness ?? 40, c.springDamping ?? 4, a1, a2)
+        : RAPIER.JointData.rope(len, a1, a2);
+    const joint = this.world.createImpulseJoint(params, body1, body2, true);
+    this.cableJointEntries.set(object.id, { joint, endObjectId: c.endObjectId, signature });
+  }
+
+  private removeCableJoint(id: string) {
+    const entry = this.cableJointEntries.get(id);
+    if (!entry) return;
+    this.world.removeImpulseJoint(entry.joint, true);
+    this.cableJointEntries.delete(id);
+  }
+
+  private pairKey(a: string, b: string) {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }
+
+  /** Cut Cable: sever the constraint between a cable owner and its end so the dynamic end flies free.
+   *  Removes the cable's own rope joint AND any plain impulse joint between the two ends, and records the
+   *  pair so neither rebuilds for the rest of this Play. */
+  severCable(ownerId: string, endId?: string) {
+    this.removeCableJoint(ownerId);
+    if (!endId) return;
+    this.severedPairs.add(this.pairKey(ownerId, endId));
+    for (const [owner, entry] of [...this.jointEntries]) {
+      if ((owner === ownerId && entry.connectedObjectId === endId) || (owner === endId && entry.connectedObjectId === ownerId)) {
+        this.removeJoint(owner);
+      }
+    }
+  }
+
+  /** Build/rebuild/drop the rope joints that physical cables manage, mirroring syncJoints. */
+  private syncCableJoints(objects: SceneObject[]) {
+    const present = new Set<string>();
+    for (const object of objects) {
+      const c = object.cable;
+      // followJoint: the cable rides an existing JointComponent — don't create a second, competing joint.
+      if (!c?.enabled || !c.physics || c.followJoint || !c.endObjectId) continue;
+      if (this.severedPairs.has(this.pairKey(object.id, c.endObjectId))) continue; // Cut Cable severed it.
+      const body1Present = this.entries.has(object.id);
+      const body2Present = this.entries.has(c.endObjectId);
+      if (!body1Present || !body2Present) continue; // link once both bodies exist.
+      present.add(object.id);
+      const signature = cableJointSignature(object, body1Present, body2Present);
+      const entry = this.cableJointEntries.get(object.id);
+      if (!entry) this.createCableJoint(object, signature);
+      else if (entry.signature !== signature) {
+        this.removeCableJoint(object.id);
+        this.createCableJoint(object, signature);
+      }
+    }
+    for (const id of this.cableJointEntries.keys()) {
+      if (!present.has(id)) this.removeCableJoint(id);
     }
   }
 
@@ -1225,6 +1323,7 @@ class PhysicsRuntime {
     this.syncCharacters(objects);
     this.syncVehicles(objects);
     this.syncJoints(objects);
+    this.syncCableJoints(objects);
 
     const movedFixedBodies = new Set<string>();
     for (const object of objects) {
@@ -1889,6 +1988,35 @@ class PhysicsRuntime {
   }
 
   /**
+   * Sphere overlap query (Unreal's OverlapSphere / Unity's Physics.OverlapSphere): every SOLID collider
+   * whose shape intersects the ball at `center` with `radius`, as object ids. Uses the Rapier broadphase
+   * so it accounts for each body's real collider extents (not just its origin), and respects whatever the
+   * world holds — fixed walls, dynamic props, characters. Sensors/triggers are skipped, and `exclude` ids
+   * (typically the querying actor itself) are filtered out. Unordered; the caller sorts by distance if it
+   * needs nearest. Returns [] when the radius is non-positive or physics isn't ready.
+   */
+  overlapSphere(center: Vector3Tuple, radius: number, exclude?: Set<string>): string[] {
+    if (!(radius > 0)) return [];
+    const found: string[] = [];
+    const seen = new Set<string>();
+    this.world.intersectionsWithShape(
+      { x: center[0], y: center[1], z: center[2] },
+      { x: 0, y: 0, z: 0, w: 1 },
+      new RAPIER.Ball(radius),
+      (collider) => {
+        const id = this.handleToId.get(collider.handle);
+        if (id !== undefined && !seen.has(id) && !exclude?.has(id)) {
+          seen.add(id);
+          found.push(id);
+        }
+        return true; // keep collecting every overlap
+      },
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+    );
+    return found;
+  }
+
+  /**
    * Apply a one-shot linear impulse to a DYNAMIC body (and wake it). Used for projectile knockback: a fast
    * CCD bullet is removed the moment it reports a hit, so it can't reliably transfer momentum through the
    * solver — instead the hit pass calls this so the struck prop visibly gets shoved along the shot. No-op
@@ -1941,7 +2069,7 @@ class PhysicsRuntime {
       sleeping,
       characters: this.charEntries.size,
       terrain: this.terrainEntries.size,
-      joints: this.jointEntries.size,
+      joints: this.jointEntries.size + this.cableJointEntries.size,
     };
   }
 
@@ -1952,6 +2080,7 @@ class PhysicsRuntime {
     this.charEntries.clear();
     this.terrainEntries.clear();
     this.jointEntries.clear();
+    this.cableJointEntries.clear();
     this.handleToId.clear();
     this.handleToTrigger.clear();
   }

@@ -18,6 +18,7 @@ import {
   type GraphNodeKind,
   type GraphNodeTone,
   type AnimatorComponent,
+  type CableComponent,
   type ClothComponent,
   type JointComponent,
   type JointType,
@@ -127,6 +128,7 @@ import {
 import { getAnimatorControllerRuntime } from './editor/animatorRuntime';
 import {
   defaultAnimator,
+  defaultCable,
   defaultCharacter,
   defaultCloth,
   defaultJoint,
@@ -483,6 +485,10 @@ interface EditorState {
   runtimeHidden: string[];
   /** Object ids deactivated at runtime by action.setActive (no render/script/physics/AI). */
   runtimeDisabled: string[];
+  /** Cable owner ids cut at runtime by action.cutCable (constraint severed, end detached). */
+  runtimeCutCables: string[];
+  /** Runtime cable-length overrides set by action.setCableLength (winch/reel), by cable owner id. */
+  runtimeCableLength: Record<string, number>;
   /** GTA-style vehicle possession: vehicleObjectId → the player pawn id currently driving it (set by the
    *  Enter Vehicle node, cleared by Exit Vehicle). Lets the HUD follow the occupant pawn while driving. */
   runtimeVehicleOccupants: Record<string, string>;
@@ -649,6 +655,10 @@ interface EditorState {
   addCloth: (id: string) => void;
   updateCloth: (id: string, patch: Partial<ClothComponent>) => void;
   removeCloth: (id: string) => void;
+  /** Add a cable/rope to `id`. No-op if it already has one. */
+  addCable: (id: string) => void;
+  updateCable: (id: string, patch: Partial<CableComponent>) => void;
+  removeCable: (id: string) => void;
   togglePhysics: (id: string) => void;
   /** Make an object destructible / patch its fracture config (seeds defaults on first use). */
   setObjectFracture: (id: string, patch: Partial<FractureComponent>) => void;
@@ -1028,6 +1038,12 @@ const cloneObjectTree = (
     // source object (or nothing). A world-anchored joint (empty connectedObjectId) is left as-is.
     if (clone.joint?.connectedObjectId) {
       clone.joint = { ...clone.joint, connectedObjectId: remap(clone.joint.connectedObjectId) };
+    }
+    // A cable whose far end attaches to another object INSIDE this tree must follow the clone — same
+    // reasoning as the joint above. A free-hanging cable (no endObjectId) or one attached OUTSIDE the
+    // tree keeps its id (remap() passes through ids it doesn't know).
+    if (clone.cable?.endObjectId) {
+      clone.cable = { ...clone.cable, endObjectId: remap(clone.cable.endObjectId) };
     }
     // Vehicles reference their rig by OBJECT ID (wheels, anchors, lights, emitters, loose parts) — a
     // cloned car must point at its own cloned parts, or a spawned/duplicated vehicle has a dead rig.
@@ -1423,6 +1439,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeTimers: {},
   runtimeHidden: [],
   runtimeDisabled: [],
+  runtimeCutCables: [],
+  runtimeCableLength: {},
   runtimeVehicleOccupants: {},
   runtimeInteractFocusId: null,
   runtimeHitMarker: 0,
@@ -2415,6 +2433,42 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) =>
       mapActiveSceneObjects(state, (objects) =>
         objects.map((object) => (object.id === id ? { ...object, cloth: undefined } : object)),
+      ),
+    ),
+  addCable: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id && !object.cable ? { ...object, cable: defaultCable() } : object)),
+      ),
+    ),
+  updateCable: (id, patch) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) => {
+        const owner = objects.find((object) => object.id === id);
+        const merged = { ...defaultCable(), ...owner?.cable, ...patch };
+        // A PHYSICAL cable needs a rigid body at BOTH ends or the rope joint can't build. Seed sensible
+        // bodies for any end that has none: the cable owner is the PIVOT → fixed; the attached end is the
+        // swinging MASS → dynamic. Existing physics (any body type) is respected — only absent ones seed.
+        const wirePhysics = Boolean(merged.physics && merged.endObjectId);
+        return objects.map((object) => {
+          if (object.id === id) {
+            const physics =
+              wirePhysics && !object.physics?.enabled
+                ? withPhysicsDefaults({ ...(object.physics ?? defaultPhysics('fixed', 'box')), enabled: true })
+                : object.physics;
+            return { ...object, cable: merged, physics };
+          }
+          if (wirePhysics && object.id === merged.endObjectId && !object.physics?.enabled) {
+            return { ...object, physics: withPhysicsDefaults({ ...(object.physics ?? defaultPhysics('dynamic', 'box')), enabled: true }) };
+          }
+          return object;
+        });
+      }),
+    ),
+  removeCable: (id) =>
+    set((state) =>
+      mapActiveSceneObjects(state, (objects) =>
+        objects.map((object) => (object.id === id ? { ...object, cable: undefined } : object)),
       ),
     ),
   setObjectFracture: (id, patch) =>
@@ -5446,6 +5500,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeTimers: {},
       runtimeHidden: [],
       runtimeDisabled: [],
+      runtimeCutCables: [],
+      runtimeCableLength: {},
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
@@ -5555,6 +5611,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeTimers: {},
       runtimeHidden: [],
       runtimeDisabled: [],
+      runtimeCutCables: [],
+      runtimeCableLength: {},
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,
@@ -5916,6 +5974,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Deactivated objects (Set Active off): no render, no script, no physics body, ignored by AI. Persisted
       // across frames; toggled by the action.setActive node. Disabled ids are merged into runtimeHidden on output.
       const nextDisabled = new Set<string>(state.runtimeDisabled);
+      // Cable runtime control (Cut Cable / Set Cable Length nodes). Cut owners persist for the session;
+      // length overrides hold until changed again (a winch keeps its reeled length).
+      const nextCutCables = new Set<string>(state.runtimeCutCables);
+      const nextCableLength: Record<string, number> = { ...state.runtimeCableLength };
       // GTA-style vehicle possession (Enter/Exit Vehicle nodes). `nextOccupants` carries which pawn drives
       // which car across frames; the request arrays are this-frame edges the movedObjects pass applies as
       // component-flag flips (camera/HUD/vehicle-pass all read those flags, so control hands off + reverts on Stop).
@@ -6149,6 +6211,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Per-tick memo for Raycast nodes (keyed `${ownerId}:${nodeId}`): one physics ray serves all four of
       // a Raycast node's outputs (Hit/Actor/Point/Distance) within the frame instead of casting per pin.
       const raycastCache = new Map<string, { hit: boolean; actor: string | undefined; point: Vector3Tuple; distance: number }>();
+
+      // Per-tick memo for Overlap Sphere nodes (keyed `${ownerId}:${nodeId}`): one broadphase query serves
+      // all three outputs (Hit/Actor/Count) within the frame instead of querying per pin.
+      const overlapCache = new Map<string, { hit: boolean; actor: string | undefined; count: number }>();
 
       // Whether a graph event-root fires for `objectId` this frame. Hoisted out of the per-object
       // loop (defined once per tick, not per scripted object) and shared by BOTH the early-skip below
@@ -6455,6 +6521,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               if (sourceHandle === 'point') return [result.point[0], result.point[1], result.point[2]] as Vector3Tuple;
               if (sourceHandle === 'distance') return result.distance;
               return result.hit; // 'value-out' = Hit (bool)
+            }
+
+            // Overlap Sphere: one broadphase ball query, three outputs (Hit/Actor/Count) by sourceHandle.
+            // Center = a wired Vector3 or the owner's position; radius = wired number or the node's field.
+            // "Actor" is the NEAREST overlapping solid actor — the idiomatic "who's in range" for AoE/abilities.
+            if (node.data.nodeKind === 'query.overlapSphere') {
+              const cacheKey = `${object.id}:${nodeId}`;
+              let result = overlapCache.get(cacheKey);
+              if (!result) {
+                const radius = Math.max(0.01, toNumber(valueInput(node, 'radius', Number(node.data.numberValue ?? 5))));
+                const centerInput = valueInput(node, 'location');
+                const center: Vector3Tuple = Array.isArray(centerInput)
+                  ? [Number(centerInput[0]) || 0, Number(centerInput[1]) || 0, Number(centerInput[2]) || 0]
+                  : [position[0], position[1], position[2]];
+                const phys = getActivePhysics();
+                const ids = phys ? phys.overlapSphere(center, radius, new Set([object.id])) : [];
+                let nearest: string | undefined;
+                let nearestDist = Infinity;
+                for (const id of ids) {
+                  const other = activeObjectById.get(id);
+                  if (!other) continue;
+                  const op = other.transform.position;
+                  const d = (op[0] - center[0]) ** 2 + (op[1] - center[1]) ** 2 + (op[2] - center[2]) ** 2;
+                  if (d < nearestDist) {
+                    nearestDist = d;
+                    nearest = id;
+                  }
+                }
+                result = { hit: ids.length > 0, actor: nearest, count: ids.length };
+                overlapCache.set(cacheKey, result);
+              }
+              if (sourceHandle === 'actor') return result.actor;
+              if (sourceHandle === 'count') return result.count;
+              return result.hit; // 'value-out' = Hit (bool)
+            }
+
+            // Get Cable Tension: current stretch ratio (end-to-end distance ÷ length). ~1 at rest, >1 taut.
+            if (node.data.nodeKind === 'query.cableTension') {
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const owner = activeObjectById.get(target);
+              const cab = owner?.cable;
+              if (!cab) return 0;
+              let endId = cab.endObjectId;
+              if (cab.followJoint) {
+                if (owner.joint?.connectedObjectId) endId = owner.joint.connectedObjectId;
+                else endId = activeObjects.find((o) => o.joint?.enabled && o.joint.connectedObjectId === target)?.id ?? endId;
+              }
+              const endObj = endId ? activeObjectById.get(endId) : undefined;
+              if (!endObj) return 0;
+              const a = owner.transform.position;
+              const b = endObj.transform.position;
+              const dist = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+              const len = Math.max(nextCableLength[target] ?? cab.length, 0.05);
+              return dist / len;
             }
 
             // Get Velocity: an actor's current velocity [x,y,z]. Tracked in nextVelocities for dynamic bodies
@@ -7620,6 +7740,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const on = toBoolean(valueInput(node, 'on', node.data.booleanValue ?? true));
               if (on) nextDisabled.delete(target);
               else nextDisabled.add(target);
+            }
+
+            if (node.data.nodeKind === 'action.cutCable') {
+              // Sever a cable's constraint and detach its end: the dynamic end flies free (drop the ball).
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const cab = activeObjectById.get(target)?.cable;
+              if (cab) {
+                // The other end: an explicit endObjectId, or (followJoint) the joint partner — owner's joint,
+                // or whatever object's joint connects to the owner.
+                let endId = cab.endObjectId;
+                if (cab.followJoint) {
+                  const owner = activeObjectById.get(target);
+                  if (owner?.joint?.connectedObjectId) endId = owner.joint.connectedObjectId;
+                  else endId = activeObjects.find((o) => o.joint?.enabled && o.joint.connectedObjectId === target)?.id ?? endId;
+                }
+                nextCutCables.add(target);
+                getActivePhysics()?.severCable(target, endId);
+              }
+            }
+
+            if (node.data.nodeKind === 'action.setCableLength') {
+              // Winch/reel: set a cable's length at runtime (visual slack + its physical rope's max distance).
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              if (activeObjectById.get(target)?.cable) {
+                nextCableLength[target] = Math.max(0.1, toNumber(valueInput(node, 'length', Number(node.data.numberValue ?? 2))));
+              }
             }
 
             if (node.data.nodeKind === 'action.enterVehicle') {
@@ -9381,14 +9527,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (physics) {
         // Deactivated objects are excluded from the physics objects list, so syncBodies removes their
         // bodies (no collision) until re-enabled.
-        const physicsObjects = movedObjects.filter(
-          (o) =>
-            !nextDisabled.has(o.id) &&
-            (shouldSimulatePhysicsObject(o) ||
-              physicsImpulses[o.id] !== undefined ||
-              physicsAngularImpulses[o.id] !== undefined ||
-              setVelocities[o.id] !== undefined),
-        );
+        const physicsObjects = movedObjects
+          .filter(
+            (o) =>
+              !nextDisabled.has(o.id) &&
+              (shouldSimulatePhysicsObject(o) ||
+                physicsImpulses[o.id] !== undefined ||
+                physicsAngularImpulses[o.id] !== undefined ||
+                setVelocities[o.id] !== undefined),
+          )
+          // Reflect a runtime winch (Set Cable Length) into the physics rope's max distance: hand physics
+          // the overridden cable length so its rope joint rebuilds at the reeled length this frame.
+          .map((o) =>
+            o.cable && nextCableLength[o.id] !== undefined && nextCableLength[o.id] !== o.cable.length
+              ? { ...o, cable: { ...o.cable, length: nextCableLength[o.id] } }
+              : o,
+          );
         const sceneEnv = selectActiveSceneEnvironment(state);
         const sceneWind = sceneEnv?.wind ?? [0, 0, 0];
         const result = physics.frame(
@@ -10741,6 +10895,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeTimers: {},
             runtimeHidden: [],
       runtimeDisabled: [],
+      runtimeCutCables: [],
+      runtimeCableLength: {},
   runtimeVehicleOccupants: {},
             runtimeInteractFocusId: null,
             runtimeEnemyCooldown: {},
@@ -10811,6 +10967,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Disabled objects are also hidden (no render) via the existing hidden path.
         runtimeHidden: keepArray(state.runtimeHidden, [...new Set([...nextHidden, ...nextDisabled])]),
         runtimeDisabled: keepArray(state.runtimeDisabled, [...nextDisabled]),
+        runtimeCutCables: keepArray(state.runtimeCutCables, [...nextCutCables]),
+        runtimeCableLength: keepRecord(state.runtimeCableLength, nextCableLength),
         runtimeVehicleOccupants: keepRecord(state.runtimeVehicleOccupants, nextOccupants),
         runtimeInteractFocusId: interactFocusId,
         runtimeHitMarker: hitMarker,
@@ -10978,6 +11136,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         water: object.water ? { ...defaultWaterVolume(), ...object.water } : object.water,
         joint: object.joint ? { ...defaultJoint(), ...object.joint } : object.joint,
         cloth: object.cloth ? { ...defaultCloth(), ...object.cloth } : object.cloth,
+        cable: object.cable ? { ...defaultCable(), ...object.cable } : object.cable,
       });
       const scenes = rawScenes.map((scene) => ({
         ...scene,
@@ -11077,6 +11236,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       runtimeTimers: {},
       runtimeHidden: [],
       runtimeDisabled: [],
+      runtimeCutCables: [],
+      runtimeCableLength: {},
   runtimeVehicleOccupants: {},
       runtimeInteractFocusId: null,
       runtimeHitMarker: 0,

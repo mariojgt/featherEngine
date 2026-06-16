@@ -11,6 +11,7 @@ import type {
   GraphNodeCategory,
   NodeForgeNodeData,
   GraphValue,
+  CableComponent,
   ClothComponent,
   GraphValueType,
   InventorySlot,
@@ -444,6 +445,10 @@ const NODE_LABELS = [
   'Find Actor By Blueprint',
   'Find Actor By Tag',
   'Raycast',
+  'Overlap Sphere',
+  'Cut Cable',
+  'Set Cable Length',
+  'Get Cable Tension',
   'Set Position',
   'Set Rotation',
   'Set Scale',
@@ -576,6 +581,10 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Find Actor By Blueprint': 'Runtime',
   'Find Actor By Tag': 'Runtime',
   Raycast: 'Runtime',
+  'Overlap Sphere': 'Physics',
+  'Cut Cable': 'Physics',
+  'Set Cable Length': 'Physics',
+  'Get Cable Tension': 'Physics',
   'Set Position': 'Runtime',
   'Set Rotation': 'Runtime',
   'Set Scale': 'Runtime',
@@ -1011,6 +1020,94 @@ const rawEngineTools = {
     },
   }),
 
+  create_cable: tool({
+    description:
+      'Create a real-time CABLE / ROPE — a Verlet-simulated chain rendered as a solid tube (separate from rigid-body physics, the 1D sibling of cloth; Unreal\'s Cable Component). Use for power lines, tow ropes, chains, hanging wires, vines, hoses, tethers. The START is pinned to this object\'s position; set endObjectId to attach the far END to another object so the cable spans the two and sags between them (Unreal AttachEndTo), else it hangs free. Integrates gravity + wind, takes explosion blasts, optionally collides with floor/bodies. Animates in edit and Play. Tip: create two small anchor objects (posts), then a cable on one with endObjectId = the other.',
+    inputSchema: z.object({
+      name: z.string().optional(),
+      position: vec3.optional().describe('Cable start point. Default [0,3,0].'),
+      color: z.string().optional().describe('Cable color hex. Default #3A3F4B.'),
+      endObjectId: z.string().optional().describe('Attach the far end to this object (AttachEndTo). Omit for a free-hanging cable.'),
+      length: z.number().min(0.1).optional().describe('Rest length / slack. Longer than the gap between the ends = sags; shorter = taut. Default 4.'),
+      radius: z.number().min(0.005).optional().describe('Tube radius (thickness). Default 0.06.'),
+      segments: z.number().min(2).max(64).optional().describe('Links along the cable 2–64. Default 14.'),
+      wind: vec3.optional().describe('Wind force [x,y,z]. Default [0,0,0].'),
+      gravityScale: z.number().optional().describe('Gravity multiplier. Default 1.'),
+      physics: z.boolean().optional().describe('PHYSICAL cable: maintain a real Rapier rope joint between the two ends (capped at length) so the dynamic end SWINGS under physics — wrecking ball / pendulum / tow rope. Requires endObjectId. Seeds bodies if missing (this object → fixed pivot, the end → dynamic). Off = cosmetic.'),
+      followJoint: z.boolean().optional().describe('USE AN EXISTING joint: if you already added a rope joint (add_joint) to the swinging object, set true and the cable just DRAWS that constraint — its end comes from the joint and it creates NO second joint. Overrides physics. Use this instead of physics when you wired the constraint yourself.'),
+    }),
+    execute: async ({ name, position, color = '#3A3F4B', endObjectId, ...cable }) => {
+      if (endObjectId && !findObject(endObjectId)) return `No object with id ${endObjectId} to attach the cable end to.`;
+      const id = store().createObjectWithProps('cube', {
+        name: name ?? 'Cable',
+        position: position ? asVec3(position) : [0, 3, 0],
+        color,
+      });
+      store().addCable(id);
+      store().updateCable(id, {
+        ...(endObjectId ? { endObjectId } : {}),
+        ...(cable.wind ? { wind: asVec3(cable.wind) } : {}),
+        ...cable,
+      } as Partial<CableComponent>);
+      return `Created cable "${findObject(id)?.name}" with id ${id}${endObjectId ? ` attached to ${endObjectId}` : ' (free-hanging)'}. It simulates in edit + Play.`;
+    },
+  }),
+
+  update_cable: tool({
+    description:
+      'Tune (or add) a cable/rope on an object: endObjectId (attach the far end to another object — Unreal AttachEndTo, or "" to free it), endOffset, length (slack), radius (thickness), segments, stiffness, damping, gravityScale, wind, turbulence, collideFloor/floorY, collideBodies, tearFactor (0 = never tears, >1 snaps when stretched past that ratio). Adds a cable component if the object has none.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      endObjectId: z.string().optional().describe('Attach the far end to this object id, or "" to make the end free-hanging.'),
+      endOffset: vec3.optional().describe('Local offset added to the end object position for the attach point.'),
+      startOffset: vec3.optional().describe('Local offset of the START attach point from this object (e.g. a crane-tip pulley, a hand socket).'),
+      length: z.number().min(0.1).optional(),
+      radius: z.number().min(0.005).optional(),
+      segments: z.number().min(2).max(64).optional(),
+      stiffness: z.number().min(1).max(16).optional(),
+      damping: z.number().min(0).max(0.95).optional(),
+      gravityScale: z.number().optional(),
+      wind: vec3.optional(),
+      turbulence: z.number().min(0).max(1).optional(),
+      collideFloor: z.boolean().optional(),
+      floorY: z.number().optional(),
+      collideBodies: z.boolean().optional(),
+      tearFactor: z.number().min(0).max(5).optional(),
+      physics: z.boolean().optional().describe('PHYSICAL cable: maintain a real Rapier rope joint between the two ends so the dynamic end SWINGS (wrecking ball / pendulum). Requires an endObjectId. Seeds bodies if missing (owner → fixed pivot, end → dynamic).'),
+      followJoint: z.boolean().optional().describe('USE AN EXISTING joint: draw an already-added rope joint (add_joint) instead of creating one — the end comes from the joint, no second constraint. Overrides physics. Use when the swinging object already has its own joint.'),
+      physicsMode: z.enum(['rope', 'spring']).optional().describe("Physical-cable constraint flavor: 'rope' (slack→taut tether, default) or 'spring' (elastic bungee — pulls toward length with springStiffness/springDamping)."),
+      springStiffness: z.number().min(0).optional().describe('Spring stiffness (physicsMode spring): higher = pulls harder. Default 40.'),
+      springDamping: z.number().min(0).optional().describe('Spring damping (physicsMode spring): higher = settles faster. Default 4.'),
+      style: z.enum(['cable', 'rope', 'chain', 'wire']).optional().describe("Visual look: 'cable' (smooth tube), 'rope' (braided twist), 'chain' (beaded links — use a metal material), 'wire' (thin)."),
+      tensionColor: z.boolean().optional().describe('Tint the cable toward red as it nears its breaking stretch — strain feedback.'),
+    }),
+    execute: async ({ objectId, endObjectId, endOffset, startOffset, wind, ...patch }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      if (endObjectId && !findObject(endObjectId)) return `No object with id ${endObjectId} to attach the cable end to.`;
+      if (!object.cable) store().addCable(objectId);
+      store().updateCable(objectId, {
+        ...(endObjectId !== undefined ? { endObjectId: endObjectId || undefined } : {}),
+        ...(endOffset ? { endOffset: asVec3(endOffset) } : {}),
+        ...(startOffset ? { startOffset: asVec3(startOffset) } : {}),
+        ...(wind ? { wind: asVec3(wind) } : {}),
+        ...patch,
+      } as Partial<CableComponent>);
+      return `Updated cable on ${objectId}.`;
+    },
+  }),
+
+  remove_cable: tool({
+    description: 'Remove the cable/rope from an object (reverts it to a normal mesh).',
+    inputSchema: z.object({ objectId: z.string() }),
+    execute: async ({ objectId }) => {
+      const object = findObject(objectId);
+      if (!object) return `No object with id ${objectId}.`;
+      store().removeCable(objectId);
+      return `Removed cable from ${objectId}.`;
+    },
+  }),
+
   update_terrain: tool({
     description:
       'Update a terrain object created with create_terrain/create_object kind:"terrain". Controls chunk streaming, procedural height, editable material layers, and instanced/custom foliage.',
@@ -1358,6 +1455,7 @@ const rawEngineTools = {
       angularDamping: z.number().optional(),
       windInfluence: z.number().min(0).optional().describe('How strongly global scene wind pushes this DYNAMIC body (0 = ignores wind). Set the wind itself via set_environment.'),
       knockOverThreshold: z.number().min(0).optional().describe('BREAKAWAY PROP (GTA streetlight): on a FIXED body, an impact faster than this speed (u/s) converts it to a dynamic body that tumbles with the hit — lamp posts, signs, fences, bollards. 0/omit = solid.'),
+      ccd: z.boolean().optional().describe('Continuous Collision Detection: stops a fast DYNAMIC body tunnelling through thin walls/floors at high speed. Small cost — enable for bullets, fast vehicles, fast-falling props. Projectiles always have it.'),
     }),
     execute: async ({ id, ...patch }) => {
       const object = findObject(id);

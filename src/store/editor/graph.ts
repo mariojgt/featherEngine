@@ -222,6 +222,10 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Find Actor By Blueprint': 'query.findActorByBlueprint',
   'Find Actor By Tag': 'query.findActorByTag',
   Raycast: 'query.raycast',
+  'Overlap Sphere': 'query.overlapSphere',
+  'Cut Cable': 'action.cutCable',
+  'Set Cable Length': 'action.setCableLength',
+  'Get Cable Tension': 'query.cableTension',
   Move: 'action.move',
   Drive: 'action.drive',
   Jump: 'action.jump',
@@ -304,6 +308,10 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
     nodeKind === 'action.setPhysics' ||
     nodeKind === 'action.setVelocity' ||
     nodeKind === 'query.velocity' ||
+    nodeKind === 'query.overlapSphere' ||
+    nodeKind === 'query.cableTension' ||
+    nodeKind === 'action.cutCable' ||
+    nodeKind === 'action.setCableLength' ||
     nodeKind === 'action.fractureObject' ||
     nodeKind === 'action.explode'
   )
@@ -721,6 +729,30 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description:
           "Casts a ray from this object (chest height) and reports what it hits. Outputs: Hit (true if something solid is in the way), Hit Actor (a reference to the object hit — wire into Cast / Get Position / Set Object Var), Hit Point (world position of the impact), and Distance. Direction defaults to the object's forward; wire a Vector3 into Direction (e.g. Direction To Player) and a number into Distance to aim/range it. Use for ground checks, shooting/aim, AI sensing, interaction probes. Skips self, the dead, and projectiles.",
       };
+    case 'query.overlapSphere':
+      return {
+        label: `Overlap Sphere ${Number(data.numberValue ?? 5)}u`,
+        description:
+          "Finds every SOLID actor whose collider overlaps a sphere — Unreal's OverlapSphere / Unity's Physics.OverlapSphere, the idiomatic 'who's in range' for AoE damage, ability ranges, proximity sensing. Outputs: Hit (true if anything is inside), Actor (the NEAREST overlapping actor — wire into Cast / Apply Damage Target / Get Position), and Count (how many). Center defaults to this object's position; wire a Vector3 into Location to probe elsewhere. Radius from the node field or a wired number. Uses the physics broadphase so it respects real collider sizes; skips self and triggers/sensors. Needs physics-enabled bodies to detect. Gate behind an event or Cooldown, not raw Update if you only need it occasionally.",
+      };
+    case 'action.cutCable':
+      return {
+        label: 'Cut Cable',
+        description:
+          "Severs a cable's physics constraint at runtime and detaches its end — the dynamic end flies FREE (drop the wrecking ball, snap a tether, collapse a bridge) and the rope dangles. Targets the cable owner (default self; set targetObjectId / wire a reference). Works for a cable's own physical rope, a followed joint, or a plain rope joint between the two ends. One-shot — wire it to an event (a key, Trigger Enter, a shot), not Update.",
+      };
+    case 'action.setCableLength':
+      return {
+        label: `Set Cable Length${typeof data.numberValue === 'number' ? ` ${data.numberValue}` : ''}`,
+        description:
+          "Sets a cable's length at runtime — a WINCH / reel: raise or lower the hanging mass (crane, elevator, zipline, fishing line, grappling line). Wire a number into Length (or set the field). Retracts (shorter) pull the end up; extends let it drop. Drives the visual slack AND the physical rope's max distance. Targets the cable owner (default self).",
+      };
+    case 'query.cableTension':
+      return {
+        label: 'Get Cable Tension',
+        description:
+          "Outputs a cable's current STRETCH ratio: end-to-end distance ÷ length. ~1 = at rest, >1 = taut/straining (≈ the tear ratio just before it snaps), <1 = slack. Wire into Compare for 'rope is taut' logic — strain alarms, snap warnings, auto-winch. Targets the cable owner (default self).",
+      };
     case 'query.findActorByTag':
       return {
         label: `Find Actor (Tag: ${data.stringValue || 'any'})${data.findMode === 'nearest' ? ' · nearest' : ' · first'}`,
@@ -935,6 +967,10 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     normalized.numberValue = 20; // default ray length (units)
   }
 
+  if (nodeKind === 'query.overlapSphere' && typeof normalized.numberValue !== 'number') {
+    normalized.numberValue = 5; // default overlap radius (units)
+  }
+
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
   }
@@ -1053,6 +1089,8 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
     nodeKind === 'query.findActorByBlueprint' ||
     nodeKind === 'query.findActorByTag' ||
     nodeKind === 'query.raycast' ||
+    nodeKind === 'query.overlapSphere' ||
+    nodeKind === 'query.cableTension' ||
     nodeKind === 'query.velocity' ||
     nodeKind === 'query.grounded' ||
     nodeKind === 'save.has' ||

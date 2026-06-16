@@ -1,5 +1,6 @@
 import type {
   AnimatorComponent,
+  CableComponent,
   CharacterControllerComponent,
   ClothComponent,
   ColliderType,
@@ -414,6 +415,32 @@ export const defaultCloth = (): ClothComponent => ({
   collideFloor: true,
   floorY: 0,
   collideBodies: true,
+  tearFactor: 0,
+});
+
+export const defaultCable = (): CableComponent => ({
+  enabled: true,
+  segments: 14,
+  length: 4,
+  radius: 0.06,
+  stiffness: 8,
+  damping: 0.04,
+  gravityScale: 1,
+  wind: [0, 0, 0],
+  turbulence: 0,
+  endObjectId: undefined,
+  endOffset: [0, 0, 0],
+  startOffset: [0, 0, 0],
+  physics: false,
+  followJoint: false,
+  physicsMode: 'rope',
+  springStiffness: 40,
+  springDamping: 4,
+  style: 'cable',
+  tensionColor: false,
+  collideFloor: false,
+  floorY: 0,
+  collideBodies: false,
   tearFactor: 0,
 });
 

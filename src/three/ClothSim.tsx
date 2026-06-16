@@ -198,7 +198,8 @@ function buildMeshTopology(geometry: THREE.BufferGeometry, cloth: ClothComponent
 }
 
 // --- Collision shapes gathered from the scene each frame -----------------------------------------
-interface ClothCollider {
+// Exported so the cable sim ({@link CableSim}) reuses the exact same body-collision pass as cloth.
+export interface ClothCollider {
   type: 'sphere' | 'box' | 'capsule';
   inv: THREE.Matrix4; // world → collider-local
   mat: THREE.Matrix4; // collider-local → world
@@ -221,10 +222,10 @@ function objectWorldMatrix(object: SceneObject): THREE.Matrix4 {
   return new THREE.Matrix4().compose(tmpV.set(px, py, pz), tmpQuat, tmpScale.set(1, 1, 1));
 }
 
-function gatherColliders(objects: SceneObject[], selfId: string, center: THREE.Vector3, range: number): ClothCollider[] {
+export function gatherColliders(objects: SceneObject[], selfId: string, center: THREE.Vector3, range: number, alsoExclude?: string): ClothCollider[] {
   const out: ClothCollider[] = [];
   for (const object of objects) {
-    if (object.id === selfId) continue;
+    if (object.id === selfId || object.id === alsoExclude) continue;
     const physics = object.physics?.enabled && !object.physics.isTrigger;
     const character = object.character?.enabled;
     if (!physics && !character) continue;
@@ -254,7 +255,7 @@ function gatherColliders(objects: SceneObject[], selfId: string, center: THREE.V
 }
 
 /** Push a single world-space point out of a collider if it's inside it. Mutates `p`. */
-function resolveCollision(p: THREE.Vector3, col: ClothCollider, margin: number) {
+export function resolveCollision(p: THREE.Vector3, col: ClothCollider, margin: number) {
   const local = tmpC.copy(p).applyMatrix4(col.inv);
   if (col.type === 'sphere') {
     const r = col.radius + margin;

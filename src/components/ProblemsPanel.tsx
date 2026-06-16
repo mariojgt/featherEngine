@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Bug } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type { AssetItem, Prefab, ProjectGraph, ScriptBlueprint, SceneObject, UIDocument, ProjectVariable } from '../types';
 
@@ -264,6 +264,69 @@ export function ProblemsButton() {
                 <span className="problems-dot" style={{ background: DOT_COLOR[problem.severity] }} />
                 <span>{problem.message}</span>
               </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Play-only sibling of {@link ProblemsButton}. The static Problems scan is frozen during Play,
+ * so a blueprint node that throws at runtime (null ref, bad cast, divide-by-zero in user logic)
+ * is otherwise only visible in the in-game console. `tickRuntime` pushes a deduped
+ * `⚠️ Script error in "<obj>": <msg>` line into `runtimeLog` for each one; this badge surfaces
+ * that count next to the run button and lists the distinct errors in a popover so the user gets
+ * an immediate signal that their scripts misbehaved.
+ */
+export function RuntimeErrorBadge() {
+  const clearRuntimeLog = useEditorStore((state) => state.clearRuntimeLog);
+  // Number selector → this only re-renders when the error count actually changes, not every
+  // frame Play mutates the store. The ⚠️ prefix is written exclusively by the script-error guard.
+  const errorCount = useEditorStore((state) => {
+    if (!state.isPlaying) return 0;
+    let n = 0;
+    for (const line of state.runtimeLog) if (line.startsWith('⚠️')) n++;
+    return n;
+  });
+  const [open, setOpen] = useState(false);
+
+  if (errorCount === 0) {
+    if (open) setOpen(false);
+    return null;
+  }
+
+  // Read full lines on demand (cheap, only while the popover is open). De-dupe identical messages.
+  const lines = open
+    ? Array.from(new Set(useEditorStore.getState().runtimeLog.filter((l) => l.startsWith('⚠️'))))
+    : [];
+
+  return (
+    <div className="problems-anchor">
+      <button
+        className="icon-button compact"
+        title={`${errorCount} script error${errorCount === 1 ? '' : 's'} during Play — click for details`}
+        style={{ color: DOT_COLOR.error }}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <Bug size={15} aria-hidden />
+        <span className="problems-badge">{errorCount}</span>
+      </button>
+      {open && (
+        <div className="problems-pop">
+          <div className="problems-head">
+            <strong>Script errors</strong>
+            <button className="problems-clear" onClick={() => clearRuntimeLog()}>
+              Clear
+            </button>
+          </div>
+          <div className="problems-rows">
+            {lines.map((line, index) => (
+              <div key={index} className="problems-row" style={{ cursor: 'default' }}>
+                <span className="problems-dot" style={{ background: DOT_COLOR.error }} />
+                <span>{line.replace(/^⚠️\s*/, '')}</span>
+              </div>
             ))}
           </div>
         </div>

@@ -147,6 +147,10 @@ export type GraphNodeKind =
   | 'query.findActorByBlueprint'
   | 'query.findActorByTag'
   | 'query.raycast'
+  | 'query.overlapSphere'
+  | 'query.cableTension'
+  | 'action.cutCable'
+  | 'action.setCableLength'
   | 'action.move'
   | 'action.drive'
   | 'action.jump'
@@ -1024,6 +1028,11 @@ export interface PhysicsComponent {
    *  when something moving faster than this speed (units/sec) slams into it — lamp posts, signs, fences,
    *  bollards. The impactor's momentum carries into the falling prop. 0/undefined = solid as ever. */
   knockOverThreshold?: number;
+  /** Continuous Collision Detection. Stops fast-moving DYNAMIC bodies from tunnelling through thin
+   *  walls/floors at high speed by sweeping the collider along its motion each step. Has a small cost,
+   *  so it's off by default — turn it on for bullets, fast vehicles, falling-from-height props.
+   *  Projectiles always get CCD regardless of this flag. */
+  ccd?: boolean;
 }
 
 export type PhysicsMaterialPresetId = 'default' | 'rubber' | 'slime' | 'ice' | 'metal' | 'stone' | 'wood' | 'mud';
@@ -1122,6 +1131,75 @@ export interface ClothComponent {
   /** Collide against nearby physics/character colliders (sphere/box/capsule approximations). */
   collideBodies: boolean;
   /** Stretch ratio past which a constraint tears (snaps). 0 = never tears. */
+  tearFactor: number;
+}
+
+/**
+ * A real-time Verlet cable / rope — the 1D sibling of {@link ClothComponent} (Unreal's Cable Component).
+ * A chain of particles linked by distance constraints, rendered as a solid TUBE through the simulated
+ * points. The START is pinned to this object's world position; the far END either hangs free or, when
+ * `endObjectId` is set, follows that object's position (Unreal's AttachEndTo) — so the cable spans two
+ * objects and sags between them. Integrates gravity + wind, takes explosion blasts, and optionally
+ * collides with the floor and nearby bodies, exactly like cloth. SEPARATE from Rapier. Animates in edit
+ * and Play. Use for power lines, tow ropes, chains, hanging wires, vines, hoses, tethers.
+ */
+export interface CableComponent {
+  enabled: boolean;
+  /** Number of links; particle count = segments + 1. Clamped to a perf-safe range. */
+  segments: number;
+  /** Rest length of the cable in world units (the slack when its two ends are pulled apart). */
+  length: number;
+  /** Tube radius (cable thickness) in world units. */
+  radius: number;
+  /** Constraint solver iterations per frame — higher = stiffer, less stretchy (and costlier). */
+  stiffness: number;
+  /** Velocity damping 0–1 (air resistance); higher = settles faster. */
+  damping: number;
+  /** Gravity multiplier (0 = floats, 1 = normal). */
+  gravityScale: number;
+  /** Constant wind force direction × strength (world space). */
+  wind: Vector3Tuple;
+  /** Random gust turbulence layered on the wind, 0–1. */
+  turbulence: number;
+  /** Attach the far end to this object (Unreal AttachEndTo). Unset/empty = the end hangs free. */
+  endObjectId?: string;
+  /** Local offset added to the end object's position for the end attach point. */
+  endOffset?: Vector3Tuple;
+  /** World-space offset of the START attach point from this object's origin (e.g. a crane-tip pulley). */
+  startOffset?: Vector3Tuple;
+  /** Physical constraint flavor when `physics` is on: 'rope' (slack→taut tether) or 'spring' (elastic bungee). */
+  physicsMode?: 'rope' | 'spring';
+  /** Spring stiffness (physicsMode 'spring'): higher = pulls harder toward `length`. */
+  springStiffness?: number;
+  /** Spring damping (physicsMode 'spring'): higher = settles faster / less bouncy. */
+  springDamping?: number;
+  /** Visual look: 'cable' (smooth tube), 'rope' (helical braid), 'chain' (beaded links), 'wire' (thin). */
+  style?: 'cable' | 'rope' | 'chain' | 'wire';
+  /** Tint the cable toward red as it nears its breaking stretch (or just goes taut) — tension feedback. */
+  tensionColor?: boolean;
+  /**
+   * PHYSICAL cable: when true (and an `endObjectId` is set), the runtime auto-maintains a Rapier ROPE
+   * joint between this object's body and the end object's body, capped at `length` — so a dynamic end
+   * actually swings/hangs under physics (wrecking ball, pendulum, tow rope) while the cable draws it.
+   * Both ends need physics bodies (the store enables them: a missing start → fixed anchor, end → dynamic).
+   * Off = the cable is purely cosmetic and just follows the end object's position.
+   */
+  physics?: boolean;
+  /**
+   * USE AN EXISTING physics joint instead of creating one. When true, the cable derives its far end from
+   * a Rapier {@link JointComponent} (add_joint) already wired on this object (its connectedObjectId) — or,
+   * if this object has none, from whatever object's joint connects TO it — and draws the rope between the
+   * two physically-constrained bodies. It creates NO joint of its own (the existing constraint is the
+   * authority), so it never double-constrains. Use this when you've already set up the wrecking-ball/
+   * pendulum joint yourself and just want the cable to visualize it. Overrides `physics`.
+   */
+  followJoint?: boolean;
+  /** Collide against a ground plane at `floorY`. */
+  collideFloor: boolean;
+  floorY: number;
+  /** Collide against nearby physics/character colliders (sphere/box/capsule approximations). */
+  collideBodies: boolean;
+  /** Stretch ratio past which a link tears (snaps the cable). 0 = never tears. */
   tearFactor: number;
 }
 
@@ -1628,6 +1706,8 @@ export interface SceneObject {
   joint?: JointComponent;
   /** Real-time cloth sheet (Verlet sim, separate from Rapier). See {@link ClothComponent}. */
   cloth?: ClothComponent;
+  /** Real-time cable/rope (Verlet sim rendered as a tube, separate from Rapier). See {@link CableComponent}. */
+  cable?: CableComponent;
   script?: ScriptGraphComponent;
   animator?: AnimatorComponent;
   character?: CharacterControllerComponent;

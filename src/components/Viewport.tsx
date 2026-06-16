@@ -38,6 +38,7 @@ import { ProjectileVisual } from '../three/ProjectileVisual';
 import { ColliderGizmo } from '../three/ColliderGizmo';
 import { JointGizmo } from '../three/JointGizmo';
 import { ClothSim } from '../three/ClothSim';
+import { CableSim } from '../three/CableSim';
 import { PostFx } from '../three/PostFx';
 import { ShadowLOD } from '../three/ShadowLOD';
 import { MeshLOD } from '../three/MeshLOD';
@@ -145,6 +146,8 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
   // among the top early-returns (before any hooks) so toggling cloth never changes this component's hook
   // count — ClothSim owns its own hooks. It resolves its material from the object's renderer internally.
   if (object.cloth?.enabled) return <ClothSim object={object} selected={selected} />;
+  // Cable/rope — a Verlet tube (separate from Rapier). Same pre-hooks early-return rule as cloth.
+  if (object.cable?.enabled) return <CableSim object={object} selected={selected} />;
   const renderer = object.renderer;
   const baseResolved = useResolvedMaterial(renderer);
   // Interaction focus highlight (during Play) — warm emissive rim, matching the standalone player.

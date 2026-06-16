@@ -8,7 +8,7 @@ import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CharacterControllerComponent, ClothComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, VehicleWheelSetup, WaterVolumeComponent } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, CableComponent, CharacterControllerComponent, ClothComponent, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, Vector3Tuple, VehicleComponent, VehicleWheelSetup, WaterVolumeComponent } from '../types';
 import { resolveVehicleWheels } from '../runtime/vehicleWheels';
 import { particlePresetIds } from '../runtime/particlePresets';
 import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
@@ -2246,6 +2246,160 @@ function ClothSection({
   );
 }
 
+function CableSection({
+  cable,
+  objectId,
+  sceneObjects,
+  onAdd,
+  onChange,
+  onRemove,
+}: {
+  cable?: CableComponent;
+  objectId: string;
+  sceneObjects: SceneObject[];
+  onAdd: () => void;
+  onChange: (patch: Partial<CableComponent>) => void;
+  onRemove: () => void;
+}) {
+  if (!cable) {
+    return (
+      <InspectorSection title="Cable">
+        <p className="field-hint">
+          Turn this object into a real-time cable / rope (Verlet sim rendered as a tube, separate from rigid-body
+          physics): power lines, tow ropes, chains, hanging wires, vines, hoses. The start follows this object;
+          attach the far end to another object to span the two.
+        </p>
+        <button className="full-button" onClick={onAdd}>Add Cable</button>
+      </InspectorSection>
+    );
+  }
+  const endTargets = sceneObjects.filter((object) => object.id !== objectId);
+  return (
+    <InspectorSection title="Cable">
+      <label className="field-row">
+        <span>Enabled</span>
+        <input type="checkbox" checked={cable.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
+      </label>
+      <label className="field-row">
+        <span>Attach end to</span>
+        <select value={cable.endObjectId ?? ''} onChange={(event) => onChange({ endObjectId: event.target.value || undefined })}>
+          <option value="">— free hanging —</option>
+          {endTargets.map((object) => (
+            <option key={object.id} value={object.id}>{object.name}</option>
+          ))}
+        </select>
+      </label>
+      <p className="field-hint">The start is pinned to this object. Pick another object to pin the far end to it (Unreal AttachEndTo); leave free to dangle.</p>
+      <VectorField label="Start offset" value={cable.startOffset ?? [0, 0, 0]} onChange={(startOffset) => onChange({ startOffset })} />
+      <p className="field-hint">Where the cable leaves THIS object (local space) — e.g. a crane-tip pulley, a hand socket.</p>
+      <label className="field-row">
+        <span>Use existing physics joint</span>
+        <input type="checkbox" checked={cable.followJoint ?? false} onChange={(event) => onChange({ followJoint: event.target.checked })} />
+      </label>
+      <p className="field-hint">
+        Already added a rope joint (Physics → Joint) to the swinging object? Turn this on and the cable just DRAWS that
+        constraint — its far end comes from the joint and it creates NO second constraint (so it won't fight your joint).
+        Leave "Attach end to" empty; the joint provides the end. Use this when you wired the physics yourself.
+      </p>
+      {(cable.endObjectId || cable.followJoint) && <VectorField label="End offset" value={cable.endOffset ?? [0, 0, 0]} onChange={(endOffset) => onChange({ endOffset })} />}
+      {cable.endObjectId && !cable.followJoint && (
+        <>
+          <label className="field-row">
+            <span>Physical (rope)</span>
+            <input type="checkbox" checked={cable.physics ?? false} onChange={(event) => onChange({ physics: event.target.checked })} />
+          </label>
+          <p className="field-hint">
+            Lets the CABLE create the rope joint for you between the two ends (capped at Length) so a dynamic end swings —
+            wrecking ball, pendulum, tow rope. Seeds bodies if missing: this object → fixed pivot, the attached end → dynamic.
+            Swings during Play. (If you already have your own joint, use "Use existing physics joint" above instead.)
+          </p>
+          {cable.physics && (
+            <>
+              <label className="field-row">
+                <span>Constraint</span>
+                <select value={cable.physicsMode ?? 'rope'} onChange={(event) => onChange({ physicsMode: event.target.value as CableComponent['physicsMode'] })}>
+                  <option value="rope">Rope (slack → taut)</option>
+                  <option value="spring">Spring (elastic / bungee)</option>
+                </select>
+              </label>
+              {cable.physicsMode === 'spring' && (
+                <>
+                  <label className="field-row">
+                    <span>Spring stiffness</span>
+                    <NumberInput value={cable.springStiffness ?? 40} min={0} step={1} onChange={(springStiffness) => onChange({ springStiffness })} />
+                  </label>
+                  <label className="field-row">
+                    <span>Spring damping</span>
+                    <NumberInput value={cable.springDamping ?? 4} min={0} step={0.5} onChange={(springDamping) => onChange({ springDamping })} />
+                  </label>
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
+      <label className="field-row">
+        <span>Length</span>
+        <NumberInput value={cable.length} min={0.1} step={0.1} onChange={(length) => onChange({ length })} />
+      </label>
+      <p className="field-hint">Rest length / slack. Longer than the gap between the ends = it sags; shorter = pulled taut.</p>
+      <label className="field-row">
+        <span>Radius</span>
+        <NumberInput value={cable.radius} min={0.005} step={0.01} onChange={(radius) => onChange({ radius })} />
+      </label>
+      <label className="field-row">
+        <span>Style</span>
+        <select value={cable.style ?? 'cable'} onChange={(event) => onChange({ style: event.target.value as CableComponent['style'] })}>
+          <option value="cable">Cable (smooth tube)</option>
+          <option value="rope">Rope (braided twist)</option>
+          <option value="chain">Chain (beaded links)</option>
+          <option value="wire">Wire (thin)</option>
+        </select>
+      </label>
+      <p className="field-hint">Visual look. Use a metal material for chain/wire. Chain/rope add a twist + link beads.</p>
+      <label className="field-row">
+        <span>Segments</span>
+        <NumberInput value={cable.segments} min={2} max={64} step={1} onChange={(segments) => onChange({ segments })} />
+      </label>
+      <p className="field-hint">Links along the cable (2–64). Higher = smoother sag, costlier.</p>
+      <label className="field-row">
+        <span>Stiffness</span>
+        <NumberInput value={cable.stiffness} min={1} max={16} step={1} onChange={(stiffness) => onChange({ stiffness })} />
+      </label>
+      <RangeField label="Damping" value={cable.damping} max={0.95} onChange={(damping) => onChange({ damping })} />
+      <label className="field-row">
+        <span>Gravity</span>
+        <NumberInput value={cable.gravityScale} step={0.1} onChange={(gravityScale) => onChange({ gravityScale })} />
+      </label>
+      <VectorField label="Wind" value={cable.wind} onChange={(wind) => onChange({ wind })} />
+      <RangeField label="Turbulence" value={cable.turbulence} onChange={(turbulence) => onChange({ turbulence })} />
+      <label className="field-row">
+        <span>Collide floor</span>
+        <input type="checkbox" checked={cable.collideFloor} onChange={(event) => onChange({ collideFloor: event.target.checked })} />
+      </label>
+      {cable.collideFloor && (
+        <label className="field-row">
+          <span>Floor Y</span>
+          <NumberInput value={cable.floorY} step={0.1} onChange={(floorY) => onChange({ floorY })} />
+        </label>
+      )}
+      <label className="field-row">
+        <span>Collide bodies</span>
+        <input type="checkbox" checked={cable.collideBodies} onChange={(event) => onChange({ collideBodies: event.target.checked })} />
+      </label>
+      <p className="field-hint">Collides with nearby physics/character colliders (sphere/box/capsule approximations).</p>
+      <RangeField label="Tear" value={cable.tearFactor} max={5} onChange={(tearFactor) => onChange({ tearFactor })} />
+      <p className="field-hint">0 = never tears; &gt;1 lets the cable snap when stretched past that ratio.</p>
+      <label className="field-row">
+        <span>Tension color</span>
+        <input type="checkbox" checked={cable.tensionColor ?? false} onChange={(event) => onChange({ tensionColor: event.target.checked })} />
+      </label>
+      <p className="field-hint">Tints the cable toward red as it nears its breaking stretch — visual strain feedback.</p>
+      <button className="full-button" onClick={onRemove}>Remove Cable</button>
+    </InspectorSection>
+  );
+}
+
 function PhysicsSection({
   physics,
   onChange,
@@ -2332,6 +2486,13 @@ function PhysicsSection({
             <NumberInput value={physics.windInfluence ?? 0} min={0} step={0.1} onChange={(windInfluence) => onChange({ windInfluence })} />
           </label>
           <p className="field-hint">How strongly global scene Wind pushes this body. 0 = ignores wind. Set the wind itself in Scene Settings.</p>
+          <label className="field-row">
+            <span>Continuous collision</span>
+            <input type="checkbox" checked={physics.ccd ?? false} onChange={(event) => onChange({ ccd: event.target.checked })} />
+          </label>
+          {physics.ccd && (
+            <p className="field-hint">Stops this body tunnelling through thin walls/floors at high speed. Small cost — use for fast objects.</p>
+          )}
         </>
       )}
       {physics.bodyType === 'fixed' && (
@@ -2525,6 +2686,9 @@ export function InspectorPanel() {
   const addCloth = useEditorStore((state) => state.addCloth);
   const updateCloth = useEditorStore((state) => state.updateCloth);
   const removeCloth = useEditorStore((state) => state.removeCloth);
+  const addCable = useEditorStore((state) => state.addCable);
+  const updateCable = useEditorStore((state) => state.updateCable);
+  const removeCable = useEditorStore((state) => state.removeCable);
   // Structurally-stable list: motion during Play must not re-render the whole Inspector 60×/s.
   const sceneObjects = useStableActiveObjects();
   const toggleAnimator = useEditorStore((state) => state.toggleAnimator);
@@ -2741,6 +2905,15 @@ export function InspectorPanel() {
             onAdd={() => addCloth(object.id)}
             onChange={(patch) => updateCloth(object.id, patch)}
             onRemove={() => removeCloth(object.id)}
+          />
+
+          <CableSection
+            cable={object.cable}
+            objectId={object.id}
+            sceneObjects={sceneObjects}
+            onAdd={() => addCable(object.id)}
+            onChange={(patch) => updateCable(object.id, patch)}
+            onRemove={() => removeCable(object.id)}
           />
 
           {object.renderer && object.kind !== 'terrain' && (

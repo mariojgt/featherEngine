@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { PREFAB_EDIT_SCENE_ID } from '../types';
-import { ProblemsButton } from './ProblemsPanel';
+import { ProblemsButton, RuntimeErrorBadge } from './ProblemsPanel';
 import { useEditorStore } from '../store/editorStore';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
@@ -450,9 +450,14 @@ export function Toolbar() {
       <BuildProgressOverlay />
       <BuildReportDialog />
 
-      <div className="project-pill" title={projectName}>
+      <div className={isDirty ? 'project-pill dirty' : 'project-pill'} title={isDirty ? `${projectName} — unsaved changes (⌘S to save)` : projectName}>
         <span>{projectName}</span>
-        {isDirty && <span className="dirty-dot" title="Unsaved changes" />}
+        {isDirty && (
+          <>
+            <span className="dirty-dot" />
+            <span className="dirty-label">Unsaved</span>
+          </>
+        )}
       </div>
 
       <AnimatePresence mode="popLayout">
@@ -487,6 +492,7 @@ export function Toolbar() {
           {isPlaying ? <Pause size={16} aria-hidden /> : <Play size={16} aria-hidden />}
           <span>{isPlaying ? 'Running' : 'Play'}</span>
         </button>
+        <RuntimeErrorBadge />
         <ProblemsButton />
         <button className="export-button" title="Save project (⌘S)" onClick={() => void save()} disabled={busy}>
           <Save size={16} aria-hidden />
