@@ -28,6 +28,7 @@ export function WorldUIAnchor({ object }: { object: SceneObject }) {
   const runtimeVariableValues = useEditorStore((state) => state.runtimeVariableValues);
   const runtimeObjectVariables = useEditorStore((state) => state.runtimeObjectVariables);
   const assets = useEditorStore((state) => state.assets);
+  const setRuntimeVariableByName = useEditorStore((state) => state.setRuntimeVariableByName);
 
   if (!ui || !doc || doc.surface !== 'world') return null;
 
@@ -79,7 +80,12 @@ export function WorldUIAnchor({ object }: { object: SceneObject }) {
       <Html center transform={!ui.billboard} distanceFactor={ui.billboard ? undefined : 8} pointerEvents="none" zIndexRange={[10, 0]}>
         <div style={{ transform: `scale(${ui.scale})`, transformOrigin: 'center', pointerEvents: 'none' }}>
           {doc.css ? <style>{doc.css}</style> : null}
-          <UIElementView element={doc.root} ctx={ctx} resolveAssetUrl={resolveAssetUrl} />
+          <UIElementView
+            element={doc.root}
+            ctx={ctx}
+            resolveAssetUrl={resolveAssetUrl}
+            onValueChange={(el, value) => el.valueVariable && setRuntimeVariableByName(el.valueVariable, value)}
+          />
         </div>
       </Html>
     </group>

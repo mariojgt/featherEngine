@@ -2328,8 +2328,13 @@ export interface ProjectGraph {
   edges: Edge[];
 }
 
-/** Kinds of UI element a document can contain. */
-export type UIElementKind = 'panel' | 'text' | 'image' | 'bar' | 'button' | 'scroll';
+/**
+ * Kinds of UI element a document can contain.
+ * Static: panel, text, image, bar, scroll.
+ * Interactive (read/write a project variable via `valueVariable` during Play): button, input,
+ * toggle, slider, dropdown.
+ */
+export type UIElementKind = 'panel' | 'text' | 'image' | 'bar' | 'button' | 'scroll' | 'input' | 'toggle' | 'slider' | 'dropdown';
 
 /** Whether a UI document draws on the player's screen (HUD) or anchored in the 3D world. */
 export type UISurface = 'screen' | 'world';
@@ -2338,10 +2343,20 @@ export type UISurface = 'screen' | 'world';
 export interface UIStyle {
   width?: string;
   height?: string;
+  /** Size constraints (first-class so the WebGL backend honours them too). */
+  minWidth?: string;
+  maxWidth?: string;
+  minHeight?: string;
+  maxHeight?: string;
   padding?: string;
   margin?: string;
-  display?: 'flex' | 'block' | 'none';
+  /** `'grid'` lays children out in `gridColumns` equal columns (DOM CSS grid; WebGL falls back to wrapped flex). */
+  display?: 'flex' | 'block' | 'none' | 'grid';
+  /** Number of equal-width columns when `display: 'grid'` (default 2). */
+  gridColumns?: number;
   flexDirection?: 'row' | 'column';
+  /** Allow flex children to wrap onto multiple lines (DOM only; required for grid-like flex). */
+  flexWrap?: 'nowrap' | 'wrap';
   alignItems?: string;
   justifyContent?: string;
   gap?: string;
@@ -2350,16 +2365,44 @@ export interface UIStyle {
   opacity?: number;
   border?: string;
   borderRadius?: string;
+  /** CSS box-shadow (also drives elevation in themes). DOM only. */
+  boxShadow?: string;
   fontSize?: string;
   fontWeight?: string;
   fontFamily?: string;
   textAlign?: 'left' | 'center' | 'right';
+  /** Text-shadow / outline-glow string, e.g. "0 0 8px #5adcff". DOM only. */
+  textShadow?: string;
+  /** How overflowing text is handled. 'ellipsis' truncates with "…" (needs nowrap). */
+  textOverflow?: 'clip' | 'ellipsis';
+  /** Whitespace handling for text wrapping. */
+  whiteSpace?: 'normal' | 'nowrap' | 'pre';
   /** Free placement within the parent — set when an element is dragged on the design canvas. */
   position?: 'absolute' | 'relative';
   left?: string;
   top?: string;
   /** Arbitrary CSS properties the inspector doesn't surface (camelCase keys). */
   custom?: Record<string, string>;
+}
+
+/** Pointer-state style overlays, merged over the base style on hover/press/disabled (button + interactive kinds). */
+export interface UIInteractionStates {
+  hover?: UIStyle;
+  active?: UIStyle;
+  disabled?: UIStyle;
+}
+
+/** Entrance/looping animation played by an element when it appears (DOM backend). */
+export interface UIAnimation {
+  type: 'fade' | 'scale' | 'pop' | 'slideUp' | 'slideDown' | 'slideLeft' | 'slideRight' | 'pulse' | 'spin';
+  /** Seconds (default 0.3). */
+  duration?: number;
+  /** Delay before it starts, seconds (default 0). */
+  delay?: number;
+  /** CSS easing (default 'ease-out'). */
+  easing?: string;
+  /** Repeat forever (pulse/spin); otherwise plays once on appear. */
+  loop?: boolean;
 }
 
 /** One-click widget templates inserted by the UI editor / AI (addUIPreset). */
@@ -2375,7 +2418,7 @@ export interface UIAnchor {
 
 /** Drives one element property from a runtime expression (e.g. `health / maxHealth`). */
 export interface UIBinding {
-  target: 'text' | 'fill' | 'visible' | 'color' | 'background' | 'width';
+  target: 'text' | 'fill' | 'visible' | 'color' | 'background' | 'width' | 'disabled';
   expression: string;
 }
 
@@ -2389,12 +2432,38 @@ export interface UIElement {
   text?: string;
   /** Image source asset id. */
   assetId?: string;
+  /**
+   * Image scaling (image kind). 'stretch' fills exactly, 'contain'/'cover' preserve aspect ratio,
+   * 'nineSlice' keeps the corners fixed and stretches the middle (scalable panels/borders — uses
+   * `sliceInset` px from each edge as the unstretched border). Defaults to 'stretch'.
+   */
+  imageFit?: 'stretch' | 'contain' | 'cover' | 'nineSlice';
+  /** Border inset in px for `imageFit: 'nineSlice'` (default 12). */
+  sliceInset?: number;
   style: UIStyle;
+  /** Pointer-state style overlays (button + interactive kinds): hover/press/disabled. */
+  states?: UIInteractionStates;
+  /** Entrance/looping animation played when the element appears. */
+  animation?: UIAnimation;
   /** Screen surface only — placement of this element's subtree. */
   anchor?: UIAnchor;
   bindings: UIBinding[];
   /** Button only — fires this custom runtime event on click (consumed by event.custom nodes). */
   onClickEvent?: string;
+  /**
+   * Interactive kinds (input/toggle/slider/dropdown) read AND write this project variable BY NAME
+   * during Play (two-way binding): the control shows the variable's live value and edits push back
+   * into it via the runtime. Empty = the control is display-only.
+   */
+  valueVariable?: string;
+  /** Placeholder text for an `input` element. */
+  placeholder?: string;
+  /** Slider numeric range / step (defaults 0..100 step 1). */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** Dropdown choices. The selected option string is written to `valueVariable`. */
+  options?: string[];
   /**
    * WebGL-backend visual effect (only honoured when the document's `renderMode` is `'webgl'`).
    * `'glow'` adds emissive bloom (pairs with the HUD bloom pass), `'holographic'` an animated

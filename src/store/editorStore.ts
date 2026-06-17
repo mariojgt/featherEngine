@@ -912,6 +912,11 @@ interface EditorState {
   hideUI: (docId: string) => void;
   /** Runtime: override an element's text (driven by ui.setText nodes). */
   setUIText: (docId: string, elementId: string, text: string) => void;
+  /**
+   * Runtime: write a project variable BY NAME from an interactive UI control (input/toggle/slider/
+   * dropdown two-way binding). No-op outside Play; coerces to the variable's declared type.
+   */
+  setRuntimeVariableByName: (name: string, value: GraphValue) => void;
   ensureMaterialGraph: (materialId: string) => void;
   addMaterialNode: (
     label: string,
@@ -4852,7 +4857,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         .map((variable) => ({
           id: makeId('var'),
           name: variable.name,
-          type: 'number' as const,
+          type: variable.type ?? ('number' as const),
           defaultValue: variable.defaultValue,
           persistent: true,
           createdAt: Date.now(),
@@ -5053,6 +5058,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => ({ runtimeVisibleUI: { ...state.runtimeVisibleUI, [docId]: false } })),
   setUIText: (docId, elementId, text) =>
     set((state) => ({ runtimeUITextOverrides: { ...state.runtimeUITextOverrides, [`${docId}:${elementId}`]: text } })),
+  setRuntimeVariableByName: (name, value) =>
+    set((state) => {
+      if (!state.isPlaying) return {};
+      const variable = state.variables.find((v) => v.name === name);
+      if (!variable) return {};
+      return {
+        runtimeVariableValues: {
+          ...state.runtimeVariableValues,
+          [variable.id]: coerceGraphValue(value, variable.type),
+        },
+      };
+    }),
   ensureMaterialGraph: (materialId) => {
     const state = get();
     const material = state.materials.find((item) => item.id === materialId);

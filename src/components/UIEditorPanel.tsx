@@ -18,6 +18,11 @@ import {
   RectangleHorizontal,
   ScrollText,
   Skull,
+  SlidersHorizontal,
+  TextCursorInput,
+  ToggleLeft,
+  Sparkles,
+  ListChecks,
   Trash2,
   Type as TextIcon,
   Workflow,
@@ -25,6 +30,7 @@ import {
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { UI_TEMPLATES, UI_THEMES, type UITemplateKind } from '../store/editor/ui';
+import { UI_ANIMATION_TYPES } from '../ui/uiAnimations';
 import { UIEditLayer } from '../ui/UIEditLayer';
 import { UILogicGraph } from './UILogicGraph';
 import type { UIBinding, UIDocument, UIElement, UIElementKind, UIPresetKind } from '../types';
@@ -35,6 +41,7 @@ const TEMPLATE_ICON: Record<UITemplateKind, typeof PanelIcon> = {
   racing: Car,
   pauseMenu: Pause,
   gameOver: Skull,
+  settings: SlidersHorizontal,
 };
 
 type Mode = 'design' | 'logic';
@@ -46,6 +53,10 @@ const ELEMENT_KINDS: Array<{ kind: UIElementKind; label: string; icon: typeof Pa
   { kind: 'button', label: 'Button', icon: MousePointerClick },
   { kind: 'image', label: 'Image', icon: ImageIcon },
   { kind: 'scroll', label: 'Scroll List', icon: ScrollText },
+  { kind: 'input', label: 'Input', icon: TextCursorInput },
+  { kind: 'toggle', label: 'Toggle', icon: ToggleLeft },
+  { kind: 'slider', label: 'Slider', icon: SlidersHorizontal },
+  { kind: 'dropdown', label: 'Dropdown', icon: ChevronDown },
 ];
 
 /** 9-slice anchor presets for the inspector (screen docs) — `${h}:${v}` value ↔ UIAnchor fields. */
@@ -72,6 +83,10 @@ const KIND_ICON: Record<UIElementKind, typeof PanelIcon> = {
   button: MousePointerClick,
   image: ImageIcon,
   scroll: ScrollText,
+  input: TextCursorInput,
+  toggle: ToggleLeft,
+  slider: SlidersHorizontal,
+  dropdown: ChevronDown,
 };
 
 const PRESETS: Array<{ preset: UIPresetKind; label: string; icon: typeof PanelIcon }> = [
@@ -89,7 +104,12 @@ function bindableTargetsFor(kind: UIElementKind): UIBinding['target'][] {
     case 'text':
       return ['text', 'color', 'visible'];
     case 'button':
-      return ['text', 'background', 'color', 'visible'];
+      return ['text', 'background', 'color', 'visible', 'disabled'];
+    case 'input':
+    case 'toggle':
+    case 'slider':
+    case 'dropdown':
+      return ['background', 'color', 'visible', 'disabled'];
     case 'image':
       return ['width', 'visible'];
     case 'panel':
@@ -106,6 +126,7 @@ const TARGET_LABEL: Record<UIBinding['target'], string> = {
   color: 'Color',
   background: 'Background',
   width: 'Width',
+  disabled: 'Disabled',
 };
 
 type Source = 'fixed' | 'variable' | 'self' | 'expression';
@@ -250,8 +271,13 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
   const imageAssets = useMemo(() => assets.filter((asset) => asset.type === 'image'), [assets]);
   const knownVars = useMemo(() => new Set(variables.map((v) => v.name)), [variables]);
 
-  const patchStyle = (patch: Record<string, string | undefined>) => updateUIElement(doc.id, element.id, { style: { ...element.style, ...patch } });
+  const patchStyle = (patch: Record<string, string | number | undefined>) => updateUIElement(doc.id, element.id, { style: { ...element.style, ...patch } });
+  const patchEl = (patch: Partial<UIElement>) => updateUIElement(doc.id, element.id, patch);
   const setSource = (target: UIBinding['target'], p: Parsed) => setUIBinding(doc.id, element.id, target, buildExpression(p, target));
+  const interactive = element.kind === 'button' || element.kind === 'input' || element.kind === 'toggle' || element.kind === 'slider' || element.kind === 'dropdown';
+  const valueControl = element.kind === 'input' || element.kind === 'toggle' || element.kind === 'slider' || element.kind === 'dropdown';
+  const patchState = (key: 'hover' | 'active' | 'disabled', stylePatch: Record<string, string | undefined>) =>
+    patchEl({ states: { ...element.states, [key]: { ...(element.states?.[key] ?? {}), ...stylePatch } } });
 
   return (
     <div className="node-inspector-body">
@@ -267,21 +293,94 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
         </label>
       )}
       {element.kind === 'image' && (
-        <label className="node-field">
-          <span>Image</span>
-          <select value={element.assetId ?? ''} onChange={(event) => updateUIElement(doc.id, element.id, { assetId: event.target.value || undefined })}>
-            <option value="">None</option>
-            {imageAssets.map((asset) => (
-              <option key={asset.id} value={asset.id}>{asset.name}</option>
-            ))}
-          </select>
-        </label>
+        <>
+          <label className="node-field">
+            <span>Image</span>
+            <select value={element.assetId ?? ''} onChange={(event) => updateUIElement(doc.id, element.id, { assetId: event.target.value || undefined })}>
+              <option value="">None</option>
+              {imageAssets.map((asset) => (
+                <option key={asset.id} value={asset.id}>{asset.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="node-field" title="How the image scales. 9-slice keeps corners fixed for scalable panels/borders.">
+            <span>Scaling</span>
+            <select value={element.imageFit ?? 'stretch'} onChange={(event) => patchEl({ imageFit: event.target.value as UIElement['imageFit'] })}>
+              <option value="stretch">Stretch</option>
+              <option value="contain">Contain (fit)</option>
+              <option value="cover">Cover (fill)</option>
+              <option value="nineSlice">9-slice (scalable border)</option>
+            </select>
+          </label>
+          {element.imageFit === 'nineSlice' && (
+            <label className="node-field">
+              <span>Slice inset (px)</span>
+              <input type="number" min={1} value={element.sliceInset ?? 12} onChange={(event) => patchEl({ sliceInset: Math.max(1, Number(event.target.value)) })} />
+            </label>
+          )}
+        </>
       )}
       {element.kind === 'button' && (
         <label className="node-field">
           <span>On click → event</span>
           <input value={element.onClickEvent ?? ''} placeholder="e.g. restart" onChange={(event) => updateUIElement(doc.id, element.id, { onClickEvent: event.target.value || undefined })} />
         </label>
+      )}
+
+      {/* Interactive controls: two-way bind to a variable (reads + writes it during Play). */}
+      {valueControl && (
+        <>
+          <label className="node-field" title="The control shows this variable's live value and writes edits back to it during Play.">
+            <span>Bind to variable</span>
+            <div className="ui-bind-fields">
+              <select value={element.valueVariable ?? ''} onChange={(event) => patchEl({ valueVariable: event.target.value || undefined })}>
+                <option value="">None (display only)</option>
+                {variables.map((v) => (
+                  <option key={v.id} value={v.name}>{v.name}</option>
+                ))}
+              </select>
+              <button
+                className="ui-bind-newvar"
+                title="New variable"
+                onClick={() => {
+                  const type = element.kind === 'toggle' ? 'boolean' : element.kind === 'input' || element.kind === 'dropdown' ? 'string' : 'number';
+                  const id = createVariable(undefined, type, false);
+                  const name = useEditorStore.getState().variables.find((v) => v.id === id)?.name;
+                  if (name) patchEl({ valueVariable: name });
+                }}
+              >
+                <Plus size={12} aria-hidden />
+              </button>
+            </div>
+          </label>
+          {(element.kind === 'input' || element.kind === 'toggle') && (
+            <label className="node-field">
+              <span>{element.kind === 'input' ? 'Placeholder' : 'Label'}</span>
+              {element.kind === 'input' ? (
+                <input value={element.placeholder ?? ''} onChange={(event) => patchEl({ placeholder: event.target.value || undefined })} />
+              ) : (
+                <input value={element.text ?? ''} onChange={(event) => patchEl({ text: event.target.value })} />
+              )}
+            </label>
+          )}
+          {element.kind === 'slider' && (
+            <div className="node-vector-field">
+              <label className="node-field"><span>Min</span><input type="number" value={element.min ?? 0} onChange={(event) => patchEl({ min: Number(event.target.value) })} /></label>
+              <label className="node-field"><span>Max</span><input type="number" value={element.max ?? 100} onChange={(event) => patchEl({ max: Number(event.target.value) })} /></label>
+              <label className="node-field"><span>Step</span><input type="number" value={element.step ?? 1} onChange={(event) => patchEl({ step: Number(event.target.value) })} /></label>
+            </div>
+          )}
+          {element.kind === 'dropdown' && (
+            <label className="node-field" title="One option per line. The selected line's text is written to the variable.">
+              <span>Options</span>
+              <textarea
+                rows={3}
+                value={(element.options ?? []).join('\n')}
+                onChange={(event) => patchEl({ options: event.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })}
+              />
+            </label>
+          )}
+        </>
       )}
 
       {(doc.renderMode === 'webgl') && (
@@ -307,6 +406,55 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
         <StyleField label="W" value={element.style.width ?? ''} placeholder="auto" onChange={(v) => patchStyle({ width: v || undefined })} />
         <StyleField label="H" value={element.style.height ?? ''} placeholder="auto" onChange={(v) => patchStyle({ height: v || undefined })} />
       </div>
+      <div className="node-vector-field">
+        <StyleField label="Min W" value={element.style.minWidth ?? ''} placeholder="—" onChange={(v) => patchStyle({ minWidth: v || undefined })} />
+        <StyleField label="Max W" value={element.style.maxWidth ?? ''} placeholder="—" onChange={(v) => patchStyle({ maxWidth: v || undefined })} />
+        <StyleField label="Min H" value={element.style.minHeight ?? ''} placeholder="—" onChange={(v) => patchStyle({ minHeight: v || undefined })} />
+        <StyleField label="Max H" value={element.style.maxHeight ?? ''} placeholder="—" onChange={(v) => patchStyle({ maxHeight: v || undefined })} />
+      </div>
+      {(element.kind === 'panel' || element.kind === 'scroll') && (
+        <>
+          <label className="node-field">
+            <span>Layout</span>
+            <select
+              value={element.style.display === 'grid' ? 'grid' : element.style.flexDirection === 'row' ? 'row' : 'column'}
+              onChange={(event) => {
+                const v = event.target.value;
+                if (v === 'grid') patchStyle({ display: 'grid', flexDirection: undefined });
+                else patchStyle({ display: 'flex', flexDirection: v as 'row' | 'column' });
+              }}
+            >
+              <option value="column">Stack (column)</option>
+              <option value="row">Row</option>
+              <option value="grid">Grid</option>
+            </select>
+          </label>
+          {element.style.display === 'grid' && (
+            <label className="node-field">
+              <span>Grid columns</span>
+              <input type="number" min={1} value={element.style.gridColumns ?? 2} onChange={(event) => patchStyle({ gridColumns: Math.max(1, Number(event.target.value)) })} />
+            </label>
+          )}
+        </>
+      )}
+      {(element.kind === 'text' || element.kind === 'button') && (
+        <>
+          <StyleField label="Text Shadow" value={element.style.textShadow ?? ''} placeholder="0 0 8px #5adcff" onChange={(v) => patchStyle({ textShadow: v || undefined })} />
+          <label className="node-field">
+            <span>Overflow</span>
+            <select value={element.style.textOverflow === 'ellipsis' ? 'ellipsis' : element.style.whiteSpace === 'nowrap' ? 'nowrap' : 'wrap'} onChange={(event) => {
+              const v = event.target.value;
+              if (v === 'ellipsis') patchStyle({ textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+              else if (v === 'nowrap') patchStyle({ textOverflow: undefined, whiteSpace: 'nowrap' });
+              else patchStyle({ textOverflow: undefined, whiteSpace: undefined });
+            }}>
+              <option value="wrap">Wrap</option>
+              <option value="nowrap">No wrap</option>
+              <option value="ellipsis">Ellipsis (…)</option>
+            </select>
+          </label>
+        </>
+      )}
       {element.style.position === 'absolute' && (
         <>
           <div className="node-vector-field">
@@ -370,6 +518,42 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
             </div>
           )}
         </>
+      )}
+
+      {/* Pointer states (interactive kinds): hover / press / disabled colour overlays. */}
+      {interactive && (
+        <>
+          <h4 className="ui-inspector-sub"><ListChecks size={12} aria-hidden /> States</h4>
+          <p className="nfn-desc">Background colour while hovered, pressed, or disabled.</p>
+          <StyleField label="Hover bg" type="color" value={element.states?.hover?.background ?? '#6f9bff'} onChange={(v) => patchState('hover', { background: v })} />
+          <StyleField label="Press bg" type="color" value={element.states?.active?.background ?? '#4a78e6'} onChange={(v) => patchState('active', { background: v })} />
+        </>
+      )}
+
+      {/* Entrance / looping animation (DOM backend). */}
+      <h4 className="ui-inspector-sub"><Sparkles size={12} aria-hidden /> Animation</h4>
+      <label className="node-field">
+        <span>Play on appear</span>
+        <select
+          value={element.animation?.type ?? ''}
+          onChange={(event) => {
+            const type = event.target.value as NonNullable<UIElement['animation']>['type'] | '';
+            if (!type) patchEl({ animation: undefined });
+            else patchEl({ animation: { duration: 0.3, ...element.animation, type } });
+          }}
+        >
+          <option value="">None</option>
+          {UI_ANIMATION_TYPES.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </label>
+      {element.animation && (
+        <div className="node-vector-field">
+          <label className="node-field"><span>Dur (s)</span><input type="number" step={0.05} value={element.animation.duration ?? 0.3} onChange={(event) => patchEl({ animation: { ...element.animation!, duration: Number(event.target.value) } })} /></label>
+          <label className="node-field"><span>Delay</span><input type="number" step={0.05} value={element.animation.delay ?? 0} onChange={(event) => patchEl({ animation: { ...element.animation!, delay: Number(event.target.value) } })} /></label>
+          <label className="node-field" title="Repeat forever (pulse/spin)"><span>Loop</span><input type="checkbox" checked={!!element.animation.loop} onChange={(event) => patchEl({ animation: { ...element.animation!, loop: event.target.checked } })} /></label>
+        </div>
       )}
 
       {/* Live values (folded-in binding builder, no "Bind" jargon) */}

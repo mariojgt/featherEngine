@@ -27,7 +27,29 @@ export const makeUIElement = (kind: UIElementKind, name?: string): UIElement => 
     };
   if (kind === 'text' || kind === 'button') base.text = kind === 'button' ? 'Button' : 'Text';
   if (kind === 'bar') base.style = { width: '160px', height: '16px', background: '#23262F', borderRadius: '8px' };
-  if (kind === 'button') base.style = { padding: '6px 12px', background: '#5B8CFF', color: '#fff', borderRadius: '8px' };
+  if (kind === 'button') {
+    base.style = { padding: '6px 12px', background: '#5B8CFF', color: '#fff', borderRadius: '8px' };
+    // A subtle default hover/press feel so new buttons react out of the box.
+    base.states = { hover: { background: '#6f9bff' }, active: { background: '#4a78e6' }, disabled: { opacity: 0.45 } };
+  }
+  if (kind === 'input') {
+    base.placeholder = 'Type here…';
+    base.style = { width: '200px', padding: '8px 10px', background: 'rgba(15,17,23,0.9)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '8px', fontSize: '14px' };
+  }
+  if (kind === 'toggle') {
+    base.text = 'Toggle';
+    base.style = { padding: '8px 12px', background: 'rgba(15,17,23,0.9)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '8px', display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '8px' };
+  }
+  if (kind === 'slider') {
+    base.min = 0;
+    base.max = 100;
+    base.step = 1;
+    base.style = { width: '200px', height: '20px' };
+  }
+  if (kind === 'dropdown') {
+    base.options = ['Option A', 'Option B', 'Option C'];
+    base.style = { width: '200px', padding: '8px 10px', background: 'rgba(15,17,23,0.9)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '8px', fontSize: '14px' };
+  }
   return base;
 };
 
@@ -158,7 +180,7 @@ export const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElem
 // One click drops in a complete, good-looking, data-bound screen — instead of assembling widgets
 // element by element. Each returns a whole document plus the project variables it binds to (created
 // by the store if missing) so it works out of the box.
-export type UITemplateKind = 'shooter' | 'platformer' | 'racing' | 'pauseMenu' | 'gameOver';
+export type UITemplateKind = 'shooter' | 'platformer' | 'racing' | 'pauseMenu' | 'gameOver' | 'settings';
 
 export const UI_TEMPLATES: Array<{ kind: UITemplateKind; label: string; blurb: string }> = [
   { kind: 'shooter', label: 'Shooter HUD', blurb: 'Health · ammo · score · crosshair' },
@@ -166,9 +188,10 @@ export const UI_TEMPLATES: Array<{ kind: UITemplateKind; label: string; blurb: s
   { kind: 'racing', label: 'Racing HUD', blurb: 'Speed · lap · position' },
   { kind: 'pauseMenu', label: 'Pause Menu', blurb: 'Resume · Restart · Quit' },
   { kind: 'gameOver', label: 'Game Over', blurb: 'Score readout · Retry' },
+  { kind: 'settings', label: 'Settings Menu', blurb: 'Volume · difficulty · toggle · name' },
 ];
 
-export type UITemplateVar = { name: string; defaultValue: number };
+export type UITemplateVar = { name: string; defaultValue: number | string | boolean; type?: 'number' | 'string' | 'boolean' };
 export type UITemplateResult = { doc: UIDocument; vars: UITemplateVar[] };
 
 const anchor = (el: UIElement, h: UIAnchor['h'], v: UIAnchor['v'], offsetX = 24, offsetY = 22): UIElement => {
@@ -240,6 +263,58 @@ export const makeUITemplate = (kind: UITemplateKind): UITemplateResult => {
       menu.children = [title, menuButton('Resume', 'resumeGame'), menuButton('Restart', 'restartGame'), menuButton('Quit', 'quitGame')];
       doc.root.children = [anchor(menu, 'center', 'middle', 0, 0)];
       return { doc, vars: [] };
+    }
+    case 'settings': {
+      const doc = makeUIDocument('Settings Menu', 'screen');
+      doc.visibleOnStart = false;
+      doc.root.style = { background: 'rgba(5,7,11,0.6)' };
+      const card = makeUIElement('panel', 'Card');
+      card.style = { display: 'flex', flexDirection: 'column', gap: '14px', padding: '28px 32px', background: 'rgba(17,20,28,0.96)', borderRadius: '16px', custom: { minWidth: '320px', boxShadow: '0 18px 52px rgba(0,0,0,0.45)' } };
+      card.animation = { type: 'pop', duration: 0.3 };
+      const title = text('Title', 'Settings', { color: '#fff', fontSize: '24px', fontWeight: '800', textAlign: 'center' });
+
+      // A labelled control row (label on the left, control on the right).
+      const row = (name: string, label: string, control: UIElement): UIElement => {
+        const r = makeUIElement('panel', name);
+        r.style = { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: '16px' };
+        const l = text('Label', label, { color: '#cdd5e3', fontSize: '14px', fontWeight: '600' });
+        r.children = [l, control];
+        return r;
+      };
+
+      const volume = makeUIElement('slider', 'Volume');
+      volume.valueVariable = 'volume';
+      volume.min = 0;
+      volume.max = 100;
+      volume.style = { width: '180px', height: '20px', color: '#5B8CFF' };
+
+      const difficulty = makeUIElement('dropdown', 'Difficulty');
+      difficulty.valueVariable = 'difficulty';
+      difficulty.options = ['Easy', 'Normal', 'Hard'];
+      difficulty.style = { width: '180px', padding: '8px 10px', background: 'rgba(10,12,18,0.9)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '8px' };
+
+      const fullscreen = makeUIElement('toggle', 'Fullscreen');
+      fullscreen.valueVariable = 'fullscreen';
+      fullscreen.text = '';
+      fullscreen.style = { color: '#5B8CFF' };
+
+      const name = makeUIElement('input', 'Player Name');
+      name.valueVariable = 'playerName';
+      name.placeholder = 'Player 1';
+      name.style = { width: '180px', padding: '8px 10px', background: 'rgba(10,12,18,0.9)', color: '#fff', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '8px' };
+
+      const back = menuButton('Back', 'closeSettings');
+      card.children = [title, row('VolumeRow', 'Volume', volume), row('DifficultyRow', 'Difficulty', difficulty), row('FullscreenRow', 'Fullscreen', fullscreen), row('NameRow', 'Name', name), back];
+      doc.root.children = [anchor(card, 'center', 'middle', 0, 0)];
+      return {
+        doc,
+        vars: [
+          { name: 'volume', defaultValue: 80, type: 'number' },
+          { name: 'difficulty', defaultValue: 'Normal', type: 'string' },
+          { name: 'fullscreen', defaultValue: true, type: 'boolean' },
+          { name: 'playerName', defaultValue: 'Player 1', type: 'string' },
+        ],
+      };
     }
     case 'gameOver':
     default: {

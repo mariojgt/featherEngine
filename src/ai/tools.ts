@@ -2902,10 +2902,10 @@ const rawEngineTools = {
 
   create_ui_template: tool({
     description:
-      'Create a polished screen UI in one call. Generic mockups: "hud", "mainMenu", "dialogue", "inventory". Ready-made GAME HUDs/menus (assemble corner-anchored, data-bound widgets AND auto-create the project variables they bind to, so they show live data immediately): "shooterHud" (health bar + ammo + score + crosshair), "platformerHud" (lives + score + coins), "racingHud" (speed + lap + position), "pauseMenu" (Resume/Restart/Quit buttons firing resumeGame/restartGame/quitGame events, hidden on start), "gameOver" (score + Retry firing restartGame, hidden on start). Prefer the game kinds when the user names a genre HUD; tweak afterward with the other ui tools / set_ui_render_mode.',
+      'Create a polished screen UI in one call. Generic mockups: "hud", "mainMenu", "dialogue", "inventory". Ready-made GAME HUDs/menus (assemble corner-anchored, data-bound widgets AND auto-create the project variables they bind to, so they show live data immediately): "shooterHud" (health bar + ammo + score + crosshair), "platformerHud" (lives + score + coins), "racingHud" (speed + lap + position), "pauseMenu" (Resume/Restart/Quit buttons firing resumeGame/restartGame/quitGame events, hidden on start), "gameOver" (score + Retry firing restartGame, hidden on start), "settings" (volume SLIDER, difficulty DROPDOWN, fullscreen TOGGLE, name INPUT — each two-way-bound to an auto-created variable — plus a Back button firing closeSettings; hidden on start; showcases interactive controls + keyboard/gamepad focus nav). Prefer the game kinds when the user names a genre HUD; tweak afterward with the other ui tools / set_ui_render_mode.',
     inputSchema: z.object({
       template: z
-        .enum(['hud', 'mainMenu', 'dialogue', 'inventory', 'shooterHud', 'platformerHud', 'racingHud', 'pauseMenu', 'gameOver'])
+        .enum(['hud', 'mainMenu', 'dialogue', 'inventory', 'shooterHud', 'platformerHud', 'racingHud', 'pauseMenu', 'gameOver', 'settings'])
         .optional()
         .describe('Defaults to hud.'),
       name: z.string().optional(),
@@ -2922,6 +2922,7 @@ const rawEngineTools = {
         racingHud: 'racing',
         pauseMenu: 'pauseMenu',
         gameOver: 'gameOver',
+        settings: 'settings',
       };
       const gameKind = gameTemplate[template];
       if (gameKind) {
@@ -3145,11 +3146,11 @@ const rawEngineTools = {
 
   add_ui_element: tool({
     description:
-      'Add a UI element under a parent or root. Kinds: panel, text, bar, button, image, scroll (a scrollable list container). Returns elementId.',
+      'Add a UI element under a parent or root. Static kinds: panel, text, bar, image, scroll (scrollable list container). Interactive kinds (set valueVariable via update_ui_element to two-way-bind to a project variable during Play): button (fires onClickEvent), input (text entry), toggle (checkbox), slider (numeric range), dropdown (option select). Returns elementId.',
     inputSchema: z.object({
       documentId: z.string(),
       parentId: z.string().optional().describe('Parent element id; defaults to the root panel.'),
-      kind: z.enum(['panel', 'text', 'bar', 'button', 'image', 'scroll']),
+      kind: z.enum(['panel', 'text', 'bar', 'button', 'image', 'scroll', 'input', 'toggle', 'slider', 'dropdown']),
     }),
     execute: async ({ documentId, parentId, kind }) => {
       if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
@@ -3160,7 +3161,7 @@ const rawEngineTools = {
 
   update_ui_element: tool({
     description:
-      'Update UI element text/name/class/event/image/style/fx/anchor. Style uses CSS-like strings plus flexDirection/textAlign enums. fx applies only when the document renderMode is "webgl". anchor pins the element to a screen corner/edge/center so HUDs survive any resolution (screen docs only; clears free placement).',
+      'Update a UI element. Covers content (text/name/class/event/image), two-way value binding (valueVariable + placeholder/min/max/step/options for input/toggle/slider/dropdown), styling, pointer states, entrance animation, image scaling, and anchoring. Style uses CSS-like strings plus enums; display "grid" + gridColumns lays children in a grid. states overlays hover/active(press)/disabled styles (button + interactive kinds). animation plays when the element appears. fx applies only when renderMode is "webgl". anchor pins to a screen corner/edge so HUDs survive any resolution (screen docs only; clears free placement).',
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
@@ -3169,6 +3170,14 @@ const rawEngineTools = {
       className: z.string().optional(),
       onClickEvent: z.string().optional(),
       assetId: z.string().optional(),
+      valueVariable: z.string().optional().describe('Interactive kinds: project variable NAME this control reads + writes during Play (two-way binding).'),
+      placeholder: z.string().optional().describe('input kind: greyed hint text.'),
+      min: z.number().optional().describe('slider min (default 0).'),
+      max: z.number().optional().describe('slider max (default 100).'),
+      step: z.number().optional().describe('slider step (default 1).'),
+      options: z.array(z.string()).optional().describe('dropdown choices; the selected one is written to valueVariable.'),
+      imageFit: z.enum(['stretch', 'contain', 'cover', 'nineSlice']).optional().describe('image kind scaling. "nineSlice" = scalable border/panel (corners fixed).'),
+      sliceInset: z.number().optional().describe('image nineSlice border inset in px (default 12).'),
       anchor: z
         .object({
           h: z.enum(['left', 'center', 'right', 'stretch']),
@@ -3180,22 +3189,57 @@ const rawEngineTools = {
         .optional()
         .describe('9-slice screen pin, e.g. {h:"right", v:"bottom"} = bottom-right HUD corner. null removes the anchor.'),
       fx: z.enum(['glow', 'holographic', 'scanline']).optional().describe('WebGL-only visual effect. "glow" blooms via post-FX (use a bright color); "holographic"/"scanline" render translucent. Pass "" via none is not supported here; omit to leave unchanged.'),
+      animation: z
+        .object({
+          type: z.enum(['fade', 'scale', 'pop', 'slideUp', 'slideDown', 'slideLeft', 'slideRight', 'pulse', 'spin']),
+          duration: z.number().optional().describe('Seconds (default 0.3).'),
+          delay: z.number().optional().describe('Seconds (default 0).'),
+          easing: z.string().optional().describe('CSS easing (default ease-out).'),
+          loop: z.boolean().optional().describe('Repeat forever (use for pulse/spin).'),
+        })
+        .nullable()
+        .optional()
+        .describe('Entrance/looping animation played when the element appears (DOM backend). null removes it.'),
+      states: z
+        .object({
+          hover: z.record(z.string(), z.string()).optional(),
+          active: z.record(z.string(), z.string()).optional(),
+          disabled: z.record(z.string(), z.string()).optional(),
+        })
+        .optional()
+        .describe('Pointer-state style overlays for button/interactive kinds, e.g. {hover:{background:"#6f9bff"}, disabled:{opacity:"0.4"}}. Merged over the base style.'),
       style: z
         .object({
           background: z.string().optional(),
           color: z.string().optional(),
           width: z.string().optional(),
           height: z.string().optional(),
+          minWidth: z.string().optional(),
+          maxWidth: z.string().optional(),
+          minHeight: z.string().optional(),
+          maxHeight: z.string().optional(),
           padding: z.string().optional(),
+          margin: z.string().optional(),
           gap: z.string().optional(),
           fontSize: z.string().optional(),
+          fontWeight: z.string().optional(),
           borderRadius: z.string().optional(),
+          border: z.string().optional(),
+          boxShadow: z.string().optional(),
+          textShadow: z.string().optional().describe('e.g. "0 0 8px #5adcff" for a glow/outline.'),
+          textOverflow: z.enum(['clip', 'ellipsis']).optional(),
+          whiteSpace: z.enum(['normal', 'nowrap', 'pre']).optional(),
+          display: z.enum(['flex', 'block', 'none', 'grid']).optional(),
+          gridColumns: z.number().optional().describe('Equal columns when display is "grid".'),
           flexDirection: z.enum(['row', 'column']).optional(),
+          flexWrap: z.enum(['nowrap', 'wrap']).optional(),
+          alignItems: z.string().optional(),
+          justifyContent: z.string().optional(),
           textAlign: z.enum(['left', 'center', 'right']).optional(),
         })
         .optional(),
     }),
-    execute: async ({ documentId, elementId, style, anchor, ...rest }) => {
+    execute: async ({ documentId, elementId, style, anchor, animation, states, ...rest }) => {
       const doc = findUIDocument(documentId);
       if (!doc) return `No UI document with id ${documentId}.`;
       const existing = findUIElement(doc.root, elementId);
@@ -3210,11 +3254,25 @@ const rawEngineTools = {
                 anchor: { h: anchor.h, v: anchor.v, offsetX: anchor.offsetX ?? 16, offsetY: anchor.offsetY ?? 16 },
                 style: { ...existing.style, ...style, position: undefined, left: undefined, top: undefined },
               };
+      // animation: null clears it; states are per-state style overlays merged over any existing ones.
+      const animationPatch = animation === undefined ? {} : { animation: animation === null ? undefined : (animation as UIElement['animation']) };
+      const statesPatch = states
+        ? {
+            states: {
+              ...existing.states,
+              ...(states.hover ? { hover: { ...existing.states?.hover, ...states.hover } } : {}),
+              ...(states.active ? { active: { ...existing.states?.active, ...states.active } } : {}),
+              ...(states.disabled ? { disabled: { ...existing.states?.disabled, ...states.disabled } } : {}),
+            } as UIElement['states'],
+          }
+        : {};
       // Merge style onto the element's existing style so partial updates don't drop other fields.
       store().updateUIElement(documentId, elementId, {
         ...rest,
-        ...(style && !('style' in anchorPatch) ? { style: { ...existing.style, ...style } } : {}),
+        ...(style && !('style' in anchorPatch) ? { style: { ...existing.style, ...(style as UIElement['style']) } } : {}),
         ...anchorPatch,
+        ...animationPatch,
+        ...statesPatch,
       });
       return `Updated element ${elementId}.`;
     },
@@ -3226,8 +3284,8 @@ const rawEngineTools = {
     inputSchema: z.object({
       documentId: z.string(),
       elementId: z.string(),
-      target: z.enum(['text', 'fill', 'visible', 'color', 'background', 'width']),
-      expression: z.string().describe('e.g. "score", "health / 100", "vars[\'Gold Coins\']", "self.health > 0"'),
+      target: z.enum(['text', 'fill', 'visible', 'color', 'background', 'width', 'disabled']),
+      expression: z.string().describe('e.g. "score", "health / 100", "vars[\'Gold Coins\']", "self.health > 0", "ammo == 0" (for disabled)'),
     }),
     execute: async ({ documentId, elementId, target, expression }) => {
       if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;

@@ -20,6 +20,11 @@ export type UikitColor = string | ReturnType<typeof withOpacity>;
 export interface UikitProps {
   width?: Size;
   height?: Size;
+  minWidth?: number | `${number}%`;
+  maxWidth?: number | `${number}%`;
+  minHeight?: number | `${number}%`;
+  maxHeight?: number | `${number}%`;
+  flexWrap?: 'no-wrap' | 'wrap';
   paddingTop?: number;
   paddingRight?: number;
   paddingBottom?: number;
@@ -133,6 +138,15 @@ export function styleToUikit(style: UIStyle): UikitProps {
   if (w !== undefined) out.width = w;
   const h = parseSize(style.height);
   if (h !== undefined) out.height = h;
+  // min/max sizes: uikit accepts px/% but not 'auto'.
+  const minW = parseSize(style.minWidth);
+  if (minW !== undefined && minW !== 'auto') out.minWidth = minW;
+  const maxW = parseSize(style.maxWidth);
+  if (maxW !== undefined && maxW !== 'auto') out.maxWidth = maxW;
+  const minH = parseSize(style.minHeight);
+  if (minH !== undefined && minH !== 'auto') out.minHeight = minH;
+  const maxH = parseSize(style.maxHeight);
+  if (maxH !== undefined && maxH !== 'auto') out.maxHeight = maxH;
 
   const pad = parseBox(style.padding);
   if (pad) [out.paddingTop, out.paddingRight, out.paddingBottom, out.paddingLeft] = pad;
@@ -140,8 +154,14 @@ export function styleToUikit(style: UIStyle): UikitProps {
   if (mar) [out.marginTop, out.marginRight, out.marginBottom, out.marginLeft] = mar;
 
   if (style.display === 'none') out.display = 'none';
-  else if (style.display) out.display = 'flex'; // 'block' has no uikit analogue; flex is the closest
-  if (style.flexDirection) out.flexDirection = style.flexDirection;
+  else if (style.display) out.display = 'flex'; // 'block'/'grid' have no uikit analogue; flex is the closest
+  // uikit has no CSS grid; approximate `display:'grid'` with a wrapping row so cells flow into columns.
+  if (style.display === 'grid') {
+    out.flexDirection = 'row';
+    out.flexWrap = 'wrap';
+  }
+  if (style.flexWrap) out.flexWrap = style.flexWrap === 'wrap' ? 'wrap' : 'no-wrap';
+  if (style.flexDirection && style.display !== 'grid') out.flexDirection = style.flexDirection;
   if (style.alignItems) out.alignItems = style.alignItems as UikitProps['alignItems'];
   if (style.justifyContent) out.justifyContent = style.justifyContent as UikitProps['justifyContent'];
   const gap = parsePx(style.gap);

@@ -42,6 +42,11 @@ export function UIElementMesh({ element, ctx, textOverrides, resolveAssetUrl, on
   if ('visible' in resolved && !truthy(resolved.visible)) return null;
 
   const props = styleToUikit(element.style);
+  const disabled = 'disabled' in resolved && truthy(resolved.disabled);
+  if (disabled && element.states?.disabled) Object.assign(props, styleToUikit({ ...element.style, ...element.states.disabled }));
+  // uikit drives hover/active off its own pointer state — feed the per-state style overlays through.
+  const hover = element.states?.hover ? styleToUikit(element.states.hover) : undefined;
+  const active = element.states?.active ? styleToUikit(element.states.active) : undefined;
 
   // Binding overrides, mirroring UIElementView.
   if ('color' in resolved && resolved.color != null) {
@@ -66,6 +71,8 @@ export function UIElementMesh({ element, ctx, textOverrides, resolveAssetUrl, on
   const overridden = textOverrides?.[element.id];
   const boundText = 'text' in resolved && resolved.text != null ? String(resolved.text) : undefined;
   const text = overridden ?? boundText ?? element.text ?? '';
+  // Two-way-bound controls show their live variable value (interactivity itself is DOM-only).
+  const liveValue = element.valueVariable != null ? ctx.vars[element.valueVariable] : undefined;
 
   const childMeshes = element.children.map((child) => (
     <UIElementMesh
@@ -95,8 +102,10 @@ export function UIElementMesh({ element, ctx, textOverrides, resolveAssetUrl, on
         return (
           <Container
             {...props}
-            cursor="pointer"
-            onClick={onButtonClick ? () => onButtonClick(element) : undefined}
+            cursor={disabled ? 'default' : 'pointer'}
+            hover={hover}
+            active={active}
+            onClick={!disabled && onButtonClick ? () => onButtonClick(element) : undefined}
             backgroundColor={props.backgroundColor ?? '#5B8CFF'}
           >
             {text ? (
@@ -107,6 +116,46 @@ export function UIElementMesh({ element, ctx, textOverrides, resolveAssetUrl, on
             {childMeshes}
           </Container>
         );
+
+      // Interactive controls are DOM-only; in WebGL they render as their nearest static readout so a
+      // webgl HUD still shows the bound value (full editing requires the DOM renderer).
+      case 'input':
+      case 'dropdown': {
+        const display = liveValue != null && String(liveValue) ? String(liveValue) : element.placeholder ?? '';
+        return (
+          <Container {...props} backgroundColor={props.backgroundColor ?? 'rgba(15,17,23,0.9)'}>
+            <Text color={props.color ?? '#ffffff'} fontSize={props.fontSize}>
+              {display}
+            </Text>
+            {childMeshes}
+          </Container>
+        );
+      }
+
+      case 'toggle': {
+        const on = truthy(liveValue);
+        return (
+          <Container {...props} flexDirection="row" alignItems="center" gap={props.gap ?? 8}>
+            <Container width={16} height={16} borderRadius={4} borderWidth={2} borderColor={props.color ?? '#ffffff'} backgroundColor={on ? props.color ?? '#ffffff' : undefined} />
+            {text ? <Text color={props.color ?? '#ffffff'} fontSize={props.fontSize}>{text}</Text> : null}
+            {childMeshes}
+          </Container>
+        );
+      }
+
+      case 'slider': {
+        const min = element.min ?? 0;
+        const max = element.max ?? 100;
+        const n = typeof liveValue === 'number' ? liveValue : Number(liveValue);
+        const pct = `${Math.max(0, Math.min(100, ((Number.isFinite(n) ? n : min) - min) / (max - min || 1) * 100))}%` as `${number}%`;
+        return (
+          <Container {...props} height={props.height ?? 20} justifyContent="center">
+            <Container width="100%" height={6} borderRadius={3} backgroundColor="rgba(255,255,255,0.25)">
+              <Container width={pct} height="100%" borderRadius={3} backgroundColor={props.color ?? '#5B8CFF'} />
+            </Container>
+          </Container>
+        );
+      }
 
       case 'image': {
         const src = element.assetId ? resolveAssetUrl?.(element.assetId) : undefined;
