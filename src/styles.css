@@ -3380,6 +3380,19 @@ button {
   right: -6px;
 }
 
+/* While dragging a wire, fade the ports it can't connect to (exec↔value never mix) and gently
+   emphasise the compatible ones — so it's immediately obvious where the connection can land. */
+.flow-shell.connecting-from-exec .node-port.value-port,
+.flow-shell.connecting-from-value .node-port.exec-port {
+  opacity: 0.18;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+.flow-shell.connecting-from-exec .node-port.exec-port,
+.flow-shell.connecting-from-value .node-port.value-port {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transition: box-shadow var(--motion-fast) var(--ease);
+}
+
 .react-flow__controls {
   overflow: hidden;
   border: 1px solid var(--border);

@@ -2164,6 +2164,9 @@ export function VisualScriptingPanel() {
   const connectingRef = useRef<{ nodeId: string; handleId: string | null; handleType: 'source' | 'target' } | null>(
     null,
   );
+  // Drives a class on the canvas while a wire is being dragged, so CSS can dim the incompatible ports
+  // (exec can't connect to value): you instantly see where the wire can actually land.
+  const [connectingKind, setConnectingKind] = useState<'exec' | 'value' | null>(null);
   // Multi-node clipboard: the copied nodes plus the wires running between them (other wires don't travel).
   const [clipboard, setClipboard] = useState<{ nodes: NodeForgeNode[]; edges: Edge[] } | null>(null);
 
@@ -2392,14 +2395,17 @@ export function VisualScriptingPanel() {
   // dropped on empty canvas → open the node menu there with this socket pending so the pick auto-wires.
   const onConnectStart = (_event: unknown, params: { nodeId: string | null; handleId: string | null; handleType: 'source' | 'target' | null }) => {
     connectingRef.current = params.nodeId && params.handleType ? { nodeId: params.nodeId, handleId: params.handleId, handleType: params.handleType } : null;
+    setConnectingKind(isExecHandle(params.handleId) ? 'exec' : 'value');
   };
   const handleConnect = (connection: Connection) => {
     connectingRef.current = null;
+    setConnectingKind(null);
     onConnect(connection);
   };
   const onConnectEnd = (event: MouseEvent | TouchEvent) => {
     const pending = connectingRef.current;
     connectingRef.current = null;
+    setConnectingKind(null);
     if (!pending) return;
     const target = event.target as HTMLElement | null;
     if (!target?.classList?.contains('react-flow__pane')) return; // landed on a socket/node, not empty canvas
@@ -2520,7 +2526,7 @@ export function VisualScriptingPanel() {
         </aside>
 
         <div
-          className="flow-shell"
+          className={connectingKind ? `flow-shell connecting-from-${connectingKind}` : 'flow-shell'}
           ref={flowShellRef}
           tabIndex={0}
           // Capture-phase: runs before ReactFlow's own pointer handlers, so node
