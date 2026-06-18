@@ -134,7 +134,7 @@ function ParametersEditor({ controller }: { controller: AnimatorController }) {
             </select>
           )}
           <button className="icon-button compact danger" title="Remove" onClick={() => removeAnimatorParameter(controller.id, param.id)}>
-            <Trash2 size={13} aria-hidden />
+            <Trash2 size={14} aria-hidden />
           </button>
         </div>
       ))}
@@ -286,7 +286,7 @@ function StateInspector({ controller, stateId }: { controller: AnimatorControlle
           <input type="checkbox" checked={controller.defaultStateId === state.id} onChange={() => updateAnimatorController(controller.id, { defaultStateId: state.id })} />
         </label>
         <button className="full-button" onClick={() => removeAnimatorState(controller.id, state.id)}>
-          <Trash2 size={13} aria-hidden /> Delete state
+          <Trash2 size={14} aria-hidden /> Delete state
         </button>
       </div>
     </aside>
@@ -359,7 +359,7 @@ function TransitionInspector({ controller, transitionId }: { controller: Animato
             })
           }
         >
-          <Plus size={13} aria-hidden /> Add condition
+          <Plus size={14} aria-hidden /> Add condition
         </button>
         <label className="field-row">
           <span>Fade (s)</span>
@@ -375,7 +375,7 @@ function TransitionInspector({ controller, transitionId }: { controller: Animato
           />
         </label>
         <button className="full-button" onClick={() => removeAnimatorTransition(controller.id, transition.id)}>
-          <Trash2 size={13} aria-hidden /> Delete transition
+          <Trash2 size={14} aria-hidden /> Delete transition
         </button>
       </div>
     </aside>
@@ -596,7 +596,7 @@ export function AnimatorEditorPanel() {
           </select>
         )}
         <button className="icon-button compact" title="Create controller" onClick={() => createAnimatorController()}>
-          <Plus size={15} aria-hidden />
+          <Plus size={14} aria-hidden />
         </button>
       </div>
 

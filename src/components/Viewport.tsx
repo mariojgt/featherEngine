@@ -1357,7 +1357,7 @@ function QualityControl() {
         title="Game quality (scalability) — resolution, shadows, post-FX"
         onClick={() => setOpen((value) => !value)}
       >
-        <Gauge size={15} aria-hidden />
+        <Gauge size={14} aria-hidden />
         <span>{quality}</span>
         <ChevronDown size={12} aria-hidden />
       </button>
@@ -1716,7 +1716,7 @@ export function ViewportPanel() {
                 title={`${label} tool (${key})`}
                 onClick={() => setTransformMode(mode)}
               >
-                <Icon size={15} aria-hidden />
+                <Icon size={14} aria-hidden />
                 <span>{label}</span>
                 <kbd>{key}</kbd>
               </button>
@@ -1741,7 +1741,7 @@ export function ViewportPanel() {
               })
             }
           >
-            <Camera size={15} aria-hidden />
+            <Camera size={14} aria-hidden />
           </button>
         </div>
         <div className="segmented" aria-label="Gizmo options">
@@ -1750,14 +1750,14 @@ export function ViewportPanel() {
             title={`Coordinate space: ${transformSpace} (X to toggle)`}
             onClick={() => setTransformSpace(transformSpace === 'world' ? 'local' : 'world')}
           >
-            <Globe size={15} aria-hidden />
+            <Globe size={14} aria-hidden />
           </button>
           <button
             className={snapEnabled ? 'active' : undefined}
             title="Snap to grid"
             onClick={() => setSnapEnabled(!snapEnabled)}
           >
-            <Magnet size={15} aria-hidden />
+            <Magnet size={14} aria-hidden />
           </button>
           <select
             className="snap-step"
@@ -1780,7 +1780,7 @@ export function ViewportPanel() {
           title={isPlaying ? 'Stop preview — back to Edit Mode' : 'Play preview'}
           onClick={() => setPlaying(!isPlaying)}
         >
-          {isPlaying ? <Pause size={15} aria-hidden /> : <Play size={15} aria-hidden />}
+          {isPlaying ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
           <span>{isPlaying ? 'Stop' : 'Play'}</span>
         </button>
       )}

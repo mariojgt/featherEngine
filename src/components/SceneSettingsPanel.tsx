@@ -74,7 +74,7 @@ export function SceneSettingsPanel() {
         <p className="field-hint">Ambient and music are scene-level loops. They start when Play begins and stop when Play ends.</p>
 
         <label className="field-row">
-          <span><Volume2 size={13} aria-hidden /> Ambient</span>
+          <span><Volume2 size={14} aria-hidden /> Ambient</span>
           <select
             value={scene.ambientSoundId ?? ''}
             onChange={(event) => setSceneAudio(scene.id, { ambientSoundId: event.target.value || undefined })}
@@ -89,7 +89,7 @@ export function SceneSettingsPanel() {
         </label>
 
         <label className="field-row">
-          <span><Music2 size={13} aria-hidden /> Music</span>
+          <span><Music2 size={14} aria-hidden /> Music</span>
           <select
             value={scene.musicSoundId ?? ''}
             onChange={(event) => setSceneAudio(scene.id, { musicSoundId: event.target.value || undefined })}
@@ -129,7 +129,7 @@ export function SceneSettingsPanel() {
         <div className="lighting-preset-library" aria-label="Lighting presets">
           <div className="preset-library-head">
             <span>
-              <Sparkles size={13} aria-hidden />
+              <Sparkles size={14} aria-hidden />
               Presets
             </span>
           </div>
@@ -151,7 +151,7 @@ export function SceneSettingsPanel() {
         </div>
 
         <label className="field-row">
-          <span><CloudSun size={13} aria-hidden /> Sky</span>
+          <span><CloudSun size={14} aria-hidden /> Sky</span>
           <select
             value={environment.skyMode}
             onChange={(event) => updateEnvironment({ skyMode: event.target.value as SceneEnvironmentSettings['skyMode'] })}
@@ -164,7 +164,7 @@ export function SceneSettingsPanel() {
 
         {environment.skyMode === 'image' && (
           <label className="field-row">
-            <span><ImageIcon size={13} aria-hidden /> Panorama</span>
+            <span><ImageIcon size={14} aria-hidden /> Panorama</span>
             <select
               value={environment.skyTextureAssetId ?? ''}
               onChange={(event) => updateEnvironment({ skyTextureAssetId: event.target.value || undefined })}
@@ -214,7 +214,7 @@ export function SceneSettingsPanel() {
         )}
 
         <label className="field-row">
-          <span><ImageIcon size={13} aria-hidden /> IBL Map</span>
+          <span><ImageIcon size={14} aria-hidden /> IBL Map</span>
           <select
             value={environment.environmentMapAssetId ?? ''}
             onChange={(event) => updateEnvironment({ environmentMapAssetId: event.target.value || undefined })}
@@ -244,7 +244,7 @@ export function SceneSettingsPanel() {
       <section className="inspector-section">
         <h3>Sun & Fog</h3>
         <label className="field-row">
-          <span><Sun size={13} aria-hidden /> Sun</span>
+          <span><Sun size={14} aria-hidden /> Sun</span>
           <input type="color" value={environment.sunColor} onChange={(event) => updateEnvironment({ sunColor: event.target.value })} />
         </label>
         <label className="field-row">
@@ -276,7 +276,7 @@ export function SceneSettingsPanel() {
           />
         </label>
         <label className="field-row">
-          <span><CloudFog size={13} aria-hidden /> Fog</span>
+          <span><CloudFog size={14} aria-hidden /> Fog</span>
           <input type="checkbox" checked={environment.fogEnabled} onChange={(event) => updateEnvironment({ fogEnabled: event.target.checked })} />
         </label>
         {environment.fogEnabled && (
@@ -308,7 +308,7 @@ export function SceneSettingsPanel() {
           </>
         )}
         <label className="field-row">
-          <span><CloudFog size={13} aria-hidden /> Volumetric Fog</span>
+          <span><CloudFog size={14} aria-hidden /> Volumetric Fog</span>
           <input
             type="checkbox"
             checked={environment.volumetricFogEnabled ?? false}
@@ -390,7 +390,7 @@ export function SceneSettingsPanel() {
       </section>
 
       <section className="settings-section">
-        <h3><Wind size={13} aria-hidden /> Wind</h3>
+        <h3><Wind size={14} aria-hidden /> Wind</h3>
         <p className="field-hint">Global wind drives cloth and pushes dynamic bodies (by their Wind Influence). Set a direction + strength.</p>
         {(['X', 'Y', 'Z'] as const).map((axis, index) => (
           <label className="field-row" key={axis}>

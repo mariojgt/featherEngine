@@ -5,6 +5,9 @@ import { Launcher } from './components/Launcher';
 import { useProjectStore } from './store/projectStore';
 import { Toolbar } from './components/Toolbar';
 import { Workspace } from './components/Workspace';
+import { StatusBar } from './components/StatusBar';
+import { ToastHost } from './components/ToastHost';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { RuntimeConsole } from './components/RuntimeConsole';
 import { VariableWatch } from './components/VariableWatch';
 import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
@@ -158,12 +161,15 @@ export default function App() {
       <PrefabEditGuard />
       {profiled('toolbar', <Toolbar />)}
       <Workspace />
+      <StatusBar />
       {profiled('console', <RuntimeConsole />)}
       {profiled('varwatch', <VariableWatch />)}
       {profiled('cine-overlay', <CinematicOverlay />)}
       {profiled('ai-chat', <AIChatWidget />)}
       <PrefabThumbnailHost />
       <PerfOverlay />
+      <ToastHost />
+      <ConfirmDialog />
       <ShortcutsOverlay />
       <CommandPalette />
     </div>

@@ -28,7 +28,7 @@ import {
   halfScale,
   sphereRadius,
 } from './colliderShape';
-import { getModelGeometry } from './meshGeometryCache';
+import { getModelGeometry, meshGeometryVersion } from './meshGeometryCache';
 import {
   buildTerrainChunkTrimesh,
   terrainChunkKeysAroundWorld,
@@ -52,6 +52,8 @@ void initRapier();
 
 const EPSILON = 1e-5;
 const DEFAULT_COLLISION_MASK = 0xffff;
+/** Re-derive terrain physics chunks every Nth frame (≈10×/s at 60fps) instead of every frame. */
+const TERRAIN_SYNC_INTERVAL = 6;
 
 const reuseEuler = new THREE.Euler();
 const reuseQuat = new THREE.Quaternion();
@@ -612,6 +614,26 @@ class PhysicsRuntime {
   private simAccumulator = 0;
   /** Per-moving-body LOCAL transform captured just before the LAST fixed step — the "from" pose for render interpolation. */
   private simPrev = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+  /**
+   * Structural-sync gate (see `structureUnchanged`). The body/vehicle/character/joint/cable sync passes
+   * only create/rebuild/remove bodies in response to STRUCTURAL changes (object added/removed, scale,
+   * bodyType, collider, material, joint/cable wiring, a model finishing loading). None of that changes
+   * when a body merely MOVES. We snapshot the inputs each frame and skip all five passes when they're
+   * byte-for-byte stable — which, thanks to copy-on-write, is true for every frame that didn't add/remove
+   * an object or edit a physics-relevant field. Terrain chunk streaming is excluded (it tracks moving focus
+   * points) and still runs every frame.
+   */
+  private lastSyncById: Map<string, SceneObject> | null = null;
+  private lastSyncCount = -1;
+  private lastSyncMeshVersion = -1;
+  /**
+   * Frame counter for throttling terrain collider streaming. Chunk membership only changes when a focus
+   * point (player/dynamic body) crosses a chunk boundary — many frames apart at any realistic speed — and
+   * the terrain's `physicsRadius` keeps a margin of loaded chunks ahead, so re-deriving the desired chunk
+   * set every Nth frame (instead of every frame) is invisible. Recompute is forced while nothing is loaded
+   * yet (Play start) so the ground exists before bodies can fall through it.
+   */
+  private terrainSyncTick = 0;
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
@@ -933,6 +955,42 @@ class PhysicsRuntime {
   }
 
   /** Build/rebuild/drop the Rapier raycast vehicles (physicsModel === 'raycast'). */
+  /**
+   * True when none of the inputs the structural sync passes react to have changed since the last sync,
+   * so all five passes are guaranteed no-ops and can be skipped. The compared fields are EXACTLY what the
+   * signature functions read (verified against bodySignature/vehicleSignature/characterSignature +
+   * colliderKindFor): the per-feature sub-object refs, transform.scale, the two renderer fields that pick a
+   * collider, parentId, plus object count (add/remove) and the mesh-geometry version (async model loads).
+   * Position/rotation are deliberately absent — a moving body doesn't change any of these, so the gate
+   * stays closed during active simulation, which is the whole point. Copy-on-write guarantees a changed
+   * field produces a new ref, so ref/value equality is a sound (never-false-positive) "unchanged" proof.
+   */
+  private structureUnchanged(objects: SceneObject[]): boolean {
+    const last = this.lastSyncById;
+    if (!last) return false;
+    if (objects.length !== this.lastSyncCount) return false;
+    if (meshGeometryVersion() !== this.lastSyncMeshVersion) return false;
+    for (const object of objects) {
+      const prev = last.get(object.id);
+      if (prev === undefined) return false; // id set changed (swap at equal length)
+      if (object === prev) continue; // identical ref ⇒ nothing changed at all
+      if (
+        object.physics !== prev.physics ||
+        object.vehicle !== prev.vehicle ||
+        object.character !== prev.character ||
+        object.joint !== prev.joint ||
+        object.cable !== prev.cable ||
+        object.parentId !== prev.parentId ||
+        object.transform.scale !== prev.transform.scale ||
+        object.renderer?.mesh !== prev.renderer?.mesh ||
+        object.renderer?.modelAssetId !== prev.renderer?.modelAssetId
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private syncVehicles(objects: SceneObject[]) {
     const present = new Set<string>();
     for (const object of objects) {
@@ -1219,6 +1277,10 @@ class PhysicsRuntime {
     const terrains = objects.filter((object) => object.terrain?.enabled && object.physics?.enabled !== false);
     // No terrain in the scene (the common case): skip the focus-point scan and chunk bookkeeping.
     if (terrains.length === 0 && this.terrainEntries.size === 0) return;
+    // Throttle the focus-driven rechunk (see terrainSyncTick) — but never while chunks are still loading,
+    // so the ground is present before the first physics step that could drop a body through it.
+    const due = this.terrainSyncTick++ % TERRAIN_SYNC_INTERVAL === 0;
+    if (this.terrainEntries.size > 0 && !due) return;
     const focus = objects
       .filter((object) => object.character?.enabled || (object.physics?.enabled && object.physics.bodyType === 'dynamic'))
       .map((object) => object.transform.position);
@@ -1318,12 +1380,20 @@ class PhysicsRuntime {
       if (!object.parentId) return prevTransforms.get(object.id);
       return worldPosRot(prevById(), object.id);
     };
+    // Terrain chunk streaming tracks moving focus points, so it must run every frame.
     this.syncTerrainChunks(objects);
-    this.syncBodies(objects);
-    this.syncCharacters(objects);
-    this.syncVehicles(objects);
-    this.syncJoints(objects);
-    this.syncCableJoints(objects);
+    // The body/vehicle/character/joint/cable passes only react to STRUCTURAL change (add/remove/rebuild) —
+    // never to motion. Skip all five on frames where nothing structural changed (the steady-state case).
+    if (!this.structureUnchanged(objects)) {
+      this.syncBodies(objects);
+      this.syncCharacters(objects);
+      this.syncVehicles(objects);
+      this.syncJoints(objects);
+      this.syncCableJoints(objects);
+    }
+    this.lastSyncById = byId;
+    this.lastSyncCount = objects.length;
+    this.lastSyncMeshVersion = meshGeometryVersion();
 
     const movedFixedBodies = new Set<string>();
     for (const object of objects) {
@@ -1347,13 +1417,26 @@ class PhysicsRuntime {
       const type = object.physics.bodyType;
 
       if (type === 'dynamic') {
-        // Per-axis: an axis a script touched becomes velocity-controlled this frame;
-        // untouched axes keep their simulated velocity (gravity, momentum, knockback).
-        const v = body.linvel();
         const movedX = Math.abs(dp[0]) > EPSILON;
         const movedY = Math.abs(dp[1]) > EPSILON;
         const movedZ = Math.abs(dp[2]) > EPSILON;
+        const impulse = impulses[object.id];
+        const torque = angularImpulses[object.id];
+        const sv = setVelocities[object.id];
+        const windInfluence = object.physics.windInfluence ?? 0;
+        const windActive = hasWind && windInfluence > 0;
+        // Nothing is driving this body this frame — no scripted move/rotate, no impulse/torque/velocity,
+        // no wind. The dynamic branch only ever WRITES to the body when one of those is present, so with
+        // none of them it would just read body.linvel() and discard it. Skipping saves that WASM call +
+        // its Vector allocation for every idle dynamic body, every frame — the bulk of a settled scene.
+        // Rapier owns the body's motion (gravity, momentum, contacts) regardless.
+        if (!movedX && !movedY && !movedZ && !movedRotation && !impulse && !torque && !sv && !windActive) {
+          continue;
+        }
+        // Per-axis: an axis a script touched becomes velocity-controlled this frame;
+        // untouched axes keep their simulated velocity (gravity, momentum, knockback).
         if (movedX || movedY || movedZ) {
+          const v = body.linvel();
           body.setLinvel(
             {
               x: movedX ? dp[0] / dt : v.x,
@@ -1364,24 +1447,20 @@ class PhysicsRuntime {
           );
         }
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
-        const impulse = impulses[object.id];
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
         // Global wind: a continuous FORCE on bodies that opt in via windInfluence (0 = ignore). Wind is a
         // roughly constant push (like pressure on a sail), so we apply force×dt WITHOUT a mass term — Rapier
         // then divides by mass, giving acceleration = force/mass. That makes LIGHT props blow around while
         // HEAVY ones barely budge (mass-based, as expected). windInfluence is the per-object "sail" factor;
         // the shared per-frame `gust` adds turbulence. This is what drifts/tumbles loose blocks, debris, etc.
-        const windInfluence = object.physics.windInfluence ?? 0;
-        if (hasWind && windInfluence > 0) {
+        if (windActive) {
           const k = windInfluence * gust * dt;
           body.applyImpulse({ x: wind[0] * k, y: wind[1] * k, z: wind[2] * k }, true);
         }
         // Apply Torque node: an angular impulse (kicks the body's spin). Used for physics-driven steering /
         // tip-over forces — pair it with applyImpulse for thrust to drive a car purely from physics.
-        const torque = angularImpulses[object.id];
         if (torque) body.applyTorqueImpulse({ x: torque[0], y: torque[1], z: torque[2] }, true);
         // Set Velocity node: hard-set the body's linear velocity (overrides the transform-derived velocity).
-        const sv = setVelocities[object.id];
         if (sv) body.setLinvel({ x: sv[0], y: sv[1], z: sv[2] }, true);
       } else if (type === 'kinematic') {
         body.setNextKinematicTranslation({ x: cur[0], y: cur[1], z: cur[2] });

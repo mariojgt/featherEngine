@@ -240,7 +240,7 @@ export function ProblemsButton() {
         style={problems.length ? { color: errorCount ? DOT_COLOR.error : DOT_COLOR.warning } : undefined}
         onClick={() => setOpen((prev) => !prev)}
       >
-        {problems.length ? <AlertTriangle size={15} aria-hidden /> : <CheckCircle2 size={15} aria-hidden />}
+        {problems.length ? <AlertTriangle size={14} aria-hidden /> : <CheckCircle2 size={14} aria-hidden />}
         {problems.length > 0 && <span className="problems-badge">{problems.length}</span>}
       </button>
       {open && (
@@ -310,7 +310,7 @@ export function RuntimeErrorBadge() {
         style={{ color: DOT_COLOR.error }}
         onClick={() => setOpen((prev) => !prev)}
       >
-        <Bug size={15} aria-hidden />
+        <Bug size={14} aria-hidden />
         <span className="problems-badge">{errorCount}</span>
       </button>
       {open && (

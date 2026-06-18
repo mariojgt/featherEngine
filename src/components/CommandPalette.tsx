@@ -188,7 +188,7 @@ export function CommandPalette() {
                   >
                     <span className="cmdk-row-label">{command.label}</span>
                     <span className="cmdk-row-group">{command.group}</span>
-                    {index === clampedActive && <CornerDownLeft size={13} className="cmdk-row-enter" aria-hidden />}
+                    {index === clampedActive && <CornerDownLeft size={14} className="cmdk-row-enter" aria-hidden />}
                   </button>
                 ))
               )}

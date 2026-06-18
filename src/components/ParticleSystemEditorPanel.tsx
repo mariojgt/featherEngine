@@ -211,7 +211,7 @@ export function ParticleSystemEditorPanel() {
           </select>
         )}
         <button className="icon-button compact" title="Create particle system" onClick={() => createParticleSystem(undefined, 'fire')}>
-          <Plus size={15} aria-hidden />
+          <Plus size={14} aria-hidden />
         </button>
       </div>
 

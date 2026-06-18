@@ -107,12 +107,12 @@ function HierarchyRow({
             onToggleCollapse(object.id);
           }}
         >
-          {collapsed ? <ChevronRight size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
+          {collapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
         </span>
       ) : (
         <span className="hierarchy-twisty placeholder" aria-hidden />
       )}
-      {isInstance ? <Boxes size={14} className="hierarchy-instance-glyph" aria-hidden /> : <Icon size={15} aria-hidden />}
+      {isInstance ? <Boxes size={14} className="hierarchy-instance-glyph" aria-hidden /> : <Icon size={14} aria-hidden />}
       <span className="hierarchy-label">{object.name}</span>
       {hasChildren && collapsed && <small className="hierarchy-count">{childCount}</small>}
     </button>
@@ -276,10 +276,10 @@ export function HierarchyPanel() {
         </div>
         <div className="panel-actions">
           <button className="icon-button compact" title="Create empty object" onClick={() => createObject('empty')}>
-            <FilePlus2 size={15} aria-hidden />
+            <FilePlus2 size={14} aria-hidden />
           </button>
           <button className="icon-button compact danger" title="Delete selected object" onClick={deleteSelectedObject}>
-            <Trash2 size={15} aria-hidden />
+            <Trash2 size={14} aria-hidden />
           </button>
         </div>
       </div>

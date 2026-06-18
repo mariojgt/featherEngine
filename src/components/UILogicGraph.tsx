@@ -88,7 +88,7 @@ function Flow({ doc }: { doc: UIDocument }) {
             <div>
               {nodes.map((label) => (
                 <button key={label} onClick={() => addNode(label, title)} title={`Add ${label}`}>
-                  <Plus size={13} aria-hidden />
+                  <Plus size={14} aria-hidden />
                   <span>{label}</span>
                 </button>
               ))}
@@ -128,7 +128,7 @@ function Flow({ doc }: { doc: UIDocument }) {
           <Background color="#30394D" gap={18} size={1} />
         </ReactFlow>
         <button className="icon-button compact material-autolayout" title="Auto-arrange nodes" onClick={autoLayoutActiveGraph}>
-          <LayoutGrid size={15} aria-hidden />
+          <LayoutGrid size={14} aria-hidden />
         </button>
       </div>
 

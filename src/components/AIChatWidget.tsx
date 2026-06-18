@@ -170,7 +170,7 @@ export function AIChatWidget() {
             <header className="ai-widget-header">
               <div className="ai-widget-title">
                 <span className="ai-avatar">
-                  <Bot size={15} aria-hidden />
+                  <Bot size={14} aria-hidden />
                 </span>
                 <span className="ai-title-copy">
                   <strong>Feather Assistant</strong>
@@ -218,7 +218,7 @@ export function AIChatWidget() {
                     {SUGGESTIONS.map((suggestion) => (
                       <button key={suggestion.label} onClick={() => void sendMessage(suggestion.prompt)} disabled={!hasKey}>
                         <span className="ai-suggestion-icon">
-                          <Sparkles size={13} aria-hidden />
+                          <Sparkles size={14} aria-hidden />
                         </span>
                         <span className="ai-suggestion-copy">
                           <strong>{suggestion.label}</strong>
@@ -251,7 +251,7 @@ export function AIChatWidget() {
 
             {error && (
               <div className="ai-error">
-                <AlertTriangle size={13} aria-hidden /> {error}
+                <AlertTriangle size={14} aria-hidden /> {error}
               </div>
             )}
 
@@ -270,7 +270,7 @@ export function AIChatWidget() {
               />
               {status === 'streaming' ? (
                 <button className="ai-send stop" title="Stop" onClick={stop}>
-                  <Square size={15} aria-hidden />
+                  <Square size={14} aria-hidden />
                 </button>
               ) : (
                 <button

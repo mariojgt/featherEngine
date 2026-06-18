@@ -33,7 +33,7 @@ export function SocketPickerModal({
         <div className="socket-head">
           <strong>Pick a bone socket</strong>
           <button className="icon-button compact" onClick={onClose} title="Close">
-            <X size={15} aria-hidden />
+            <X size={14} aria-hidden />
           </button>
         </div>
         <div className="socket-canvas">

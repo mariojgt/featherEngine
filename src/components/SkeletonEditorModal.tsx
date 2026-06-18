@@ -115,7 +115,7 @@ export function SkeletonEditorModal({ skeletonId, onClose }: { skeletonId: strin
         <div className="socket-head">
           <strong>Skeleton · {skeleton.name}</strong>
           <button className="icon-button compact" onClick={onClose} title="Close">
-            <X size={15} aria-hidden />
+            <X size={14} aria-hidden />
           </button>
         </div>
         <div className="socket-body">
@@ -153,7 +153,7 @@ export function SkeletonEditorModal({ skeletonId, onClose }: { skeletonId: strin
                 <div className="animator-row">
                   <input className="animator-name" value={socket.name} onChange={(event) => updateSkeletonSocket(skeletonId, socket.id, { name: event.target.value })} />
                   <button className="icon-button compact danger" title="Delete socket" onClick={() => removeSkeletonSocket(skeletonId, socket.id)}>
-                    <Trash2 size={13} aria-hidden />
+                    <Trash2 size={14} aria-hidden />
                   </button>
                 </div>
                 <span className="field-hint">on {socket.boneName}</span>
@@ -193,7 +193,7 @@ export function SkeletonEditorModal({ skeletonId, onClose }: { skeletonId: strin
                   <strong style={{ fontSize: 12 }}>{selectedBone}</strong>
                   {selectedBody ? (
                     <button className="icon-button compact danger" title="Remove this bone's body" onClick={() => removeRagdollBody(skeletonId, selectedBone)}>
-                      <Trash2 size={13} aria-hidden />
+                      <Trash2 size={14} aria-hidden />
                     </button>
                   ) : (
                     <button className="icon-button compact" title="Add a body for this bone" onClick={() => setRagdollBody(skeletonId, selectedBone, { shape: 'capsule', enabled: true })}>

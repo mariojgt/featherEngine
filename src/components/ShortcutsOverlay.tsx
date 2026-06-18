@@ -120,7 +120,7 @@ export function ShortcutsOverlay() {
               <strong>Keyboard shortcuts</strong>
               <div className="prefs-spacer" />
               <button className="prefs-close" onClick={() => setOpen(false)} title="Close (Esc)">
-                <X size={15} aria-hidden />
+                <X size={14} aria-hidden />
               </button>
             </header>
             <div className="shortcuts-grid">

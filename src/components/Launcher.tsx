@@ -89,7 +89,7 @@ export function Launcher() {
                 setRecovery(null);
               }}
             >
-              <X size={15} aria-hidden />
+              <X size={14} aria-hidden />
             </button>
           </div>
         )}
@@ -130,11 +130,11 @@ export function Launcher() {
 
         <div className="launcher-actions">
           <button disabled={busy} onClick={() => void openProject()}>
-            <FolderOpen size={15} aria-hidden />
+            <FolderOpen size={14} aria-hidden />
             <span>Open project{isDesktop ? '…' : ' file'}</span>
           </button>
           <button disabled={busy} onClick={useDemo}>
-            <Sparkles size={15} aria-hidden />
+            <Sparkles size={14} aria-hidden />
             <span>Open demo scene</span>
           </button>
         </div>
@@ -153,7 +153,7 @@ export function Launcher() {
 
         {error && (
           <div className="ai-error">
-            <AlertTriangle size={13} aria-hidden /> {error}
+            <AlertTriangle size={14} aria-hidden /> {error}
           </div>
         )}
 

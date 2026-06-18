@@ -1199,10 +1199,10 @@ export function CinematicPanel() {
                   onChange={(event) => setKeyframeTime(action, index, Number(event.target.value))}
                 />
                 <button className="icon-button" title="Jump playhead to this keyframe" disabled={running} onClick={() => setPreviewTime(frame.time)}>
-                  <Eye size={13} aria-hidden />
+                  <Eye size={14} aria-hidden />
                 </button>
                 <button className="icon-button" title="Recapture this keyframe from the current viewport" disabled={!editorCameraPose.valid || running || previewing} onClick={() => recaptureKeyframe(action, index)}>
-                  <Camera size={13} aria-hidden />
+                  <Camera size={14} aria-hidden />
                 </button>
                 <input
                   className="cinematic-keyframe-fov"
@@ -1220,7 +1220,7 @@ export function CinematicPanel() {
                   }}
                 />
                 <button className="icon-button" title="Delete keyframe" onClick={() => removeKeyframe(action, index)}>
-                  <Trash2 size={13} aria-hidden />
+                  <Trash2 size={14} aria-hidden />
                 </button>
               </div>
             ))}
@@ -1265,7 +1265,7 @@ export function CinematicPanel() {
                   onChange={(event) => setTransformKeyframeTime(action, index, Number(event.target.value))}
                 />
                 <button className="icon-button" title="Jump playhead to this keyframe" disabled={running} onClick={() => setPreviewTime(frame.time)}>
-                  <Eye size={13} aria-hidden />
+                  <Eye size={14} aria-hidden />
                 </button>
                 <button
                   className="icon-button"
@@ -1273,10 +1273,10 @@ export function CinematicPanel() {
                   disabled={!isTarget || running}
                   onClick={() => action.objectId && addCinematicTransformKeyframe(active!.id, action.objectId, frame.time)}
                 >
-                  <Camera size={13} aria-hidden />
+                  <Camera size={14} aria-hidden />
                 </button>
                 <button className="icon-button" title="Delete keyframe" onClick={() => removeTransformKeyframe(action, index)}>
-                  <Trash2 size={13} aria-hidden />
+                  <Trash2 size={14} aria-hidden />
                 </button>
               </div>
             ))}
@@ -1837,7 +1837,7 @@ export function CinematicPanel() {
           <h2>Cinematics</h2>
         </div>
         <button className="icon-button" title="Create cinematic" onClick={() => createCinematic('Opening Shot', 8)}>
-          <Plus size={15} aria-hidden />
+          <Plus size={14} aria-hidden />
         </button>
       </div>
 
@@ -1853,7 +1853,7 @@ export function CinematicPanel() {
         <>
           <div className="seq-seqbar">
             <label className="seq-search" title="Search cinematics by folder/name">
-              <Search size={13} aria-hidden />
+              <Search size={14} aria-hidden />
               <input value={cinematicSearch} placeholder="Search" onChange={(event) => setCinematicSearch(event.target.value)} />
             </label>
             <select className="seq-seq-select" value={active?.id ?? ''} onChange={(event) => setActiveCinematic(event.target.value)} title="Active sequence">
@@ -1868,11 +1868,11 @@ export function CinematicPanel() {
             )}
             {active && (
               <button className="icon-button" title="Duplicate as a new take" onClick={() => duplicateCinematicTake(active.id)}>
-                <Copy size={15} aria-hidden />
+                <Copy size={14} aria-hidden />
               </button>
             )}
             <button className="icon-button" title="New sequence" onClick={() => createCinematic('New Sequence', 8)}>
-              <Plus size={15} aria-hidden />
+              <Plus size={14} aria-hidden />
             </button>
           </div>
 
@@ -1899,7 +1899,7 @@ export function CinematicPanel() {
                 <label className="field-row">
                   <span>Snap</span>
                   <button className={`mini-toggle${snapTimeline ? ' active' : ''}`} type="button" title="Snap scrubbing and drag retiming to sequence frames" onClick={() => setSnapTimeline(!snapTimeline)}>
-                    <Magnet size={13} aria-hidden />
+                    <Magnet size={14} aria-hidden />
                     {snapTimeline ? 'Frames' : 'Free'}
                   </button>
                 </label>
@@ -1979,7 +1979,7 @@ export function CinematicPanel() {
                         title={`Add ${camera.name} as a hard cut at ${beatTime.toFixed(2)}s`}
                         onClick={() => addShotFromCamera(camera.id, true)}
                       >
-                        <Camera size={13} aria-hidden />
+                        <Camera size={14} aria-hidden />
                         <span>{camera.name}</span>
                         <small>Cut</small>
                       </button>
@@ -2546,7 +2546,7 @@ export function CinematicPanel() {
                       Set time to preview
                     </button>
                     <button className="full-button danger" title="Delete this beat" onClick={() => removeCinematicAction(active.id, selectedAction.id)}>
-                      <Trash2 size={13} aria-hidden />
+                      <Trash2 size={14} aria-hidden />
                       Delete beat
                     </button>
                   </div>

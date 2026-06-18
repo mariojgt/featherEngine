@@ -27,6 +27,7 @@ const THEME_OPTIONS: Array<{ id: ThemeMode; label: string; hint: string }> = [
   { id: 'dark', label: 'Dark', hint: 'Default — soft blue-grey panels.' },
   { id: 'midnight', label: 'Midnight', hint: 'Deeper black for OLED + focus.' },
   { id: 'light', label: 'Light', hint: 'For bright rooms and demos.' },
+  { id: 'high-contrast', label: 'High contrast', hint: 'Maximum legibility (WCAG AAA).' },
 ];
 
 const ACCENT_SWATCHES = ['#5b8cff', '#7c5cff', '#3ddc97', '#f7b955', '#ff6b6b', '#ff8ad6'];
@@ -85,7 +86,7 @@ export function PreferencesModal({ open, onClose }: { open: boolean; onClose: ()
               <strong>Preferences</strong>
               <div className="prefs-spacer" />
               <button className="prefs-close" onClick={onClose} title="Close (Esc)">
-                <X size={15} aria-hidden />
+                <X size={14} aria-hidden />
               </button>
             </header>
             <div className="prefs-body">
@@ -285,7 +286,7 @@ function WorkspacePanel({ onClose }: { onClose: () => void }) {
                   onClick={() => deleteCustomLayout(layout.name)}
                   title={`Delete "${layout.name}"`}
                 >
-                  <Trash2 size={13} aria-hidden />
+                  <Trash2 size={14} aria-hidden />
                 </button>
               </li>
             ))}

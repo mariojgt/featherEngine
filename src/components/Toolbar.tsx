@@ -106,7 +106,7 @@ function AddMenu() {
   return (
     <div className="file-menu" ref={ref}>
       <button className="file-menu-trigger add-trigger" onClick={() => setOpen((value) => !value)}>
-        <Plus size={15} aria-hidden />
+        <Plus size={14} aria-hidden />
         <span>Add</span>
       </button>
       {open && (
@@ -119,7 +119,7 @@ function AddMenu() {
                 createObject(kind);
               }}
             >
-              <Icon size={15} aria-hidden />
+              <Icon size={14} aria-hidden />
               <span>{label}</span>
             </button>
           ))}
@@ -154,16 +154,16 @@ function ExportMenu() {
       <button className="export-button" disabled={busy} title="Export your game" onClick={() => setOpen((value) => !value)}>
         <Package size={16} aria-hidden />
         <span>Export</span>
-        <ChevronDown size={13} aria-hidden />
+        <ChevronDown size={14} aria-hidden />
       </button>
       {open && (
         <div className="file-menu-popover add-popover export-popover">
           <button onClick={run(exportGame)}>
-            <Package size={15} aria-hidden />
+            <Package size={14} aria-hidden />
             <span>Game bundle (game.json)</span>
           </button>
           <button onClick={run(exportProduction)}>
-            <Rocket size={15} aria-hidden />
+            <Rocket size={14} aria-hidden />
             <span>Production — web + native app</span>
           </button>
         </div>
@@ -233,32 +233,8 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
   );
 }
 
-function SaveToast() {
-  const toast = useProjectStore((state) => state.toast);
-  const clearToast = useProjectStore((state) => state.clearToast);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(clearToast, 2600);
-    return () => window.clearTimeout(timer);
-  }, [toast, clearToast]);
-
-  return (
-    <AnimatePresence>
-      {toast && (
-        <motion.div
-          key={toast.message}
-          className={`save-toast ${toast.kind}`}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 8 }}
-        >
-          {toast.message}
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
+/* Save/export/build feedback now flows through the app-wide ToastHost (bridged from
+   projectStore.toast), replacing the old single-slot SaveToast that lived here. */
 
 /** Full-screen overlay showing live output while a production build runs. */
 function BuildProgressOverlay() {
@@ -276,7 +252,7 @@ function BuildProgressOverlay() {
             title="Hide (the build keeps running)"
             onClick={clearBuildProgress}
           >
-            <X size={15} aria-hidden />
+            <X size={14} aria-hidden />
           </button>
         </div>
         <p className="build-overlay-hint">
@@ -312,7 +288,7 @@ function SceneSwitcher() {
   if (editingPrefabId) {
     return (
       <div className="scene-switcher prefab-editing" title={`Editing prefab "${prefabName}"`}>
-        <Boxes size={15} aria-hidden />
+        <Boxes size={14} aria-hidden />
         <span className="prefab-editing-label">Editing: {prefabName}</span>
         <button className="icon-button compact" title="Save prefab & close" onClick={() => closePrefabEditor(true)}>
           <Check size={14} aria-hidden />
@@ -326,7 +302,7 @@ function SceneSwitcher() {
 
   return (
     <div className="scene-switcher" title={isPlaying ? 'Stop play to switch scenes' : 'Active scene'}>
-      <Layers size={15} aria-hidden />
+      <Layers size={14} aria-hidden />
       <select
         value={activeSceneId}
         disabled={isPlaying}
@@ -405,23 +381,23 @@ export function Toolbar() {
         title="Command palette — run any command (⌘K)"
         onClick={() => window.dispatchEvent(new CustomEvent('nf:open-command-palette'))}
       >
-        <Command size={13} aria-hidden />
+        <Command size={14} aria-hidden />
         <span>K</span>
       </button>
       <SceneSwitcher />
 
       <div className="tool-group" aria-label="History">
         <button className="icon-button" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
-          <Undo2 size={17} aria-hidden />
+          <Undo2 size={16} aria-hidden />
         </button>
         <button className="icon-button" title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
-          <Redo2 size={17} aria-hidden />
+          <Redo2 size={16} aria-hidden />
         </button>
       </div>
 
       <div className="tool-group" aria-label="Object actions">
         <button className="icon-button" title="Duplicate selected object" onClick={duplicateSelectedObject}>
-          <Copy size={17} aria-hidden />
+          <Copy size={16} aria-hidden />
         </button>
         <button
           className="icon-button"
@@ -437,16 +413,15 @@ export function Toolbar() {
             });
           }}
         >
-          <Boxes size={17} aria-hidden />
+          <Boxes size={16} aria-hidden />
         </button>
         <button className="icon-button danger" title="Delete selected object" onClick={deleteSelectedObject}>
-          <Trash2 size={17} aria-hidden />
+          <Trash2 size={16} aria-hidden />
         </button>
       </div>
 
       <div className="toolbar-spacer" />
 
-      <SaveToast />
       <BuildProgressOverlay />
       <BuildReportDialog />
 
@@ -479,7 +454,7 @@ export function Toolbar() {
         title="Preferences (theme, layout, density)"
         onClick={() => setPrefsOpen(true)}
       >
-        <Settings size={17} aria-hidden />
+        <Settings size={16} aria-hidden />
       </button>
 
       <div className="tool-group" aria-label="Runtime controls">
