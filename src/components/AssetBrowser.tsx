@@ -28,6 +28,7 @@ import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import { confirmAction } from '../store/confirmStore';
+import { useModelThumbnails } from '../store/modelThumbnailStore';
 import { getPlatform } from '../platform';
 import { fbxToGlb } from '../three/convertModel';
 import { compressGlbTextures } from '../three/compressTextures';
@@ -82,6 +83,7 @@ interface AssetEntry {
   accent?: string;
   thumbnail?: string;
   prefabThumb?: boolean;
+  modelThumb?: boolean;
   subtitle?: string;
   title?: string;
   active?: boolean;
@@ -102,6 +104,17 @@ export function AssetBrowser() {
   const anchorRef = useRef<string | null>(null);
 
   const assets = useEditorStore((state) => state.assets);
+  // GLB/model preview thumbnails (rendered offscreen by ModelThumbnailHost).
+  const modelThumbnails = useModelThumbnails((state) => state.thumbnails);
+  const requestModelThumbnail = useModelThumbnails((state) => state.request);
+  // Ask for a preview of every resolvable model asset that doesn't have one yet.
+  useEffect(() => {
+    for (const asset of assets) {
+      if (asset.type === 'model' && !asset.unresolved && !(asset.id in modelThumbnails)) {
+        requestModelThumbnail(asset.id);
+      }
+    }
+  }, [assets, modelThumbnails, requestModelThumbnail]);
   const folders = useEditorStore((state) => state.folders);
   const blueprints = useEditorStore((state) => state.blueprints);
   const dataAssets = useEditorStore((state) => state.dataAssets);
@@ -836,7 +849,14 @@ export function AssetBrowser() {
         label: asset.name,
         folderId: asset.folderId,
         Icon: assetGlyph(asset.type),
-        thumbnail: asset.type === 'image' && !asset.unresolved ? asset.url : undefined,
+        thumbnail:
+          asset.type === 'image' && !asset.unresolved
+            ? asset.url
+            : asset.type === 'model'
+              ? modelThumbnails[asset.id] || undefined // '' (failed) → fall back to the icon
+              : undefined,
+        // Model previews render asynchronously — flag so the tile shows a shimmer while it generates.
+        modelThumb: asset.type === 'model' && !asset.unresolved && !modelThumbnails[asset.id],
         subtitle: `${asset.type} · ${formatBytes(asset.size)}`,
         unresolved: asset.unresolved,
         dragKind: 'asset',
@@ -975,8 +995,8 @@ export function AssetBrowser() {
         <span className="asset-tile-thumb" style={{ height: tileSize - 18 }}>
           {entry.thumbnail ? (
             <img className={clsx('asset-tile-img', entry.prefabThumb && 'prefab')} src={entry.thumbnail} alt="" />
-          ) : entry.prefabThumb ? (
-            // Prefab tile whose preview is still rendering — show a shimmer rather than a flashing icon.
+          ) : entry.prefabThumb || entry.modelThumb ? (
+            // Prefab/model tile whose preview is still rendering — show a shimmer rather than a flashing icon.
             <span className="skeleton" style={{ width: '100%', height: '100%' }} aria-label="Generating preview" />
           ) : (
             <entry.Icon size={Math.round(tileSize * 0.4)} style={{ color: entry.accent }} className={clsx(entry.unresolved && 'tree-unresolved')} aria-hidden />

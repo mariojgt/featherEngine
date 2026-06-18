@@ -11,6 +11,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { RuntimeConsole } from './components/RuntimeConsole';
 import { VariableWatch } from './components/VariableWatch';
 import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
+import { ModelThumbnailHost } from './components/ModelThumbnailHost';
 import { CinematicOverlay } from './components/CinematicOverlay';
 import { useEditorStore } from './store/editorStore';
 import { useEditorPrefs } from './store/editorPrefsStore';
@@ -167,6 +168,7 @@ export default function App() {
       {profiled('cine-overlay', <CinematicOverlay />)}
       {profiled('ai-chat', <AIChatWidget />)}
       <PrefabThumbnailHost />
+      <ModelThumbnailHost />
       <PerfOverlay />
       <ToastHost />
       <ConfirmDialog />

@@ -4,7 +4,7 @@ import { Environment, Lightformer } from '@react-three/drei';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
 import { SceneObjectView } from './Viewport';
-import type { Prefab } from '../types';
+import type { Prefab, SceneObject } from '../types';
 
 const noop = () => {};
 
@@ -62,10 +62,13 @@ function Capture({ groupRef, onReady }: { groupRef: React.RefObject<THREE.Group>
   return null;
 }
 
-function PrefabThumbnailer({ prefab, onCapture }: { prefab: Prefab; onCapture: (url: string) => void }) {
+/**
+ * Renders a set of scene objects in an isolated offscreen Canvas and captures a square PNG once they've
+ * loaded + the camera has framed them. Shared by the prefab browser preview and the GLB/model-asset
+ * preview (ModelThumbnailHost) so both produce identical-looking thumbnails.
+ */
+export function OffscreenThumbnail({ objects, onCapture }: { objects: SceneObject[]; onCapture: (url: string) => void }) {
   const groupRef = useRef<THREE.Group>(null);
-  // Only objects with a visual presence; skip world-UI-only anchors.
-  const objects = useMemo(() => prefab.objects.filter((object) => !object.viewModel), [prefab.objects]);
 
   return (
     <div style={{ position: 'fixed', left: -10000, top: 0, width: 256, height: 256, pointerEvents: 'none', opacity: 0 }}>
@@ -93,6 +96,12 @@ function PrefabThumbnailer({ prefab, onCapture }: { prefab: Prefab; onCapture: (
       </Canvas>
     </div>
   );
+}
+
+function PrefabThumbnailer({ prefab, onCapture }: { prefab: Prefab; onCapture: (url: string) => void }) {
+  // Only objects with a visual presence; skip world-UI-only anchors.
+  const objects = useMemo(() => prefab.objects.filter((object) => !object.viewModel), [prefab.objects]);
+  return <OffscreenThumbnail objects={objects} onCapture={onCapture} />;
 }
 
 /**
