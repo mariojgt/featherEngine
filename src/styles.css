@@ -143,6 +143,71 @@
   background: var(--background);
 }
 
+/* ============================================================================
+   UNREAL — a redesign of the editor chrome to read like Unreal Engine 5: flat,
+   NEUTRAL dark grays (no blue tint), tight squared corners, minimal glow. The
+   palette tokens cascade to the dockview tabs/panels automatically; the rules
+   below flatten the few surfaces that hardcode the old blue-grey + gradients.
+   ============================================================================ */
+:root[data-theme="unreal"] {
+  color-scheme: dark;
+  background: #1a1a1a;
+  color: #e6e6e6;
+  --background: #1a1a1a;
+  --panel: #242424;
+  --panel-light: #2d2d2d;
+  --panel-soft: #1f1f1f;
+  --border: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #e6e6e6;
+  --muted: #9b9b9b;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* UE5 is squarer and tighter than the default rounded look. */
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 6px;
+}
+
+/* Flatten the decorative accent gradients — UE5 surfaces are solid, not washed. */
+:root[data-theme="unreal"] .editor-shell {
+  background: var(--background);
+}
+/* Solid neutral toolbar bar (no blue glass). */
+:root[data-theme="unreal"] .toolbar {
+  background: #2b2b2b;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+/* Neutral dockview tab strip + tabs (override the hardcoded blue-greys). */
+:root[data-theme="unreal"] .nf-dockview-host {
+  --dv-tabs-and-actions-container-background-color: #1c1c1c;
+  --dv-activegroup-hiddenpanel-tab-background-color: #252525;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #2a2a2a;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #202020;
+}
+/* Flat, neutral panel headers (drop the dark-blue wash + any glow). */
+:root[data-theme="unreal"] .panel-header,
+:root[data-theme="unreal"] .viewport-topbar {
+  background: #2b2b2b;
+}
+/* Calm the node selection/error halos to a clean 1px ring (UE5 doesn't bloom). */
+:root[data-theme="unreal"] .nodeforge-node.selected {
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 8px 20px rgba(0, 0, 0, 0.45);
+}
+/* Solid panels behind the canvas (the default uses translucent blue-grey). */
+:root[data-theme="unreal"] .status-bar,
+:root[data-theme="unreal"] .toast {
+  background: #232323;
+  backdrop-filter: none;
+}
+/* UE5 buttons are SOLID, not gradient-filled — flatten the accent gradients. */
+:root[data-theme="unreal"] .launcher-primary,
+:root[data-theme="unreal"] .export-button {
+  background: var(--accent);
+}
+
 /* Cross-cutting tweaks for the light theme: a few hard-coded dark backgrounds
    in components don't follow the palette vars — soften them here. */
 :root[data-theme="light"] body {

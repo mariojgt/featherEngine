@@ -24,7 +24,8 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof Palette }> = [
 ];
 
 const THEME_OPTIONS: Array<{ id: ThemeMode; label: string; hint: string }> = [
-  { id: 'dark', label: 'Dark', hint: 'Default — soft blue-grey panels.' },
+  { id: 'unreal', label: 'Unreal', hint: 'Flat neutral grays, squared corners — Unreal Engine feel.' },
+  { id: 'dark', label: 'Dark', hint: 'Soft blue-grey panels.' },
   { id: 'midnight', label: 'Midnight', hint: 'Deeper black for OLED + focus.' },
   { id: 'light', label: 'Light', hint: 'For bright rooms and demos.' },
   { id: 'high-contrast', label: 'High contrast', hint: 'Maximum legibility (WCAG AAA).' },

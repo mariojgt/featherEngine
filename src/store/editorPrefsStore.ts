@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type ThemeMode = 'dark' | 'light' | 'midnight' | 'high-contrast';
+export type ThemeMode = 'unreal' | 'dark' | 'light' | 'midnight' | 'high-contrast';
 export type Density = 'comfortable' | 'compact';
 export type FontScale = 0.9 | 1.0 | 1.1;
 
@@ -27,7 +27,7 @@ interface EditorPrefsState {
 }
 
 const DEFAULTS = {
-  themeMode: 'dark' as ThemeMode,
+  themeMode: 'unreal' as ThemeMode,
   accent: '#5b8cff',
   density: 'comfortable' as Density,
   fontScale: 1.0 as FontScale,
