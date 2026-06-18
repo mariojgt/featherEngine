@@ -221,57 +221,41 @@ import { getGraphRuntimeMap, layoutGraphNodes } from './editor/graphRuntime';
 import { buildContactIndex, contactMatches, contactOthers, contactTouches, firstContactOther, toIdSet, toLowerCaseSet } from './editor/runtimeIndexes';
 import { makeId, stripUndefined } from './editor/ids';
 import { createArrayIndexer } from './editor/arrayIndex';
+import { mergePrefabInstances, prefabWouldCycle } from './editor/prefabMerge';
+import {
+  aiFeelerExclude,
+  blueprintVarTypeCache,
+  detachedParts,
+  fillObjectIdMap,
+  pendingPartKicks,
+  pendingPartRestores,
+  prevTransformEntryPool,
+  reportedScriptErrors,
+  resetReportedScriptErrors,
+  tickMappedById,
+  tickPrevTransforms,
+  tickRemainingById,
+  tickResolvedById,
+  tickVehicleById,
+} from './editor/tickState';
+import {
+  SURFACE_DUST,
+  checkpointIndexForName,
+  crashDebrisObject,
+  headingFromEuler,
+  keepArray,
+  keepRecord,
+  literalValueForType,
+  nextWaterImpactId,
+  rotateLocalVector,
+  tagTokens,
+  waterSurfaceHeight,
+} from './editor/runtimeHelpers';
 import { recordRuntimeSection } from '../runtime/perfStats';
 
 // Per-frame lookup Maps over project-level arrays. The arrays are replaced
 // immutably only on edit, so these WeakMap-cached indexers return the same Map
 // across Play frames instead of rebuilding it 60×/s (see tickRuntime).
-// Monotonic id for water surface-impact ripple events (transient FX; the WaterSurface shader dedupes by it).
-let waterImpactSeq = 0;
-const nextWaterImpactId = () => (waterImpactSeq = (waterImpactSeq + 1) % 1_000_000);
-
-// Kick-up puff colour per `surface` tag (matches the SURFACE_GRIP keys the wheel raycast reads) — so a
-// wheel on grass throws green-flecked sod, sand a bright tan rooster, snow a white plume, and so on.
-const SURFACE_DUST: Record<string, string> = {
-  dirt: '#9a7b58',
-  curb: '#b9a37e',
-  grass: '#7a8f5a',
-  gravel: '#8d8d93',
-  sand: '#e2cb95',
-  mud: '#6b5236',
-  snow: '#eef3f8',
-  ice: '#cfe6f5',
-};
-
-/**
- * Surface displacement of a water volume at world (px,pz) and time t — the SAME 4-octave swell the
- * WaterSurface shader renders (plus directional flow), so buoyant bodies ride the VISIBLE crest. Keep
- * this in sync with `waterHeight` in src/three/WaterSurface.tsx.
- */
-function waterSurfaceHeight(
-  water: { waveAmplitude: number; waveFrequency: number; waveSpeed: number; flowStrength?: number; flowAngle?: number },
-  px: number,
-  pz: number,
-  t: number,
-): number {
-  const a = water.waveAmplitude;
-  const f = water.waveFrequency;
-  const s = water.waveSpeed;
-  let h = 0;
-  h += Math.sin((px * 1 + pz * 0) * f + t * s) * a * 0.5;
-  h += Math.sin((px * 0.7071 + pz * 0.7071) * f * 1.7 - t * s * 1.3) * a * 0.28;
-  h += Math.sin((px * -0.6 + pz * 0.8) * f * 2.6 + t * s * 1.7) * a * 0.16;
-  h += Math.sin((px * 0.2 + pz * -0.98) * f * 3.7 - t * s * 2.1) * a * 0.09;
-  const flow = water.flowStrength ?? 0;
-  if (flow > 0) {
-    const ang = ((water.flowAngle ?? 0) * Math.PI) / 180;
-    const dx = Math.cos(ang);
-    const dz = Math.sin(ang);
-    h += Math.sin((px * dx + pz * dz) * f * 1.2 - t * s * (1 + flow)) * a * 0.2;
-  }
-  return h;
-}
-
 const indexVariablesById = createArrayIndexer((v: ProjectVariable) => v.id);
 const indexVariablesByName = createArrayIndexer((v: ProjectVariable) => v.name);
 const indexDataAssetsById = createArrayIndexer((a: DataAsset) => a.id);
@@ -287,50 +271,6 @@ const indexSceneObjectsById = createArrayIndexer((o: SceneObject) => o.id);
 const indexTableColumnsById = createArrayIndexer((c: DataAssetColumn) => c.id);
 const indexTableRowsByKey = createArrayIndexer((r: DataAssetRow) => r.key);
 
-// Pure literal coercion used by the script evaluator. Hoisted to module scope so it isn't
-// re-created for every scripted object on every frame (it captures no per-object state).
-function literalValueForType(data: NodeForgeNodeData, type: GraphValueType): GraphValue {
-  if (type === 'number') return Number(data.numberValue ?? data.amount ?? 0);
-  if (type === 'string') return data.stringValue ?? data.message ?? '';
-  if (type === 'boolean') return Boolean(data.booleanValue);
-  return data.vectorValue ?? [0, 0, 0];
-}
-
-const rotateLocalVector = (vector: Vector3Tuple, rotation: Vector3Tuple): Vector3Tuple => {
-  let [x, y, z] = vector;
-  const [rx, ry, rz] = rotation;
-  let cos = Math.cos(rx);
-  let sin = Math.sin(rx);
-  [y, z] = [y * cos - z * sin, y * sin + z * cos];
-  cos = Math.cos(ry);
-  sin = Math.sin(ry);
-  [x, z] = [x * cos + z * sin, -x * sin + z * cos];
-  cos = Math.cos(rz);
-  sin = Math.sin(rz);
-  [x, y] = [x * cos - y * sin, x * sin + y * cos];
-  return [x, y, z];
-};
-
-const crashDebrisObject = (position: Vector3Tuple, impulse: Vector3Tuple, index: number): SceneObject => {
-  const debris = makeSpawnedObject('cube', position);
-  return {
-    ...debris,
-    name: `Crash Debris ${index + 1}`,
-    transform: {
-      ...debris.transform,
-      rotation: [Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI],
-      scale: [0.18 + Math.random() * 0.22, 0.08 + Math.random() * 0.12, 0.18 + Math.random() * 0.28],
-    },
-    renderer: {
-      ...(debris.renderer ?? defaultRenderer('cube', '#2b2b2b')),
-      color: index % 2 ? '#171717' : '#34302c',
-      metalness: 0.55,
-      roughness: 0.6,
-    },
-    physics: debris.physics ? { ...debris.physics, mass: 0.18, friction: 0.7, angularDamping: 0.15 } : debris.physics,
-    variables: { ...(debris.variables ?? {}), __impulse: impulse },
-  };
-};
 export {
   defaultCharacter,
   defaultLight,
@@ -1083,261 +1023,20 @@ const cloneObjectTree = (
 const effectLife = new Map<string, number>();
 
 /**
- * Per-Play-session dedup of script runtime errors. A blueprint node that throws during a tick (null
- * ref, bad cast, etc.) would otherwise re-throw 60×/s and flood the runtime console; we report each
- * unique `objectId:message` once per session and swallow the rest. The set is cleared whenever Play
- * toggles (see setPlaying), so a fixed script reports fresh on the next run. The throw itself is
- * caught at the per-object dispatch in tickRuntime so one bad script can't kill the whole frame loop.
+ * "Checkpoint <n>" name → gate index (-1 = not a checkpoint) is memoized in `checkpointIndexForName`
+ * (see ./editor/runtimeHelpers). The per-Play runtime scratch (pooled Maps, error dedup, crash-part
+ * bookkeeping) lives in ./editor/tickState — imported above. Both are kept out of store state.
  */
-const reportedScriptErrors = new Set<string>();
-const resetReportedScriptErrors = () => reportedScriptErrors.clear();
-
-/**
- * Pooled entries for tickRuntime's start-of-tick transform snapshot (`prevTransforms`). The Map handed
- * to the tick/physics is rebuilt each frame (consumers may hold it only within the tick), but the
- * per-object `{ position, rotation }` wrapper objects are reused across frames — that's N fewer
- * allocations per frame, every frame. Entries are mutated in place at the top of each tick, so they
- * must never be retained across ticks (physicsWorld only reads them synchronously). Cleared on Play start.
- */
-const prevTransformEntryPool = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
-
-/**
- * "Checkpoint <n>" name → gate index (-1 = not a checkpoint), memoized by the (static) name string so
- * the per-tick race-support scan does a Map lookup per object instead of a regex exec. Bounded by the
- * number of distinct object names ever seen, so it never needs clearing.
- */
-/**
- * Per-tick object-index Maps, POOLED at module level and refilled with clear() + set() each frame.
- * The tick used to mint ~5 of these (one per pass, N entries each) every frame — at 60fps in a
- * ~250-object scene that's tens of thousands of Map-entry allocations per second, and the live
- * profiler attributed the user-visible periodic ~60ms stalls to exactly this kind of GC pressure
- * (stalls with tick≈3ms, render≈2ms, other≈55ms). clear() keeps the backing storage, so steady-state
- * frames allocate nothing here. ⚠️ STRICTLY tick-local: each pool is valid only between its fill and
- * the end of that tick — never retain one across ticks (closures created inside the tick are fine).
- */
-const fillObjectIdMap = (pool: Map<string, SceneObject>, objects: readonly SceneObject[]): Map<string, SceneObject> => {
-  pool.clear();
-  for (const object of objects) pool.set(object.id, object);
-  return pool;
-};
-const tickMappedById = new Map<string, SceneObject>();
-const tickResolvedById = new Map<string, SceneObject>();
-const tickVehicleById = new Map<string, SceneObject>();
-const tickRemainingById = new Map<string, SceneObject>();
-const tickPrevTransforms = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
-
-/**
- * Continuous heading (rotation about +Y; atan2 of the rotated forward vector) from an XYZ euler.
- * `rotation[1]` alone is WRONG for half of all headings: euler decomposition confines Y to ±90° and
- * represents flipped headings as (π, π−θ, π), so anything steering off the raw Y (the AI driver) drove
- * the wrong way whenever the car faced -Z. fwd = Rx·Ry·Rz·(0,0,1) = (sinY, −cosY·sinX, cosY·cosX).
- */
-const headingFromEuler = (rotation: Vector3Tuple): number =>
-  Math.atan2(Math.sin(rotation[1]), Math.cos(rotation[1]) * Math.cos(rotation[0]));
-
-/** Reused exclusion set for the AI driver's obstacle feeler rays (single-threaded tick). */
-const aiFeelerExclude = new Set<string>();
-
-/**
- * Comma-separated tag value → trimmed tokens, so per-actor tag queries don't split/trim/allocate on
- * every evaluation. Tag vars are authored strings (a small, stable set); the size cap guards against
- * a script writing ever-changing strings into a tag variable.
- */
-const tagTokenCache = new Map<string, readonly string[]>();
-const tagTokens = (value: string): readonly string[] => {
-  let tokens = tagTokenCache.get(value);
-  if (!tokens) {
-    if (tagTokenCache.size > 512) tagTokenCache.clear();
-    tokens = value.split(',').map((token) => token.trim());
-    tagTokenCache.set(value, tokens);
-  }
-  return tokens;
-};
-
-/**
- * Blueprint → declared-variable types. Keyed on blueprint object identity, which is stable during Play
- * (editing a blueprint mints a new object), so the type Maps survive across ticks instead of being
- * rebuilt per frame.
- */
-const blueprintVarTypeCache = new WeakMap<ScriptBlueprint, Map<string, GraphValueType>>();
-
-const checkpointIdxByName = new Map<string, number>();
-const checkpointIndexForName = (name: string): number => {
-  let idx = checkpointIdxByName.get(name);
-  if (idx === undefined) {
-    const m = /^Checkpoint\s*(\d+)/i.exec(name);
-    idx = m ? Number(m[1]) : -1;
-    checkpointIdxByName.set(name, idx);
-  }
-  return idx;
-};
-
-/**
- * LOOSE car parts (vehicle.loosePartIds): bookkeeping for parts torn off by crashes, all module-level
- * so per-frame bookkeeping never touches store identities.
- * - detachedParts: part id → its original attachment (parent + LOCAL transform), so R-repair can bolt
- *   it back on exactly where it was.
- * - pendingPartKicks: momentum/tumble queued at detach time, handed to the physics world on the NEXT
- *   tick (the part's dynamic body is created during that frame's sync).
- * - pendingPartRestores: parts queued for re-attachment by a respawn/repair this frame.
- */
-const detachedParts = new Map<string, { parentId: string; transform: TransformComponent }>();
-const pendingPartKicks = new Map<string, { vel: Vector3Tuple; spin: Vector3Tuple }>();
-const pendingPartRestores = new Map<string, { parentId: string; transform: TransformComponent }>();
-
-/**
- * True if stamping prefab `candidateId` inside prefab `hostId` would create a containment cycle —
- * i.e. the candidate's stored objects (transitively, through nested-instance `prefabSourceId` tags)
- * contain an instance of the host. A then contains A, which corrupts every future restamp/merge.
- */
-const prefabWouldCycle = (prefabs: Prefab[], candidateId: string, hostId: string): boolean => {
-  const visited = new Set<string>();
-  const queue = [candidateId];
-  while (queue.length) {
-    const id = queue.pop()!;
-    if (id === hostId) return true;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    const prefab = prefabs.find((p) => p.id === id);
-    for (const object of prefab?.objects ?? []) {
-      if (object.prefabSourceId && !visited.has(object.prefabSourceId)) queue.push(object.prefabSourceId);
-    }
-  }
-  return false;
-};
-
-/** Structural fields a prefab merge never copies from the prefab — they define identity/hierarchy. */
-const PREFAB_STRUCT_KEYS = new Set(['id', 'parentId', 'prefabSourceId', 'prefabObjectId']);
-const prefabFieldEqual = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-
-/**
- * Propagate a prefab edit into every placed instance with a Unity-style **3-way merge** that PRESERVES
- * per-instance overrides. For each instance object (matched to its prefab object by `prefabObjectId`):
- * a field that differs from the OLD prefab is an instance override → kept; otherwise it takes the NEW
- * prefab's value (so prefab edits flow through). Objects the prefab edit ADDED appear in instances;
- * objects the instance DELETED stay deleted; objects the user ADDED to an instance (no prefabObjectId)
- * are preserved. The instance root keeps its world placement (parent) automatically (its transform is an
- * override vs the prefab root). `exceptRootId` leaves one instance untouched (the source of an apply).
- */
-const mergePrefabInstances = (
-  objects: SceneObject[],
-  prefabId: string,
-  oldPrefab: { objects: SceneObject[]; rootId: string },
-  newPrefab: { objects: SceneObject[]; rootId: string },
-  exceptRootId?: string,
-): SceneObject[] => {
-  const tagged = objects.filter((o) => o.prefabSourceId === prefabId);
-  if (tagged.length === 0) return objects;
-  const taggedIds = new Set(tagged.map((o) => o.id));
-  // Instance roots: a prefab-tagged object whose parent isn't part of the same prefab instance.
-  const roots = objects.filter(
-    (o) => o.prefabSourceId === prefabId && (!o.parentId || !taggedIds.has(o.parentId)) && o.id !== exceptRootId,
-  );
-  if (roots.length === 0) return objects;
-
-  const childrenOf = new Map<string, SceneObject[]>();
-  for (const o of objects) {
-    if (!o.parentId) continue;
-    (childrenOf.get(o.parentId) ?? childrenOf.set(o.parentId, []).get(o.parentId)!).push(o);
-  }
-  const oldById = new Map(oldPrefab.objects.map((o) => [o.id, o]));
-  const newByPid = newPrefab.objects;
-
-  const rebuildIds = new Set<string>();
-  const out: SceneObject[] = [];
-
-  for (const root of roots) {
-    // Full subtree of this instance (includes user-added children that lack a prefab link).
-    const subtree: SceneObject[] = [];
-    const walk = (o: SceneObject) => {
-      subtree.push(o);
-      rebuildIds.add(o.id);
-      for (const c of childrenOf.get(o.id) ?? []) walk(c);
-    };
-    walk(root);
-
-    const instByPid = new Map<string, SceneObject>();
-    const localAdds: SceneObject[] = [];
-    for (const o of subtree) {
-      if (o.prefabObjectId) instByPid.set(o.prefabObjectId, o);
-      else if (o.id !== root.id) localAdds.push(o); // user-added object inside the instance — keep it
-    }
-
-    // Resolve the surviving instance id for every prefab object (existing kept, prefab-added = fresh).
-    const pidToId = new Map<string, string>();
-    for (const np of newByPid) {
-      const existing = instByPid.get(np.id);
-      if (existing) pidToId.set(np.id, existing.id);
-      else if (!oldById.has(np.id)) pidToId.set(np.id, makeId('obj')); // newly added by the prefab edit
-      // else: was in the old prefab but not in this instance → the user deleted it → skip
-    }
-
-    for (const np of newByPid) {
-      const id = pidToId.get(np.id);
-      if (!id) continue;
-      const existing = instByPid.get(np.id);
-      const oldp = oldById.get(np.id);
-      const isRoot = np.id === newPrefab.rootId;
-      const merged = structuredClone(np) as unknown as Record<string, unknown>;
-      if (existing) {
-        const ex = existing as unknown as Record<string, unknown>;
-        const oldRec = oldp as unknown as Record<string, unknown> | undefined;
-        const keys = new Set([...Object.keys(np), ...Object.keys(existing)]);
-        for (const key of keys) {
-          if (PREFAB_STRUCT_KEYS.has(key)) continue;
-          // Override = the instance value differs from what the prefab used to have → keep the instance's.
-          if (!prefabFieldEqual(ex[key], oldRec?.[key])) merged[key] = ex[key];
-        }
-      }
-      merged.id = id;
-      merged.prefabObjectId = np.id;
-      merged.prefabSourceId = prefabId;
-      merged.parentId = isRoot
-        ? (existing?.parentId ?? root.parentId) // root keeps its world placement parent
-        : np.parentId
-          ? pidToId.get(np.parentId) // internal node → its prefab-parent's surviving instance id
-          : undefined;
-      out.push(merged as unknown as SceneObject);
-    }
-    out.push(...localAdds); // user additions keep their ids/parents (which still resolve)
-  }
-
-  // Everything not part of a rebuilt instance (other objects, skipped instances) passes through unchanged.
-  for (const o of objects) if (!rebuildIds.has(o.id)) out.push(o);
-  return out;
-};
 
 /** Stable selector for the active scene's objects. Use this in components, not an inline arrow. */
 export const selectActiveObjects = (state: EditorState): SceneObject[] =>
   state.scenes.find((scene) => scene.id === state.activeSceneId)?.objects ?? [];
 
-/**
- * Identity-preserving guards for the per-tick state patch. tickRuntime builds fresh records/arrays
- * every frame by construction; when the CONTENTS turn out unchanged, these return the PREVIOUS
- * reference so Zustand subscribers (HUD layers, panels, render memos) don't re-render at 60fps for
- * data that didn't actually change. The shallow compare is O(entries) — far cheaper than the React
- * work a false-positive identity change triggers downstream.
- */
 /** One Call Function activation: the evaluated A/B/C arguments + the value a Return node set. */
 interface FunctionFrame {
   args: [GraphValue | undefined, GraphValue | undefined, GraphValue | undefined];
   ret: GraphValue | undefined;
 }
-
-const keepRecord = <T,>(prev: Record<string, T>, next: Record<string, T>): Record<string, T> => {
-  if (prev === next) return next;
-  const keys = Object.keys(next);
-  if (keys.length !== Object.keys(prev).length) return next;
-  for (const key of keys) if (!Object.is(prev[key], next[key])) return next;
-  return prev;
-};
-
-const keepArray = <T,>(prev: T[], next: T[]): T[] => {
-  if (prev === next) return next;
-  if (prev.length !== next.length) return next;
-  for (let i = 0; i < next.length; i++) if (!Object.is(prev[i], next[i])) return next;
-  return prev;
-};
 
 /** Stable selector for the active scene's environment settings (sky/fog/sun). May be undefined. */
 export const selectActiveSceneEnvironment = (
