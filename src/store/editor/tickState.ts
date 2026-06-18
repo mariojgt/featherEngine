@@ -24,6 +24,39 @@ export const reportedScriptErrors = new Set<string>();
 export const resetReportedScriptErrors = () => reportedScriptErrors.clear();
 
 /**
+ * Per-Play-session map of blueprint NODE id → the error message it last threw, so the node editor can
+ * paint an error badge on the exact node that failed (not just a console line). Populated by the per-node
+ * try/catch in tickRuntime's executeFrom. A versioned snapshot keeps the object identity STABLE across
+ * frames (so 60fps subscribers don't re-render) and rebuilds only when a new error is recorded. Cleared
+ * on Play start.
+ */
+export const nodeRuntimeErrors = new Map<string, string>();
+let nodeErrorsVersion = 0;
+let nodeErrorsCache: Record<string, string> = {};
+let nodeErrorsCacheVersion = -1;
+
+/** Record a node error; returns true only the FIRST time this exact (node, message) is seen this session. */
+export const recordNodeError = (nodeId: string, message: string): boolean => {
+  if (nodeRuntimeErrors.get(nodeId) === message) return false;
+  nodeRuntimeErrors.set(nodeId, message);
+  nodeErrorsVersion += 1;
+  return true;
+};
+export const clearNodeErrors = (): void => {
+  if (nodeRuntimeErrors.size === 0) return;
+  nodeRuntimeErrors.clear();
+  nodeErrorsVersion += 1;
+};
+/** Identity-stable snapshot for the store: same object across frames, rebuilt only when errors change. */
+export const nodeErrorsSnapshot = (): Record<string, string> => {
+  if (nodeErrorsCacheVersion !== nodeErrorsVersion) {
+    nodeErrorsCache = Object.fromEntries(nodeRuntimeErrors);
+    nodeErrorsCacheVersion = nodeErrorsVersion;
+  }
+  return nodeErrorsCache;
+};
+
+/**
  * Pooled entries for tickRuntime's start-of-tick transform snapshot (`prevTransforms`). The Map handed
  * to the tick/physics is rebuilt each frame (consumers may hold it only within the tick), but the
  * per-object `{ position, rotation }` wrapper objects are reused across frames — that's N fewer

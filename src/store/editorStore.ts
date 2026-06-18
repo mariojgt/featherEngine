@@ -225,8 +225,11 @@ import { mergePrefabInstances, prefabWouldCycle } from './editor/prefabMerge';
 import {
   aiFeelerExclude,
   blueprintVarTypeCache,
+  clearNodeErrors,
   detachedParts,
   fillObjectIdMap,
+  nodeErrorsSnapshot,
+  recordNodeError,
   pendingPartKicks,
   pendingPartRestores,
   prevTransformEntryPool,
@@ -471,6 +474,9 @@ interface EditorState {
   runtimeVehicleSound: { engineId?: string; skidId?: string; rpm: number; slip: number; pop?: number } | null;
   /** Messages emitted by action.print during Play; shown by the on-screen console overlay. */
   runtimeLog: string[];
+  /** Blueprint node id → the error it threw this Play session, so the node editor can badge the exact
+   *  failing node. Identity-stable across frames (see nodeErrorsSnapshot); reset on Play start. */
+  runtimeNodeErrors: Record<string, string>;
   /** Screen UI documents currently shown during Play (keyed by doc id). Seeded from `visibleOnStart`. */
   runtimeVisibleUI: Record<string, boolean>;
   /** Per-object instance variables during Play (e.g. each enemy's health), read by world-UI `self.*` bindings. */
@@ -1162,6 +1168,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeSoundQueue: [],
   runtimeVehicleSound: null,
   runtimeLog: [],
+  runtimeNodeErrors: {},
   runtimeVisibleUI: {},
   runtimeObjectVariables: {},
   runtimeUITextOverrides: {},
@@ -5166,6 +5173,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (isPlaying && state.editingPrefabId) return state;
       // Fresh run = fresh error reporting: a script fixed since the last run should report again.
       resetReportedScriptErrors();
+      clearNodeErrors();
       if (isPlaying) {
         const objects = selectActiveObjects(state);
         const autoplay = state.scenes.find((scene) => scene.id === state.activeSceneId)?.cinematics?.find((cinematic) => cinematic.autoplay);
@@ -5235,6 +5243,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           runtimeSoundQueue: [],
           runtimeVehicleSound: null,
           runtimeLog: [],
+          runtimeNodeErrors: {},
           // Show every screen HUD flagged visibleOnStart; world docs render whenever their object exists.
           runtimeVisibleUI: Object.fromEntries(
             state.uiDocuments.filter((doc) => doc.surface === 'screen' && doc.visibleOnStart).map((doc) => [doc.id, true]),
@@ -5346,6 +5355,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSoundQueue: [],
         runtimeVehicleSound: null,
         runtimeLog: [],
+        runtimeNodeErrors: {},
         runtimeVisibleUI: {},
         runtimeObjectVariables: {},
         runtimeUITextOverrides: {},
@@ -6578,9 +6588,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             visited.add(nodeId);
             const node = runtime.nodesById.get(nodeId);
             if (!node) return;
+            // Per-node error isolation: a throw below is recorded against THIS node (so the editor can
+            // badge the exact failing node) and swallowed, so one broken node never aborts its siblings
+            // or the frame. The innermost executeFrom frame catches first → precise attribution.
+            try {
             // Feed the editor's exec-flow visualization (no-op unless a graph editor is open in Play).
             markExec(nodeId);
-
             // Call Function: run the named "Function" entry's chain synchronously (a reusable subgraph —
             // Unreal Blueprint function-lite), then continue this chain. Each call gets a fresh visited
             // set so the body re-runs on every call; the depth cap stops runaway recursion. Arguments
@@ -6689,6 +6702,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const shouldContinue = applyAction(node, visited);
             if (shouldContinue !== false) {
               (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+            }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (recordNodeError(nodeId, message)) {
+                prints.push(`⚠️ Node error in "${object.name}" → ${node.data.label ?? node.data.nodeKind}: ${message}`);
+              }
             }
           }
 
@@ -10630,6 +10649,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
             runtimeVehicleSound: null,
             runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
+            runtimeNodeErrors: nodeErrorsSnapshot(),
             runtimeVisibleUI: Object.fromEntries(
               state.uiDocuments.filter((doc) => doc.surface === 'screen' && doc.visibleOnStart).map((doc) => [doc.id, true]),
             ),
@@ -10707,6 +10727,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSoundQueue: sounds.length ? [...state.runtimeSoundQueue, ...sounds] : state.runtimeSoundQueue,
         runtimeVehicleSound: nextVehicleSound,
         runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
+        runtimeNodeErrors: nodeErrorsSnapshot(),
         runtimeObjectVariables: nextObjectVariables,
         runtimeVisibleUI: keepRecord(state.runtimeVisibleUI, nextVisibleUI),
         runtimeUITextOverrides: keepRecord(state.runtimeUITextOverrides, nextUITextOverrides),
@@ -10969,6 +10990,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeSoundQueue: [],
         runtimeVehicleSound: null,
         runtimeLog: [],
+        runtimeNodeErrors: {},
         runtimeVisibleUI: {},
         runtimeObjectVariables: {},
         runtimeUITextOverrides: {},

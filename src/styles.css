@@ -3030,6 +3030,36 @@ button {
     0 16px 32px rgba(0, 0, 0, 0.38);
 }
 
+/* A node that threw at runtime: red ring + corner badge so the failure is impossible to miss. */
+.nodeforge-node.has-error {
+  border-color: var(--danger);
+  box-shadow:
+    0 0 0 1px var(--danger),
+    0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent),
+    0 0 22px color-mix(in srgb, var(--danger) 30%, transparent),
+    0 16px 32px rgba(0, 0, 0, 0.4);
+}
+
+.nfn-error-badge {
+  position: absolute;
+  top: -10px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: #fff;
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 45%, transparent);
+  cursor: help;
+}
+
 .nfn-selection-mark {
   position: absolute;
   inset: 7px auto 7px -2px;

@@ -2,6 +2,7 @@ import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
 import { useEditorStore } from '../store/editorStore';
 import {
   Ampersand,
+  AlertTriangle,
   ArrowLeftRight,
   Axis3d,
   Ban,
@@ -653,6 +654,9 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   const detail = nodeDetail(data, variables, dataAssets);
   const storeSelected = useEditorStore((state) => state.selectedGraphNodeId === id);
   const isSelected = selected || storeSelected;
+  // Runtime error this node threw during the current Play session (see tickRuntime executeFrom) — paint
+  // a badge so the user sees exactly which node failed, not just a console line.
+  const runtimeError = useEditorStore((state) => state.runtimeNodeErrors[id]);
 
   // Comment frame: a resizable, pin-less note that sits BEHIND real nodes — purely organizational.
   // Rendered after the hooks above so the hook count never changes between node kinds.
@@ -726,15 +730,21 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
 
   return (
     <div
-      className={`nodeforge-node ${data.tone} ${isEvent ? 'is-event' : ''} ${isValueProducer ? 'is-pure' : ''} ${valueInputs.length ? 'has-value-inputs' : ''} ${isSelected ? 'selected' : ''}`}
+      className={`nodeforge-node ${data.tone} ${isEvent ? 'is-event' : ''} ${isValueProducer ? 'is-pure' : ''} ${valueInputs.length ? 'has-value-inputs' : ''} ${isSelected ? 'selected' : ''} ${runtimeError ? 'has-error' : ''}`}
       style={pinBottom ? { minHeight: pinBottom } : undefined}
       aria-selected={isSelected}
-      title={`${data.label} · ${data.category}`}
+      aria-invalid={runtimeError ? true : undefined}
+      title={runtimeError ? `Runtime error: ${runtimeError}` : `${data.label} · ${data.category}`}
       // Select directly so the inspector always opens, independent of ReactFlow's
       // pointer-based selection (which can be unreliable inside a docked panel).
       onClick={() => useEditorStore.getState().selectGraphNode(id)}
       onPointerDown={() => useEditorStore.getState().selectGraphNode(id)}
     >
+      {runtimeError && (
+        <span className="nfn-error-badge" title={runtimeError} aria-label={`Runtime error: ${runtimeError}`}>
+          <AlertTriangle size={12} aria-hidden /> error
+        </span>
+      )}
       {inputPinCount > 0 && <span className="nfn-port-rail in" aria-hidden />}
       {outputPinCount > 0 && <span className="nfn-port-rail out" aria-hidden />}
       <span className="nfn-selection-mark" aria-hidden />
