@@ -52,6 +52,8 @@ void initRapier();
 
 const EPSILON = 1e-5;
 const DEFAULT_COLLISION_MASK = 0xffff;
+/** Re-derive terrain physics chunks every Nth frame (≈10×/s at 60fps) instead of every frame. */
+const TERRAIN_SYNC_INTERVAL = 6;
 
 const reuseEuler = new THREE.Euler();
 const reuseQuat = new THREE.Quaternion();
@@ -624,6 +626,14 @@ class PhysicsRuntime {
   private lastSyncById: Map<string, SceneObject> | null = null;
   private lastSyncCount = -1;
   private lastSyncMeshVersion = -1;
+  /**
+   * Frame counter for throttling terrain collider streaming. Chunk membership only changes when a focus
+   * point (player/dynamic body) crosses a chunk boundary — many frames apart at any realistic speed — and
+   * the terrain's `physicsRadius` keeps a margin of loaded chunks ahead, so re-deriving the desired chunk
+   * set every Nth frame (instead of every frame) is invisible. Recompute is forced while nothing is loaded
+   * yet (Play start) so the ground exists before bodies can fall through it.
+   */
+  private terrainSyncTick = 0;
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
@@ -1267,6 +1277,10 @@ class PhysicsRuntime {
     const terrains = objects.filter((object) => object.terrain?.enabled && object.physics?.enabled !== false);
     // No terrain in the scene (the common case): skip the focus-point scan and chunk bookkeeping.
     if (terrains.length === 0 && this.terrainEntries.size === 0) return;
+    // Throttle the focus-driven rechunk (see terrainSyncTick) — but never while chunks are still loading,
+    // so the ground is present before the first physics step that could drop a body through it.
+    const due = this.terrainSyncTick++ % TERRAIN_SYNC_INTERVAL === 0;
+    if (this.terrainEntries.size > 0 && !due) return;
     const focus = objects
       .filter((object) => object.character?.enabled || (object.physics?.enabled && object.physics.bodyType === 'dynamic'))
       .map((object) => object.transform.position);
