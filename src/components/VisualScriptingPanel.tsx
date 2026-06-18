@@ -250,7 +250,7 @@ function GraphDataLibrary() {
         <div className="library-heading">
           <span>Global Variables</span>
           <button title="Create a global (shared) variable" onClick={() => createVariable()}>
-            <Plus size={13} aria-hidden />
+            <Plus size={14} aria-hidden />
           </button>
         </div>
         <small className="node-hint">
@@ -263,7 +263,7 @@ function GraphDataLibrary() {
             <div className="library-row">
               <input value={variable.name} onChange={(event) => updateVariable(variable.id, { name: event.target.value })} />
               <button title="Delete variable" onClick={() => deleteVariable(variable.id)}>
-                <Trash2 size={13} aria-hidden />
+                <Trash2 size={14} aria-hidden />
               </button>
             </div>
             <div className="library-row two">
@@ -308,7 +308,7 @@ function GraphDataLibrary() {
             disabled={!activeBlueprint}
             onClick={() => activeBlueprint && addBlueprintVariable(activeBlueprint.id)}
           >
-            <Plus size={13} aria-hidden />
+            <Plus size={14} aria-hidden />
           </button>
         </div>
         {!activeBlueprint && <small className="node-hint">Open a blueprint to declare its per-instance variables.</small>}
@@ -326,7 +326,7 @@ function GraphDataLibrary() {
                   onChange={(event) => updateBlueprintVariable(activeBlueprint.id, variable.id, { name: event.target.value })}
                 />
                 <button title="Delete instance variable" onClick={() => removeBlueprintVariable(activeBlueprint.id, variable.id)}>
-                  <Trash2 size={13} aria-hidden />
+                  <Trash2 size={14} aria-hidden />
                 </button>
               </div>
               <div className="library-row two">
@@ -359,7 +359,7 @@ function GraphDataLibrary() {
         <div className="library-heading">
           <span>Data Assets</span>
           <button title="Create Data Asset" onClick={() => createDataAsset()}>
-            <Plus size={13} aria-hidden />
+            <Plus size={14} aria-hidden />
           </button>
         </div>
 
@@ -368,7 +368,7 @@ function GraphDataLibrary() {
             <div className="library-row">
               <input value={table.name} onChange={(event) => renameDataAsset(table.id, event.target.value)} />
               <button title="Delete Data Asset" onClick={() => deleteDataAsset(table.id)}>
-                <Trash2 size={13} aria-hidden />
+                <Trash2 size={14} aria-hidden />
               </button>
             </div>
 
@@ -1584,7 +1584,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
         {updatesPhysics && (
           <>
             <div className="node-field-group-title">
-              <Boxes size={13} aria-hidden />
+              <Boxes size={14} aria-hidden />
               <span>Runtime Physics Options</span>
             </div>
             <label className="library-check" title="Enable or disable the target object's physics body during Play">
@@ -2404,10 +2404,10 @@ export function VisualScriptingPanel() {
             title="Auto-arrange nodes on a grid"
             onClick={autoLayoutActiveGraph}
           >
-            <LayoutGrid size={15} aria-hidden />
+            <LayoutGrid size={14} aria-hidden />
           </button>
           <button className="icon-button compact" title="Create reusable Blueprint" onClick={createBlueprint}>
-            <Plus size={15} aria-hidden />
+            <Plus size={14} aria-hidden />
           </button>
         </div>
       </div>

@@ -765,7 +765,7 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
 
       <header className="nfn-head">
         <span className="nfn-badge">
-          <Icon size={15} aria-hidden />
+          <Icon size={14} aria-hidden />
         </span>
         <div className="nfn-titles">
           <span className="nfn-kicker">{data.category}</span>

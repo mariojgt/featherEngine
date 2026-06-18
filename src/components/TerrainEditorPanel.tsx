@@ -409,7 +409,7 @@ export function TerrainEditorPanel() {
           </select>
         )}
         <button className="icon-button compact" title="Create terrain" onClick={createTerrain}>
-          <Plus size={15} aria-hidden />
+          <Plus size={14} aria-hidden />
         </button>
       </div>
 

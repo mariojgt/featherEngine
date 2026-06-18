@@ -82,7 +82,7 @@ export function BuildReportDialog() {
               <strong>Build Report — {pending.mode === 'production' ? 'Production' : 'Export'}</strong>
               <div className="prefs-spacer" />
               <button className="prefs-close" onClick={cancel} title="Close (Esc)">
-                <X size={15} aria-hidden />
+                <X size={14} aria-hidden />
               </button>
             </header>
 
@@ -106,7 +106,7 @@ export function BuildReportDialog() {
               {hasErrors && (
                 <section className="report-section">
                   <h3 className="report-h-error">
-                    <OctagonX size={13} aria-hidden /> Errors — export blocked
+                    <OctagonX size={14} aria-hidden /> Errors — export blocked
                   </h3>
                   <ul className="report-issues error">
                     {report.errors.map((line) => (
@@ -119,7 +119,7 @@ export function BuildReportDialog() {
               {hasWarnings && (
                 <section className="report-section">
                   <h3 className="report-h-warn">
-                    <AlertTriangle size={13} aria-hidden /> Warnings
+                    <AlertTriangle size={14} aria-hidden /> Warnings
                   </h3>
                   <ul className="report-issues warn">
                     {report.warnings.map((line) => (
@@ -169,7 +169,7 @@ export function BuildReportDialog() {
                     disabled={report.scanFailed}
                     onChange={(e) => setStrip(e.target.checked)}
                   />
-                  <Scissors size={13} aria-hidden />
+                  <Scissors size={14} aria-hidden />
                   <span>
                     Strip unused assets
                     {report.scanFailed

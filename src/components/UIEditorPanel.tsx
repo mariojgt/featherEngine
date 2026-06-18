@@ -208,29 +208,29 @@ function TreeRow({ element, doc, depth, addingUnder, setAddingUnder }: { element
     <>
       <div className={clsx('ui-node', (selectedId || doc.root.id) === element.id && 'selected')}>
         <button className="ui-node-main" style={{ paddingLeft: 6 + depth * 14 }} onClick={() => selectUIElement(element.id)}>
-          <Icon size={13} aria-hidden />
+          <Icon size={14} aria-hidden />
           <span className="ui-node-name">{element.name}</span>
           <span className="ui-node-kind">{element.kind}</span>
         </button>
         <div className="ui-node-tools">
           {(element.kind === 'panel' || element.kind === 'scroll') && (
             <button title="Add child" onClick={() => setAddingUnder(addingUnder === element.id ? null : element.id)}>
-              <Plus size={13} aria-hidden />
+              <Plus size={14} aria-hidden />
             </button>
           )}
           {!isRoot && (
             <>
               <button title="Move up" onClick={() => moveUIElement(doc.id, element.id, 'up')}>
-                <ChevronUp size={13} aria-hidden />
+                <ChevronUp size={14} aria-hidden />
               </button>
               <button title="Move down" onClick={() => moveUIElement(doc.id, element.id, 'down')}>
-                <ChevronDown size={13} aria-hidden />
+                <ChevronDown size={14} aria-hidden />
               </button>
               <button title="Duplicate" onClick={() => selectUIElement(duplicateUIElement(doc.id, element.id))}>
-                <Copy size={13} aria-hidden />
+                <Copy size={14} aria-hidden />
               </button>
               <button title="Delete" onClick={() => { removeUIElement(doc.id, element.id); selectUIElement(doc.root.id); }}>
-                <Trash2 size={13} aria-hidden />
+                <Trash2 size={14} aria-hidden />
               </button>
             </>
           )}
@@ -638,16 +638,16 @@ function UINewMenu() {
   return (
     <div className="file-menu" ref={ref}>
       <button className="icon-button compact" title="New UI — blank or from a template" onClick={() => setOpen((value) => !value)}>
-        <Plus size={15} aria-hidden />
+        <Plus size={14} aria-hidden />
       </button>
       {open && (
         <div className="file-menu-popover add-popover ui-new-popover">
           <button onClick={pick(() => createUIDocument(undefined, 'screen'))}>
-            <LayoutDashboard size={15} aria-hidden />
+            <LayoutDashboard size={14} aria-hidden />
             <span>Blank Screen HUD</span>
           </button>
           <button onClick={pick(() => createUIDocument(undefined, 'world'))}>
-            <MonitorPlay size={15} aria-hidden />
+            <MonitorPlay size={14} aria-hidden />
             <span>Blank World UI</span>
           </button>
           <hr />
@@ -656,7 +656,7 @@ function UINewMenu() {
             const Icon = TEMPLATE_ICON[template.kind];
             return (
               <button key={template.kind} title={template.blurb} onClick={pick(() => createUIFromTemplate(template.kind))}>
-                <Icon size={15} aria-hidden />
+                <Icon size={14} aria-hidden />
                 <span>{template.label}</span>
               </button>
             );

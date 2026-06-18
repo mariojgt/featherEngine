@@ -27,6 +27,7 @@ import {
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
+import { confirmAction } from '../store/confirmStore';
 import { getPlatform } from '../platform';
 import { fbxToGlb } from '../three/convertModel';
 import { compressGlbTextures } from '../three/compressTextures';
@@ -162,10 +163,13 @@ export function AssetBrowser() {
   const importPackageFromFile = useProjectStore((state) => state.importPackageFromFile);
 
   // Imports are additive but write into the project — confirm so the user can back up first.
-  const importPackage = () => {
-    const ok = window.confirm(
-      'Import a package into this project?\n\nIt adds new prefabs, blueprints and assets (it never overwrites existing ones), but you should back up your project first if it matters.',
-    );
+  const importPackage = async () => {
+    const ok = await confirmAction({
+      title: 'Import package',
+      message:
+        'Import a package into this project? It adds new prefabs, blueprints and assets (it never overwrites existing ones), but you should back up your project first if it matters.',
+      confirmLabel: 'Import',
+    });
     if (ok) void importPackageFromFile();
   };
 
@@ -971,6 +975,9 @@ export function AssetBrowser() {
         <span className="asset-tile-thumb" style={{ height: tileSize - 18 }}>
           {entry.thumbnail ? (
             <img className={clsx('asset-tile-img', entry.prefabThumb && 'prefab')} src={entry.thumbnail} alt="" />
+          ) : entry.prefabThumb ? (
+            // Prefab tile whose preview is still rendering — show a shimmer rather than a flashing icon.
+            <span className="skeleton" style={{ width: '100%', height: '100%' }} aria-label="Generating preview" />
           ) : (
             <entry.Icon size={Math.round(tileSize * 0.4)} style={{ color: entry.accent }} className={clsx(entry.unresolved && 'tree-unresolved')} aria-hidden />
           )}
@@ -1032,7 +1039,7 @@ export function AssetBrowser() {
                 toggleCollapse(folder.id);
               }}
             >
-              {isCollapsed ? <ChevronRight size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
+              {isCollapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
             </span>
           ) : (
             <span className="tree-twist" />
@@ -1128,20 +1135,20 @@ export function AssetBrowser() {
           title="Toggle folders panel"
           onClick={() => setShowFolders((value) => !value)}
         >
-          <PanelLeft size={15} aria-hidden />
+          <PanelLeft size={14} aria-hidden />
         </button>
         <button
           className="icon-button compact"
           title={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
           onClick={() => setViewMode((mode) => (mode === 'grid' ? 'list' : 'grid'))}
         >
-          {viewMode === 'grid' ? <List size={15} aria-hidden /> : <LayoutGrid size={15} aria-hidden />}
+          {viewMode === 'grid' ? <List size={14} aria-hidden /> : <LayoutGrid size={14} aria-hidden />}
         </button>
         <button className="icon-button compact" title="New folder" onClick={() => newFolder(selectedFolderId)}>
-          <Folder size={15} aria-hidden />
+          <Folder size={14} aria-hidden />
         </button>
         <button className="icon-button compact" title="Import assets" onClick={() => triggerImport(selectedFolderId)}>
-          <Upload size={15} aria-hidden />
+          <Upload size={14} aria-hidden />
         </button>
         <button
           className={clsx('icon-button compact', compressTextures && 'active')}
@@ -1152,10 +1159,10 @@ export function AssetBrowser() {
           }
           onClick={() => updateRenderSettings({ compressTextures: !compressTextures })}
         >
-          <FileArchive size={15} aria-hidden />
+          <FileArchive size={14} aria-hidden />
         </button>
         <button className="icon-button compact" title="Import package (.nfpack)" onClick={importPackage}>
-          <PackagePlus size={15} aria-hidden />
+          <PackagePlus size={14} aria-hidden />
         </button>
         <input
           ref={fileInputRef}
@@ -1171,7 +1178,7 @@ export function AssetBrowser() {
       </div>
 
       <label className="search-field">
-        <Search size={15} aria-hidden />
+        <Search size={14} aria-hidden />
         <input value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="Search assets" />
       </label>
 

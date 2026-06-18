@@ -108,22 +108,24 @@ function HeaderActions(props: IDockviewHeaderActionsProps) {
         <button
           className="dv-float-action"
           title="Float this panel (stays inside the window)"
+          aria-label="Float this panel"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => props.containerApi.addFloatingGroup(props.group)}
         >
-          <PictureInPicture2 size={13} aria-hidden />
+          <PictureInPicture2 size={14} aria-hidden />
         </button>
       )}
       {canPopOut && (
         <button
           className="dv-float-action"
           title="Pop out to a separate window"
+          aria-label="Pop out panel to a separate window"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => {
             void popOutPanel(props.containerApi, panelId);
           }}
         >
-          <ExternalLink size={13} aria-hidden />
+          <ExternalLink size={14} aria-hidden />
         </button>
       )}
     </div>

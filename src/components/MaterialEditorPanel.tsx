@@ -273,7 +273,7 @@ function MaterialFlow({ material }: { material: MaterialDefinition }) {
           <PaletteGroup key={title} title={title} icon={Icon} count={nodes.length}>
             {nodes.map((node) => (
               <button key={node.key} onClick={() => selectGraphNode(addMaterialNode(node.key, 'Material'))} title={`Add ${node.label}`}>
-                <Plus size={13} aria-hidden />
+                <Plus size={14} aria-hidden />
                 <span>{node.label}</span>
               </button>
             ))}
@@ -321,7 +321,7 @@ function MaterialFlow({ material }: { material: MaterialDefinition }) {
           title="Auto-arrange nodes"
           onClick={autoLayoutMaterialGraph}
         >
-          <LayoutGrid size={15} aria-hidden />
+          <LayoutGrid size={14} aria-hidden />
         </button>
       </div>
 
@@ -377,7 +377,7 @@ export function MaterialEditorPanel() {
           </select>
         )}
         <button className="icon-button compact" title="Create material" onClick={() => createMaterial()}>
-          <Plus size={15} aria-hidden />
+          <Plus size={14} aria-hidden />
         </button>
       </div>
 
@@ -408,7 +408,7 @@ export function MaterialEditorPanel() {
           <section className="material-preset-library" aria-label="Material presets">
             <div className="preset-library-head">
               <span>
-                <Sparkles size={13} aria-hidden />
+                <Sparkles size={14} aria-hidden />
                 Presets
               </span>
               <button

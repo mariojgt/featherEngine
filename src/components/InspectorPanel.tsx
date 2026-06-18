@@ -44,7 +44,7 @@ function InspectorSection({ title, defaultOpen = true, children }: { title: stri
           }
         }}
       >
-        <ChevronRight size={13} className="inspector-section-caret" aria-hidden />
+        <ChevronRight size={14} className="inspector-section-caret" aria-hidden />
         {title}
       </h3>
       {open && children}
@@ -287,7 +287,7 @@ function RendererSection({
                     ))}
                   </select>
                   <button className="icon-button compact" title="Edit this material" onClick={() => onEditMaterial(effectiveId)}>
-                    <Palette size={13} aria-hidden />
+                    <Palette size={14} aria-hidden />
                   </button>
                 </span>
               </label>
@@ -323,7 +323,7 @@ function RendererSection({
           <div className="script-actions">
             <button onClick={() => onEditMaterial(renderer.materialId!)}>Edit</button>
             <button onClick={() => onMaterialChange(undefined)}>
-              <Unlink size={13} aria-hidden />
+              <Unlink size={14} aria-hidden />
               Detach
             </button>
           </div>
@@ -2954,7 +2954,7 @@ export function InspectorPanel() {
                 <div className="script-actions">
                   <button onClick={() => setActiveBlueprint(object.script!.blueprintId)}>Edit</button>
                   <button onClick={() => detachScript(object.id)}>
-                    <Unlink size={13} aria-hidden />
+                    <Unlink size={14} aria-hidden />
                     Detach
                   </button>
                 </div>
