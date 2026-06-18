@@ -186,6 +186,10 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Scale Vector': 'math.vectorScale',
   Normalize: 'math.normalize',
   'Make Vector3': 'math.makeVector',
+  'Map Range': 'math.mapRange',
+  Floor: 'math.floor',
+  'Vector Length': 'math.vectorLength',
+  'Dot Product': 'math.dot',
   Number: 'value.number',
   Random: 'value.random',
   String: 'value.string',
@@ -675,6 +679,14 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       return { label: 'Normalize', description: 'Returns a Vector3 pointing the same way but with length 1 — turn a difference into a pure direction.' };
     case 'math.makeVector':
       return { label: 'Make Vector3', description: 'Builds a Vector3 from separate X, Y, Z numbers.' };
+    case 'math.mapRange':
+      return { label: 'Map Range', description: 'Remaps Value from the input range [In Min, In Max] to the output range [Out Min, Out Max], clamped (Unreal Map Range Clamped). E.g. health 0..100 → bar 0..1, or input -1..1 → angle 0..360.' };
+    case 'math.floor':
+      return { label: 'Floor', description: 'Rounds Value DOWN to the nearest whole number (3.7 → 3, −0.2 → −1). Use for grid/tile indices, counters, quantising.' };
+    case 'math.vectorLength':
+      return { label: 'Vector Length', description: 'Outputs the magnitude (length) of a Vector3 — e.g. speed from a velocity vector, or distance from an offset.' };
+    case 'math.dot':
+      return { label: 'Dot Product', description: 'Outputs the dot product of two Vector3s (A·B). With normalized directions it is the cosine of the angle between them — positive = same way, 0 = perpendicular, negative = opposing. Great for facing/aim checks.' };
     case 'action.getPosition':
       return { label: 'Get Position', description: "Outputs an actor's world position [x,y,z] (Unreal GetActorLocation). Defaults to this object; pick a Target ($player/$trigger/$cast/an object) or wire a reference into Target." };
     case 'action.getRotation':

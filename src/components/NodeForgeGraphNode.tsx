@@ -86,6 +86,10 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'math.clamp': 'number',
   'math.lerp': 'number',
   'math.distance': 'number',
+  'math.mapRange': 'number',
+  'math.floor': 'number',
+  'math.vectorLength': 'number',
+  'math.dot': 'number',
   'animator.getParam': 'number',
   'query.vehicleSpeed': 'number',
   'event.receiveDamage': 'number',
@@ -180,6 +184,10 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'math.vectorScale': Scaling,
   'math.normalize': Move3d,
   'math.makeVector': Axis3d,
+  'math.mapRange': ArrowLeftRight,
+  'math.floor': Minus,
+  'math.vectorLength': Ruler,
+  'math.dot': CircleDot,
   'action.getPosition': Crosshair,
   'action.getRotation': RotateCw,
   'action.getScale': Scaling,
@@ -290,6 +298,10 @@ const valueProducerKinds = new Set<GraphNodeKind>([
   'math.clamp',
   'math.lerp',
   'math.distance',
+  'math.mapRange',
+  'math.floor',
+  'math.vectorLength',
+  'math.dot',
   'math.vectorAdd',
   'math.vectorSubtract',
   'math.vectorScale',
@@ -342,6 +354,7 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
     case 'math.divide':
     case 'math.modulo':
     case 'math.distance':
+    case 'math.dot':
     case 'math.vectorAdd':
     case 'math.vectorSubtract':
       return [
@@ -352,9 +365,20 @@ const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: string 
     case 'math.normalize':
     case 'math.abs':
     case 'math.round':
+    case 'math.floor':
     case 'math.sin':
     case 'math.cos':
       return [{ id: 'value', label: 'Value' }];
+    case 'math.vectorLength':
+      return [{ id: 'vector', label: 'Vector' }];
+    case 'math.mapRange':
+      return [
+        { id: 'value', label: 'Value' },
+        { id: 'inMin', label: 'In Min' },
+        { id: 'inMax', label: 'In Max' },
+        { id: 'outMin', label: 'Out Min' },
+        { id: 'outMax', label: 'Out Max' },
+      ];
     case 'math.min':
     case 'math.max':
     case 'math.power':

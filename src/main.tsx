@@ -22,6 +22,7 @@ if (!panelKind) {
 
 
 
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ReactFlowProvider>{panelKind ? <PanelHost kind={panelKind} /> : <App />}</ReactFlowProvider>

@@ -6451,6 +6451,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return a + (b - a) * t;
             }
 
+            if (node.data.nodeKind === 'math.mapRange') {
+              const value = toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0)));
+              const inMin = toNumber(valueInput(node, 'inMin', 0));
+              const inMax = toNumber(valueInput(node, 'inMax', 1));
+              const outMin = toNumber(valueInput(node, 'outMin', 0));
+              const outMax = toNumber(valueInput(node, 'outMax', 1));
+              const span = inMax - inMin;
+              const t = span === 0 ? 0 : Math.min(Math.max((value - inMin) / span, 0), 1); // clamped
+              return outMin + (outMax - outMin) * t;
+            }
+
+            if (node.data.nodeKind === 'math.floor') {
+              return Math.floor(toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0))));
+            }
+
+            if (node.data.nodeKind === 'math.vectorLength') {
+              const v = asVec3(valueInput(node, 'vector'));
+              return Math.hypot(v[0], v[1], v[2]);
+            }
+
+            if (node.data.nodeKind === 'math.dot') {
+              const a = asVec3(valueInput(node, 'a'));
+              const b = asVec3(valueInput(node, 'b'));
+              return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            }
+
             if (node.data.nodeKind === 'math.subtract') {
               return toNumber(valueInput(node, 'a', 0)) - toNumber(valueInput(node, 'b', 0));
             }

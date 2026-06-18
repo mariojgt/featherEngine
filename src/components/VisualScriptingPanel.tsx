@@ -60,6 +60,10 @@ export const nodeGroups: Array<{
       'Scale Vector',
       'Normalize',
       'Make Vector3',
+      'Vector Length',
+      'Dot Product',
+      'Map Range',
+      'Floor',
     ],
   },
   {
