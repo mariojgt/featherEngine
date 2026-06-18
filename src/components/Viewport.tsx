@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, PerformanceMonitor, TransformControls } from '@react-three/drei';
-import { Camera, ChevronDown, Globe, Gauge, Magnet, Move3D, Pause, Play, Rotate3D, Scaling, View } from 'lucide-react';
+import { ArrowDownToLine, Camera, ChevronDown, Globe, Gauge, Magnet, Move3D, Pause, Play, Rotate3D, Scaling, View } from 'lucide-react';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -73,6 +73,9 @@ type SceneApi = {
   boxSelect: (rect: { left: number; top: number; right: number; bottom: number }, additive: boolean) => void;
   /** True while a transform-gizmo handle is hovered or being dragged (suppresses box-select). */
   isGizmoEngaged: () => boolean;
+  /** Drop each given object straight down so its bounding-box bottom rests on the geometry below
+   *  (or the y=0 ground if nothing is under it). Other selected objects are ignored as landing targets. */
+  dropToSurface: (ids: string[]) => void;
 };
 
 // Blender-style numpad presets, with the row digits as a no-numpad fallback.
@@ -763,6 +766,8 @@ function SceneContent({
   transformSpace,
   snapEnabled,
   snapStep,
+  angleStepDeg,
+  scaleStep,
   focusNonce,
   viewCommand,
   previewCamera,
@@ -773,6 +778,8 @@ function SceneContent({
   transformSpace: 'world' | 'local';
   snapEnabled: boolean;
   snapStep: number;
+  angleStepDeg: number;
+  scaleStep: number;
   focusNonce: number;
   viewCommand: { view: ViewPreset; nonce: number };
   previewCamera: boolean;
@@ -868,6 +875,21 @@ function SceneContent({
   const selectedJointObject = sceneObjects.find((o) => o.id === selectedObjectId && o.joint?.enabled);
   const objectRefs = useRef(new Map<string, THREE.Group>());
   const [selectedTarget, setSelectedTarget] = useState<THREE.Group | null>(null);
+  // Hold Ctrl to momentarily flip snapping (Blender/Unity convention): snap on → off while held, and
+  // off → on. Lets you nudge freely without toggling the persisted setting, or snap a single drag.
+  const [snapOverride, setSnapOverride] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Control') setSnapOverride(event.type === 'keydown');
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+    };
+  }, []);
+  const effectiveSnap = snapEnabled !== snapOverride;
   // Ref to the live three TransformControls. `axis` is non-null while the pointer hovers a handle
   // (set on pointer-move, before the press), and `dragging` is true mid-drag — either means a click
   // belongs to the gizmo, not to editor selection.
@@ -1013,11 +1035,39 @@ function SceneContent({
         const store = useEditorStore.getState();
         store.selectObjects(additive ? [...effectiveSelection(store), ...hits] : hits);
       },
+      dropToSurface: (ids) => {
+        if (ids.length === 0) return;
+        const idSet = new Set(ids);
+        // Landing targets = every OTHER registered object group (excludes the dropped objects, and
+        // naturally excludes the grid / gizmo / shadows / lights, which aren't in objectRefs).
+        const targets: THREE.Object3D[] = [];
+        for (const [tid, group] of objectRefs.current) if (!idSet.has(tid)) targets.push(group);
+        const ray = new THREE.Raycaster();
+        const down = new THREE.Vector3(0, -1, 0);
+        const box = new THREE.Box3();
+        const origin = new THREE.Vector3();
+        for (const id of ids) {
+          const group = objectRefs.current.get(id);
+          if (!group) continue;
+          group.getWorldPosition(origin);
+          box.setFromObject(group);
+          if (!Number.isFinite(box.min.y)) continue;
+          // Cast from just above the object's top so we never start inside it.
+          ray.set(new THREE.Vector3(origin.x, box.max.y + 0.05, origin.z), down);
+          const hits = ray.intersectObjects(targets, true);
+          const surfaceY = hits.length > 0 ? hits[0].point.y : 0;
+          const bottomToOrigin = origin.y - box.min.y; // how far the pivot sits above the AABB bottom
+          const world = new THREE.Vector3(origin.x, surfaceY + bottomToOrigin, origin.z);
+          // Object transforms are LOCAL; convert through the parent (identity for unparented objects).
+          const local = group.parent ? group.parent.worldToLocal(world.clone()) : world;
+          updateTransform(id, 'position', [local.x, local.y, local.z]);
+        }
+      },
     };
     return () => {
       sceneApiRef.current = null;
     };
-  }, [camera, gl, isGizmoEngaged, sceneApiRef]);
+  }, [camera, gl, isGizmoEngaged, sceneApiRef, updateTransform]);
 
   return (
     <>
@@ -1082,9 +1132,9 @@ function SceneContent({
           onMouseDown={beginGizmoDrag}
           onMouseUp={endGizmoDrag}
           space={transformSpace}
-          translationSnap={snapEnabled ? snapStep : null}
-          rotationSnap={snapEnabled ? Math.PI / 12 : null}
-          scaleSnap={snapEnabled ? 0.25 : null}
+          translationSnap={effectiveSnap ? snapStep : null}
+          rotationSnap={effectiveSnap ? (angleStepDeg * Math.PI) / 180 : null}
+          scaleSnap={effectiveSnap ? scaleStep : null}
         />
       )}
       {/* 3D camera gizmos + view-range frustums for every follow camera in the scene (Unreal-style),
@@ -1333,6 +1383,8 @@ function DropController({ contextRef }: { contextRef: MutableRefObject<DropConte
 }
 
 const SNAP_STEPS = [0.25, 0.5, 1, 2];
+const SNAP_ANGLES = [5, 15, 45, 90];
+const SNAP_SCALES = [0.1, 0.25, 0.5, 1];
 
 /** Quality preset + Auto toggle, tucked into a popover so the topbar shows only frequent controls. */
 function QualityControl() {
@@ -1393,6 +1445,10 @@ export function ViewportPanel() {
   const setSnapEnabled = useViewportPrefs((state) => state.setSnapEnabled);
   const snapStep = useViewportPrefs((state) => state.snapStep);
   const setSnapStep = useViewportPrefs((state) => state.setSnapStep);
+  const angleStepDeg = useViewportPrefs((state) => state.angleStepDeg);
+  const setAngleStepDeg = useViewportPrefs((state) => state.setAngleStepDeg);
+  const scaleStep = useViewportPrefs((state) => state.scaleStep);
+  const setScaleStep = useViewportPrefs((state) => state.setScaleStep);
   const [focusNonce, setFocusNonce] = useState(0);
   // Bumped to command the editor camera to a standard orientation (ViewCube / numpad presets).
   const [viewCommand, setViewCommand] = useState<{ view: ViewPreset; nonce: number }>({ view: 'persp', nonce: 0 });
@@ -1404,6 +1460,10 @@ export function ViewportPanel() {
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const setPlaying = useEditorStore((state) => state.setPlaying);
+  const hasSelection = useEditorStore((state) => Boolean(state.selectedObjectId));
+  const dropSelectionToSurface = useCallback(() => {
+    sceneApiRef.current?.dropToSurface(effectiveSelection(useEditorStore.getState()));
+  }, []);
   // Adaptive quality only degrades DURING Play — give the user back their authored preset on Stop.
   useEffect(() => {
     if (!isPlaying) resetAutoQuality();
@@ -1529,6 +1589,13 @@ export function ViewportPanel() {
         }
         case 'f':
           setFocusNonce((nonce) => nonce + 1);
+          break;
+        case 'end':
+          // Drop the selection onto the geometry below it (Unreal "End" convention).
+          if (store.selectedObjectId) {
+            event.preventDefault();
+            sceneApiRef.current?.dropToSurface(effectiveSelection(store));
+          }
           break;
         case 'escape':
           store.selectObject('');
@@ -1754,23 +1821,59 @@ export function ViewportPanel() {
           </button>
           <button
             className={snapEnabled ? 'active' : undefined}
-            title="Snap to grid"
+            title="Snap to grid (hold Ctrl to flip while dragging)"
             onClick={() => setSnapEnabled(!snapEnabled)}
           >
             <Magnet size={14} aria-hidden />
           </button>
-          <select
-            className="snap-step"
-            value={snapStep}
-            title="Snap step (units)"
-            onChange={(event) => setSnapStep(Number(event.target.value))}
+          {transformMode === 'rotate' ? (
+            <select
+              className="snap-step"
+              value={angleStepDeg}
+              title="Rotation snap (degrees)"
+              onChange={(event) => setAngleStepDeg(Number(event.target.value))}
+            >
+              {SNAP_ANGLES.map((step) => (
+                <option key={step} value={step}>
+                  {step}°
+                </option>
+              ))}
+            </select>
+          ) : transformMode === 'scale' ? (
+            <select
+              className="snap-step"
+              value={scaleStep}
+              title="Scale snap increment"
+              onChange={(event) => setScaleStep(Number(event.target.value))}
+            >
+              {SNAP_SCALES.map((step) => (
+                <option key={step} value={step}>
+                  {step}×
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              className="snap-step"
+              value={snapStep}
+              title="Move snap step (metres)"
+              onChange={(event) => setSnapStep(Number(event.target.value))}
+            >
+              {SNAP_STEPS.map((step) => (
+                <option key={step} value={step}>
+                  {step}m
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            disabled={!hasSelection}
+            title="Drop selection to surface below (End)"
+            aria-label="Drop selection to surface"
+            onClick={dropSelectionToSurface}
           >
-            {SNAP_STEPS.map((step) => (
-              <option key={step} value={step}>
-                {step}m
-              </option>
-            ))}
-          </select>
+            <ArrowDownToLine size={14} aria-hidden />
+          </button>
         </div>
         <QualityControl />
       </div>
@@ -1830,6 +1933,8 @@ export function ViewportPanel() {
                 transformSpace={transformSpace}
                 snapEnabled={snapEnabled}
                 snapStep={snapStep}
+                angleStepDeg={angleStepDeg}
+                scaleStep={scaleStep}
                 focusNonce={focusNonce}
                 viewCommand={viewCommand}
                 previewCamera={previewCamera}

@@ -8,10 +8,17 @@ import { persist } from 'zustand/middleware';
  */
 interface ViewportPrefsState {
   snapEnabled: boolean;
+  /** Translate snap increment, in metres. */
   snapStep: number;
+  /** Rotate snap increment, in degrees. */
+  angleStepDeg: number;
+  /** Scale snap increment (unitless). */
+  scaleStep: number;
   transformSpace: 'world' | 'local';
   setSnapEnabled: (value: boolean) => void;
   setSnapStep: (value: number) => void;
+  setAngleStepDeg: (value: number) => void;
+  setScaleStep: (value: number) => void;
   setTransformSpace: (value: 'world' | 'local') => void;
 }
 
@@ -20,9 +27,13 @@ export const useViewportPrefs = create<ViewportPrefsState>()(
     (set) => ({
       snapEnabled: false,
       snapStep: 0.5,
+      angleStepDeg: 15,
+      scaleStep: 0.25,
       transformSpace: 'world',
       setSnapEnabled: (value) => set({ snapEnabled: value }),
       setSnapStep: (value) => set({ snapStep: value }),
+      setAngleStepDeg: (value) => set({ angleStepDeg: value }),
+      setScaleStep: (value) => set({ scaleStep: value }),
       setTransformSpace: (value) => set({ transformSpace: value }),
     }),
     { name: 'nodeforge.viewport' },

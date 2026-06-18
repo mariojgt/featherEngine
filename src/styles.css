@@ -717,6 +717,14 @@ button {
   color: var(--danger);
 }
 
+/* Disabled toolbar/segmented buttons (e.g. Drop-to-surface with no selection): dim, no hover lift. */
+.segmented button:disabled,
+.icon-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none;
+}
+
 /* Tactile press: the lifted button settles back down on click (snappier than the hover). */
 .icon-button:active,
 .run-button:active,
