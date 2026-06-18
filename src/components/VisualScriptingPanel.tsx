@@ -2152,7 +2152,18 @@ export function VisualScriptingPanel() {
 
   const { screenToFlowPosition } = useReactFlow();
   const flowShellRef = useRef<HTMLDivElement | null>(null);
-  const [searchMenu, setSearchMenu] = useState<{ x: number; y: number } | null>(null);
+  // When the search menu was opened by dragging a wire into empty space, `pending` holds the socket the
+  // drag started from, so picking a node auto-wires it (Unreal-style). null = opened via right-click.
+  const [searchMenu, setSearchMenu] = useState<{
+    x: number;
+    y: number;
+    pending?: { nodeId: string; handleId: string | null; handleType: 'source' | 'target' };
+  } | null>(null);
+  // Set on connect-start, cleared by a successful onConnect; if still set at connect-end the drag landed
+  // on empty canvas, which is our cue to open the node menu with that source connection pending.
+  const connectingRef = useRef<{ nodeId: string; handleId: string | null; handleType: 'source' | 'target' } | null>(
+    null,
+  );
   // Multi-node clipboard: the copied nodes plus the wires running between them (other wires don't travel).
   const [clipboard, setClipboard] = useState<{ nodes: NodeForgeNode[]; edges: Edge[] } | null>(null);
 
@@ -2243,7 +2254,10 @@ export function VisualScriptingPanel() {
     return id;
   };
 
-  const addNodeAt = (choice: NodeChoice, screen: { x: number; y: number }) => {
+  const addNodeAt = (
+    choice: NodeChoice,
+    screen: { x: number; y: number; pending?: { nodeId: string; handleId: string | null; handleType: 'source' | 'target' } },
+  ) => {
     const position = screenToFlowPosition({ x: screen.x, y: screen.y });
     if (choice.action === 'create-variable' || choice.label === 'New Variable') {
       createVariableNode(position);
@@ -2251,6 +2265,32 @@ export function VisualScriptingPanel() {
       return;
     }
     const id = addGraphNodeToBlueprint(activeBlueprintId, choice.nodeLabel ?? choice.label, choice.category, choice.data ?? {}, position);
+    // Auto-wire the dragged-from socket to the new node (Unreal-style). Handle ids are uniform enough to do
+    // this reliably for exec flow (exec-in/exec-out) and for feeding a value input from a new value node
+    // (value-out). The one case we can't target generically — an output into an arbitrary value INPUT — just
+    // drops the node unconnected.
+    const pending = screen.pending;
+    if (pending) {
+      // Only wire a handle we KNOW the new node has, so we never leave a dangling edge: pure value nodes
+      // (outputTypeOf defined) have `value-out` and no exec pins; everything else has exec-in/exec-out.
+      const created = useEditorStore.getState().activeGraph()?.nodes.find((node) => node.id === id);
+      const kind = created?.data.nodeKind as GraphNodeKind | undefined;
+      const isValueNode = kind ? outputTypeOf[kind] !== undefined : false;
+      const exec = (pending.handleId ?? '').startsWith('exec');
+      let connection: Connection | null = null;
+      if (pending.handleType === 'source') {
+        // Dragged from an OUTPUT → into the new node's input. Exec into an action node's exec-in is the
+        // reliable case; a value output into an arbitrary input handle can't be targeted generically.
+        if (exec && !isValueNode) connection = { source: pending.nodeId, sourceHandle: pending.handleId, target: id, targetHandle: 'exec-in' };
+      } else if (exec && !isValueNode) {
+        // Dragged from an exec INPUT → drive it from the new action node's exec-out.
+        connection = { source: id, sourceHandle: 'exec-out', target: pending.nodeId, targetHandle: pending.handleId };
+      } else if (!exec && isValueNode) {
+        // Dragged from a value INPUT → feed it from the new value node's value-out (the common "I need a value here").
+        connection = { source: id, sourceHandle: 'value-out', target: pending.nodeId, targetHandle: pending.handleId };
+      }
+      if (connection) onConnect(connection);
+    }
     selectGraphNode(id);
     setSearchMenu(null);
   };
@@ -2345,6 +2385,26 @@ export function VisualScriptingPanel() {
   const isValidConnection = (connection: Connection | Edge) => {
     if (connection.source === connection.target) return false;
     return isExecHandle(connection.sourceHandle) === isExecHandle(connection.targetHandle);
+  };
+
+  // Drag-to-create: remember the socket a wire drag started from; clear it the moment a real connection
+  // lands on another socket (onConnect fires first). If it's still set at connect-end, the wire was
+  // dropped on empty canvas → open the node menu there with this socket pending so the pick auto-wires.
+  const onConnectStart = (_event: unknown, params: { nodeId: string | null; handleId: string | null; handleType: 'source' | 'target' | null }) => {
+    connectingRef.current = params.nodeId && params.handleType ? { nodeId: params.nodeId, handleId: params.handleId, handleType: params.handleType } : null;
+  };
+  const handleConnect = (connection: Connection) => {
+    connectingRef.current = null;
+    onConnect(connection);
+  };
+  const onConnectEnd = (event: MouseEvent | TouchEvent) => {
+    const pending = connectingRef.current;
+    connectingRef.current = null;
+    if (!pending) return;
+    const target = event.target as HTMLElement | null;
+    if (!target?.classList?.contains('react-flow__pane')) return; // landed on a socket/node, not empty canvas
+    const point = 'changedTouches' in event ? event.changedTouches[0] : event;
+    setSearchMenu({ x: point.clientX, y: point.clientY, pending });
   };
 
   // Color wires by what flows through them: neutral for exec, data-type hue for values.
@@ -2492,7 +2552,9 @@ export function VisualScriptingPanel() {
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
+            onConnect={handleConnect}
+            onConnectStart={onConnectStart}
+            onConnectEnd={onConnectEnd}
             isValidConnection={isValidConnection}
             edgesFocusable
             edgesReconnectable
