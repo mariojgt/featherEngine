@@ -784,6 +784,14 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
         <span className="nfn-mode">{nodeMode}</span>
       </header>
 
+      {typeof data.liveValue === 'string' && (
+        // Live output value during Play (fed by the editor's value-trace poll). A monospace chip pinned
+        // to the value-out side so you watch real data flow through the graph.
+        <span className="nfn-live-value" title="Live value (Play)">
+          {data.liveValue}
+        </span>
+      )}
+
       {(detail || (showInlineDescription && data.description)) && (
         <div className="nfn-body">
           {detail && <span className="nfn-detail">{detail}</span>}

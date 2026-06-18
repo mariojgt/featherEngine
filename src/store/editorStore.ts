@@ -96,6 +96,7 @@ import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
 import { gamepadInput } from '../runtime/gamepadInput';
 import { markExec } from '../runtime/execTrace';
+import { recordValue } from '../runtime/valueTrace';
 import { addSkidMark } from '../runtime/skidMarks';
 import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
 import { sendParticleCommand } from '../runtime/particleBus';
@@ -6037,7 +6038,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             valueVisited.add(node.id);
             // Pass which OUTPUT pin of the source we're reading, so multi-output value nodes (Raycast:
             // Hit/Actor/Point/Distance) can return a different value per handle.
-            return evaluateValue(edge.source, valueVisited, edge.sourceHandle ?? 'value-out');
+            const resolved = evaluateValue(edge.source, valueVisited, edge.sourceHandle ?? 'value-out');
+            // Live value trace (no-op unless a graph editor is open in Play): record the value flowing
+            // out of the source node so the editor can show it on the node.
+            recordValue(edge.source, resolved);
+            return resolved;
           }
 
           const evaluateValue = (nodeId: string, visited: Set<string>, sourceHandle = 'value-out'): GraphValue | undefined => {

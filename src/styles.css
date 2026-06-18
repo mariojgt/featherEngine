@@ -3060,6 +3060,28 @@ button {
   cursor: help;
 }
 
+/* Live output value shown on a value node during Play (fed by the value trace). */
+.nfn-live-value {
+  position: absolute;
+  top: -9px;
+  right: 10px;
+  z-index: 3;
+  max-width: 140px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
+  background: color-mix(in srgb, var(--success) 22%, var(--panel));
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--text-3xs);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
 .nfn-selection-mark {
   position: absolute;
   inset: 7px auto 7px -2px;

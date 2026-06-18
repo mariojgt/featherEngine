@@ -11,6 +11,7 @@ import type { GraphNodeCategory, GraphNodeKind, GraphValue, GraphValueType, Node
 import { QUALITY_LEVELS } from '../three/quality';
 import { KEY_CODE_OPTIONS, keyLabelByCode } from '../utils/keyboardCodes';
 import { execTrace, setExecTraceEnabled } from '../runtime/execTrace';
+import { valueTrace, setValueTraceEnabled, formatTraceValue } from '../runtime/valueTrace';
 
 const nodeTypes: NodeTypes = {
   nodeforge: NodeForgeGraphNode,
@@ -2193,11 +2194,18 @@ export function VisualScriptingPanel() {
   // that executed within the last ~⅓ second.
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const [hotNodes, setHotNodes] = useState<Set<string>>(() => new Set());
+  // Live value readouts (formatted) per node, polled from the value trace at the same cadence.
+  const [liveValues, setLiveValues] = useState<Record<string, string>>({});
   useEffect(() => {
     setExecTraceEnabled(isPlaying);
+    setValueTraceEnabled(isPlaying);
     if (!isPlaying) {
       setHotNodes((prev) => (prev.size ? new Set<string>() : prev));
-      return () => setExecTraceEnabled(false);
+      setLiveValues((prev) => (Object.keys(prev).length ? {} : prev));
+      return () => {
+        setExecTraceEnabled(false);
+        setValueTraceEnabled(false);
+      };
     }
     const interval = window.setInterval(() => {
       const cutoff = performance.now() - 350;
@@ -2207,21 +2215,40 @@ export function VisualScriptingPanel() {
         if (prev.size === next.size && [...next].every((id) => prev.has(id))) return prev;
         return next;
       });
+      // Snapshot current value readouts; bail out of the state update when nothing changed.
+      const values: Record<string, string> = {};
+      for (const [nodeId, value] of valueTrace.values) values[nodeId] = formatTraceValue(value);
+      setLiveValues((prev) => {
+        const keys = Object.keys(values);
+        if (keys.length === Object.keys(prev).length && keys.every((k) => prev[k] === values[k])) return prev;
+        return values;
+      });
     }, 150);
     return () => {
       window.clearInterval(interval);
       setExecTraceEnabled(false);
+      setValueTraceEnabled(false);
     };
   }, [isPlaying]);
 
-  // Nodes fed to React Flow, tagged with the exec-hot pulse class while they're executing.
-  const flowNodes = useMemo<NodeForgeNode[]>(
-    () =>
-      (hotNodes.size
-        ? graph?.nodes.map((node) => (hotNodes.has(node.id) ? { ...node, className: 'exec-hot' } : node))
-        : graph?.nodes) ?? [],
-    [graph, hotNodes],
-  );
+  // Nodes fed to React Flow, tagged with the exec-hot pulse class while executing and carrying a
+  // transient `liveValue` (read by NodeForgeGraphNode) so value nodes show their current output.
+  const flowNodes = useMemo<NodeForgeNode[]>(() => {
+    const nodes = graph?.nodes;
+    if (!nodes) return [];
+    const hasValues = Object.keys(liveValues).length > 0;
+    if (!hotNodes.size && !hasValues) return nodes;
+    return nodes.map((node) => {
+      const live = liveValues[node.id];
+      const hot = hotNodes.has(node.id);
+      if (!live && !hot) return node;
+      return {
+        ...node,
+        ...(hot ? { className: 'exec-hot' } : {}),
+        ...(live ? { data: { ...node.data, liveValue: live } } : {}),
+      };
+    });
+  }, [graph, hotNodes, liveValues]);
 
   const nodeChoices = useMemo<NodeChoice[]>(
     () => [
