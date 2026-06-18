@@ -2549,7 +2549,8 @@ export function VisualScriptingPanel() {
             <span>{selectedNodeDetail}</span>
             <small>
               {graph.nodes.length} nodes / {graph.edges.length} wires
-              {clipboard ? ` / ${clipboard.nodes.length} copied` : ''} · Shift+drag to box-select
+              {clipboard ? ` / ${clipboard.nodes.length} copied` : ''} · Drag a pin to empty space (or
+              right-click) to add a node · Shift+drag to box-select
             </small>
           </div>
           <ReactFlow
