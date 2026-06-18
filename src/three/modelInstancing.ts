@@ -10,8 +10,9 @@ import type { MaterialDefinition, SceneObject } from '../types';
  * Scope (deliberately conservative — this is correctness-critical and only the safe subset is batched):
  *  - Active ONLY during Play. In the editor each object keeps its own mesh so click-select, the gizmo,
  *    and live material edits work unchanged; instancing turns on when you press Play.
- *  - Gated behind a runtime toggle (default OFF — see {@link setInstancingEnabled}; wired to the F8
- *    perf overlay). Off-by-default means it can never regress existing rendering until explicitly on.
+ *  - Gated behind a runtime toggle (default ON — see {@link setInstancingEnabled}; wired to the F8
+ *    perf overlay). The toggle stays so a scene can opt out, but the conservative filter below means
+ *    only safe-to-batch static decoration is ever collapsed, so it's on by default for the draw-call win.
  *  - Only objects that use the model's BAKED materials (no per-object override) and are otherwise
  *    static + non-interactive qualify, so every instance in a batch shares one material and never moves.
  */
@@ -19,7 +20,10 @@ import type { MaterialDefinition, SceneObject } from '../types';
 /** Fewer instances than this isn't worth a batch — keep them as individual meshes. */
 const INSTANCE_MIN_BATCH = 4;
 
-let enabled = false;
+// Default ON: the batch filter (isInstanceable) is deliberately conservative — only static, root-level,
+// baked-material, non-interactive models qualify — and the path is Play-only, so a large open scene gets
+// the draw-call cut out of the box. The F8 perf overlay can still toggle it off if a scene ever needs it.
+let enabled = true;
 const listeners = new Set<() => void>();
 
 export const getInstancingEnabled = (): boolean => enabled;
