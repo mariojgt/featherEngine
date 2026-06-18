@@ -1417,13 +1417,26 @@ class PhysicsRuntime {
       const type = object.physics.bodyType;
 
       if (type === 'dynamic') {
-        // Per-axis: an axis a script touched becomes velocity-controlled this frame;
-        // untouched axes keep their simulated velocity (gravity, momentum, knockback).
-        const v = body.linvel();
         const movedX = Math.abs(dp[0]) > EPSILON;
         const movedY = Math.abs(dp[1]) > EPSILON;
         const movedZ = Math.abs(dp[2]) > EPSILON;
+        const impulse = impulses[object.id];
+        const torque = angularImpulses[object.id];
+        const sv = setVelocities[object.id];
+        const windInfluence = object.physics.windInfluence ?? 0;
+        const windActive = hasWind && windInfluence > 0;
+        // Nothing is driving this body this frame — no scripted move/rotate, no impulse/torque/velocity,
+        // no wind. The dynamic branch only ever WRITES to the body when one of those is present, so with
+        // none of them it would just read body.linvel() and discard it. Skipping saves that WASM call +
+        // its Vector allocation for every idle dynamic body, every frame — the bulk of a settled scene.
+        // Rapier owns the body's motion (gravity, momentum, contacts) regardless.
+        if (!movedX && !movedY && !movedZ && !movedRotation && !impulse && !torque && !sv && !windActive) {
+          continue;
+        }
+        // Per-axis: an axis a script touched becomes velocity-controlled this frame;
+        // untouched axes keep their simulated velocity (gravity, momentum, knockback).
         if (movedX || movedY || movedZ) {
+          const v = body.linvel();
           body.setLinvel(
             {
               x: movedX ? dp[0] / dt : v.x,
@@ -1434,24 +1447,20 @@ class PhysicsRuntime {
           );
         }
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
-        const impulse = impulses[object.id];
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
         // Global wind: a continuous FORCE on bodies that opt in via windInfluence (0 = ignore). Wind is a
         // roughly constant push (like pressure on a sail), so we apply force×dt WITHOUT a mass term — Rapier
         // then divides by mass, giving acceleration = force/mass. That makes LIGHT props blow around while
         // HEAVY ones barely budge (mass-based, as expected). windInfluence is the per-object "sail" factor;
         // the shared per-frame `gust` adds turbulence. This is what drifts/tumbles loose blocks, debris, etc.
-        const windInfluence = object.physics.windInfluence ?? 0;
-        if (hasWind && windInfluence > 0) {
+        if (windActive) {
           const k = windInfluence * gust * dt;
           body.applyImpulse({ x: wind[0] * k, y: wind[1] * k, z: wind[2] * k }, true);
         }
         // Apply Torque node: an angular impulse (kicks the body's spin). Used for physics-driven steering /
         // tip-over forces — pair it with applyImpulse for thrust to drive a car purely from physics.
-        const torque = angularImpulses[object.id];
         if (torque) body.applyTorqueImpulse({ x: torque[0], y: torque[1], z: torque[2] }, true);
         // Set Velocity node: hard-set the body's linear velocity (overrides the transform-derived velocity).
-        const sv = setVelocities[object.id];
         if (sv) body.setLinvel({ x: sv[0], y: sv[1], z: sv[2] }, true);
       } else if (type === 'kinematic') {
         body.setNextKinematicTranslation({ x: cur[0], y: cur[1], z: cur[2] });
