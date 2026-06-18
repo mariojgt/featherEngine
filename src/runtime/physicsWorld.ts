@@ -28,7 +28,7 @@ import {
   halfScale,
   sphereRadius,
 } from './colliderShape';
-import { getModelGeometry } from './meshGeometryCache';
+import { getModelGeometry, meshGeometryVersion } from './meshGeometryCache';
 import {
   buildTerrainChunkTrimesh,
   terrainChunkKeysAroundWorld,
@@ -612,6 +612,18 @@ class PhysicsRuntime {
   private simAccumulator = 0;
   /** Per-moving-body LOCAL transform captured just before the LAST fixed step — the "from" pose for render interpolation. */
   private simPrev = new Map<string, { position: Vector3Tuple; rotation: Vector3Tuple }>();
+  /**
+   * Structural-sync gate (see `structureUnchanged`). The body/vehicle/character/joint/cable sync passes
+   * only create/rebuild/remove bodies in response to STRUCTURAL changes (object added/removed, scale,
+   * bodyType, collider, material, joint/cable wiring, a model finishing loading). None of that changes
+   * when a body merely MOVES. We snapshot the inputs each frame and skip all five passes when they're
+   * byte-for-byte stable — which, thanks to copy-on-write, is true for every frame that didn't add/remove
+   * an object or edit a physics-relevant field. Terrain chunk streaming is excluded (it tracks moving focus
+   * points) and still runs every frame.
+   */
+  private lastSyncById: Map<string, SceneObject> | null = null;
+  private lastSyncCount = -1;
+  private lastSyncMeshVersion = -1;
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = 1 / 60;
@@ -933,6 +945,42 @@ class PhysicsRuntime {
   }
 
   /** Build/rebuild/drop the Rapier raycast vehicles (physicsModel === 'raycast'). */
+  /**
+   * True when none of the inputs the structural sync passes react to have changed since the last sync,
+   * so all five passes are guaranteed no-ops and can be skipped. The compared fields are EXACTLY what the
+   * signature functions read (verified against bodySignature/vehicleSignature/characterSignature +
+   * colliderKindFor): the per-feature sub-object refs, transform.scale, the two renderer fields that pick a
+   * collider, parentId, plus object count (add/remove) and the mesh-geometry version (async model loads).
+   * Position/rotation are deliberately absent — a moving body doesn't change any of these, so the gate
+   * stays closed during active simulation, which is the whole point. Copy-on-write guarantees a changed
+   * field produces a new ref, so ref/value equality is a sound (never-false-positive) "unchanged" proof.
+   */
+  private structureUnchanged(objects: SceneObject[]): boolean {
+    const last = this.lastSyncById;
+    if (!last) return false;
+    if (objects.length !== this.lastSyncCount) return false;
+    if (meshGeometryVersion() !== this.lastSyncMeshVersion) return false;
+    for (const object of objects) {
+      const prev = last.get(object.id);
+      if (prev === undefined) return false; // id set changed (swap at equal length)
+      if (object === prev) continue; // identical ref ⇒ nothing changed at all
+      if (
+        object.physics !== prev.physics ||
+        object.vehicle !== prev.vehicle ||
+        object.character !== prev.character ||
+        object.joint !== prev.joint ||
+        object.cable !== prev.cable ||
+        object.parentId !== prev.parentId ||
+        object.transform.scale !== prev.transform.scale ||
+        object.renderer?.mesh !== prev.renderer?.mesh ||
+        object.renderer?.modelAssetId !== prev.renderer?.modelAssetId
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private syncVehicles(objects: SceneObject[]) {
     const present = new Set<string>();
     for (const object of objects) {
@@ -1318,12 +1366,20 @@ class PhysicsRuntime {
       if (!object.parentId) return prevTransforms.get(object.id);
       return worldPosRot(prevById(), object.id);
     };
+    // Terrain chunk streaming tracks moving focus points, so it must run every frame.
     this.syncTerrainChunks(objects);
-    this.syncBodies(objects);
-    this.syncCharacters(objects);
-    this.syncVehicles(objects);
-    this.syncJoints(objects);
-    this.syncCableJoints(objects);
+    // The body/vehicle/character/joint/cable passes only react to STRUCTURAL change (add/remove/rebuild) —
+    // never to motion. Skip all five on frames where nothing structural changed (the steady-state case).
+    if (!this.structureUnchanged(objects)) {
+      this.syncBodies(objects);
+      this.syncCharacters(objects);
+      this.syncVehicles(objects);
+      this.syncJoints(objects);
+      this.syncCableJoints(objects);
+    }
+    this.lastSyncById = byId;
+    this.lastSyncCount = objects.length;
+    this.lastSyncMeshVersion = meshGeometryVersion();
 
     const movedFixedBodies = new Set<string>();
     for (const object of objects) {
