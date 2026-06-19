@@ -38,6 +38,10 @@
   --motion: 150ms;
   --motion-fast: 90ms;
   --ring: 0 0 0 2px var(--background), 0 0 0 4px var(--accent);
+  /* Technical monospace stack for numeric readouts, coordinates, the console and node
+     value chips. Self-hosted/system only (Tauri CSP blocks web fonts). Referenced via
+     var(--mono) so any surface can opt into tabular, engineer-grade numerics. */
+  --mono: "JetBrains Mono", "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
 
   /* ---- Type ramp ----------------------------------------------------------------
      One ramp for the whole editor (was 13 ad-hoc px sizes scattered across the CSS).
@@ -206,6 +210,143 @@
 :root[data-theme="unreal"] .launcher-primary,
 :root[data-theme="unreal"] .export-button {
   background: var(--accent);
+}
+
+/* ============================================================================
+   FORGE — NodeForge's own signature identity. A refined, industrial dark:
+   warm-graphite neutrals (a whisper of heat, not brown), machined-metal depth
+   (hairline top-highlights, deep shadow), tight squared corners, and a molten
+   EMBER signature reserved for the "ignite" surfaces — the brand mark, the Play
+   button, the active tab. The user-tunable --accent still drives selection and
+   generic controls, so ember + accent read as a deliberate dual-tone, not a clash.
+   Typography leans engineer-grade: tracked uppercase section labels and tabular
+   monospace numerics. Self-contained — selecting another theme fully restores it.
+   ============================================================================ */
+:root[data-theme="forge"] {
+  color-scheme: dark;
+  background: #161514;
+  color: #ece9e4;
+  --background: #161514;
+  --panel: #201e1b;
+  --panel-light: #2a2723;
+  --panel-soft: #1a1816;
+  --border: rgba(255, 245, 235, 0.07);
+  --border-strong: rgba(255, 245, 235, 0.16);
+  --text: #ece9e4;
+  --muted: #9d968c;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  /* Squared, precise — an instrument, not a toy. */
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 7px;
+  /* The signature. Molten ember + its washes. */
+  --forge-ember: #ff7a18;
+  --forge-ember-bright: #ff9648;
+  --forge-glow: color-mix(in srgb, var(--forge-ember) 22%, transparent);
+  --forge-wash: color-mix(in srgb, var(--forge-ember) 13%, transparent);
+}
+
+/* Forge heat: a barely-there ember glow falling from above onto the workspace —
+   the only "texture", and subtle enough to never fight content legibility. */
+:root[data-theme="forge"] .editor-shell {
+  background:
+    radial-gradient(135% 75% at 50% -12%, var(--forge-wash), transparent 58%),
+    var(--background);
+}
+
+/* Machined surfaces: solid warm panels with a single hairline top-highlight,
+   reading as brushed metal catching the forge light. */
+:root[data-theme="forge"] .toolbar,
+:root[data-theme="forge"] .panel-header,
+:root[data-theme="forge"] .viewport-topbar,
+:root[data-theme="forge"] .status-bar,
+:root[data-theme="forge"] .toast {
+  background: #221f1b;
+  backdrop-filter: none;
+  box-shadow: inset 0 1px 0 rgba(255, 246, 236, 0.04);
+}
+
+/* Warm-neutral dock tab strip. */
+:root[data-theme="forge"] .nf-dockview-host {
+  --dv-tabs-and-actions-container-background-color: #1a1816;
+  --dv-activegroup-visiblepanel-tab-background-color: #262320;
+  --dv-activegroup-hiddenpanel-tab-background-color: #201d1a;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #211e1b;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #1c1a17;
+  --dv-tab-divider-color: var(--border);
+}
+
+/* The active panel tab is lit from beneath by the ember — the one place your eye
+   should land first when scanning the dock. */
+:root[data-theme="forge"] .dv-tab.dv-active-tab {
+  box-shadow: inset 0 -2px 0 var(--forge-ember);
+}
+
+/* Brand mark glows like hot iron rather than the cool accent box. */
+:root[data-theme="forge"] .brand > svg {
+  color: var(--forge-ember-bright);
+  border-color: color-mix(in srgb, var(--forge-ember) 38%, transparent);
+  background: var(--forge-wash);
+}
+
+/* Play = ignite. The idle Play button wears the ember signature and lifts into a
+   warm glow on hover; it still flips to the green "running" state while playing
+   (a clear, conventional run indicator that ember shouldn't override). */
+:root[data-theme="forge"] .run-button:not(.active) {
+  border-color: color-mix(in srgb, var(--forge-ember) 42%, transparent);
+  color: var(--forge-ember-bright);
+  background: var(--forge-wash);
+}
+:root[data-theme="forge"] .run-button:not(.active):hover {
+  border-color: var(--forge-ember);
+  color: #fff;
+  background: color-mix(in srgb, var(--forge-ember) 26%, transparent);
+  box-shadow: 0 0 0 1px var(--forge-glow), 0 6px 18px var(--forge-glow);
+}
+
+/* Solid ember launcher/export primaries (no gradient wash). */
+:root[data-theme="forge"] .launcher-primary,
+:root[data-theme="forge"] .export-button {
+  background: var(--forge-ember);
+  border-color: color-mix(in srgb, var(--forge-ember) 60%, black 8%);
+  color: #1a1208;
+}
+:root[data-theme="forge"] .launcher-primary:hover,
+:root[data-theme="forge"] .export-button:hover {
+  background: var(--forge-ember-bright);
+}
+
+/* Launcher carries the same forge identity: ember heat-wash backdrop + hot brand mark. */
+:root[data-theme="forge"] .launcher {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, var(--forge-wash), transparent),
+    var(--background);
+}
+:root[data-theme="forge"] .launcher-brand svg {
+  color: var(--forge-ember-bright);
+}
+
+/* Calm, precise node selection ring — a clean 1px ember edge, no bloom. */
+:root[data-theme="forge"] .nodeforge-node.selected {
+  box-shadow:
+    0 0 0 1px var(--forge-ember),
+    0 8px 22px rgba(0, 0, 0, 0.5);
+}
+
+/* Engineer-grade typography. Section labels are tracked uppercase (an instrument
+   panel reading), and every numeric field/readout uses tabular monospace so digits
+   align in columns and stop shifting as values change. */
+:root[data-theme="forge"] .inspector-section-head,
+:root[data-theme="forge"] .palette-group-head {
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+:root[data-theme="forge"] input[type="number"],
+:root[data-theme="forge"] .axis-input input,
+:root[data-theme="forge"] .nfn-live-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
 }
 
 /* Cross-cutting tweaks for the light theme: a few hard-coded dark backgrounds

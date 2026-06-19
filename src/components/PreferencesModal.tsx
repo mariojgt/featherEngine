@@ -24,6 +24,7 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof Palette }> = [
 ];
 
 const THEME_OPTIONS: Array<{ id: ThemeMode; label: string; hint: string }> = [
+  { id: 'forge', label: 'Forge', hint: 'NodeForge signature — warm industrial dark, molten-ember accents, mono numerics.' },
   { id: 'unreal', label: 'Unreal', hint: 'Flat neutral grays, squared corners — Unreal Engine feel.' },
   { id: 'dark', label: 'Dark', hint: 'Soft blue-grey panels.' },
   { id: 'midnight', label: 'Midnight', hint: 'Deeper black for OLED + focus.' },
@@ -31,7 +32,7 @@ const THEME_OPTIONS: Array<{ id: ThemeMode; label: string; hint: string }> = [
   { id: 'high-contrast', label: 'High contrast', hint: 'Maximum legibility (WCAG AAA).' },
 ];
 
-const ACCENT_SWATCHES = ['#5b8cff', '#7c5cff', '#3ddc97', '#f7b955', '#ff6b6b', '#ff8ad6'];
+const ACCENT_SWATCHES = ['#5b8cff', '#7c5cff', '#3ddc97', '#f7b955', '#ff7a18', '#ff6b6b', '#ff8ad6'];
 
 const DENSITY_OPTIONS: Array<{ id: Density; label: string; hint: string }> = [
   { id: 'comfortable', label: 'Comfortable', hint: 'Default spacing.' },
