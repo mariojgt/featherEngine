@@ -29,6 +29,16 @@ export const defaultSceneEnvironment = (): SceneEnvironmentSettings => ({
   volumetricMaxDistance: 140,
   wind: [0, 0, 0],
   windTurbulence: 0,
+  // ACES + neutral exposure = the look every existing project already renders with, so adding the
+  // control changes nothing until the user picks another operator.
+  toneMapping: 'aces',
+  toneMappingExposure: 1,
+  ambientMode: 'flat',
+  // Contact shadows default to the values both viewports hardcoded before they were made configurable.
+  contactShadows: true,
+  contactShadowY: 0,
+  contactShadowScale: 14,
+  contactShadowOpacity: 0.36,
 });
 
 export function withSceneEnvironmentDefaults(

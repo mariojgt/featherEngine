@@ -146,6 +146,15 @@ export interface ModelMaterial {
   baseColorUrl?: string;
   /** Resolved URL of the normal map, if any. */
   normalUrl?: string;
+  /** Advanced physical layers — only take effect on slots whose baked material is a MeshPhysicalMaterial. */
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  sheen?: number;
+  sheenColor?: string;
+  transmission?: number;
+  ior?: number;
+  thickness?: number;
+  iridescence?: number;
 }
 
 /** Each cloned material remembers its imported values so overrides can be toggled back off. */
@@ -302,6 +311,21 @@ export function ModelAsset({
           if (typeof mat.roughness === 'number') mat.roughness = chosen.roughness;
           mat.emissive?.set(chosen.emissiveColor);
           if (typeof mat.emissiveIntensity === 'number') mat.emissiveIntensity = chosen.emissiveIntensity;
+          // Advanced physical layers — only on physical slots, and only when a layer is engaged, so
+          // recoloring a baked-glass model doesn't silently zero out its imported transmission/coat.
+          const phys = mat as THREE.MeshPhysicalMaterial;
+          const physEngaged =
+            (chosen.clearcoat ?? 0) > 0 || (chosen.sheen ?? 0) > 0 || (chosen.transmission ?? 0) > 0 || (chosen.iridescence ?? 0) > 0;
+          if (phys.isMeshPhysicalMaterial && physEngaged) {
+            phys.clearcoat = chosen.clearcoat ?? 0;
+            phys.clearcoatRoughness = chosen.clearcoatRoughness ?? 0;
+            phys.sheen = chosen.sheen ?? 0;
+            if (chosen.sheenColor) phys.sheenColor.set(chosen.sheenColor);
+            phys.transmission = chosen.transmission ?? 0;
+            phys.ior = chosen.ior ?? 1.5;
+            phys.thickness = chosen.thickness ?? 0;
+            phys.iridescence = chosen.iridescence ?? 0;
+          }
         } else {
           if (original.color && mat.color) mat.color.copy(original.color);
           if (typeof original.metalness === 'number') mat.metalness = original.metalness;

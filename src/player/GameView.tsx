@@ -18,7 +18,7 @@ import { EffectLightPool } from '../three/effectLights';
 import { autoQualityStep } from '../runtime/autoQuality';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
-import { useResolvedMaterial } from '../three/resolveMaterial';
+import { useResolvedMaterial, hasPhysicalLayers } from '../three/resolveMaterial';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import { WebGLScreenUILayer } from '../ui/WebGLScreenUILayer';
 import { ImpactParticles } from '../three/ImpactParticles';
@@ -29,6 +29,7 @@ import { PostFx } from '../three/PostFx';
 import { ShadowLOD } from '../three/ShadowLOD';
 import { MeshLOD } from '../three/MeshLOD';
 import { CompressedTextureSupport } from '../three/CompressedTextureSupport';
+import { ToneMapping } from '../three/ToneMapping';
 import { ModelInstances } from '../three/ModelInstances';
 import {
   useInstancingEnabled,
@@ -181,13 +182,44 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
             override: resolved.overrideModel,
             baseColorUrl: resolved.baseColorUrl,
             normalUrl: resolved.normalUrl,
+            clearcoat: resolved.clearcoat,
+            clearcoatRoughness: resolved.clearcoatRoughness,
+            sheen: resolved.sheen,
+            sheenColor: resolved.sheenColor,
+            transmission: resolved.transmission,
+            ior: resolved.ior,
+            thickness: resolved.thickness,
+            iridescence: resolved.iridescence,
           }}
         />
       </Suspense>
     );
   }
 
-  const material = (
+  // Heavier MeshPhysicalMaterial only when a physical layer (clearcoat/sheen/transmission/iridescence)
+  // is engaged; otherwise the lighter MeshStandardMaterial (defaults match, so this is purely additive).
+  const material = hasPhysicalLayers(resolved) ? (
+    <meshPhysicalMaterial
+      color={resolved.color}
+      metalness={resolved.metalness}
+      roughness={resolved.roughness}
+      emissive={resolved.emissiveColor}
+      emissiveIntensity={resolved.emissiveIntensity}
+      map={builtinBaseTexture ?? null}
+      normalMap={builtinNormalTexture ?? null}
+      clearcoat={resolved.clearcoat}
+      clearcoatRoughness={resolved.clearcoatRoughness}
+      sheen={resolved.sheen}
+      sheenColor={resolved.sheenColor}
+      transmission={resolved.transmission}
+      ior={resolved.ior}
+      thickness={resolved.thickness}
+      iridescence={resolved.iridescence}
+      transparent={resolved.opacity < 1}
+      opacity={resolved.opacity}
+      depthWrite={resolved.opacity >= 1}
+    />
+  ) : (
     <meshStandardMaterial
       color={resolved.color}
       metalness={resolved.metalness}
@@ -419,7 +451,15 @@ function GameScene() {
       {/* WebGL HUD (uikit) for renderMode:'webgl' screen docs — caught by PostFx bloom. */}
       <WebGLScreenUILayer />
 
-      <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />
+      {(sceneEnvironment?.contactShadows ?? true) && (
+        <ContactShadows
+          position={[0, (sceneEnvironment?.contactShadowY ?? 0) - 0.01, 0]}
+          opacity={sceneEnvironment?.contactShadowOpacity ?? 0.36}
+          scale={sceneEnvironment?.contactShadowScale ?? 14}
+          blur={2.4}
+          far={6}
+        />
+      )}
       <PostFx />
     </>
   );
@@ -449,6 +489,7 @@ export function GameView() {
           above a certain speed/scene load. autoQualityStep has its own hysteresis + session latch. */}
       <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => autoQualityStep(1)} />
       <CompressedTextureSupport />
+      <ToneMapping />
       <AudioListenerSync />
       <SkidMarks />
       <ShaderPrewarm />

@@ -2708,6 +2708,25 @@ button {
   gap: 6px;
 }
 
+.material-advanced {
+  margin-top: 8px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+.material-advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+  user-select: none;
+}
+.material-advanced[open] > summary {
+  margin-bottom: 2px;
+}
+
 .node-field-group-title {
   display: flex;
   align-items: center;

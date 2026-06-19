@@ -147,7 +147,35 @@ export interface SceneEnvironmentSettings {
   wind?: Vector3Tuple;
   /** Random gust turbulence layered on the global wind, 0–1. */
   windTurbulence?: number;
+  /**
+   * Camera/film tonemapping operator applied to the HDR scene on its way to the screen — the single
+   * biggest lever on the overall "look". `aces` (default) is the punchy filmic curve three.js has
+   * always used here; `agx` is the modern, highlight-preserving curve (Blender 4's default) that
+   * desaturates bright colors gracefully instead of clipping them to white; `neutral` is Khronos PBR
+   * Neutral (accurate, minimal grade — good for product/UI); `reinhard`/`cineon` are classic curves;
+   * `linear` and `none` disable filmic shaping. Per scene so each level can set its own mood.
+   */
+  toneMapping?: ToneMappingMode;
+  /** Exposure multiplier applied before tonemapping (stops of light). 1 = neutral; >1 brighter, <1 darker. */
+  toneMappingExposure?: number;
+  /**
+   * Ambient fill model. `flat` (default) is a single constant ambient term — the legacy look. `hemisphere`
+   * grades the fill from the sky color overhead to the ground color below, so undersides read cooler/darker
+   * and tops catch the sky — a more natural, free lighting lift.
+   */
+  ambientMode?: 'flat' | 'hemisphere';
+  /** Soft grounding shadow blob under objects (drei ContactShadows). Default on. Turn off for flying/space scenes. */
+  contactShadows?: boolean;
+  /** World Y the contact-shadow plane sits at (match your ground height). Default 0. */
+  contactShadowY?: number;
+  /** Footprint size of the contact-shadow plane in world units. Default 14; raise for big scenes. */
+  contactShadowScale?: number;
+  /** Darkness of the contact shadow, 0–1. Default 0.36. */
+  contactShadowOpacity?: number;
 }
+
+/** Film/camera tonemapping operators. See `SceneEnvironmentSettings.toneMapping`. */
+export type ToneMappingMode = 'aces' | 'agx' | 'neutral' | 'reinhard' | 'cineon' | 'linear' | 'none';
 
 /** A reusable named attach point on a skeleton (Unreal socket): a bone + a local offset. */
 export interface SkeletonSocket {

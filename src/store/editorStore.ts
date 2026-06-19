@@ -6050,13 +6050,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             visited.add(nodeId);
             const node = runtime.nodesById.get(nodeId);
             if (!node) return undefined;
+            const kind = node.data.nodeKind;
+            switch (kind) {
+            case 'value.number': return Number(node.data.numberValue ?? 0);
+            case 'value.string': return node.data.stringValue ?? '';
+            case 'value.boolean': return Boolean(node.data.booleanValue);
+            case 'value.vector3': return node.data.vectorValue ?? [0, 0, 0];
 
-            if (node.data.nodeKind === 'value.number') return Number(node.data.numberValue ?? 0);
-            if (node.data.nodeKind === 'value.string') return node.data.stringValue ?? '';
-            if (node.data.nodeKind === 'value.boolean') return Boolean(node.data.booleanValue);
-            if (node.data.nodeKind === 'value.vector3') return node.data.vectorValue ?? [0, 0, 0];
-
-            if (node.data.nodeKind === 'value.random') {
+            case 'value.random': {
               const lo = toNumber(valueInput(node, 'min', Number(node.data.randomMin ?? 0)));
               const hi = toNumber(valueInput(node, 'max', Number(node.data.randomMax ?? 1)));
               const min = Math.min(lo, hi);
@@ -6066,33 +6067,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             // For Loop's value-out = the current 0-based iteration index (0 when not iterating).
-            if (node.data.nodeKind === 'logic.forLoop') return loopIndex.get(nodeId) ?? 0;
+            case 'logic.forLoop': return loopIndex.get(nodeId) ?? 0;
 
             // Function entry's A/B/C value-outs = the CURRENT call's arguments (top call frame).
-            if (node.data.nodeKind === 'event.functionEntry') {
+            case 'event.functionEntry': {
               const frame = functionFrames[functionFrames.length - 1];
               if (!frame) return undefined;
               return sourceHandle === 'arg-b' ? frame.args[1] : sourceHandle === 'arg-c' ? frame.args[2] : frame.args[0];
             }
 
             // Call Function's Return pin = whatever a Return node set during this node's LAST call.
-            if (node.data.nodeKind === 'logic.callFunction') return callReturns.get(nodeId);
+            case 'logic.callFunction': return callReturns.get(nodeId);
 
             // Spawn Prefab's value-out = a reference to the actor it most recently spawned.
-            if (node.data.nodeKind === 'action.spawnPrefab') return lastSpawnedByNode.get(nodeId);
+            case 'action.spawnPrefab': return lastSpawnedByNode.get(nodeId);
 
             // Custom Event's value-out = the payload the firing Fire Event carried (last one per name).
-            if (node.data.nodeKind === 'event.custom') {
+            case 'event.custom': {
               return eventPayloads[(node.data.eventName || 'CustomEvent').toLowerCase()];
             }
 
             // For Each Actor's value-out = the current iteration's actor reference (a wired Body chain reads it).
-            if (node.data.nodeKind === 'logic.forEachActor') return forEachCurrent.get(nodeId);
+            case 'logic.forEachActor': return forEachCurrent.get(nodeId);
 
             // On Receive Damage's value-out = how much HP this object lost on the hit that fired the event.
-            if (node.data.nodeKind === 'event.receiveDamage') return priorDamage[object.id] ?? 0;
+            case 'event.receiveDamage': return priorDamage[object.id] ?? 0;
 
-            if (node.data.nodeKind === 'input.move') {
+            case 'input.move': {
               // Move direction from the character's key bindings (falls back to WASD), normalized.
               // Camera-relative when the character uses mouse-look so "forward" follows the view.
               const cc = object.character;
@@ -6124,12 +6125,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return [dirX, 0, dirZ] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'query.vehicleSpeed') {
+            case 'query.vehicleSpeed': {
               const v = nextVelocities[object.id];
               return v ? Math.hypot(v[0], v[2]) : 0;
             }
 
-            if (node.data.nodeKind === 'input.driveInput') {
+            case 'input.driveInput': {
               // Vehicle input → [throttle (W=+1/S=-1), steer (A=+1/D=-1), handbrake (Space=1/0)]. Reads the
               // owner Vehicle's key bindings so the graph is fully editable (rebind keys, gate it, etc.).
               const veh = object.vehicle;
@@ -6154,12 +6155,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return [throttle, steer, hand] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'query.grounded') {
+            case 'query.grounded': {
               return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
             }
 
             // Has Save: true when the slot holds saved data — gate a "Continue" button / skip-intro branch.
-            if (node.data.nodeKind === 'save.has') {
+            case 'save.has': {
               const slot = node.data.saveSlot ?? 'slot1';
               let has = saveSlotHasCache.get(slot);
               if (has === undefined) {
@@ -6173,12 +6174,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // blueprint or an instance-var "tag", returning its id (a reference). Skips self, the dead
             // (ragdolls), and transient projectiles/effects. 'first' breaks early (cheap); 'nearest' keeps the
             // closest by squared horizontal distance (no sqrt). Memoized per (owner,node) for the frame.
-            if (node.data.nodeKind === 'query.findActorByBlueprint' || node.data.nodeKind === 'query.findActorByTag') {
+            case 'query.findActorByBlueprint':
+            case 'query.findActorByTag': {
               const cacheKey = `${object.id}:${nodeId}`;
               const memo = findActorCache.get(cacheKey);
               if (memo !== undefined) return memo || undefined;
 
-              const byTag = node.data.nodeKind === 'query.findActorByTag';
+              const byTag = kind === 'query.findActorByTag';
               const blueprintId = node.data.castBlueprintId;
               // `tag` = the tag to find (the prominent field; matches the Inspector "Tags" chips).
               // `tagKey` = which instance variable holds the tag list (default 'tags', what the Tags UI writes).
@@ -6215,7 +6217,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             // Raycast: one ray, four outputs (selected by sourceHandle). Origin = owner chest; direction =
             // a wired Vector3 or the owner's forward; length = wired number or the node's distance field.
-            if (node.data.nodeKind === 'query.raycast') {
+            case 'query.raycast': {
               const cacheKey = `${object.id}:${nodeId}`;
               let result = raycastCache.get(cacheKey);
               if (!result) {
@@ -6257,7 +6259,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // Overlap Sphere: one broadphase ball query, three outputs (Hit/Actor/Count) by sourceHandle.
             // Center = a wired Vector3 or the owner's position; radius = wired number or the node's field.
             // "Actor" is the NEAREST overlapping solid actor — the idiomatic "who's in range" for AoE/abilities.
-            if (node.data.nodeKind === 'query.overlapSphere') {
+            case 'query.overlapSphere': {
               const cacheKey = `${object.id}:${nodeId}`;
               let result = overlapCache.get(cacheKey);
               if (!result) {
@@ -6289,7 +6291,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             // Get Cable Tension: current stretch ratio (end-to-end distance ÷ length). ~1 at rest, >1 taut.
-            if (node.data.nodeKind === 'query.cableTension') {
+            case 'query.cableTension': {
               const target = resolveTarget(node.data.targetObjectId) || object.id;
               const owner = activeObjectById.get(target);
               const cab = owner?.cable;
@@ -6310,19 +6312,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             // Get Velocity: an actor's current velocity [x,y,z]. Tracked in nextVelocities for dynamic bodies
             // (written back from the physics step), characters, and vehicles.
-            if (node.data.nodeKind === 'query.velocity') {
+            case 'query.velocity': {
               const tid = objectVarTarget(node);
               const v = nextVelocities[tid];
               return (v ? [v[0], v[1], v[2]] : [0, 0, 0]) as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'ai.distanceToPlayer') {
+            case 'ai.distanceToPlayer': {
               if (!aiPlayer || aiPlayer.id === object.id) return 9999;
               const p = aiPlayer.transform.position;
               return Math.hypot(p[0] - position[0], p[2] - position[2]);
             }
 
-            if (node.data.nodeKind === 'ai.directionToPlayer') {
+            case 'ai.directionToPlayer': {
               if (!aiPlayer || aiPlayer.id === object.id) return [0, 0, 0] as Vector3Tuple;
               const p = aiPlayer.transform.position;
               const dx = p[0] - position[0];
@@ -6331,12 +6333,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return [dx / len, 0, dz / len] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'ai.playerLocation') {
+            case 'ai.playerLocation': {
               const p = aiPlayer?.transform.position;
               return (p ? [p[0], p[1], p[2]] : [0, 0, 0]) as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'ai.hasLineOfSight') {
+            case 'ai.hasLineOfSight': {
               // True if a chest-to-chest ray from this object to the player isn't blocked by solid
               // geometry (walls, doors, cover). Used by enemy brains to gate Move + Spawn Projectile so
               // they don't chase or shoot through walls. Defaults to true when the player or the
@@ -6370,7 +6372,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return visible;
             }
 
-            if (node.data.nodeKind === 'animator.getParam') {
+            case 'animator.getParam': {
               // Read the live animator parameter (previous frame) — from self, or another object's animator.
               const targetId = node.data.targetObjectId || object.id;
               const targetObj = targetId === object.id ? object : activeObjectById.get(targetId);
@@ -6382,7 +6384,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return 0;
             }
 
-            if (node.data.nodeKind === 'animator.getState') {
+            case 'animator.getState': {
               const targetId = node.data.targetObjectId || object.id;
               const targetObj = targetId === object.id ? object : activeObjectById.get(targetId);
               const controller = targetObj?.animator?.controllerId ? controllerById.get(targetObj.animator.controllerId) : undefined;
@@ -6391,7 +6393,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return stateId ? controllerRuntime?.statesById.get(stateId)?.name ?? '' : '';
             }
 
-            if (node.data.nodeKind === 'variable.get') {
+            case 'variable.get': {
               if (node.data.variableId) {
                 const variable = variableById.get(node.data.variableId);
                 return variable ? cloneGraphValue(nextVariableValues[variable.id] ?? variable.defaultValue) : undefined;
@@ -6405,7 +6407,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return undefined;
             }
 
-            if (node.data.nodeKind === 'variable.getObject') {
+            case 'variable.getObject': {
               const key = node.data.objectKey || '';
               // Target comes from the wired reference input (a Cast's "As" pin) or the targetObjectId sentinel —
               // so a script can READ another actor's instance variable (then e.g. increment it).
@@ -6416,7 +6418,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             }
 
             // Cast's value-out ("As <Blueprint>"): the validated actor id, or undefined if it isn't that blueprint.
-            if (node.data.nodeKind === 'logic.cast') {
+            case 'logic.cast': {
               const wired = valueInput(node, 'object');
               const targetId = (typeof wired === 'string' && wired) || resolveTarget(node.data.targetObjectId) || object.id;
               const targetObj = activeObjectById.get(targetId);
@@ -6425,7 +6427,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 : undefined;
             }
 
-            if (node.data.nodeKind === 'data.tableGet') {
+            case 'data.tableGet': {
               const table = node.data.tableId ? dataAssetById.get(node.data.tableId) : undefined;
               const column = table && node.data.columnId ? indexTableColumnsById(table.columns).get(node.data.columnId) : undefined;
               const rowKey = graphValueToString(valueInput(node, 'rowKey', node.data.rowKey ?? ''));
@@ -6433,25 +6435,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return column && row ? cloneGraphValue(row.values[column.id] ?? defaultValueForType(column.type)) : undefined;
             }
 
-            if (node.data.nodeKind === 'math.add') {
+            case 'math.add': {
               return toNumber(valueInput(node, 'a', Number(node.data.numberValue ?? 0))) + toNumber(valueInput(node, 'b', Number(node.data.amount ?? 0)));
             }
 
-            if (node.data.nodeKind === 'math.clamp') {
+            case 'math.clamp': {
               const value = toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0)));
               const min = toNumber(valueInput(node, 'min', 0));
               const max = toNumber(valueInput(node, 'max', Number(node.data.amount ?? 1)));
               return Math.min(Math.max(value, min), max);
             }
 
-            if (node.data.nodeKind === 'math.lerp') {
+            case 'math.lerp': {
               const a = toNumber(valueInput(node, 'a', 0));
               const b = toNumber(valueInput(node, 'b', Number(node.data.amount ?? 1)));
               const t = Math.min(Math.max(toNumber(valueInput(node, 't', Number(node.data.numberValue ?? 0.5))), 0), 1);
               return a + (b - a) * t;
             }
 
-            if (node.data.nodeKind === 'math.mapRange') {
+            case 'math.mapRange': {
               const value = toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0)));
               const inMin = toNumber(valueInput(node, 'inMin', 0));
               const inMax = toNumber(valueInput(node, 'inMax', 1));
@@ -6462,96 +6464,96 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return outMin + (outMax - outMin) * t;
             }
 
-            if (node.data.nodeKind === 'math.floor') {
+            case 'math.floor': {
               return Math.floor(toNumber(valueInput(node, 'value', Number(node.data.numberValue ?? 0))));
             }
 
-            if (node.data.nodeKind === 'math.vectorLength') {
+            case 'math.vectorLength': {
               const v = asVec3(valueInput(node, 'vector'));
               return Math.hypot(v[0], v[1], v[2]);
             }
 
-            if (node.data.nodeKind === 'math.dot') {
+            case 'math.dot': {
               const a = asVec3(valueInput(node, 'a'));
               const b = asVec3(valueInput(node, 'b'));
               return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
             }
 
-            if (node.data.nodeKind === 'math.subtract') {
+            case 'math.subtract': {
               return toNumber(valueInput(node, 'a', 0)) - toNumber(valueInput(node, 'b', 0));
             }
 
-            if (node.data.nodeKind === 'math.multiply') {
+            case 'math.multiply': {
               return toNumber(valueInput(node, 'a', 0)) * toNumber(valueInput(node, 'b', 0));
             }
 
-            if (node.data.nodeKind === 'math.divide') {
+            case 'math.divide': {
               const b = toNumber(valueInput(node, 'b', 0));
               return b === 0 ? 0 : toNumber(valueInput(node, 'a', 0)) / b;
             }
 
-            if (node.data.nodeKind === 'math.modulo') {
+            case 'math.modulo': {
               const b = toNumber(valueInput(node, 'b', 0));
               return b === 0 ? 0 : toNumber(valueInput(node, 'a', 0)) % b;
             }
 
-            if (node.data.nodeKind === 'math.abs') return Math.abs(toNumber(valueInput(node, 'value', 0)));
-            if (node.data.nodeKind === 'math.min') return Math.min(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 0)));
-            if (node.data.nodeKind === 'math.max') return Math.max(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 0)));
-            if (node.data.nodeKind === 'math.round') {
+            case 'math.abs': return Math.abs(toNumber(valueInput(node, 'value', 0)));
+            case 'math.min': return Math.min(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 0)));
+            case 'math.max': return Math.max(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 0)));
+            case 'math.round': {
               const value = toNumber(valueInput(node, 'value', 0));
               const mode = node.data.roundMode ?? 'round';
               return mode === 'floor' ? Math.floor(value) : mode === 'ceil' ? Math.ceil(value) : Math.round(value);
             }
-            if (node.data.nodeKind === 'math.power') return Math.pow(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 2)));
+            case 'math.power': return Math.pow(toNumber(valueInput(node, 'a', 0)), toNumber(valueInput(node, 'b', 2)));
             // Sin/Cos take DEGREES (matching Set Rotation's authoring convention).
-            if (node.data.nodeKind === 'math.sin') return Math.sin((toNumber(valueInput(node, 'value', 0)) * Math.PI) / 180);
-            if (node.data.nodeKind === 'math.cos') return Math.cos((toNumber(valueInput(node, 'value', 0)) * Math.PI) / 180);
+            case 'math.sin': return Math.sin((toNumber(valueInput(node, 'value', 0)) * Math.PI) / 180);
+            case 'math.cos': return Math.cos((toNumber(valueInput(node, 'value', 0)) * Math.PI) / 180);
 
             // Append: text join (numbers/bools stringify naturally) — HUD labels, print messages.
-            if (node.data.nodeKind === 'string.append') {
+            case 'string.append': {
               const a = valueInput(node, 'a', node.data.stringValue ?? '');
               const b = valueInput(node, 'b', '');
               return `${a ?? ''}${b ?? ''}`;
             }
 
             // Select: the value-side Branch — condition ? A : B, any types.
-            if (node.data.nodeKind === 'logic.select') {
+            case 'logic.select': {
               return toBoolean(valueInput(node, 'condition', false)) ? valueInput(node, 'a') : valueInput(node, 'b');
             }
 
             // --- Vector math (read inputs as [x,y,z] tuples) ---
-            if (node.data.nodeKind === 'math.distance') {
+            case 'math.distance': {
               const a = asVec3(valueInput(node, 'a'));
               const b = asVec3(valueInput(node, 'b'));
               return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
             }
 
-            if (node.data.nodeKind === 'math.vectorAdd') {
+            case 'math.vectorAdd': {
               const a = asVec3(valueInput(node, 'a'));
               const b = asVec3(valueInput(node, 'b'));
               return [a[0] + b[0], a[1] + b[1], a[2] + b[2]] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'math.vectorSubtract') {
+            case 'math.vectorSubtract': {
               const a = asVec3(valueInput(node, 'a'));
               const b = asVec3(valueInput(node, 'b'));
               return [a[0] - b[0], a[1] - b[1], a[2] - b[2]] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'math.vectorScale') {
+            case 'math.vectorScale': {
               const v = asVec3(valueInput(node, 'vector'));
               const s = toNumber(valueInput(node, 'scale', 1));
               return [v[0] * s, v[1] * s, v[2] * s] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'math.normalize') {
+            case 'math.normalize': {
               const v = asVec3(valueInput(node, 'value'));
               const len = Math.hypot(v[0], v[1], v[2]) || 1;
               return [v[0] / len, v[1] / len, v[2] / len] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'math.makeVector') {
+            case 'math.makeVector': {
               return [
                 toNumber(valueInput(node, 'x', 0)),
                 toNumber(valueInput(node, 'y', 0)),
@@ -6559,26 +6561,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               ] as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'logic.not') {
+            case 'logic.not': {
               return !toBoolean(valueInput(node, 'value', false));
             }
 
             // Read an actor's transform (Unreal GetActorLocation/Rotation/Scale). Target resolves via the wired
             // "target" reference or the targetObjectId sentinel ($self/$player/$trigger/$cast), default self. For
             // self we read the LIVE arrays (reflecting this-frame mutations); other actors read their transform.
-            if (
-              node.data.nodeKind === 'action.getPosition' ||
-              node.data.nodeKind === 'action.getRotation' ||
-              node.data.nodeKind === 'action.getScale'
-            ) {
+            case 'action.getPosition':
+            case 'action.getRotation':
+            case 'action.getScale': {
               const targetId = objectVarTarget(node);
               const self = targetId === object.id;
               const tf = self ? undefined : activeObjectById.get(targetId)?.transform;
-              if (node.data.nodeKind === 'action.getPosition') {
+              if (kind === 'action.getPosition') {
                 const p = self ? position : tf?.position;
                 return (p ? [p[0], p[1], p[2]] : [0, 0, 0]) as Vector3Tuple;
               }
-              if (node.data.nodeKind === 'action.getScale') {
+              if (kind === 'action.getScale') {
                 const s = self ? scale : tf?.scale;
                 return (s ? [s[0], s[1], s[2]] : [1, 1, 1]) as Vector3Tuple;
               }
@@ -6588,29 +6588,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               return (r ? [r[0] * d, r[1] * d, r[2] * d] : [0, 0, 0]) as Vector3Tuple;
             }
 
-            if (node.data.nodeKind === 'logic.compare') {
+            case 'logic.compare': {
               return compareValues(valueInput(node, 'a', 0), valueInput(node, 'b', Number(node.data.numberValue ?? 0)), node.data.compareOp ?? '==');
             }
 
-            if (node.data.nodeKind === 'logic.and') {
+            case 'logic.and': {
               return toBoolean(valueInput(node, 'a', false)) && toBoolean(valueInput(node, 'b', false));
             }
 
-            if (node.data.nodeKind === 'logic.or') {
+            case 'logic.or': {
               return toBoolean(valueInput(node, 'a', false)) || toBoolean(valueInput(node, 'b', false));
             }
 
             // Read this object's CURRENT effective material (base + graph + overrides written so far this frame).
-            if (node.data.nodeKind === 'action.getMaterialColor') {
+            case 'action.getMaterialColor': {
               return resolveMaterial(nextRenderer, state.materials, state.graphs).color;
             }
 
-            if (node.data.nodeKind === 'action.getMaterialProperty') {
+            case 'action.getMaterialProperty': {
               const current = resolveMaterial(nextRenderer, state.materials, state.graphs);
               const property = node.data.materialProperty ?? 'metalness';
               return property in current ? (current as unknown as Record<string, GraphValue>)[property] : undefined;
             }
-
+            }
             return undefined;
           }
 

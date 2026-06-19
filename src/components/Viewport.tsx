@@ -23,7 +23,7 @@ import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
 import { EditorCamera, editorNav, type ViewPreset } from '../three/EditorCamera';
 import { ViewCube } from './ViewCube';
 import { BoneAttachment } from '../three/BoneAttachment';
-import { useResolvedMaterial, useResolvedMaterialSlots } from '../three/resolveMaterial';
+import { useResolvedMaterial, useResolvedMaterialSlots, hasPhysicalLayers } from '../three/resolveMaterial';
 import { assetDrag, isAssetDrag, isPrefabDrag, prefabDrag, readAssetDragId, readPrefabDragId } from './dragShared';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
 import { ScreenUILayer } from '../ui/ScreenUILayer';
@@ -43,6 +43,7 @@ import { PostFx } from '../three/PostFx';
 import { ShadowLOD } from '../three/ShadowLOD';
 import { MeshLOD } from '../three/MeshLOD';
 import { CompressedTextureSupport } from '../three/CompressedTextureSupport';
+import { ToneMapping } from '../three/ToneMapping';
 import { ModelInstances } from '../three/ModelInstances';
 import {
   useInstancingEnabled,
@@ -206,6 +207,14 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
       override: resolved.overrideModel,
       baseColorUrl: resolved.baseColorUrl,
       normalUrl: resolved.normalUrl,
+      clearcoat: resolved.clearcoat,
+      clearcoatRoughness: resolved.clearcoatRoughness,
+      sheen: resolved.sheen,
+      sheenColor: resolved.sheenColor,
+      transmission: resolved.transmission,
+      ior: resolved.ior,
+      thickness: resolved.thickness,
+      iridescence: resolved.iridescence,
     }),
     [resolved],
   );
@@ -270,7 +279,32 @@ function Primitive({ object, selected }: { object: SceneObject; selected: boolea
       </Suspense>
     );
   }
-  const commonMaterial = (
+  // MeshPhysicalMaterial only when a clearcoat/sheen/transmission/iridescence layer is actually engaged
+  // — it's a heavier shader, so plain props keep the lighter MeshStandardMaterial. Defaults match, so
+  // switching is purely additive. Transmission renders via three's own refraction pass (not the
+  // transparent queue), so we don't force `transparent` for it.
+  const commonMaterial = hasPhysicalLayers(resolved) ? (
+    <meshPhysicalMaterial
+      color={resolved.color}
+      metalness={resolved.metalness}
+      roughness={resolved.roughness}
+      emissive={resolved.emissiveColor}
+      emissiveIntensity={resolved.emissiveIntensity}
+      map={builtinBaseTexture ?? null}
+      normalMap={builtinNormalTexture ?? null}
+      clearcoat={resolved.clearcoat}
+      clearcoatRoughness={resolved.clearcoatRoughness}
+      sheen={resolved.sheen}
+      sheenColor={resolved.sheenColor}
+      transmission={resolved.transmission}
+      ior={resolved.ior}
+      thickness={resolved.thickness}
+      iridescence={resolved.iridescence}
+      transparent={resolved.opacity < 1}
+      opacity={resolved.opacity}
+      depthWrite={resolved.opacity >= 1}
+    />
+  ) : (
     <meshStandardMaterial
       color={resolved.color}
       metalness={resolved.metalness}
@@ -1160,7 +1194,15 @@ function SceneContent({
       {/* Editor ground aids — hidden during Play so they don't show up (or sit at the origin over terrain) in
           the running game. */}
       {!isPlaying && <gridHelper args={[24, 24, '#30394D', '#202737']} position={[0, 0.01, 0]} />}
-      {!isPlaying && <ContactShadows position={[0, -0.01, 0]} opacity={0.36} scale={14} blur={2.4} far={6} />}
+      {!isPlaying && (sceneEnvironment?.contactShadows ?? true) && (
+        <ContactShadows
+          position={[0, (sceneEnvironment?.contactShadowY ?? 0) - 0.01, 0]}
+          opacity={sceneEnvironment?.contactShadowOpacity ?? 0.36}
+          scale={sceneEnvironment?.contactShadowScale ?? 14}
+          blur={2.4}
+          far={6}
+        />
+      )}
       {/* During Play (or when previewing) a character's follow camera takes over the view; otherwise free-orbit.
           Preview mode (editor, not playing) frames the resting camera so offset/pitch tuning is visible live. */}
       {isPlaying && cinematicCamera ? (
@@ -1920,6 +1962,7 @@ export function ViewportPanel() {
                 }}
               />
               <CompressedTextureSupport />
+              <ToneMapping />
               <AudioListenerSync />
               <SkidMarks />
               <ShaderPrewarm />

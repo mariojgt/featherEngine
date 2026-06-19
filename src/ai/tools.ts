@@ -37,7 +37,7 @@ import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createSimRacingTemplate } from '../project/simRacingTemplate';
 import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
-import { findLightingPreset, findMaterialPreset, lightingPresetIds, materialPresetIds } from '../three/presets';
+import { findLightingPreset, findMaterialPreset, lightingPresetIds, materialPresetIds, materialPresetPatch } from '../three/presets';
 import { applyPhysicsMaterialPreset, physicsMaterialPresetIds } from '../runtime/physicsMaterials';
 
 const store = () => useEditorStore.getState();
@@ -131,6 +131,16 @@ const environmentPatchSchema = z.object({
   volumetricMaxDistance: z.number().min(1).optional().describe('Far clamp (world units) for the volumetric raymarch.'),
   wind: vec3.optional().describe('Global wind force vector [x,y,z] (world space). Drives all cloth and pushes dynamic bodies by their windInfluence. [0,0,0] = calm.'),
   windTurbulence: z.number().min(0).max(1).optional().describe('Global wind gust turbulence 0–1.'),
+  toneMapping: z
+    .enum(['aces', 'agx', 'neutral', 'reinhard', 'cineon', 'linear', 'none'])
+    .optional()
+    .describe('Film tonemapping curve for the whole scene — the biggest single lever on overall look. aces = classic punchy filmic (default); agx = modern, preserves bright highlights instead of blowing them to white (great for neon/sunlit/HDR scenes); neutral = accurate/flat PBR; reinhard/cineon = classic curves; linear/none = no filmic shaping.'),
+  toneMappingExposure: z.number().min(0).optional().describe('Exposure multiplier before tonemapping. 1 = neutral, >1 brighter, <1 darker.'),
+  ambientMode: z.enum(['flat', 'hemisphere']).optional().describe('Ambient fill model. hemisphere grades sky color above → ground color below (more natural); flat is a constant term (legacy).'),
+  contactShadows: z.boolean().optional().describe('Soft grounding shadow blob under objects. On by default; turn off for flying/space/no-floor scenes.'),
+  contactShadowY: z.number().optional().describe('World Y the contact-shadow plane sits at — match the ground height. Default 0.'),
+  contactShadowScale: z.number().min(1).optional().describe('Footprint size of the contact-shadow plane in world units. Default 14; raise for big scenes.'),
+  contactShadowOpacity: z.number().min(0).max(1).optional().describe('Contact shadow darkness 0–1. Default 0.36.'),
 });
 const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   skyTopColor: true,
@@ -2766,7 +2776,7 @@ const rawEngineTools = {
 
   apply_material_preset: tool({
     description:
-      'Apply a named material preset (plastic, metal, wet floor, glass, neon, rock, grass, skin, rubber). If materialId is omitted, creates a reusable material. If objectId is provided, assigns the material to that object.',
+      'Apply a named material preset (plastic, metal, wet floor, glass, neon, rock, grass, skin, rubber, water, car-paint, velvet, gemstone). glass/gemstone use real refraction (transmission), car-paint a clearcoat layer, velvet a fabric sheen — all best at High/Epic quality. If materialId is omitted, creates a reusable material. If objectId is provided, assigns the material to that object.',
     inputSchema: z.object({
       preset: z.enum(materialPresetIds),
       materialId: z.string().optional().describe('Existing material to update. Omit to create a new reusable material from the preset.'),
@@ -2786,7 +2796,7 @@ const rawEngineTools = {
         id = store().createMaterial(name ?? selected.name, selected.description, folderId);
       }
       store().updateMaterial(id, {
-        ...selected.patch,
+        ...materialPresetPatch(selected),
         description: selected.description,
         ...(creating || name ? { name: name ?? selected.name } : {}),
       });
@@ -2799,7 +2809,7 @@ const rawEngineTools = {
 
   update_material: tool({
     description:
-      'Update a reusable material. Color fields are hex; metalness/roughness are 0-1; texture/normal ids must be image assets.',
+      'Update a reusable material. Color fields are hex; metalness/roughness are 0-1; texture/normal ids must be image assets. Advanced physical layers (best at High/Epic quality): clearcoat (car paint/lacquer), sheen (fabric/velvet), transmission+ior+thickness (real refractive glass/liquid/gems), iridescence (soap-film/oil sheen).',
     inputSchema: z.object({
       id: z.string(),
       name: z.string().optional(),
@@ -2810,6 +2820,14 @@ const rawEngineTools = {
       emissiveIntensity: z.number().min(0).optional(),
       textureAssetId: z.string().optional().describe('Image asset id for the base-color map, or "" to clear.'),
       normalMapAssetId: z.string().optional().describe('Image asset id for the normal map, or "" to clear.'),
+      clearcoat: z.number().min(0).max(1).optional().describe('Clear lacquer layer on top — car paint, varnish, polished plastic.'),
+      clearcoatRoughness: z.number().min(0).max(1).optional().describe('Roughness of the clearcoat layer (0 = mirror coat).'),
+      sheen: z.number().min(0).max(1).optional().describe('Fabric sheen at grazing angles — velvet, satin, cloth.'),
+      sheenColor: z.string().optional().describe('Hex tint of the fabric sheen highlight.'),
+      transmission: z.number().min(0).max(1).optional().describe('Light passing THROUGH the surface — real glass/water/gems. Pair with ior + thickness.'),
+      ior: z.number().min(1).max(2.5).optional().describe('Index of refraction (1.33 water, 1.5 glass, 2.4 diamond).'),
+      thickness: z.number().min(0).optional().describe('Volume thickness for refraction bending (world units); 0 = thin shell.'),
+      iridescence: z.number().min(0).max(1).optional().describe('Thin-film iridescence — soap bubbles, oil slicks, beetle shells.'),
     }),
     execute: async ({ id, textureAssetId, normalMapAssetId, ...rest }) => {
       if (!findMaterial(id)) return `No material with id ${id}.`;

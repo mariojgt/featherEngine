@@ -239,6 +239,84 @@ export function SceneSettingsPanel() {
             onChange={(event) => updateEnvironment({ environmentIntensity: num(event.target.value, environment.environmentIntensity) })}
           />
         </label>
+
+        <label className="field-row">
+          <span title="Film tonemapping curve applied to the whole scene. AgX preserves bright highlights instead of clipping them to white; Neutral is accurate/flat; ACES is the classic punchy look.">Tonemap</span>
+          <select
+            value={environment.toneMapping ?? 'aces'}
+            onChange={(event) => updateEnvironment({ toneMapping: event.target.value as SceneEnvironmentSettings['toneMapping'] })}
+          >
+            <option value="aces">ACES Filmic</option>
+            <option value="agx">AgX (modern)</option>
+            <option value="neutral">Neutral (PBR)</option>
+            <option value="reinhard">Reinhard</option>
+            <option value="cineon">Cineon</option>
+            <option value="linear">Linear</option>
+            <option value="none">None</option>
+          </select>
+        </label>
+        <label className="field-row">
+          <span>Exposure</span>
+          <input
+            type="number"
+            min={0}
+            step={0.05}
+            value={environment.toneMappingExposure ?? 1}
+            onChange={(event) => updateEnvironment({ toneMappingExposure: Math.max(0, num(event.target.value, environment.toneMappingExposure ?? 1)) })}
+          />
+        </label>
+        <label className="field-row">
+          <span title="Hemisphere grades the ambient fill from sky color above to ground color below — more natural than a flat constant.">Ambient</span>
+          <select
+            value={environment.ambientMode ?? 'flat'}
+            onChange={(event) => updateEnvironment({ ambientMode: event.target.value as SceneEnvironmentSettings['ambientMode'] })}
+          >
+            <option value="flat">Flat</option>
+            <option value="hemisphere">Hemisphere (sky/ground)</option>
+          </select>
+        </label>
+        <label className="field-row">
+          <span title="Soft grounding shadow under objects. Turn off for flying/space scenes.">Contact Shadow</span>
+          <input
+            type="checkbox"
+            checked={environment.contactShadows ?? true}
+            onChange={(event) => updateEnvironment({ contactShadows: event.target.checked })}
+          />
+        </label>
+        {(environment.contactShadows ?? true) && (
+          <>
+            <label className="field-row">
+              <span>Shadow Y</span>
+              <input
+                type="number"
+                step={0.1}
+                value={environment.contactShadowY ?? 0}
+                onChange={(event) => updateEnvironment({ contactShadowY: num(event.target.value, environment.contactShadowY ?? 0) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Shadow Size</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={environment.contactShadowScale ?? 14}
+                onChange={(event) => updateEnvironment({ contactShadowScale: Math.max(1, num(event.target.value, environment.contactShadowScale ?? 14)) })}
+              />
+            </label>
+            <label className="field-row">
+              <span>Shadow Opacity</span>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.02}
+                value={environment.contactShadowOpacity ?? 0.36}
+                onChange={(event) => updateEnvironment({ contactShadowOpacity: Math.min(1, Math.max(0, num(event.target.value, environment.contactShadowOpacity ?? 0.36))) })}
+              />
+            </label>
+          </>
+        )}
       </section>
 
       <section className="inspector-section">

@@ -1,4 +1,4 @@
-import type { MaterialDefinition, MeshRendererComponent, ProjectGraph } from '../types';
+import type { MaterialDefinition, MeshRendererComponent, PhysicalSurfaceProps, ProjectGraph } from '../types';
 
 /** The effective surface of an object after merging material asset + graph + per-object overrides. */
 export interface ResolvedMaterial {
@@ -13,6 +13,50 @@ export interface ResolvedMaterial {
   normalAssetId?: string;
   /** Whether these props should override an imported model's baked materials. */
   overrideModel: boolean;
+  /** Advanced MeshPhysicalMaterial layers, always present and neutral by default. */
+  clearcoat: number;
+  clearcoatRoughness: number;
+  sheen: number;
+  sheenColor: string;
+  transmission: number;
+  ior: number;
+  thickness: number;
+  iridescence: number;
+}
+
+/** Every physical layer with a concrete value (no optionals) — the shape carried on a ResolvedMaterial. */
+export type PhysicalValues = Required<PhysicalSurfaceProps>;
+
+/** Neutral physical layers — a material with these renders identically to a plain MeshStandardMaterial. */
+export const NEUTRAL_PHYSICAL: PhysicalValues = {
+  clearcoat: 0,
+  clearcoatRoughness: 0,
+  sheen: 0,
+  sheenColor: '#000000',
+  transmission: 0,
+  ior: 1.5,
+  thickness: 0,
+  iridescence: 0,
+};
+
+/** True when any physical layer is engaged — gates the heavier MeshPhysicalMaterial at the render site. */
+export function hasPhysicalLayers(m: Pick<ResolvedMaterial, 'clearcoat' | 'sheen' | 'transmission' | 'iridescence'>): boolean {
+  return m.clearcoat > 0 || m.sheen > 0 || m.transmission > 0 || m.iridescence > 0;
+}
+
+/** Merge a source's optional physical props over a base, keeping the base where a field is absent. */
+function mergePhysical(base: PhysicalValues, src: PhysicalSurfaceProps | undefined): PhysicalValues {
+  if (!src) return base;
+  return {
+    clearcoat: src.clearcoat ?? base.clearcoat,
+    clearcoatRoughness: src.clearcoatRoughness ?? base.clearcoatRoughness,
+    sheen: src.sheen ?? base.sheen,
+    sheenColor: src.sheenColor ?? base.sheenColor,
+    transmission: src.transmission ?? base.transmission,
+    ior: src.ior ?? base.ior,
+    thickness: src.thickness ?? base.thickness,
+    iridescence: src.iridescence ?? base.iridescence,
+  };
 }
 
 /** A value produced by a material graph node. */
@@ -216,6 +260,7 @@ export function resolveMaterial(
     baseColorAssetId: renderer?.textureAssetId,
     normalAssetId: undefined,
     overrideModel: Boolean(renderer?.overrideMaterial),
+    ...NEUTRAL_PHYSICAL,
   };
   if (!renderer) return inline;
 
@@ -231,6 +276,7 @@ export function resolveMaterial(
         baseColorAssetId: material.textureAssetId,
         normalAssetId: material.normalMapAssetId,
         overrideModel: true,
+        ...mergePhysical(NEUTRAL_PHYSICAL, material),
       }
     : inline;
 
@@ -267,6 +313,10 @@ export function resolveMaterial(
     roughness: overrides.roughness ?? base.roughness,
     emissiveColor: overrides.emissiveColor ?? base.emissiveColor,
     emissiveIntensity: overrides.emissiveIntensity ?? base.emissiveIntensity,
+    ...mergePhysical(
+      { clearcoat: base.clearcoat, clearcoatRoughness: base.clearcoatRoughness, sheen: base.sheen, sheenColor: base.sheenColor, transmission: base.transmission, ior: base.ior, thickness: base.thickness, iridescence: base.iridescence },
+      overrides,
+    ),
     // Any override means the model's baked materials should yield to it too.
     overrideModel: base.overrideModel || Object.keys(overrides).length > 0,
   };

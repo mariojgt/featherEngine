@@ -13,13 +13,13 @@ import {
 import { Hash, LayoutGrid, Palette, Plus, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { useAssetTexture, useAssetUrl } from '../three/ModelAsset';
-import { useResolvedMaterial } from '../three/resolveMaterial';
+import { useResolvedMaterial, hasPhysicalLayers } from '../three/resolveMaterial';
 import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
 import { PaletteGroup } from './PaletteGroup';
 import { RangeField } from './InspectorPanel';
 import type { AssetItem, GraphNodeCategory, MaterialDefinition, MeshRendererComponent, NodeForgeNode } from '../types';
-import { MATERIAL_PRESETS } from '../three/presets';
+import { MATERIAL_PRESETS, materialPresetPatch } from '../three/presets';
 
 const nodeTypes: NodeTypes = { nodeforge: NodeForgeGraphNode };
 
@@ -69,15 +69,35 @@ function MaterialPreview({ material }: { material: MaterialDefinition }) {
   return (
     <mesh castShadow>
       <sphereGeometry args={[1, 48, 32]} />
-      <meshStandardMaterial
-        color={resolved.color}
-        metalness={resolved.metalness}
-        roughness={resolved.roughness}
-        emissive={resolved.emissiveColor}
-        emissiveIntensity={resolved.emissiveIntensity}
-        map={baseTexture ?? null}
-        normalMap={normalTexture ?? null}
-      />
+      {hasPhysicalLayers(resolved) ? (
+        <meshPhysicalMaterial
+          color={resolved.color}
+          metalness={resolved.metalness}
+          roughness={resolved.roughness}
+          emissive={resolved.emissiveColor}
+          emissiveIntensity={resolved.emissiveIntensity}
+          map={baseTexture ?? null}
+          normalMap={normalTexture ?? null}
+          clearcoat={resolved.clearcoat}
+          clearcoatRoughness={resolved.clearcoatRoughness}
+          sheen={resolved.sheen}
+          sheenColor={resolved.sheenColor}
+          transmission={resolved.transmission}
+          ior={resolved.ior}
+          thickness={resolved.thickness}
+          iridescence={resolved.iridescence}
+        />
+      ) : (
+        <meshStandardMaterial
+          color={resolved.color}
+          metalness={resolved.metalness}
+          roughness={resolved.roughness}
+          emissive={resolved.emissiveColor}
+          emissiveIntensity={resolved.emissiveIntensity}
+          map={baseTexture ?? null}
+          normalMap={normalTexture ?? null}
+        />
+      )}
     </mesh>
   );
 }
@@ -226,6 +246,25 @@ function MaterialNodeInspector({
               imageAssets={imageAssets}
               onChange={(normalMapAssetId) => updateMaterial(material.id, { normalMapAssetId })}
             />
+            <details className="material-advanced">
+              <summary>Advanced (Physical)</summary>
+              <p className="nfn-desc">Extra surface layers — clear coat, fabric sheen, refractive glass, iridescence. Best at High/Epic quality.</p>
+              <RangeField label="Clearcoat" value={material.clearcoat ?? 0} onChange={(clearcoat) => updateMaterial(material.id, { clearcoat })} />
+              <RangeField label="Coat Rough" value={material.clearcoatRoughness ?? 0} onChange={(clearcoatRoughness) => updateMaterial(material.id, { clearcoatRoughness })} />
+              <RangeField label="Sheen" value={material.sheen ?? 0} onChange={(sheen) => updateMaterial(material.id, { sheen })} />
+              <label className="node-field">
+                <span>Sheen Color</span>
+                <input
+                  type="color"
+                  value={material.sheenColor ?? '#000000'}
+                  onChange={(event) => updateMaterial(material.id, { sheenColor: event.target.value })}
+                />
+              </label>
+              <RangeField label="Transmission" value={material.transmission ?? 0} onChange={(transmission) => updateMaterial(material.id, { transmission })} />
+              <RangeField label="IOR" value={material.ior ?? 1.5} min={1} max={2.5} step={0.01} onChange={(ior) => updateMaterial(material.id, { ior })} />
+              <RangeField label="Thickness" value={material.thickness ?? 0} min={0} max={5} step={0.05} onChange={(thickness) => updateMaterial(material.id, { thickness })} />
+              <RangeField label="Iridescence" value={material.iridescence ?? 0} onChange={(iridescence) => updateMaterial(material.id, { iridescence })} />
+            </details>
           </>
         )}
       </div>
@@ -416,7 +455,7 @@ export function MaterialEditorPanel() {
                 onClick={() => {
                   for (const preset of MATERIAL_PRESETS) {
                     const id = createMaterial(preset.name, preset.description);
-                    updateMaterial(id, { ...preset.patch, description: preset.description });
+                    updateMaterial(id, { ...materialPresetPatch(preset), description: preset.description });
                   }
                 }}
               >
@@ -428,7 +467,7 @@ export function MaterialEditorPanel() {
                 <button
                   key={preset.id}
                   title={preset.description}
-                  onClick={() => updateMaterial(material.id, { ...preset.patch, description: preset.description })}
+                  onClick={() => updateMaterial(material.id, { ...materialPresetPatch(preset), description: preset.description })}
                 >
                   <span className="preset-swatch" style={{ background: preset.patch.emissiveIntensity > 0 ? preset.patch.emissiveColor : preset.patch.color }} />
                   <span>{preset.name}</span>

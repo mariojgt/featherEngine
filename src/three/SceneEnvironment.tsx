@@ -160,7 +160,17 @@ export function SceneEnvironment({
           the volumetric pass replaces it with height-based mist + sun in-scattering. */}
       {env.fogEnabled && !env.volumetricFogEnabled && <fog attach="fog" args={[env.fogColor, Math.max(0, env.fogNear), Math.max(env.fogNear + 1, env.fogFar)]} />}
 
-      <ambientLight intensity={0.38 + lightIntensity * 0.24} />
+      {/* Ambient fill. `hemisphere` grades sky→ground so undersides read cooler/darker; `flat` is the
+          legacy constant term. Same intensity either way, so switching is purely a quality choice. */}
+      {env.ambientMode === 'hemisphere' ? (
+        <hemisphereLight
+          color={env.skyTopColor}
+          groundColor={env.skyGroundColor}
+          intensity={0.38 + lightIntensity * 0.24}
+        />
+      ) : (
+        <ambientLight intensity={0.38 + lightIntensity * 0.24} />
+      )}
       {/* The sun. The shadow camera is explicitly framed (not the tiny three.js ±5 default) so it covers
           the play area — this is the shadow map the volumetric pass samples to carve god-ray light shafts,
           so if the frustum is too small every fog sample reads "lit" and no shafts appear. Map size follows
@@ -184,10 +194,20 @@ export function SceneEnvironment({
       {useImageIbl ? (
         <Environment map={envMapTexture} environmentIntensity={lightIntensity} environmentRotation={iblRotation} />
       ) : (
+        // Default studio IBL rig — a soft 3-point + rim + bounce setup so metals/glossy surfaces get
+        // believable reflections and shading separation before any HDRI is assigned. All scaled by
+        // environmentIntensity. (Replaced the old flat 3-light rig.)
         <Environment resolution={envResolution}>
-          <Lightformer intensity={1.2 * lightIntensity} position={[0, 6, 0]} scale={[10, 10, 1]} />
-          <Lightformer intensity={0.7 * lightIntensity} position={[6, 3, 4]} scale={[6, 6, 1]} color="#8aa0ff" />
-          <Lightformer intensity={0.5 * lightIntensity} position={[-6, 2, -4]} scale={[6, 6, 1]} color="#ffd6a5" />
+          {/* Big soft overhead key — the dominant light, broad and slightly forward. */}
+          <Lightformer intensity={1.5 * lightIntensity} form="rect" position={[0, 7, 2]} rotation={[-Math.PI / 2, 0, 0]} scale={[12, 12, 1]} color="#fff4e6" />
+          {/* Cool sky fill from the right, large and dim — opens up the shadow side. */}
+          <Lightformer intensity={0.6 * lightIntensity} form="rect" position={[7, 3, 4]} scale={[7, 7, 1]} color="#9bb4ff" />
+          {/* Warm bounce from the lower left — mimics ground/wall fill. */}
+          <Lightformer intensity={0.4 * lightIntensity} form="rect" position={[-7, 1.5, -3]} scale={[7, 7, 1]} color="#ffd6a5" />
+          {/* Bright thin rim behind the subject — crisp edge highlights on metal/glossy surfaces. */}
+          <Lightformer intensity={1.8 * lightIntensity} form="rect" position={[0, 4, -8]} scale={[10, 2, 1]} color="#ffffff" />
+          {/* Subtle ground bounce so undersides aren't pure black. */}
+          <Lightformer intensity={0.25 * lightIntensity} form="rect" position={[0, -4, 0]} rotation={[Math.PI / 2, 0, 0]} scale={[12, 12, 1]} color="#c9d2e0" />
         </Environment>
       )}
 

@@ -150,8 +150,33 @@ export interface TerrainComponent {
   editVersion?: number;
 }
 
+/**
+ * Advanced MeshPhysicalMaterial surface layers, on top of the base metal/rough PBR. All optional and
+ * default to neutral (0 / ior 1.5) so a material without them renders exactly like the old
+ * MeshStandardMaterial. Fully honored on built-in meshes and on imported models whose material is
+ * physical (PBR glass/car/gem GLBs); ignored on plain MeshStandardMaterial model slots.
+ */
+export interface PhysicalSurfaceProps {
+  /** Clear lacquer layer on top of the base — car paint, varnished wood, polished plastic. 0–1. */
+  clearcoat?: number;
+  /** Roughness of that clearcoat layer (0 = mirror-sharp coat, 1 = satin). */
+  clearcoatRoughness?: number;
+  /** Retroreflective fabric sheen — velvet, satin, brushed cloth. 0–1. */
+  sheen?: number;
+  /** Tint of the fabric sheen highlight (hex). */
+  sheenColor?: string;
+  /** Light transmitted THROUGH the surface — real glass, water, gems, liquids. 0–1. Pair with ior/thickness. */
+  transmission?: number;
+  /** Index of refraction for transmission/reflections (1.0 air … 1.33 water … 1.5 glass … 2.4 diamond). */
+  ior?: number;
+  /** Volume thickness for refraction bending (world units); 0 = thin shell, higher = chunky glass/gem. */
+  thickness?: number;
+  /** Thin-film iridescence — soap bubbles, oil slicks, beetle shells. 0–1. */
+  iridescence?: number;
+}
+
 /** Per-object overrides layered over an assigned MaterialDefinition (Unreal "dynamic material instance" style). */
-export interface MaterialOverrides {
+export interface MaterialOverrides extends PhysicalSurfaceProps {
   color?: string;
   metalness?: number;
   roughness?: number;
@@ -160,7 +185,7 @@ export interface MaterialOverrides {
 }
 
 /** A reusable material asset authored once and assigned to many objects. */
-export interface MaterialDefinition {
+export interface MaterialDefinition extends PhysicalSurfaceProps {
   id: string;
   name: string;
   description: string;

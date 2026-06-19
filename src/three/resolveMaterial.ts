@@ -6,8 +6,8 @@ import { resolveMaterial, type ResolvedMaterial } from './materialResolve';
 import { resolveAssetItemUrl } from './ModelAsset';
 
 // Re-export the pure resolver + types so existing imports from this module keep working.
-export { resolveMaterial, evaluateMaterialGraph } from './materialResolve';
-export type { ResolvedMaterial, MaterialGraphOutput } from './materialResolve';
+export { resolveMaterial, evaluateMaterialGraph, hasPhysicalLayers, NEUTRAL_PHYSICAL } from './materialResolve';
+export type { ResolvedMaterial, MaterialGraphOutput, PhysicalValues } from './materialResolve';
 
 /** Resolved material plus the runtime URLs for its texture maps. */
 export interface ResolvedMaterialUrls extends ResolvedMaterial {

@@ -1,4 +1,4 @@
-import type { CinematicLook, MaterialDefinition, RenderSettings, SceneEnvironmentSettings, WaterStylePreset, WaterVolumeComponent } from '../types';
+import type { CinematicLook, MaterialDefinition, PhysicalSurfaceProps, RenderSettings, SceneEnvironmentSettings, WaterStylePreset, WaterVolumeComponent } from '../types';
 
 export type MaterialPresetId =
   | 'plastic'
@@ -10,7 +10,10 @@ export type MaterialPresetId =
   | 'grass'
   | 'skin'
   | 'rubber'
-  | 'water';
+  | 'water'
+  | 'car-paint'
+  | 'velvet'
+  | 'gemstone';
 
 export type LightingPresetId = 'sunny' | 'overcast' | 'night' | 'cyberpunk' | 'indoor' | 'cinematic' | 'godrays';
 
@@ -18,8 +21,23 @@ export interface MaterialPreset {
   id: MaterialPresetId;
   name: string;
   description: string;
-  patch: Pick<MaterialDefinition, 'color' | 'metalness' | 'roughness' | 'emissiveColor' | 'emissiveIntensity'>;
+  patch: Pick<MaterialDefinition, 'color' | 'metalness' | 'roughness' | 'emissiveColor' | 'emissiveIntensity'> & Partial<PhysicalSurfaceProps>;
 }
+
+/** Neutral physical layers, so applying a preset that doesn't use them clears any left over from a prior preset. */
+const NEUTRAL_PHYS: Required<PhysicalSurfaceProps> = {
+  clearcoat: 0,
+  clearcoatRoughness: 0,
+  sheen: 0,
+  sheenColor: '#000000',
+  transmission: 0,
+  ior: 1.5,
+  thickness: 0,
+  iridescence: 0,
+};
+
+/** A preset's full material patch, with physical layers explicitly reset where the preset doesn't set them. */
+export const materialPresetPatch = (preset: MaterialPreset) => ({ ...NEUTRAL_PHYS, ...preset.patch });
 
 export interface LightingPreset {
   id: LightingPresetId;
@@ -52,8 +70,8 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
   {
     id: 'glass',
     name: 'Glass',
-    description: 'Bright transparent-looking surface for panels and displays.',
-    patch: { color: '#BFEAFF', metalness: 0, roughness: 0.02, emissiveColor: '#72D7FF', emissiveIntensity: 0.12 },
+    description: 'Real refractive glass (light passes through) — windows, bottles, panels. Best at High/Epic quality.',
+    patch: { color: '#EAF6FF', metalness: 0, roughness: 0.03, emissiveColor: '#000000', emissiveIntensity: 0, transmission: 0.95, ior: 1.5, thickness: 0.5 },
   },
   {
     id: 'neon',
@@ -90,6 +108,24 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
     name: 'Water',
     description: 'Glossy blue water surface; pair with a Water Volume for buoyancy and waves.',
     patch: { color: '#2BA8FF', metalness: 0, roughness: 0.08, emissiveColor: '#0B5C88', emissiveIntensity: 0.08 },
+  },
+  {
+    id: 'car-paint',
+    name: 'Car Paint',
+    description: 'Glossy automotive paint with a clear lacquer coat — deep color under a sharp reflective layer.',
+    patch: { color: '#B11226', metalness: 0.55, roughness: 0.38, emissiveColor: '#000000', emissiveIntensity: 0, clearcoat: 1, clearcoatRoughness: 0.06 },
+  },
+  {
+    id: 'velvet',
+    name: 'Velvet / Fabric',
+    description: 'Soft cloth with a retroreflective sheen at grazing angles — velvet, satin, upholstery.',
+    patch: { color: '#5A1230', metalness: 0, roughness: 0.92, emissiveColor: '#000000', emissiveIntensity: 0, sheen: 1, sheenColor: '#FF8FB0' },
+  },
+  {
+    id: 'gemstone',
+    name: 'Gemstone',
+    description: 'Faceted refractive gem — high IOR transmission with a touch of iridescence. Best at High/Epic.',
+    patch: { color: '#D6F0FF', metalness: 0, roughness: 0, emissiveColor: '#000000', emissiveIntensity: 0, transmission: 0.92, ior: 2.3, thickness: 0.6, iridescence: 0.35 },
   },
 ];
 
