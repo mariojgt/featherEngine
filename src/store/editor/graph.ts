@@ -282,6 +282,7 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   'Set Particles Emitting': 'action.setParticlesEmitting',
   'Spawn Particle System': 'action.spawnParticleSystem',
   'Camera Shake': 'action.cameraShake',
+  'Screen Flash': 'action.screenFlash',
   Explode: 'action.explode',
   'Move To': 'action.moveTo',
   Fracture: 'action.fractureObject',
@@ -558,6 +559,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         label: `Camera Shake ${Number(data.shakeAmount ?? 0.6)}`,
         description:
           'Shakes the player camera (trauma 0..1, fades automatically) — explosions, big hits, impacts. The player firing/taking damage already adds shake; use this node for scripted punch.',
+      };
+    case 'action.screenFlash':
+      return {
+        label: `Screen Flash ${Number(data.flashAmount ?? 0.7)}`,
+        description:
+          'Pops a full-screen color flash that fades in ~0.3s — muzzle/explosion bloom, an ability blink, a damage blink. Amount = peak opacity 0..1 (wire a number into "amount"); set flashColor (white default, hot orange for blasts, red for damage). Explosions already add a flash automatically, so reserve this for scripted moments.',
       };
     case 'action.explode':
       return {
@@ -985,6 +992,11 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
 
   if (nodeKind === 'action.cameraShake' && typeof normalized.shakeAmount !== 'number') {
     normalized.shakeAmount = 0.6;
+  }
+
+  if (nodeKind === 'action.screenFlash') {
+    if (typeof normalized.flashAmount !== 'number') normalized.flashAmount = 0.7;
+    if (typeof normalized.flashColor !== 'string') normalized.flashColor = '#ffffff';
   }
 
   if (nodeKind === 'action.explode') {

@@ -50,6 +50,8 @@ export function GameHud() {
   const hitMarker = useEditorStore((state) => state.runtimeHitMarker);
   const killMarker = useEditorStore((state) => state.runtimeKillMarker);
   const hurt = useEditorStore((state) => state.runtimeHurt);
+  const flash = useEditorStore((state) => state.runtimeFlash);
+  const flashColor = useEditorStore((state) => state.runtimeFlashColor);
   const objVars = useEditorStore((state) => state.runtimeObjectVariables);
   const runtimeAnimators = useEditorStore((state) => state.runtimeAnimators);
   const animatorControllers = useEditorStore((state) => state.animatorControllers);
@@ -142,6 +144,18 @@ export function GameHud() {
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', fontFamily: 'inherit' }}>
+      {/* Screen flash: a full-screen tinted pop driven by runtimeFlash (decays in the tick). Explosions add
+          a hot-orange bloom automatically; the Screen Flash node fires custom-colored blinks. */}
+      {flash > 0.01 && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: flashColor,
+            opacity: Math.min(0.92, flash),
+          }}
+        />
+      )}
       {/* Hurt flash: a red vignette that pulses each time the player takes damage (keyed to replay). */}
       {hurt > 0 && (
         <div
