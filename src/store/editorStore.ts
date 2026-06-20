@@ -445,6 +445,10 @@ interface EditorState {
   runtimeKillMarker: number;
   /** Monotonic counter bumped each time the local player takes damage — drives the HUD hurt flash. */
   runtimeHurt: number;
+  /** Full-screen flash opacity (0..1), decays each frame. Bumped by nearby explosions + the Screen Flash node. */
+  runtimeFlash: number;
+  /** Tint (hex) of the current screen flash — white bloom by default, hot orange for blasts. */
+  runtimeFlashColor: string;
   /** Per-enemy attack cooldown (seconds remaining) so contact damage applies on a cadence, not every frame. */
   runtimeEnemyCooldown: Record<string, number>;
   /** Per-character footstep-sound override from the surface volume they're standing in (a trigger tagged with
@@ -1124,6 +1128,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeAnimators: {},
   runtimeCameraOverrides: {},
   runtimeCameraShake: 0,
+  runtimeFlash: 0,
+  runtimeFlashColor: '#ffffff',
   runtimeGrounded: [],
   runtimeSwimming: [],
   runtimeInWater: [],
@@ -5639,7 +5645,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const dieOrRagdoll = (target: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
         if (target && (target.character?.enabled || target.animator?.enabled)) setRagdoll(id, true);
         else if (target?.fracture?.enabled && fractureSource(target, id, origin)) return;
-        else destroyedIds.add(id);
+        else {
+          // A plain enemy/health prop (e.g. a kinematic guard capsule) would otherwise just blink out — give
+          // it a death burst at the kill point so a downed foe reads as a hit, not a despawn glitch.
+          if (target && (target.variables?.enemy || target.variables?.health !== undefined)) {
+            spawned.push(makeImpactObject(origin ?? target.transform.position, '#7e0f0f'));
+          }
+          destroyedIds.add(id);
+        }
       };
       // Explosions: an object with an `explosive` instance var bursts on death (barrels, grenades) — queued here,
       // then processed after the hit passes so blasts can CHAIN (a barrel killed by another barrel explodes too).
@@ -5724,6 +5737,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Camera-shake trauma decays ~2/sec (a full 1.0 hit settles in ~0.5s). The Camera Shake node, the
       // player firing/being hurt, and explosions add to it below; the follow camera reads it and jitters.
       let cameraShake = Math.max(0, state.runtimeCameraShake - delta * 2);
+      // Screen flash opacity decays ~3.3/sec (a full 1.0 pop fades in ~0.3s). Explosions + the Screen Flash
+      // node bump it; GameHud renders a full-screen tinted overlay at this opacity.
+      let flash = Math.max(0, state.runtimeFlash - delta * 3.3);
+      let flashColor = state.runtimeFlashColor;
       // Roll/dodge + attack/reload/interact timers carried frame-to-frame (started on their key, counted down here).
       const nextRoll: Record<string, number> = {};
       const nextLockOn: Record<string, string> = {};
@@ -7211,6 +7228,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
             if (node.data.nodeKind === 'action.cameraShake') {
               cameraShake = Math.min(1, cameraShake + Math.max(0, toNumber(valueInput(node, 'amount', Number(node.data.shakeAmount ?? 0.6)))));
+            }
+
+            if (node.data.nodeKind === 'action.screenFlash') {
+              // Set (don't accumulate) the screen flash to its peak — a single bright pop, then it fades.
+              const amount = Math.max(0, Math.min(1, toNumber(valueInput(node, 'amount', Number(node.data.flashAmount ?? 0.7)))));
+              if (amount > flash) flash = amount;
+              if (typeof node.data.flashColor === 'string') flashColor = node.data.flashColor;
             }
 
             if (node.data.nodeKind === 'action.explode') {
@@ -10036,7 +10060,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         // Consume the bullet (a wall stops it too): explosive rounds DETONATE (blast + area damage); the rest
         // spawn a small particle burst at the impact point.
         if (proj.explosive) detonate();
-        else spawned.push(makeImpactObject(obj.transform.position));
+        // A bullet that struck a living thing (has health) throws a BLOOD-red burst; a wall/prop throws
+        // the neutral warm spark. Reads as a real hit-vs-miss tell, the way AAA shooters do.
+        else spawned.push(makeImpactObject(obj.transform.position, hasHealth ? '#a01515' : '#ffd27f'));
         destroyedIds.add(obj.id);
       }
 
@@ -10157,6 +10183,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const pp = aiPlayer.transform.position;
           const bd = Math.hypot(pp[0] - blast.pos[0], pp[1] - blast.pos[1], pp[2] - blast.pos[2]);
           cameraShake = Math.min(1, cameraShake + 0.6 * Math.max(0, 1 - bd / (blast.radius * 4)));
+          // A hot-orange screen bloom on close blasts, falling off faster than the shake (radius*3).
+          const fp = 0.8 * Math.max(0, 1 - bd / (blast.radius * 3));
+          if (fp > flash) {
+            flash = Math.min(1, fp);
+            flashColor = '#ffd29a';
+          }
         }
         if (!blastCandidates) {
           blastCandidates = [];
@@ -10705,6 +10737,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeAnimators: keepRecord(state.runtimeAnimators, nextAnimators),
         runtimeCameraOverrides: keepRecord(state.runtimeCameraOverrides, nextCameraOverrides),
         runtimeCameraShake: cameraShake,
+        runtimeFlash: flash,
+        runtimeFlashColor: flashColor,
         runtimeGrounded: keepArray(state.runtimeGrounded, groundedIds),
         runtimeSwimming: keepArray(state.runtimeSwimming, swimmingIds),
         runtimeInWater: keepArray(state.runtimeInWater, inWaterIds),

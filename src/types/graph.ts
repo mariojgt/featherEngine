@@ -177,6 +177,7 @@ export type GraphNodeKind =
   | 'action.spawnParticleSystem'
   | 'action.loadScene'
   | 'action.cameraShake'
+  | 'action.screenFlash'
   | 'action.explode'
   | 'action.moveTo'
   | 'action.fractureObject'
@@ -301,6 +302,11 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   /** action.cameraShake: trauma to add (0..1). The runtime decays it; the follow camera turns it into a
    *  positional + rotational jitter. The player firing/being hurt and explosions also add trauma. */
   shakeAmount?: number;
+  /** action.screenFlash: peak opacity (0..1) of a full-screen color pop that fades in ~0.3s — muzzle/
+   *  explosion bloom, hit blink, ability flash. Explosions already add a flash automatically. */
+  flashAmount?: number;
+  /** action.screenFlash: the flash tint (hex). Default white; use a hot orange for blasts, red for damage. */
+  flashColor?: string;
   /** action.setEnvironment: a partial patch over the active scene's environment. Any field present here
    *  overwrites the same field on the live scene (sky colors, fog, sun, environmentIntensity) — undefined
    *  fields are left alone. Use it to crossfade atmospheres on a trigger (day → toxic green → dawn). */

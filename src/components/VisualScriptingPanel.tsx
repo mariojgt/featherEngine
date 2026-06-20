@@ -84,7 +84,7 @@ export const nodeGroups: Array<{
   {
     title: 'Runtime',
     icon: Waypoints,
-    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Tween', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Set Time Scale', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
+    nodes: ['Translate', 'Rotate', 'Get Position', 'Set Position', 'Get Rotation', 'Set Rotation', 'Get Scale', 'Set Scale', 'Tween', 'Look At', 'Get Move Input', 'Move', 'Move To', 'Jump', 'Get Drive Input', 'Drive', 'Enter Vehicle', 'Exit Vehicle', 'Get Vehicle Speed', 'Is Grounded', 'Raycast', 'Set Camera', 'Set Ragdoll', 'Spawn Projectile', 'Spawn Attached', 'Set Visible', 'Set Active', 'Burst Particles', 'Set Particles Emitting', 'Spawn Particle System', 'Camera Shake', 'Screen Flash', 'Explode', 'Set Environment', 'Apply Damage', 'Set Quality', 'Set Time Scale', 'Fire Event', 'Play Cinematic', 'Spawn Object', 'Load Scene', 'Destroy Object', 'Play Sound', 'Set Material Color', 'Set Material Property', 'Get Material Color', 'Get Material Property', 'Set Anim Float', 'Set Anim Bool', 'Set Anim Trigger', 'Play Animation', 'Set Movement Mode', 'Get Anim Param', 'Get Anim State', 'Find Actor By Blueprint', 'Find Actor By Tag', 'Distance To Player', 'Direction To Player', 'Player Location', 'Face Player', 'Print'],
   },
   {
     title: 'Physics',
@@ -561,6 +561,7 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
   const updatesLoop = node.data.nodeKind === 'logic.forLoop';
   const updatesLoadScene = node.data.nodeKind === 'action.loadScene';
   const updatesCameraShake = node.data.nodeKind === 'action.cameraShake';
+  const updatesScreenFlash = node.data.nodeKind === 'action.screenFlash';
   const updatesExplode = node.data.nodeKind === 'action.explode';
   const isReceiveDamage = node.data.nodeKind === 'event.receiveDamage';
   const updatesQuality = node.data.nodeKind === 'action.setQuality';
@@ -906,6 +907,32 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
             />
             <small className="node-hint">Trauma 0–1 added to the camera (fades automatically). 0.6 ≈ a solid hit; 1 = a big explosion.</small>
           </label>
+        )}
+
+        {updatesScreenFlash && (
+          <>
+            <label className="node-field">
+              <span>Flash amount</span>
+              <input
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                value={node.data.flashAmount ?? 0.7}
+                onChange={(event) => updateGraphNodeData(node.id, { flashAmount: Math.max(0, Math.min(1, Number(event.target.value))) })}
+              />
+              <small className="node-hint">Peak opacity 0–1 of a full-screen pop, fades in ~0.3s. Wire a number into “amount” to drive it live.</small>
+            </label>
+            <label className="node-field">
+              <span>Flash color</span>
+              <input
+                type="color"
+                value={node.data.flashColor ?? '#ffffff'}
+                onChange={(event) => updateGraphNodeData(node.id, { flashColor: event.target.value })}
+              />
+              <small className="node-hint">White = neutral bloom; hot orange for blasts; red for damage.</small>
+            </label>
+          </>
         )}
 
         {isReceiveDamage && (
