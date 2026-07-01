@@ -257,6 +257,8 @@ import {
 } from './editor/runtimeHelpers';
 import { recordRuntimeSection } from '../runtime/perfStats';
 
+const EMPTY_EXEC_TARGETS: string[] = [];
+
 // Per-frame lookup Maps over project-level arrays. The arrays are replaced
 // immutably only on edit, so these WeakMap-cached indexers return the same Map
 // across Play frames instead of rebuilding it 60×/s (see tickRuntime).
@@ -6021,7 +6023,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (
             !elapsedDelaysByObject.has(object.id) &&
             !elapsedTweensByObject.has(object.id) &&
-            !graphRuntime.eventRoots.some((node) => eventRootFires(node, object.id))
+            !graphRuntime.dispatchEventRoots.some((node) => eventRootFires(node, object.id))
           )
             return object;
           // Only scripted objects clone their transform tuples — a script may mutate these in place.
@@ -6032,6 +6034,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // Per-object material overrides (Unreal-MID style) written by "Set Material" nodes — never the shared definition.
           let nextRenderer = object.renderer;
           const runtime = graphRuntime;
+          const execTargets = (nodeId: string) => runtime.compiledNodesById.get(nodeId)?.outgoing ?? EMPTY_EXEC_TARGETS;
+          const execTargetsFromHandle = (nodeId: string, handle: string) =>
+            runtime.compiledNodesById.get(nodeId)?.outgoingByHandle.get(handle) ?? EMPTY_EXEC_TARGETS;
 
           // One cycle-guard set reused across every value-input evaluation for this object instead of
           // a fresh `new Set` per edge. Cleared and re-seeded with the consumer node at each top-level
@@ -6049,24 +6054,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // exist for objects that actually run a script this tick. (Mutual references between them are
           // fine: nothing calls them until the event-root dispatch at the bottom, after all are defined.)
           const valueInput = (node: NodeForgeNode, handle: string, fallback?: GraphValue): GraphValue | undefined => {
-            const edge = runtime.incomingValueByHandle.get(node.id)?.get(handle);
-            if (!edge) return fallback;
+            const link = runtime.compiledNodesById.get(node.id)?.valueInputs.get(handle);
+            if (!link) return fallback;
             valueVisited.clear();
             valueVisited.add(node.id);
             // Pass which OUTPUT pin of the source we're reading, so multi-output value nodes (Raycast:
             // Hit/Actor/Point/Distance) can return a different value per handle.
-            const resolved = evaluateValue(edge.source, valueVisited, edge.sourceHandle ?? 'value-out');
+            const resolved = evaluateValue(link.source, valueVisited, link.sourceHandle);
             // Live value trace (no-op unless a graph editor is open in Play): record the value flowing
             // out of the source node so the editor can show it on the node.
-            recordValue(edge.source, resolved);
+            recordValue(link.source, resolved);
             return resolved;
           }
 
           const evaluateValue = (nodeId: string, visited: Set<string>, sourceHandle = 'value-out'): GraphValue | undefined => {
             if (visited.has(nodeId)) return undefined;
             visited.add(nodeId);
-            const node = runtime.nodesById.get(nodeId);
-            if (!node) return undefined;
+            const compiled = runtime.compiledNodesById.get(nodeId);
+            if (!compiled) return undefined;
+            const node = compiled.node;
             const kind = node.data.nodeKind;
             switch (kind) {
             case 'value.number': return Number(node.data.numberValue ?? 0);
@@ -6634,8 +6640,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const executeFrom = (nodeId: string, visited: Set<string>) => {
             if (visited.has(nodeId)) return;
             visited.add(nodeId);
-            const node = runtime.nodesById.get(nodeId);
-            if (!node) return;
+            const compiled = runtime.compiledNodesById.get(nodeId);
+            if (!compiled) return;
+            const node = compiled.node;
             // Per-node error isolation: a throw below is recorded against THIS node (so the editor can
             // badge the exact failing node) and swallowed, so one broken node never aborts its siblings
             // or the frame. The innermost executeFrom frame catches first → precise attribution.
@@ -6658,13 +6665,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 functionFrames.push(frame);
                 for (const entry of runtime.functionRoots.get(fnName) ?? []) {
                   markExec(entry.id);
-                  (runtime.outgoing.get(entry.id) ?? []).forEach((targetId) => executeFrom(targetId, new Set([entry.id])));
+                  for (const targetId of execTargets(entry.id)) executeFrom(targetId, new Set([entry.id]));
                 }
                 functionFrames.pop();
                 callReturns.set(nodeId, frame.ret);
                 functionDepth -= 1;
               }
-              (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              for (const targetId of compiled.outgoing) executeFrom(targetId, visited);
               return;
             }
 
@@ -6675,9 +6682,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const value = String(raw ?? '');
               const index = (node.data.switchCases ?? []).indexOf(value);
               if (index >= 0) {
-                (runtime.outgoingByHandle.get(nodeId)?.get(`case-${index}`) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+                for (const targetId of execTargetsFromHandle(nodeId, `case-${index}`)) executeFrom(targetId, visited);
               } else {
-                (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+                for (const targetId of compiled.outgoing) executeFrom(targetId, visited);
               }
               return;
             }
@@ -6685,7 +6692,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             // Sequence: fire Then 0 → Then 1 → Then 2 in order, same frame — readable parallel lanes.
             if (node.data.nodeKind === 'logic.sequence') {
               for (const handle of ['then-0', 'then-1', 'then-2']) {
-                (runtime.outgoingByHandle.get(nodeId)?.get(handle) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+                for (const targetId of execTargetsFromHandle(nodeId, handle)) executeFrom(targetId, visited);
               }
               return;
             }
@@ -6697,7 +6704,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               const key = `__flip:${node.id}`;
               const fireA = !toBoolean(bag[key] ?? false);
               bag[key] = fireA;
-              (runtime.outgoingByHandle.get(nodeId)?.get(fireA ? 'flip-a' : 'flip-b') ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              for (const targetId of execTargetsFromHandle(nodeId, fireA ? 'flip-a' : 'flip-b')) executeFrom(targetId, visited);
               return;
             }
 
@@ -6707,13 +6714,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             if (node.data.nodeKind === 'logic.forLoop') {
               const raw = Math.floor(toNumber(valueInput(node, 'count', Number(node.data.loopCount ?? 4))));
               const count = Math.max(0, Math.min(raw, 10000));
-              const bodyTargets = runtime.outgoingByHandle.get(nodeId)?.get('exec-body') ?? [];
+              const bodyTargets = execTargetsFromHandle(nodeId, 'exec-body');
               for (let i = 0; i < count; i += 1) {
                 loopIndex.set(nodeId, i);
-                bodyTargets.forEach((targetId) => executeFrom(targetId, new Set([nodeId])));
+                for (const targetId of bodyTargets) executeFrom(targetId, new Set([nodeId]));
               }
               loopIndex.delete(nodeId);
-              (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              for (const targetId of compiled.outgoing) executeFrom(targetId, visited);
               return;
             }
 
@@ -6737,19 +6744,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                   matches.push(c.id);
                 }
               }
-              const bodyTargets = runtime.outgoingByHandle.get(nodeId)?.get('exec-body') ?? [];
+              const bodyTargets = execTargetsFromHandle(nodeId, 'exec-body');
               for (const actorId of matches) {
                 forEachCurrent.set(nodeId, actorId);
-                bodyTargets.forEach((targetId) => executeFrom(targetId, new Set([nodeId])));
+                for (const targetId of bodyTargets) executeFrom(targetId, new Set([nodeId]));
               }
               forEachCurrent.delete(nodeId);
-              (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              for (const targetId of compiled.outgoing) executeFrom(targetId, visited);
               return;
             }
 
             const shouldContinue = applyAction(node, visited);
             if (shouldContinue !== false) {
-              (runtime.outgoing.get(nodeId) ?? []).forEach((targetId) => executeFrom(targetId, visited));
+              for (const targetId of compiled.outgoing) executeFrom(targetId, visited);
             }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
@@ -7779,16 +7786,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           // every other object keep ticking. Partial transform writes made before the throw still commit
           // via the `changed` return below — same as a node chain that simply stops early.
           try {
-            runtime.eventRoots
-              .filter((node) => eventRootFires(node, object.id))
-              .forEach((node) => executeFrom(node.id, new Set()));
+            for (const node of runtime.dispatchEventRoots) {
+              if (eventRootFires(node, object.id)) executeFrom(node.id, new Set());
+            }
 
             // Resume latent Delay nodes whose timer elapsed this frame: fire each delay node's exec-out
             // (the continuation that was held back when the Delay was first reached).
             const elapsedHere = elapsedDelaysByObject.get(object.id);
             if (elapsedHere) {
               for (const delayNodeId of elapsedHere) {
-                (runtime.outgoing.get(delayNodeId) ?? []).forEach((targetId) => executeFrom(targetId, new Set()));
+                for (const targetId of execTargets(delayNodeId)) executeFrom(targetId, new Set());
               }
             }
 
@@ -7796,9 +7803,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             const tweensDoneHere = elapsedTweensByObject.get(object.id);
             if (tweensDoneHere) {
               for (const tweenNodeId of tweensDoneHere) {
-                (runtime.outgoingByHandle.get(tweenNodeId)?.get('exec-done') ?? []).forEach((targetId) =>
-                  executeFrom(targetId, new Set()),
-                );
+                for (const targetId of execTargetsFromHandle(tweenNodeId, 'exec-done')) executeFrom(targetId, new Set());
               }
             }
           } catch (error) {

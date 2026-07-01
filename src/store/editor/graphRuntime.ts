@@ -58,6 +58,8 @@ export const layoutGraphNodes = (nodes: NodeForgeNode[], edges: Edge[]): NodeFor
 export interface GraphRuntime {
   graph: ProjectGraph;
   nodesById: Map<string, NodeForgeNode>;
+  /** Compiled node records: one lookup gives the node plus its exec/value wiring. */
+  compiledNodesById: Map<string, CompiledGraphNode>;
   /** Default execution continuation: targets reached via the standard "exec-out" pin. */
   outgoing: Map<string, string[]>;
   /** Execution targets grouped by the source pin they leave from (e.g. "exec-out", "exec-body").
@@ -66,6 +68,8 @@ export interface GraphRuntime {
   incomingValues: Map<string, Edge[]>;
   incomingValueByHandle: Map<string, Map<string, Edge>>;
   eventRoots: NodeForgeNode[];
+  /** Event roots that can auto-dispatch during a tick. Function entries are call-only. */
+  dispatchEventRoots: NodeForgeNode[];
   customEventRoots: Map<string, NodeForgeNode[]>;
   /** Function entry nodes grouped by lowercased name — the targets of Call Function (never auto-fire). */
   functionRoots: Map<string, NodeForgeNode[]>;
@@ -76,11 +80,37 @@ export interface GraphRuntime {
   receiveDamageRoot: NodeForgeNode | undefined;
 }
 
+export interface CompiledGraphNode {
+  node: NodeForgeNode;
+  /** Default execution continuation from the standard "exec-out" pin. */
+  outgoing: string[];
+  /** Execution targets grouped by source pin. */
+  outgoingByHandle: Map<string, string[]>;
+  /** Value inputs keyed by target handle. */
+  valueInputs: Map<string, CompiledValueInput>;
+}
+
+export interface CompiledValueInput {
+  source: string;
+  sourceHandle: string;
+}
+
 const graphRuntimeCache = new WeakMap<ProjectGraph, GraphRuntime>();
 const graphRuntimeMapCache = new WeakMap<ProjectGraph[], Map<string, GraphRuntime>>();
 
 export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const compiledNodesById = new Map<string, CompiledGraphNode>(
+    graph.nodes.map((node) => [
+      node.id,
+      {
+        node,
+        outgoing: [],
+        outgoingByHandle: new Map<string, string[]>(),
+        valueInputs: new Map<string, CompiledValueInput>(),
+      },
+    ]),
+  );
   const outgoing = new Map<string, string[]>();
   const outgoingByHandle = new Map<string, Map<string, string[]>>();
   const incomingValues = new Map<string, Edge[]>();
@@ -95,6 +125,13 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
       const byHandle = incomingValueByHandle.get(edge.target) ?? new Map<string, Edge>();
       if (edge.targetHandle) byHandle.set(edge.targetHandle, edge);
       incomingValueByHandle.set(edge.target, byHandle);
+      const compiledTarget = compiledNodesById.get(edge.target);
+      if (compiledTarget && edge.targetHandle) {
+        compiledTarget.valueInputs.set(edge.targetHandle, {
+          source: edge.source,
+          sourceHandle: edge.sourceHandle ?? 'value-out',
+        });
+      }
     } else {
       // Exec edges leave a node from a named pin. Edges authored before multi-output nodes existed
       // (and AI-created flow edges) carry no sourceHandle → treat them as the default "exec-out".
@@ -104,16 +141,24 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
       if (handleTargets) handleTargets.push(edge.target);
       else byHandle.set(handle, [edge.target]);
       outgoingByHandle.set(edge.source, byHandle);
+      const compiledSource = compiledNodesById.get(edge.source);
+      if (compiledSource) {
+        const compiledTargets = compiledSource.outgoingByHandle.get(handle);
+        if (compiledTargets) compiledTargets.push(edge.target);
+        else compiledSource.outgoingByHandle.set(handle, [edge.target]);
+      }
       // The default-pin continuation stays in `outgoing` so existing call sites are unchanged.
       if (handle === 'exec-out') {
         const existing = outgoing.get(edge.source);
         if (existing) existing.push(edge.target);
         else outgoing.set(edge.source, [edge.target]);
+        compiledSource?.outgoing.push(edge.target);
       }
     }
   });
 
   const eventRoots = graph.nodes.filter((node) => node.data.nodeKind?.startsWith('event.'));
+  const dispatchEventRoots = eventRoots.filter((node) => node.data.nodeKind !== 'event.functionEntry');
   const customEventRoots = new Map<string, NodeForgeNode[]>();
   const functionRoots = new Map<string, NodeForgeNode[]>();
   for (const node of eventRoots) {
@@ -131,7 +176,7 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
     else customEventRoots.set(key, [node]);
   }
 
-  const timerRoots = eventRoots.filter(
+  const timerRoots = dispatchEventRoots.filter(
     (node) =>
       node.data.nodeKind === 'event.timer' ||
       (node.data.nodeKind === 'event.update' && Number(node.data.numberValue ?? 0) > 0),
@@ -141,11 +186,13 @@ export const buildGraphRuntime = (graph: ProjectGraph): GraphRuntime => {
   return {
     graph,
     nodesById,
+    compiledNodesById,
     outgoing,
     outgoingByHandle,
     incomingValues,
     incomingValueByHandle,
     eventRoots,
+    dispatchEventRoots,
     customEventRoots,
     functionRoots,
     timerRoots,
