@@ -20,7 +20,9 @@ import { qualityProfile } from './quality';
  */
 export function PostFx() {
   const rs = useEditorStore((state) => state.renderSettings);
-  const pose = useEditorStore((state) => state.runtimeCinematicCamera ?? state.editorCinematicPreviewCamera);
+  const pose = useEditorStore((state) =>
+    state.runtimeCinematicCamera ?? (state.cinematicViewportMode === 'camera' ? state.editorCinematicPreviewCamera : undefined),
+  );
   const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook ?? state.renderSettings.colorGrade);
   const environment = useEditorStore(selectActiveSceneEnvironment);
   const profile = qualityProfile(rs?.quality);

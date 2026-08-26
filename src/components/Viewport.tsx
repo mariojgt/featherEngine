@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, Grid, Html, PerformanceMonitor, TransformControls } from '@react-three/drei';
-import { ArrowDownToLine, Aperture, Camera, Globe, Magnet, Maximize2, Minimize2, Move3D, Play, Rotate3D, Scaling, Sparkles, Square, View } from 'lucide-react';
+import { ArrowDownToLine, Aperture, Camera, CircleDot, Globe, Magnet, Maximize2, Minimize2, Move3D, Play, Rotate3D, Scaling, Sparkles, Square, View } from 'lucide-react';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -25,7 +25,7 @@ import { SkinnedModel, useResolvedAnimator } from '../three/SkinnedModel';
 import { FollowCamera, LockOnMarker, useFollowTargetId, computeRestingCameraPose, resolveCameraConfig } from '../three/FollowCamera';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
-import { EditorCamera, editorNav, type ViewPreset } from '../three/EditorCamera';
+import { EditorCamera, editorCameraPose, editorNav, type ViewPreset } from '../three/EditorCamera';
 import { ViewCube } from './ViewCube';
 import { maximizeViewportLayout, restoreWorkspaceLayout, isViewportLayoutMaximized } from './workspacePanels';
 import { BoneAttachment } from '../three/BoneAttachment';
@@ -979,7 +979,7 @@ function SceneContent({
   const cinematicPreviewHidden = useEditorStore((state) => state.editorCinematicPreviewHidden);
   const cinematicPreviewMaterials = useEditorStore((state) => state.editorCinematicPreviewMaterials);
   const recording = useEditorStore((state) => state.cinematicRecording);
-  const editingKeyframe = useEditorStore((state) => Boolean(state.selectedCinematicKeyframe));
+  const cinematicViewportMode = useEditorStore((state) => state.cinematicViewportMode);
   const previewingCinematic = !isPlaying && Boolean(cinematicPreview);
   const renderPreviewEnabled = useViewportPrefs((state) => state.renderPreviewEnabled);
   const renderQuality = useEditorStore((state) => state.renderSettings.quality);
@@ -1387,9 +1387,9 @@ function SceneContent({
           Preview mode (editor, not playing) frames the resting camera so offset/pitch tuning is visible live. */}
       {isPlaying && cinematicCamera ? (
         <CinematicCamera />
-      ) : !isPlaying && cinematicPreviewCamera && !recording && !editingKeyframe ? (
-        // While recording (or editing a keyframe handle) you stay on the free editor camera so you can
-        // fly to frame / drag the path; navigating the viewport auto-keys the cinematic camera track.
+      ) : !isPlaying && cinematicPreviewCamera && cinematicViewportMode === 'camera' && !recording ? (
+        // Camera View is explicit. Scrubbing in Edit Paths keeps the normal free editor camera so
+        // the route and its handles stay visible and directly editable.
         <CinematicCamera pose={cinematicPreviewCamera} />
       ) : (isPlaying || previewCamera) && followTarget ? (
         <FollowCamera preview={!isPlaying} />
@@ -1695,6 +1695,18 @@ export function ViewportPanel() {
   const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
   const cinematicPreviewFade = useEditorStore((state) => state.editorCinematicPreviewFade);
   const cinematicPreviewLook = useEditorStore((state) => state.editorCinematicPreviewLook);
+  const cinematicViewportMode = useEditorStore((state) => state.cinematicViewportMode);
+  const cinematicPathMode = useEditorStore((state) => state.cinematicPathMode);
+  const playtimeCameraSessionId = useEditorStore((state) => state.playtimeCameraSession?.sequenceId);
+  const runtimeCinematicId = useEditorStore((state) => state.runtimeCinematic?.sequenceId);
+  const finishPlaytimeCameraRecording = useEditorStore((state) => state.finishPlaytimeCameraRecording);
+  // A normal Stop, an explicit cinematic Stop, and natural sequence completion all clear the runtime
+  // sequence. Whichever happens first commits the transient camera samples as one new editor take.
+  useEffect(() => {
+    if (playtimeCameraSessionId && runtimeCinematicId !== playtimeCameraSessionId) {
+      finishPlaytimeCameraRecording();
+    }
+  }, [finishPlaytimeCameraRecording, playtimeCameraSessionId, runtimeCinematicId]);
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const editingPrefabName = useEditorStore((state) =>
     state.prefabs.find((prefab) => prefab.id === state.editingPrefabId)?.name ?? 'Prefab',
@@ -1812,6 +1824,42 @@ export function ViewportPanel() {
       }
 
       switch (key) {
+        case 's': {
+          // Unreal-style Sequencer shortcut: key the selected actor's full transform at the
+          // cinematic playhead. With no actor selected, key the free editor camera instead.
+          if (editorNav.flying || event.repeat) return;
+          const cinematicId = store.activeCinematicId;
+          const cinematic = store.activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+          if (!cinematic) break;
+          const time = store.editorCinematicPreview?.sequenceId === cinematic.id
+            ? store.editorCinematicPreview.time
+            : 0;
+          let actionId: string | undefined;
+          let kind: 'camera' | 'transform' = 'camera';
+          if (store.selectedObjectId) {
+            const object = selectActiveObjects(store).find((item) => item.id === store.selectedObjectId);
+            const pose = store.editorCinematicPreviewTransforms[store.selectedObjectId] ?? object?.transform;
+            if (pose) {
+              kind = 'transform';
+              actionId = store.addCinematicTransformKeyframe(cinematic.id, store.selectedObjectId, time, pose);
+            }
+          } else if (store.cinematicViewportMode === 'edit' && editorCameraPose.valid) {
+            actionId = store.addCinematicCameraKeyframe(cinematic.id, time, editorCameraPose);
+          }
+          if (!actionId) break;
+          const fresh = store.activeScene()?.cinematics?.find((item) => item.id === cinematic.id);
+          const action = fresh?.actions.find((item) => item.id === actionId);
+          const frames = kind === 'camera' && action?.type === 'camera'
+            ? action.keyframes
+            : kind === 'transform' && action?.type === 'transform'
+              ? action.transformKeyframes
+              : undefined;
+          const frameRate = Math.max(1, fresh?.frameRate ?? 24);
+          const index = frames?.findIndex((frame) => Math.round(frame.time * frameRate) === Math.round(time * frameRate)) ?? -1;
+          if (index >= 0) store.selectCinematicKeyframe(actionId, index);
+          event.preventDefault();
+          break;
+        }
         case 'w':
         case 'e':
         case 'r':
@@ -2352,6 +2400,21 @@ export function ViewportPanel() {
           <ViewportFallback />
         )}
         {showMouseHint && <div className="mouse-look-hint">Click to capture mouse · ESC to release</div>}
+        {isPlaying && playtimeCameraSessionId && (
+          <div className="playtime-camera-overlay" role="status" aria-live="polite">
+            <strong><CircleDot size={14} aria-hidden /> Live camera recording</strong>
+            <span>RMB + WASD fly · Alt+LMB orbit · MMB pan · Q/E vertical · Wheel dolly/speed</span>
+            <small>Stop when finished — a new take will be saved automatically.</small>
+          </div>
+        )}
+        {!isPlaying && cinematicPreview && cinematicViewportMode === 'edit' && cinematicPathMode !== 'off' && (
+          <div className="cinematic-path-legend" role="status">
+            <strong>Edit Paths</strong>
+            <span><i className="camera" aria-hidden /> Camera path</span>
+            <span><i className="object" aria-hidden /> Object path</span>
+            <small>Click a numbered key to edit it · drag the gold handle to move it</small>
+          </div>
+        )}
         {insertMenu && !isPlaying && !editingPrefabId && (
           <div
             className="insert-popover"

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Search, Square, Trash2 } from 'lucide-react';
+import { Aperture, Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { useThrottledActiveObjects } from '../store/stableSelectors';
@@ -68,7 +68,7 @@ function HierarchyRow({
   const toggleSelectObject = useEditorStore((state) => state.toggleSelectObject);
   const openObjectScript = useEditorStore((state) => state.openObjectScript);
   const setObjectParent = useEditorStore((state) => state.setObjectParent);
-  const Icon = objectIcon[object.kind];
+  const Icon = object.reflectionProbe?.enabled ? Aperture : objectIcon[object.kind];
   const hasChildren = childCount > 0;
   const isInstance = Boolean(object.prefabSourceId);
   // Highlight the whole multi-selection when it's active, otherwise just the single selected object.

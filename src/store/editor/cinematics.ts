@@ -156,7 +156,7 @@ const stripMaterialUndefined = (material: MaterialOverrides): MaterialOverrides 
  * (positions + look-ats + fov). Times are absolute seconds; outside the range the camera holds on
  * the first/last keyframe. A single keyframe is a static framing.
  */
-const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): RuntimeCinematicCamera | undefined => {
+export const sampleCameraKeyframes = (keyframes: CinematicCameraKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): RuntimeCinematicCamera | undefined => {
   const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
   if (!frames.length) return undefined;
   if (frames.length === 1 || time <= frames[0].time) {
@@ -301,7 +301,7 @@ export const cinematicCameraAt = (
 };
 
 /** Sample an animated object transform track: fly smoothly through the keyframes via Catmull-Rom. */
-const sampleTransformKeyframes = (keyframes: CinematicTransformKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): TransformComponent | undefined => {
+export const sampleTransformKeyframes = (keyframes: CinematicTransformKeyframe[], time: number, interpolation: CinematicInterpolation = 'smooth'): TransformComponent | undefined => {
   const frames = keyframes.filter((frame) => Number.isFinite(frame.time)).sort((a, b) => a.time - b.time);
   if (!frames.length) return undefined;
   const pick = (frame: CinematicTransformKeyframe): TransformComponent => ({ position: frame.position, rotation: frame.rotation, scale: frame.scale });

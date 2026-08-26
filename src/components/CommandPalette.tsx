@@ -10,6 +10,7 @@ import { applyWorkspaceLayout, type WorkspaceLayoutId } from './Workspace';
 import { focusWorkspacePanel, openWorkspacePanel } from './workspacePanels';
 import { OPEN_SHORTCUTS_EVENT } from './ShortcutsOverlay';
 import { captureViewportScreenshot } from '../runtime/viewportCaptureBridge';
+import { editorCameraPose } from '../three/EditorCamera';
 import type { SceneObjectKind } from '../types';
 import { useExtensionSnapshot } from '../extensions/react';
 
@@ -111,6 +112,92 @@ export function CommandPalette() {
     for (const [kind, label] of objectKinds) {
       cmds.push({ id: `create-${kind}`, label: `Create ${label}`, group: 'Create', keywords: 'add object new', run: () => store().createObject(kind) });
     }
+    cmds.push({
+      id: 'create-reflection-probe',
+      label: 'Create Reflection Probe',
+      group: 'Create',
+      keywords: 'render unreal sphere capture reflections cubemap',
+      run: () => {
+        store().createReflectionProbe();
+        focusWorkspacePanel('inspector');
+      },
+    });
+    cmds.push({
+      id: 'create-instanced-grid',
+      label: 'Create 3×3 GPU-Instanced Model Grid',
+      group: 'Create',
+      keywords: 'instance instanced mesh repeated model performance unreal',
+      run: () => {
+        const ids = store().createInstancedGrid(store().selectedObjectId, { rows: 3, columns: 3 });
+        if (!ids.length) throw new Error('Select a root-level static imported model with baked materials first.');
+        focusWorkspacePanel('inspector');
+      },
+    });
+    cmds.push({
+      id: 'cinematic-new',
+      label: 'Film Mode: New Cinematic',
+      group: 'Film Mode',
+      keywords: 'sequence cutscene movie simple',
+      run: () => {
+        store().createCinematic('New Cinematic', 8);
+        focusWorkspacePanel('cinematic');
+      },
+    });
+    cmds.push({
+      id: 'cinematic-add-view-shot',
+      label: 'Film Mode: Add Shot from Current View',
+      group: 'Film Mode',
+      keywords: 'camera cut capture viewport simple',
+      run: () => {
+        if (!editorCameraPose.valid) return;
+        const state = store();
+        const cinematicId = state.activeCinematicId || state.activeScene()?.cinematics?.[0]?.id || state.createCinematic('New Cinematic', 8);
+        const cinematic = store().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+        const time = state.editorCinematicPreview?.sequenceId === cinematicId ? state.editorCinematicPreview.time : 0;
+        store().addCinematicShot(cinematicId, {
+          time,
+          position: [...editorCameraPose.position],
+          lookAt: [...editorCameraPose.lookAt],
+          fov: editorCameraPose.fov,
+          label: `Shot ${(cinematic?.actions.filter((action) => action.type === 'camera').length ?? 0) + 1}`,
+        });
+        focusWorkspacePanel('cinematic');
+      },
+    });
+    cmds.push({
+      id: 'cinematic-live-record',
+      label: 'Film Mode: Toggle Playtime Camera Record',
+      group: 'Film Mode',
+      keywords: 'playtime possess camera record take wasd',
+      run: () => store().setPlaytimeCameraRecording(!store().playtimeCameraRecording),
+    });
+    cmds.push({
+      id: 'cinematic-play-active',
+      label: 'Film Mode: Play Active Cinematic',
+      group: 'Film Mode',
+      keywords: 'sequence cutscene movie preview record take run',
+      run: () => {
+        const state = store();
+        const cinematicId = state.activeCinematicId || state.activeScene()?.cinematics?.[0]?.id;
+        if (!cinematicId) throw new Error('Create a cinematic first.');
+
+        const sequence = state.activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+        const hasCameraShot = sequence?.actions.some((action) => action.type === 'camera') ?? false;
+        if (state.playtimeCameraRecording && !hasCameraShot) {
+          if (!editorCameraPose.valid) throw new Error('Move the editor viewport once so its camera can be captured.');
+          state.addCinematicShot(cinematicId, {
+            time: 0,
+            position: [...editorCameraPose.position],
+            lookAt: [...editorCameraPose.lookAt],
+            fov: editorCameraPose.fov,
+            label: 'Shot 1',
+          });
+        }
+
+        store().playCinematic(cinematicId);
+        focusWorkspacePanel('cinematic');
+      },
+    });
 
     // Jump-to-object: select + focus Inspector + frame in viewport (cap keeps palette snappy).
     const sceneObjects = selectActiveObjects(store())

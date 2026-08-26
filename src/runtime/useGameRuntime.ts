@@ -29,7 +29,8 @@ export function useGameRuntime(active: boolean, instrumentation?: RuntimeLoopIns
       const delta = smoothFrameDelta(frameMs / 1000);
       lastTime = time;
       const tickStart = performance.now();
-      sampleGamepads(delta, setRuntimeKey);
+      // Live cinematic camera possession owns movement input; do not also drive the player/vehicle.
+      if (!useEditorStore.getState().playtimeCameraSession) sampleGamepads(delta, setRuntimeKey);
       tickRuntime(delta);
       instrumentationRef.current?.onFrame?.(frameMs, performance.now() - tickStart);
       frame = requestAnimationFrame(loop);
@@ -44,10 +45,14 @@ export function useGameRuntime(active: boolean, instrumentation?: RuntimeLoopIns
   useEffect(() => {
     if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (useEditorStore.getState().playtimeCameraSession) return;
       if (!event.repeat) setRuntimeKey(event.code, true);
     };
     const onKeyUp = (event: KeyboardEvent) => setRuntimeKey(event.code, false);
-    const onMouseDown = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, true);
+    const onMouseDown = (event: MouseEvent) => {
+      if (useEditorStore.getState().playtimeCameraSession) return;
+      setRuntimeKey(`Mouse${event.button}`, true);
+    };
     const onMouseUp = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, false);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);

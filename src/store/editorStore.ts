@@ -121,6 +121,7 @@ import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSi
 import { withParticleDefaults, defaultParticleConfig, particlePresets, particleAssetConfig, type ParticlePresetId } from '../runtime/particlePresets';
 import { applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { resolveMaterial } from '../three/materialResolve';
+import { customizedModelIds, isInstanceable } from '../three/modelInstancing';
 import { WATER_LOOK_KEYS, findRenderPreset, waterStylePatch } from '../three/presets';
 import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import { chopTree, clearTreeChops } from '../runtime/treeChop';
@@ -148,6 +149,23 @@ export interface PlantGroveOptions {
   /** Layout seed — the same seed replants the identical grove. Random when omitted. */
   seed?: number;
   name?: string;
+}
+
+export interface InstancedGridOptions {
+  /** Number of rows along world Z. Defaults to 3. */
+  rows?: number;
+  /** Number of columns along world X. Defaults to 3. */
+  columns?: number;
+  /** Distance between columns. Defaults to 2 world units. */
+  spacingX?: number;
+  /** Distance between rows. Defaults to 2 world units. */
+  spacingZ?: number;
+}
+
+/** Editor-only state for a live, possessed camera take being captured during Play. */
+export interface PlaytimeCameraRecordingSession {
+  sequenceId: string;
+  samples: CinematicCameraKeyframe[];
 }
 
 /** Stable per-object tree seed derived from its id, so the same tree rebuilds identically on reload. */
@@ -629,6 +647,14 @@ interface EditorState {
   editorCinematicPreviewMaterials: Record<string, MaterialOverrides>;
   /** Editor-only: Film Mode "Record" mode — moving the camera or dragging objects auto-keys them. */
   cinematicRecording: boolean;
+  /** Film Mode viewport behavior: edit keeps the free camera + trails; camera pilots the evaluated shot. */
+  cinematicViewportMode: 'edit' | 'camera';
+  /** Which motion trails Film Mode draws in the viewport. */
+  cinematicPathMode: 'all' | 'selected' | 'off';
+  /** Editor-only option: the next cinematic Play run possesses the camera and captures a new take. */
+  playtimeCameraRecording: boolean;
+  /** Active live-camera capture. Samples stay transient until Play ends, then become a non-destructive take. */
+  playtimeCameraSession?: PlaytimeCameraRecordingSession;
   /** Editor-only: the keyframe selected for 3D path editing (its handle gets a transform gizmo). */
   selectedCinematicKeyframe?: { actionId: string; index: number };
   runtimeStarted: boolean;
@@ -679,6 +705,8 @@ interface EditorState {
   ungroupObject: (id: string) => void;
   /** Clone an object (and its descendants) `count` times, each offset from the previous copy. Returns the new root ids. */
   duplicateObject: (id: string, options?: { count?: number; offset?: Vector3Tuple }) => string[];
+  /** Build an editable grid from one safe static model; Play/export batches the result into real GPU instances. */
+  createInstancedGrid: (sourceId: string, options?: InstancedGridOptions) => string[];
   renameObject: (id: string, name: string) => void;
   /** Re-parent `id` under `parentId` (or detach to scene root when undefined). Cycle-safe. */
   setObjectParent: (id: string, parentId?: string) => void;
@@ -852,6 +880,8 @@ interface EditorState {
   setObjectLight: (objectId: string, patch: Partial<LightComponent>) => void;
   /** Add/patch a local reflection probe on an object (captures a cubemap for nearby reflective surfaces). Creates it if absent. */
   setReflectionProbe: (objectId: string, patch: Partial<ReflectionProbeComponent>) => void;
+  /** Create and select a dedicated Reflection Probe entity. */
+  createReflectionProbe: (position?: Vector3Tuple) => string;
   /** Force a static reflection probe to re-capture its cubemap (bumps bakeNonce). */
   rebakeReflectionProbe: (objectId: string) => void;
   /** Remove an object's reflection probe. */
@@ -939,10 +969,18 @@ interface EditorState {
   updateCinematicAction: (cinematicId: string, actionId: string, patch: Partial<Omit<CinematicAction, 'id'>>) => void;
   removeCinematicAction: (cinematicId: string, actionId: string) => void;
   /** Capture/replace a camera keyframe at `time` on the cinematic's camera track (creates one). */
-  addCinematicCameraKeyframe: (cinematicId: string, time: number, pose: RuntimeCinematicCamera) => string | undefined;
+  addCinematicCameraKeyframe: (cinematicId: string, time: number, pose: RuntimeCinematicCamera, targetActionId?: string) => string | undefined;
   /** Capture/replace an object transform keyframe at `time` (uses `transform` or the object's live pose). */
-  addCinematicTransformKeyframe: (cinematicId: string, objectId: string, time: number, transform?: TransformComponent) => string | undefined;
+  addCinematicTransformKeyframe: (cinematicId: string, objectId: string, time: number, transform?: TransformComponent, targetActionId?: string) => string | undefined;
   setCinematicRecording: (recording: boolean) => void;
+  setCinematicViewportMode: (mode: 'edit' | 'camera') => void;
+  setCinematicPathMode: (mode: 'all' | 'selected' | 'off') => void;
+  /** Arm/disarm live camera possession for the next cinematic Play. */
+  setPlaytimeCameraRecording: (recording: boolean) => void;
+  /** Append one sampled camera pose to the active live take. */
+  recordPlaytimeCameraSample: (sample: CinematicCameraKeyframe) => void;
+  /** Stop Play if needed and commit the captured path as a new, non-destructive cinematic take. */
+  finishPlaytimeCameraRecording: () => void;
   /** Select (or clear, with null) a keyframe for 3D path editing; poses the scene at its time. */
   selectCinematicKeyframe: (actionId: string | null, index?: number) => void;
   /** Move the selected keyframe's world position (camera or object) — used by the 3D path gizmo. */
@@ -1201,6 +1239,125 @@ const deleteWithChildren = (objects: SceneObject[], id: string) => {
 
   return objects.filter((object) => !ids.has(object.id));
 };
+
+/** Resolve a deletion selection to every root + descendant id before mutating the scene. */
+const collectDeletedObjectIds = (objects: SceneObject[], rootIds: Iterable<string>): Set<string> => {
+  const ids = new Set(rootIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    objects.forEach((object) => {
+      if (object.parentId && ids.has(object.parentId) && !ids.has(object.id)) {
+        ids.add(object.id);
+        changed = true;
+      }
+    });
+  }
+  return ids;
+};
+
+const cameraLookAtFromRotation = (position: Vector3Tuple, rotation: Vector3Tuple): Vector3Tuple => {
+  const pitch = rotation[0] ?? 0;
+  const yaw = rotation[1] ?? 0;
+  const cosPitch = Math.cos(pitch);
+  return [
+    position[0] + Math.sin(yaw) * cosPitch * 10,
+    position[1] + Math.sin(pitch) * 10,
+    position[2] + Math.cos(yaw) * cosPitch * 10,
+  ];
+};
+
+/**
+ * Keep authored cinematics export-safe when their scene objects are deleted. Camera beats are frozen at
+ * their last authored/object framing; target constraints are baked to values. Object-driven non-camera
+ * beats are removed because they cannot do meaningful work after their target is gone.
+ */
+const sanitizeCinematicsForDeletedObjects = (
+  cinematics: CinematicSequence[] | undefined,
+  objects: SceneObject[],
+  deletedIds: ReadonlySet<string>,
+): CinematicSequence[] | undefined => {
+  if (!cinematics?.length || !deletedIds.size) return cinematics;
+  const objectById = new Map(objects.map((object) => [object.id, object]));
+  return cinematics.map((cinematic) => ({
+    ...cinematic,
+    actions: cinematic.actions.flatMap((action) => {
+      if (action.objectId && deletedIds.has(action.objectId) && action.type !== 'camera') return [];
+
+      const next: CinematicAction = { ...action };
+      const boundObject = next.objectId ? objectById.get(next.objectId) : undefined;
+
+      if (next.type === 'camera' && next.objectId && deletedIds.has(next.objectId)) {
+        const position = next.position ?? next.toPosition ?? next.fromPosition ?? boundObject?.transform.position;
+        if (position && !next.position && !next.toPosition && !next.fromPosition) next.position = [...position];
+        if (!next.lookAt && !next.rotation && !next.toRotation && !next.fromRotation && boundObject && position) {
+          next.lookAt = cameraLookAtFromRotation(position, boundObject.transform.rotation);
+        }
+        delete next.objectId;
+      }
+
+      if (next.lookAtObjectId && deletedIds.has(next.lookAtObjectId)) {
+        const target = objectById.get(next.lookAtObjectId);
+        if (!next.lookAt && target) next.lookAt = [...target.transform.position];
+        delete next.lookAtObjectId;
+      }
+
+      if (next.followObjectId && deletedIds.has(next.followObjectId)) {
+        const target = objectById.get(next.followObjectId);
+        if (target) {
+          const offset = next.followOffset ?? next.position ?? [0, 0, 0];
+          if (!next.position && !next.toPosition && !next.fromPosition) {
+            next.position = [
+              target.transform.position[0] + offset[0],
+              target.transform.position[1] + offset[1],
+              target.transform.position[2] + offset[2],
+            ];
+          }
+          if (!next.lookAt && !next.lookAtObjectId) next.lookAt = [...target.transform.position];
+        }
+        delete next.followObjectId;
+      }
+
+      if (next.focusObjectId && deletedIds.has(next.focusObjectId)) {
+        const target = objectById.get(next.focusObjectId);
+        const cameraPosition = next.position ?? next.toPosition ?? next.fromPosition ?? boundObject?.transform.position;
+        if (target && cameraPosition && next.focusDistance === undefined) {
+          next.focusDistance = Math.hypot(
+            target.transform.position[0] - cameraPosition[0],
+            target.transform.position[1] - cameraPosition[1],
+            target.transform.position[2] - cameraPosition[2],
+          );
+        }
+        delete next.focusObjectId;
+      }
+
+      return [next];
+    }),
+  }));
+};
+
+/** Apply an editor patch while treating an explicitly-present `undefined` as "remove this field". */
+const applyCinematicActionPatch = (
+  action: CinematicAction,
+  patch: Partial<Omit<CinematicAction, 'id'>>,
+): CinematicAction => {
+  const next = { ...action } as CinematicAction & Record<string, unknown>;
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+  });
+  next.id = action.id;
+  next.time = Math.max(0, typeof patch.time === 'number' ? patch.time : action.time);
+  return next;
+};
+
+/** Furthest authored time reached by a beat, including absolute key times beyond its clip span. */
+const cinematicActionEndTime = (action: CinematicAction): number => Math.max(
+  action.time + (action.duration ?? 0.1),
+  ...(action.keyframes?.map((frame) => frame.time) ?? []),
+  ...(action.transformKeyframes?.map((frame) => frame.time) ?? []),
+  ...(action.materialKeyframes?.map((frame) => frame.time) ?? []),
+);
 
 /** Collect `rootId` plus every descendant (following parentId), preserving document order. */
 const collectSubtree = (objects: SceneObject[], rootId: string): SceneObject[] => {
@@ -1537,6 +1694,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   editorCinematicPreviewHidden: [],
   editorCinematicPreviewMaterials: {},
   cinematicRecording: false,
+  cinematicViewportMode: 'edit',
+  cinematicPathMode: 'all',
+  playtimeCameraRecording: false,
+  playtimeCameraSession: undefined,
   selectedCinematicKeyframe: undefined,
   runtimeStarted: false,
   runtimeTime: 0,
@@ -1728,21 +1889,48 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   deleteObject: (id) =>
     set((state) => {
       const objects = selectActiveObjects(state);
-      const remaining = deleteWithChildren(objects, id);
+      if (!objects.some((object) => object.id === id)) return state;
+      const deletedIds = collectDeletedObjectIds(objects, [id]);
+      const remaining = objects.filter((object) => !deletedIds.has(object.id));
       const selectedObjectId = remaining.some((object) => object.id === state.selectedObjectId)
         ? state.selectedObjectId
         : remaining[0]?.id ?? '';
-      return { ...mapActiveSceneObjects(state, () => remaining), selectedObjectId };
+      return {
+        scenes: state.scenes.map((scene) =>
+          scene.id === state.activeSceneId
+            ? {
+                ...scene,
+                objects: remaining,
+                cinematics: sanitizeCinematicsForDeletedObjects(scene.cinematics, objects, deletedIds),
+              }
+            : scene,
+        ),
+        selectedObjectId,
+        selectedObjectIds: state.selectedObjectIds.filter((selectedId) => !deletedIds.has(selectedId)),
+        isDirty: true,
+      };
     }),
   deleteSelectedObject: () =>
     set((state) => {
       const ids = effectiveSelection(state);
       if (!ids.length) return state;
-      let remaining = selectActiveObjects(state);
-      ids.forEach((id) => {
-        remaining = deleteWithChildren(remaining, id);
-      });
-      return { ...mapActiveSceneObjects(state, () => remaining), selectedObjectId: remaining[0]?.id ?? '', selectedObjectIds: [] };
+      const objects = selectActiveObjects(state);
+      const deletedIds = collectDeletedObjectIds(objects, ids);
+      const remaining = objects.filter((object) => !deletedIds.has(object.id));
+      return {
+        scenes: state.scenes.map((scene) =>
+          scene.id === state.activeSceneId
+            ? {
+                ...scene,
+                objects: remaining,
+                cinematics: sanitizeCinematicsForDeletedObjects(scene.cinematics, objects, deletedIds),
+              }
+            : scene,
+        ),
+        selectedObjectId: remaining[0]?.id ?? '',
+        selectedObjectIds: [],
+        isDirty: true,
+      };
     }),
   duplicateSelectedObject: () =>
     set((state) => {
@@ -1921,6 +2109,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     });
     return newRootIds;
+  },
+  createInstancedGrid: (sourceId, options = {}) => {
+    const rows = Math.round(options.rows ?? 3);
+    const columns = Math.round(options.columns ?? 3);
+    const total = rows * columns;
+    const spacingX = Number.isFinite(options.spacingX) ? Number(options.spacingX) : 2;
+    const spacingZ = Number.isFinite(options.spacingZ) ? Number(options.spacingZ) : 2;
+    if (rows < 1 || columns < 1 || total < 4 || total > 400) return [];
+
+    let createdIds: string[] = [];
+    set((state) => {
+      const objects = selectActiveObjects(state);
+      const source = objects.find((object) => object.id === sourceId);
+      if (!source || !isInstanceable(source, customizedModelIds(state.materials))) return state;
+
+      createdIds = [source.id];
+      const additions: SceneObject[] = [];
+      for (let index = 1; index < total; index += 1) {
+        const row = Math.floor(index / columns);
+        const column = index % columns;
+        const clone = structuredClone(source) as SceneObject;
+        clone.id = makeId('obj');
+        clone.name = `${source.name} Instance ${index + 1}`;
+        clone.parentId = undefined;
+        clone.transform = {
+          ...clone.transform,
+          position: [
+            source.transform.position[0] + column * spacingX,
+            source.transform.position[1],
+            source.transform.position[2] + row * spacingZ,
+          ],
+        };
+        createdIds.push(clone.id);
+        additions.push(clone);
+      }
+
+      return {
+        ...mapActiveSceneObjects(state, (current) => [...current, ...additions]),
+        selectedObjectId: source.id,
+        selectedObjectIds: createdIds,
+      };
+    });
+    return createdIds;
   },
   setObjectParent: (id, parentId) =>
     set((state) => {
@@ -3390,6 +3621,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ),
       ),
     ),
+  createReflectionProbe: (position = [0, 2, 0]) => {
+    const id = makeId('obj');
+    const probe: SceneObject = {
+      id,
+      name: 'Reflection Probe',
+      kind: 'empty',
+      transform: defaultTransform(position),
+      ...objectDefaults.empty,
+      reflectionProbe: defaultReflectionProbe(),
+    } as SceneObject;
+    set((state) => ({
+      ...mapActiveSceneObjects(state, (objects) => [...objects, probe]),
+      selectedObjectId: id,
+      selectedObjectIds: [],
+    }));
+    return id;
+  },
   rebakeReflectionProbe: (objectId) =>
     set((state) =>
       mapActiveSceneObjects(state, (objects) =>
@@ -4353,8 +4601,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setActiveCinematic: (id) =>
     set((state) =>
       state.editorCinematicPreview && state.editorCinematicPreview.sequenceId !== id
-        ? {
+          ? {
             activeCinematicId: id,
+            selectedCinematicKeyframe: undefined,
+            cinematicViewportMode: 'edit' as const,
             editorCinematicPreview: undefined,
             editorCinematicPreviewCamera: undefined,
             editorCinematicPreviewFade: undefined,
@@ -4362,7 +4612,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             editorCinematicPreviewHidden: [],
             editorCinematicPreviewMaterials: {},
           }
-        : { activeCinematicId: id },
+          : { activeCinematicId: id, selectedCinematicKeyframe: undefined, cinematicViewportMode: 'edit' as const },
     ),
   addCinematicAction: (cinematicId, action) => {
     const actionId = makeId('caction');
@@ -4375,7 +4625,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           found = true;
           const nextAction: CinematicAction = { ...action, id: actionId, time: Math.max(0, action.time) };
           const actions = [...cinematic.actions, nextAction].sort((a, b) => a.time - b.time);
-          const duration = Math.max(cinematic.duration, nextAction.time + (nextAction.duration ?? 0.1));
+          const duration = Math.max(cinematic.duration, cinematicActionEndTime(nextAction));
           return { ...cinematic, actions, duration };
         }),
       }));
@@ -4387,16 +4637,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => ({
       scenes: state.scenes.map((scene) => ({
         ...scene,
-        cinematics: (scene.cinematics ?? []).map((cinematic) =>
-          cinematic.id === cinematicId
-            ? {
-                ...cinematic,
-                actions: cinematic.actions
-                  .map((action) => (action.id === actionId ? { ...action, ...stripUndefined(patch), time: Math.max(0, patch.time ?? action.time) } : action))
-                  .sort((a, b) => a.time - b.time),
-              }
-            : cinematic,
-        ),
+        cinematics: (scene.cinematics ?? []).map((cinematic) => {
+          if (cinematic.id !== cinematicId) return cinematic;
+          const actions = cinematic.actions
+            .map((action) => (action.id === actionId ? applyCinematicActionPatch(action, patch) : action))
+            .sort((a, b) => a.time - b.time);
+          return {
+            ...cinematic,
+            actions,
+            duration: Math.max(cinematic.duration, ...actions.map(cinematicActionEndTime)),
+          };
+        }),
       })),
       isDirty: true,
     })),
@@ -4459,7 +4710,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ease: 'smooth',
     });
   },
-  addCinematicCameraKeyframe: (cinematicId, time, pose) => {
+  addCinematicCameraKeyframe: (cinematicId, time, pose, targetActionId) => {
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
     if (!cinematic) return undefined;
     const frame: CinematicCameraKeyframe = {
@@ -4470,14 +4721,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       focusDistance: pose.focusDistance,
       aperture: pose.aperture,
     };
-    const track = cinematic.actions.find((action) => action.type === 'camera' && action.keyframes?.length);
+    const requestedTrack = targetActionId ? cinematic.actions.find((action) => action.id === targetActionId && action.type === 'camera') : undefined;
+    if (targetActionId && !requestedTrack) return undefined;
+    const track = requestedTrack ?? cinematic.actions.find((action) => action.type === 'camera' && action.keyframes?.length);
     let actionId = track?.id;
     if (!track) {
       actionId = get().addCinematicAction(cinematicId, { type: 'camera', time: frame.time, duration: 0.5, label: 'Camera track', ease: 'smooth', keyframes: [frame] });
     }
     if (!actionId) return undefined;
     const existing = track?.keyframes ?? [frame];
-    const merged = [...existing.filter((keyframe) => Math.abs(keyframe.time - frame.time) > 0.06), frame].sort((a, b) => a.time - b.time);
+    const frameRate = Math.max(1, cinematic.frameRate ?? 24);
+    const merged = [...existing.filter((keyframe) => Math.round(keyframe.time * frameRate) !== Math.round(frame.time * frameRate)), frame].sort((a, b) => a.time - b.time);
     const minTime = Math.min(0, ...merged.map((keyframe) => keyframe.time));
     const maxTime = Math.max(0.5, ...merged.map((keyframe) => keyframe.time));
     get().updateCinematicAction(cinematicId, actionId, { keyframes: merged, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
@@ -4485,10 +4739,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (preview?.sequenceId === cinematicId) get().previewCinematic(cinematicId, preview.time);
     return actionId;
   },
-  addCinematicTransformKeyframe: (cinematicId, objectId, time, transform) => {
+  addCinematicTransformKeyframe: (cinematicId, objectId, time, transform, targetActionId) => {
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
     if (!cinematic) return undefined;
     const object = selectActiveObjects(get()).find((item) => item.id === objectId);
+    // Never create a dangling timeline binding, even when a caller supplies an explicit pose.
+    // Object-track pickers and scripting integrations can therefore treat an undefined result as a
+    // clean rejected add rather than leaving a permanently broken "Missing Object" row.
+    if (!object) return undefined;
     const pose = transform ?? object?.transform;
     if (!pose) return undefined;
     const frame: CinematicTransformKeyframe = {
@@ -4497,7 +4755,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       rotation: [...pose.rotation],
       scale: [...pose.scale],
     };
-    const track = cinematic.actions.find((action) => action.type === 'transform' && action.objectId === objectId && action.transformKeyframes);
+    const requestedTrack = targetActionId
+      ? cinematic.actions.find((action) => action.id === targetActionId && action.type === 'transform' && action.objectId === objectId)
+      : undefined;
+    if (targetActionId && !requestedTrack) return undefined;
+    const track =
+      requestedTrack ??
+      cinematic.actions.find((action) => action.type === 'transform' && action.objectId === objectId && action.transformKeyframes?.length) ??
+      // A legacy from→to transform beat is already this object's binding. Reuse and upgrade it
+      // instead of silently creating a second Object row/action when the first key is added.
+      cinematic.actions.find((action) => action.type === 'transform' && action.objectId === objectId);
     let actionId = track?.id;
     if (!track) {
       actionId = get().addCinematicAction(cinematicId, {
@@ -4512,7 +4779,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     if (!actionId) return undefined;
     const existing = track?.transformKeyframes ?? [frame];
-    const merged = [...existing.filter((keyframe) => Math.abs(keyframe.time - frame.time) > 0.06), frame].sort((a, b) => a.time - b.time);
+    const frameRate = Math.max(1, cinematic.frameRate ?? 24);
+    const merged = [...existing.filter((keyframe) => Math.round(keyframe.time * frameRate) !== Math.round(frame.time * frameRate)), frame].sort((a, b) => a.time - b.time);
     const minTime = Math.min(0, ...merged.map((keyframe) => keyframe.time));
     const maxTime = Math.max(0.5, ...merged.map((keyframe) => keyframe.time));
     get().updateCinematicAction(cinematicId, actionId, { transformKeyframes: merged, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
@@ -4528,14 +4796,136 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (cinematicId && !state.editorCinematicPreview) {
         queueMicrotask(() => get().previewCinematic(cinematicId, 0));
       }
-      return { cinematicRecording: true };
+      return { cinematicRecording: true, playtimeCameraRecording: false, cinematicViewportMode: 'edit' as const };
     }),
+  setCinematicViewportMode: (mode) => set({ cinematicViewportMode: mode }),
+  setCinematicPathMode: (mode) => set({ cinematicPathMode: mode }),
+  setPlaytimeCameraRecording: (recording) =>
+    set((state) =>
+      state.playtimeCameraSession
+        ? state
+        : {
+            playtimeCameraRecording: recording,
+            // The two recording modes are deliberately exclusive: one keys editor manipulation,
+            // the other possesses the runtime camera during Play.
+            cinematicRecording: recording ? false : state.cinematicRecording,
+          },
+    ),
+  recordPlaytimeCameraSample: (sample) =>
+    set((state) => {
+      const session = state.playtimeCameraSession;
+      if (!session || !Number.isFinite(sample.time)) return state;
+      const clean: CinematicCameraKeyframe = {
+        time: Number(Math.max(0, sample.time).toFixed(3)),
+        position: [...sample.position],
+        lookAt: [...sample.lookAt],
+        fov: Math.min(140, Math.max(10, sample.fov)),
+        focusDistance: sample.focusDistance,
+        aperture: sample.aperture,
+      };
+      const last = session.samples[session.samples.length - 1];
+      const samples = last && Math.abs(last.time - clean.time) < 0.01
+        ? [...session.samples.slice(0, -1), clean]
+        : [...session.samples, clean];
+      return { playtimeCameraSession: { ...session, samples } };
+    }),
+  finishPlaytimeCameraRecording: () => {
+    const current = get();
+    if (!current.playtimeCameraSession) return;
+    // Restore the pristine Play snapshot first. The take is committed in the next microtask so it is
+    // a normal undoable editor edit, never mixed into transient gameplay state.
+    if (current.isPlaying) {
+      current.setPlaying(false);
+      queueMicrotask(() => get().finishPlaytimeCameraRecording());
+      return;
+    }
+
+    set((state) => {
+      const session = state.playtimeCameraSession;
+      if (!session) return state;
+      const scene = state.scenes.find((item) => item.id === state.activeSceneId);
+      const source = scene?.cinematics?.find((item) => item.id === session.sequenceId);
+      if (!scene || !source || session.samples.length === 0) {
+        return { playtimeCameraSession: undefined, playtimeCameraRecording: false };
+      }
+
+      const samples = session.samples
+        .filter((sample) => Number.isFinite(sample.time))
+        .sort((a, b) => a.time - b.time)
+        .filter((sample, index, all) => index === 0 || sample.time - all[index - 1].time >= 0.02)
+        .map((sample) => ({
+          ...sample,
+          position: [...sample.position] as Vector3Tuple,
+          lookAt: [...sample.lookAt] as Vector3Tuple,
+        }));
+      if (!samples.length) return { playtimeCameraSession: undefined, playtimeCameraRecording: false };
+      samples[0] = { ...samples[0], time: 0 };
+      if (samples.length === 1) {
+        samples.push({ ...samples[0], time: Math.min(source.duration, 1 / Math.max(1, source.frameRate ?? 24)) });
+      }
+
+      const familyId = source.takeOf ?? source.id;
+      const takeNumber =
+        Math.max(
+          0,
+          ...(scene.cinematics ?? [])
+            .filter((cinematic) => (cinematic.takeOf ?? cinematic.id) === familyId)
+            .map((cinematic) => cinematic.takeNumber ?? 0),
+        ) + 1;
+      const familyName = (scene.cinematics ?? []).find((cinematic) => cinematic.id === familyId)?.name ?? source.name;
+      const nextId = makeId('cinematic');
+      const cameraTrack: CinematicAction = {
+        id: makeId('caction'),
+        type: 'camera',
+        time: 0,
+        duration: Math.max(0.5, source.duration),
+        label: 'Playtime Camera',
+        ease: 'smooth',
+        interpolation: 'smooth',
+        keyframes: samples,
+      };
+      const next: CinematicSequence = {
+        ...source,
+        id: nextId,
+        name: `${familyName} Take ${takeNumber} — Live Camera`,
+        takeOf: familyId,
+        takeNumber,
+        actions: [
+          ...source.actions
+            .filter((action) => action.type !== 'camera')
+            .map((action) => ({ ...action, id: makeId('caction') })),
+          cameraTrack,
+        ].sort((a, b) => a.time - b.time),
+        markers: (source.markers ?? []).map((marker) => ({ ...marker, id: makeId('cmark') })),
+        createdAt: Date.now(),
+      };
+
+      return {
+        scenes: state.scenes.map((item) =>
+          item.id === scene.id ? { ...item, cinematics: [...(item.cinematics ?? []), next] } : item,
+        ),
+        activeCinematicId: nextId,
+        playtimeCameraSession: undefined,
+        playtimeCameraRecording: false,
+        selectedCinematicKeyframe: undefined,
+        editorCinematicPreview: undefined,
+        editorCinematicPreviewCamera: undefined,
+        editorCinematicPreviewFade: undefined,
+        editorCinematicPreviewLook: undefined,
+        editorCinematicPreviewText: undefined,
+        editorCinematicPreviewTransforms: {},
+        editorCinematicPreviewHidden: [],
+        editorCinematicPreviewMaterials: {},
+        isDirty: true,
+      };
+    });
+  },
   selectCinematicKeyframe: (actionId, index) => {
     if (!actionId || index == null) {
       set({ selectedCinematicKeyframe: undefined });
       return;
     }
-    set({ selectedCinematicKeyframe: { actionId, index } });
+    set({ selectedCinematicKeyframe: { actionId, index }, cinematicViewportMode: 'edit' });
     // Pose the scene at this keyframe's time so editing it shows the right moment.
     const cinematic = get().activeScene()?.cinematics?.find((item) => item.actions.some((action) => action.id === actionId));
     const action = cinematic?.actions.find((item) => item.id === actionId);
@@ -4558,7 +4948,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const keyframes = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, position } : keyframe));
       get().updateCinematicAction(cinematic.id, actionId, { keyframes });
     } else if (action.type === 'transform' && action.transformKeyframes?.[index]) {
-      const transformKeyframes = action.transformKeyframes.map((keyframe, i) => (i === index ? { ...keyframe, position } : keyframe));
+      const scene = get().activeScene();
+      const object = scene?.objects.find((item) => item.id === action.objectId);
+      const frame = action.transformKeyframes[index];
+      if (!scene || !object || !frame) return;
+      // Track values are local to the object's parent, while viewport handles live at the scene root.
+      // Pose the hierarchy at this key's time, move in world space, then convert back under the parent.
+      const overrides = cinematicTransformsAt(cinematic, scene.objects, frame.time, scene.cinematics);
+      const posedObjects = scene.objects.map((item) => (overrides[item.id] ? { ...item, transform: overrides[item.id] } : item));
+      const desiredWorld = { ...worldTransformOf(posedObjects, object.id), position };
+      const local = worldToLocalUnderParent(posedObjects, desiredWorld, object.parentId);
+      const transformKeyframes = action.transformKeyframes.map((keyframe, i) => (i === index ? { ...keyframe, position: local.position } : keyframe));
       get().updateCinematicAction(cinematic.id, actionId, { transformKeyframes });
     } else {
       return;
@@ -4616,6 +5016,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             editorCinematicPreviewHidden: [],
             editorCinematicPreviewMaterials: {},
             selectedCinematicKeyframe: undefined,
+            cinematicViewportMode: 'edit' as const,
           }
         : state,
     ),
@@ -4637,6 +5038,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         runtimeCinematicFade: initialCinematicFade(sequence, sequences),
         runtimeCinematicLook: sequence.look,
         runtimeCinematicText: cinematicTextAt(sequence, 0, sequences),
+        playtimeCameraSession: state.playtimeCameraRecording
+          ? { sequenceId: cinematicId, samples: [] }
+          : undefined,
+        cinematicRecording: state.playtimeCameraRecording ? false : state.cinematicRecording,
       };
     });
   },
@@ -13379,6 +13784,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         editorCinematicPreviewTransforms: {},
         editorCinematicPreviewHidden: [],
         editorCinematicPreviewMaterials: {},
+        cinematicRecording: false,
+        cinematicViewportMode: 'edit',
+        cinematicPathMode: 'all',
+        playtimeCameraRecording: false,
+        playtimeCameraSession: undefined,
         runtimeTriggers: [],
         runtimeTriggersExit: [],
         runtimeStarted: false,

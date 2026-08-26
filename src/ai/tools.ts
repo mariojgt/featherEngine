@@ -54,6 +54,7 @@ import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinema
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, findRenderPreset, lightingPresetIds, materialPresetIds, materialPresetPatch, renderPresetIds } from '../three/presets';
 import { applyPhysicsMaterialPreset, physicsMaterialPresetIds } from '../runtime/physicsMaterials';
+import { cinematicTransformsAt } from '../store/editor/cinematics';
 
 const store = () => useEditorStore.getState();
 const projectStore = () => useProjectStore.getState();
@@ -270,8 +271,10 @@ function normalizeWaterPatch<T extends { surfaceOpacity?: number }>(patch: T): O
   const { surfaceOpacity, ...rest } = patch;
   return surfaceOpacity === undefined ? rest : { ...rest, opacity: surfaceOpacity };
 }
+const cinematicActionTypes = ['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence', 'text'] as const;
+const cinematicActionTypeSchema = z.enum(cinematicActionTypes);
 const cinematicActionSchema = z.object({
-  type: z.enum(['camera', 'transform', 'visibility', 'spawn', 'animation', 'sound', 'event', 'fade', 'material', 'timeDilation', 'subsequence', 'text']),
+  type: cinematicActionTypeSchema,
   time: z.number().min(0).describe('Seconds from cinematic start.'),
   duration: z.number().min(0).optional().describe('Seconds this beat lasts; use for camera/transform/fade interpolation.'),
   ease: z.enum(['linear', 'smooth', 'in', 'out']).optional().describe('Interpolation curve for camera/transform/fade beats. Default smooth (ease in-out); use linear for constant-speed moves.'),
@@ -394,27 +397,32 @@ function normalizeCinematicAction(input: z.infer<typeof cinematicActionSchema>):
 }
 
 function normalizeCinematicActionPatch(input: Partial<z.infer<typeof cinematicActionSchema>>): Partial<Omit<CinematicAction, 'id'>> {
-  return {
-    ...input,
-    type: input.type as CinematicActionType | undefined,
-    fromPosition: input.fromPosition ? asVec3(input.fromPosition) : undefined,
-    toPosition: input.toPosition ? asVec3(input.toPosition) : undefined,
-    fromRotation: input.fromRotation ? asVec3(input.fromRotation) : undefined,
-    toRotation: input.toRotation ? asVec3(input.toRotation) : undefined,
-    fromScale: input.fromScale ? asVec3(input.fromScale) : undefined,
-    toScale: input.toScale ? asVec3(input.toScale) : undefined,
-    position: input.position ? asVec3(input.position) : undefined,
-    rotation: input.rotation ? asVec3(input.rotation) : undefined,
-    scale: input.scale ? asVec3(input.scale) : undefined,
-    lookAt: input.lookAt ? asVec3(input.lookAt) : undefined,
-    followOffset: input.followOffset ? asVec3(input.followOffset) : undefined,
-    keyframes: input.keyframes
-      ? input.keyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), lookAt: asVec3(frame.lookAt), fov: frame.fov, focusDistance: frame.focusDistance, aperture: frame.aperture }))
-      : undefined,
-    transformKeyframes: input.transformKeyframes
-      ? input.transformKeyframes.map((frame) => ({ time: frame.time, position: asVec3(frame.position), rotation: asVec3(frame.rotation), scale: asVec3(frame.scale) }))
-      : undefined,
-  };
+  const output: Record<string, unknown> = { ...input };
+  const has = (key: keyof typeof input) => Object.prototype.hasOwnProperty.call(input, key);
+  if (has('type')) output.type = input.type as CinematicActionType | undefined;
+  const vectorFields = ['fromPosition', 'toPosition', 'fromRotation', 'toRotation', 'fromScale', 'toScale', 'position', 'rotation', 'scale', 'lookAt', 'followOffset'] as const;
+  vectorFields.forEach((key) => {
+    if (has(key)) output[key] = input[key] ? asVec3(input[key]!) : undefined;
+  });
+  if (has('keyframes')) {
+    output.keyframes = input.keyframes?.map((frame) => ({
+      time: frame.time,
+      position: asVec3(frame.position),
+      lookAt: asVec3(frame.lookAt),
+      fov: frame.fov,
+      focusDistance: frame.focusDistance,
+      aperture: frame.aperture,
+    }));
+  }
+  if (has('transformKeyframes')) {
+    output.transformKeyframes = input.transformKeyframes?.map((frame) => ({
+      time: frame.time,
+      position: asVec3(frame.position),
+      rotation: asVec3(frame.rotation),
+      scale: asVec3(frame.scale),
+    }));
+  }
+  return output as Partial<Omit<CinematicAction, 'id'>>;
 }
 
 const NODE_LABELS = [
@@ -752,6 +760,96 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
 };
 
 const findObject = (id: string) => selectActiveObjects(store()).find((object) => object.id === id);
+const findCinematic = (id: string) => store().activeScene()?.cinematics?.find((cinematic) => cinematic.id === id);
+const activeObjectPath = (objectId: string): string | null => {
+  const objects = selectActiveObjects(store());
+  const names: string[] = [];
+  const visited = new Set<string>();
+  let current = objects.find((object) => object.id === objectId);
+  if (!current) return null;
+  while (current && !visited.has(current.id)) {
+    names.unshift(current.name);
+    visited.add(current.id);
+    current = current.parentId ? objects.find((object) => object.id === current!.parentId) : undefined;
+  }
+  if (current) names.unshift('[cyclic hierarchy]');
+  return names.join(' / ');
+};
+const cinematicBinding = (objectId: string | undefined) => {
+  if (!objectId) return null;
+  const object = findObject(objectId);
+  return {
+    id: objectId,
+    name: object?.name ?? null,
+    kind: object?.kind ?? null,
+    path: activeObjectPath(objectId),
+    status: object ? 'ok' : 'missing',
+  };
+};
+const cinematicActionKeys = (action: CinematicAction) => {
+  const keyframes = action.type === 'camera'
+    ? action.keyframes
+    : action.type === 'transform'
+      ? action.transformKeyframes
+      : action.type === 'material'
+        ? action.materialKeyframes
+        : undefined;
+  const times = [...(keyframes?.map((frame) => frame.time) ?? [])].sort((a, b) => a - b);
+  return {
+    kind: action.type === 'camera' ? 'camera' : action.type === 'transform' ? 'transform' : action.type === 'material' ? 'material' : 'none',
+    mode: times.length ? 'keyframed' : action.type === 'transform' ? 'legacy-range' : 'beat',
+    count: times.length,
+    times,
+    range: times.length ? [times[0], times[times.length - 1]] : [action.time, action.time + (action.duration ?? 0)],
+  };
+};
+const summarizeCinematicAction = (action: CinematicAction) => ({
+  id: action.id,
+  type: action.type,
+  label: action.label ?? null,
+  time: action.time,
+  duration: action.duration ?? null,
+  ease: action.ease ?? null,
+  interpolation: action.interpolation ?? null,
+  binding: cinematicBinding(action.objectId),
+  keys: cinematicActionKeys(action),
+  references: {
+    lookAt: action.lookAtObjectId ? cinematicBinding(action.lookAtObjectId) : null,
+    follow: action.followObjectId ? cinematicBinding(action.followObjectId) : null,
+    focus: action.focusObjectId ? cinematicBinding(action.focusObjectId) : null,
+    subsequenceId: action.cinematicId ?? null,
+  },
+});
+const validateCinematicAction = (action: Omit<CinematicAction, 'id'> | CinematicAction, cinematicId?: string): string | undefined => {
+  if (action.type === 'transform' && !action.objectId) return 'A transform action requires objectId.';
+  if (['visibility', 'animation', 'material'].includes(action.type) && !action.objectId) return `A ${action.type} action requires objectId.`;
+  if (action.objectId) {
+    const object = findObject(action.objectId);
+    if (!object) return `No scene object with id ${action.objectId}; refusing to create a dangling ${action.type} binding.`;
+    if (action.type === 'camera' && object.kind !== 'camera') return `Camera action objectId ${action.objectId} is ${object.kind}, not a camera.`;
+  }
+  for (const [field, objectId] of [
+    ['lookAtObjectId', action.lookAtObjectId],
+    ['followObjectId', action.followObjectId],
+    ['focusObjectId', action.focusObjectId],
+  ] as const) {
+    if (objectId && !findObject(objectId)) return `No scene object with id ${objectId} for ${field}.`;
+  }
+  if (action.type === 'subsequence') {
+    if (!action.cinematicId) return 'A subsequence action requires cinematicId.';
+    if (action.cinematicId === cinematicId) return 'A cinematic cannot contain itself as a subsequence.';
+    if (!findCinematic(action.cinematicId)) return `No child cinematic with id ${action.cinematicId}.`;
+  }
+  return undefined;
+};
+const mergeCinematicActionPatch = (action: CinematicAction, patch: Partial<Omit<CinematicAction, 'id'>>): CinematicAction => {
+  const merged = { ...action } as CinematicAction & Record<string, unknown>;
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value === undefined) delete merged[key];
+    else merged[key] = value;
+  });
+  return merged;
+};
 const findBlueprint = (id: string) => store().blueprints.find((blueprint) => blueprint.id === id);
 const findScene = (id: string) => store().scenes.find((scene) => scene.id === id);
 const findAsset = (id: string) => store().assets.find((asset) => asset.id === id);
@@ -803,6 +901,63 @@ const rawEngineTools = {
     description: 'List the current project snapshot. Defaults to tiny; request compact/standard/full only when extra graph or asset detail is needed.',
     inputSchema: z.object({ detail: z.enum(['tiny', 'compact', 'standard', 'full']).optional(), limit: z.number().int().min(1).max(200).optional() }),
     execute: async ({ detail, limit }) => JSON.stringify(buildSceneSnapshot({ detail: detail as SceneSnapshotDetail | undefined, limit })),
+  }),
+
+  inspect_cinematic: tool({
+    description:
+      'Inspect a Film Mode sequence before refining it. Summary mode returns every requested action id/type/binding/key count/key times. Full mode returns raw action fields and paginated key arrays; pass actionId for one exact track so the result stays focused.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      actionId: z.string().optional(),
+      objectId: z.string().optional().describe('Optional target-object filter.'),
+      type: cinematicActionTypeSchema.optional(),
+      detail: z.enum(['summary', 'full']).optional(),
+      offset: z.number().int().min(0).optional(),
+      limit: z.number().int().min(1).max(50).optional(),
+      keyOffset: z.number().int().min(0).optional(),
+      keyLimit: z.number().int().min(1).max(100).optional(),
+    }),
+    execute: async ({ cinematicId, actionId, objectId, type, detail = 'summary', offset = 0, limit = 12, keyOffset = 0, keyLimit = 12 }) => {
+      const cinematic = findCinematic(cinematicId);
+      if (!cinematic) return `No cinematic with id ${cinematicId}.`;
+      if (actionId && !cinematic.actions.some((action) => action.id === actionId)) return `No cinematic action with id ${actionId}.`;
+      const filtered = [...cinematic.actions]
+        .filter((action) => (!actionId || action.id === actionId) && (!objectId || action.objectId === objectId) && (!type || action.type === type))
+        .sort((a, b) => a.time - b.time);
+      const page = filtered.slice(offset, offset + limit);
+      const actions = page.map((action) => {
+        if (detail !== 'full' && !actionId) return summarizeCinematicAction(action);
+        const full = { ...action } as CinematicAction & Record<string, unknown>;
+        const keyField = action.type === 'camera' ? 'keyframes' : action.type === 'transform' ? 'transformKeyframes' : action.type === 'material' ? 'materialKeyframes' : undefined;
+        if (keyField) {
+          const allKeys = (action[keyField] ?? []) as Array<{ time: number }>;
+          (full as Record<string, unknown>)[keyField] = allKeys.slice(keyOffset, keyOffset + keyLimit);
+          full.keyPage = { offset: keyOffset, returned: Math.min(keyLimit, Math.max(0, allKeys.length - keyOffset)), total: allKeys.length };
+        }
+        full.binding = cinematicBinding(action.objectId);
+        full.references = summarizeCinematicAction(action).references;
+        return full;
+      });
+      return JSON.stringify({
+        cinematic: {
+          id: cinematic.id,
+          name: cinematic.name,
+          duration: cinematic.duration,
+          frameRate: cinematic.frameRate ?? 24,
+          folder: cinematic.folder ?? null,
+          takeOf: cinematic.takeOf ?? null,
+          takeNumber: cinematic.takeNumber ?? null,
+          autoplay: Boolean(cinematic.autoplay),
+          skippable: cinematic.skippable ?? true,
+          look: cinematic.look ?? null,
+          markers: cinematic.markers ?? [],
+          actionCount: cinematic.actions.length,
+        },
+        filters: { actionId: actionId ?? null, objectId: objectId ?? null, type: type ?? null, detail },
+        actionPage: { offset, returned: page.length, matched: filtered.length, total: cinematic.actions.length },
+        actions,
+      });
+    },
   }),
 
   inspect_object: tool({
@@ -3047,6 +3202,141 @@ const rawEngineTools = {
     },
   }),
 
+  set_cinematic_keyframe: tool({
+    description:
+      'Safely add or replace one Film Mode key at an absolute sequence time. Object mode creates/reuses the object\'s Transform track and preserves sampled fields you omit. Camera mode creates/reuses an animated camera track. A key on the same sequence frame is replaced, never duplicated.',
+    inputSchema: z.discriminatedUnion('trackType', [
+      z.object({
+        trackType: z.literal('object'),
+        cinematicId: z.string(),
+        objectId: z.string(),
+        actionId: z.string().optional().describe('Existing Transform action id from inspect_cinematic. Omit to reuse this object\'s current track or create one.'),
+        time: z.number().min(0).describe('Absolute seconds from sequence start.'),
+        position: vec3.optional().describe('LOCAL/parent-relative position. Omit to preserve the sampled/current value.'),
+        rotation: vec3.optional().describe('LOCAL Euler rotation in radians. Omit to preserve the sampled/current value.'),
+        scale: vec3.optional().describe('LOCAL scale. Omit to preserve the sampled/current value.'),
+        interpolation: z.enum(['smooth', 'linear', 'hold']).optional(),
+        label: z.string().optional(),
+        space: z.literal('local').optional().describe('Object cinematic keys are always local/parent-relative.'),
+      }),
+      z.object({
+        trackType: z.literal('camera'),
+        cinematicId: z.string(),
+        actionId: z.string().optional().describe('Existing animated Camera action id from inspect_cinematic. Omit to reuse/create the main animated camera track.'),
+        time: z.number().min(0).describe('Absolute seconds from sequence start.'),
+        position: vec3.describe('Camera world position.'),
+        lookAt: vec3.describe('World point framed by the camera.'),
+        fov: z.number().min(10).max(140),
+        focusDistance: z.number().min(0).optional(),
+        aperture: z.number().min(0).max(12).optional(),
+        interpolation: z.enum(['smooth', 'linear', 'hold']).optional(),
+        label: z.string().optional(),
+      }),
+    ]),
+    execute: async (input) => {
+      const cinematic = findCinematic(input.cinematicId);
+      if (!cinematic) return `No cinematic with id ${input.cinematicId}.`;
+      if (input.trackType === 'object') {
+        const object = findObject(input.objectId);
+        if (!object) return `No object with id ${input.objectId}.`;
+        const requested = input.actionId ? cinematic.actions.find((action) => action.id === input.actionId) : undefined;
+        if (input.actionId && (!requested || requested.type !== 'transform' || requested.objectId !== input.objectId)) {
+          return `Action ${input.actionId} is not a Transform track bound to ${input.objectId}.`;
+        }
+        const existing = requested ?? cinematic.actions.find((action) => action.type === 'transform' && action.objectId === input.objectId && action.transformKeyframes?.length)
+          ?? cinematic.actions.find((action) => action.type === 'transform' && action.objectId === input.objectId);
+        const sampled = cinematicTransformsAt(cinematic, selectActiveObjects(store()), input.time)[input.objectId];
+        const base = sampled ?? object.transform;
+        const actionId = store().addCinematicTransformKeyframe(input.cinematicId, input.objectId, input.time, {
+          position: input.position ? asVec3(input.position) : [...base.position],
+          rotation: input.rotation ? asVec3(input.rotation) : [...base.rotation],
+          scale: input.scale ? asVec3(input.scale) : [...base.scale],
+        }, existing?.id);
+        if (!actionId) return `Couldn't key ${object.name}.`;
+        const patch: Partial<Omit<CinematicAction, 'id'>> = {};
+        if (input.interpolation !== undefined) patch.interpolation = input.interpolation;
+        if (input.label !== undefined) patch.label = input.label;
+        if (Object.keys(patch).length) store().updateCinematicAction(input.cinematicId, actionId, patch);
+        return `Set object key at ${input.time}s on Transform track ${actionId} for ${object.name} (${activeObjectPath(object.id)}).`;
+      }
+      const requested = input.actionId ? cinematic.actions.find((action) => action.id === input.actionId) : undefined;
+      if (input.actionId && (!requested || requested.type !== 'camera')) return `Action ${input.actionId} is not a Camera track.`;
+      const actionId = store().addCinematicCameraKeyframe(input.cinematicId, input.time, {
+        position: asVec3(input.position),
+        lookAt: asVec3(input.lookAt),
+        fov: input.fov,
+        focusDistance: input.focusDistance,
+        aperture: input.aperture,
+      }, requested?.id);
+      if (!actionId) return `Couldn't add camera key to cinematic ${input.cinematicId}.`;
+      const patch: Partial<Omit<CinematicAction, 'id'>> = {};
+      if (input.interpolation !== undefined) patch.interpolation = input.interpolation;
+      if (input.label !== undefined) patch.label = input.label;
+      if (Object.keys(patch).length) store().updateCinematicAction(input.cinematicId, actionId, patch);
+      return `Set camera key at ${input.time}s on Camera track ${actionId}.`;
+    },
+  }),
+
+  delete_cinematic_keyframe: tool({
+    description:
+      'Delete one camera/object key by action id and absolute time (matched on the sequence frame). Object tracks are removed when their final key is deleted; a final camera key becomes a static shot so its framing is preserved.',
+    inputSchema: z.object({
+      cinematicId: z.string(),
+      actionId: z.string(),
+      time: z.number().min(0),
+    }),
+    execute: async ({ cinematicId, actionId, time }) => {
+      const cinematic = findCinematic(cinematicId);
+      if (!cinematic) return `No cinematic with id ${cinematicId}.`;
+      const action = cinematic.actions.find((item) => item.id === actionId);
+      if (!action) return `No cinematic action with id ${actionId}.`;
+      if (action.type !== 'camera' && action.type !== 'transform') return `Action ${actionId} is ${action.type}, not a camera/object key track.`;
+      const frameRate = Math.max(1, cinematic.frameRate ?? 24);
+      let removedTime: number;
+      if (action.type === 'camera') {
+        const frames = action.keyframes;
+        if (!frames?.length) return `Action ${actionId} has no keyframes to delete.`;
+        const index = frames.findIndex((frame) => Math.round(frame.time * frameRate) === Math.round(time * frameRate));
+        if (index < 0) return `No key on action ${actionId} at sequence frame ${Math.round(time * frameRate)} (${time}s).`;
+        const removed = frames[index];
+        const remaining = frames.filter((_, frameIndex) => frameIndex !== index);
+        removedTime = removed.time;
+        if (remaining.length) {
+          const minTime = Math.min(...remaining.map((frame) => frame.time));
+          const maxTime = Math.max(...remaining.map((frame) => frame.time));
+          store().updateCinematicAction(cinematicId, actionId, { keyframes: remaining, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
+        } else {
+          store().updateCinematicAction(cinematicId, actionId, {
+            keyframes: undefined,
+            time: removed.time,
+            duration: 0.5,
+            position: removed.position,
+            lookAt: removed.lookAt,
+            fov: removed.fov,
+            focusDistance: removed.focusDistance ?? action.focusDistance,
+            aperture: removed.aperture ?? action.aperture,
+          });
+        }
+      } else {
+        const frames = action.transformKeyframes;
+        if (!frames?.length) return `Action ${actionId} has no keyframes to delete.`;
+        const index = frames.findIndex((frame) => Math.round(frame.time * frameRate) === Math.round(time * frameRate));
+        if (index < 0) return `No key on action ${actionId} at sequence frame ${Math.round(time * frameRate)} (${time}s).`;
+        const removed = frames[index];
+        const remaining = frames.filter((_, frameIndex) => frameIndex !== index);
+        removedTime = removed.time;
+        if (remaining.length) {
+          const minTime = Math.min(...remaining.map((frame) => frame.time));
+          const maxTime = Math.max(...remaining.map((frame) => frame.time));
+          store().updateCinematicAction(cinematicId, actionId, { transformKeyframes: remaining, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
+        } else {
+          store().removeCinematicAction(cinematicId, actionId);
+        }
+      }
+      return `Deleted key at ${removedTime}s from cinematic action ${actionId}.`;
+    },
+  }),
+
   create_cinematic: tool({
     description:
       'Create a Film Mode cinematic timeline in the active scene. Use this for AI-authored cutscenes: camera cuts, object transform tracks, temporary spawns, animation montages, sounds, custom events, visibility, and fades.',
@@ -3059,10 +3349,15 @@ const rawEngineTools = {
       actions: z.array(cinematicActionSchema).optional(),
     }),
     execute: async ({ name, duration = 8, frameRate, folder, autoplay, actions = [] }) => {
+      const normalized = actions.map((action) => normalizeCinematicAction(action));
+      for (const action of normalized) {
+        const error = validateCinematicAction(action);
+        if (error) return `Cannot create cinematic: ${error}`;
+      }
       const id = store().createCinematic(name ?? 'AI Cinematic', duration);
       store().updateCinematic(id, { autoplay, frameRate, folder });
-      const created = actions
-        .map((action) => store().addCinematicAction(id, normalizeCinematicAction(action)))
+      const created = normalized
+        .map((action) => store().addCinematicAction(id, action))
         .filter(Boolean);
       return `Created cinematic "${name ?? 'AI Cinematic'}" with cinematicId ${id} and ${created.length} actions.`;
     },
@@ -3133,17 +3428,21 @@ const rawEngineTools = {
 
   add_cinematic_action: tool({
     description:
-      'Add one timed action to an existing Film Mode cinematic. Use after create_cinematic when iterating on a cutscene.',
+      'Add one distinct timed action to an existing Film Mode cinematic. For camera/object key editing prefer set_cinematic_keyframe, which reuses the correct track instead of creating a duplicate.',
     inputSchema: z.object({ cinematicId: z.string(), action: cinematicActionSchema }),
     execute: async ({ cinematicId, action }) => {
-      const id = store().addCinematicAction(cinematicId, normalizeCinematicAction(action));
+      if (!findCinematic(cinematicId)) return `No cinematic with id ${cinematicId}.`;
+      const normalized = normalizeCinematicAction(action);
+      const error = validateCinematicAction(normalized, cinematicId);
+      if (error) return `Cannot add cinematic action: ${error}`;
+      const id = store().addCinematicAction(cinematicId, normalized);
       return id ? `Added cinematic action ${id}.` : `No cinematic with id ${cinematicId}.`;
     },
   }),
 
   update_cinematic_action: tool({
     description:
-      'Update an existing Film Mode timeline action/shot. Use this to retime camera cuts, switch hard cuts to blends (blend:0 = hard cut, blend > 0 = smooth blend), change zoom/FOV, adjust focus/aperture, rename shots, or edit keyframes. Get action ids from the snapshot cameraShots list or list_scene.',
+      'Update an existing Film Mode timeline action/shot. Inspect it first with inspect_cinematic. Use this to retime beats, switch hard cuts to blends, change framing/constraints, or replace a complete keyframe array; use set_cinematic_keyframe for safe incremental keys.',
     inputSchema: z.object({
       cinematicId: z.string(),
       actionId: z.string(),
@@ -3152,9 +3451,36 @@ const rawEngineTools = {
     execute: async ({ cinematicId, actionId, patch }) => {
       const cinematic = store().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
       if (!cinematic) return `No cinematic with id ${cinematicId}.`;
-      if (!cinematic.actions.some((action) => action.id === actionId)) return `No cinematic action with id ${actionId}.`;
-      store().updateCinematicAction(cinematicId, actionId, normalizeCinematicActionPatch(patch));
+      const action = cinematic.actions.find((item) => item.id === actionId);
+      if (!action) return `No cinematic action with id ${actionId}.`;
+      const normalized = normalizeCinematicActionPatch(patch);
+      const error = validateCinematicAction(mergeCinematicActionPatch(action, normalized), cinematicId);
+      if (error) return `Cannot update cinematic action: ${error}`;
+      store().updateCinematicAction(cinematicId, actionId, normalized);
       return `Updated cinematic action ${actionId}.`;
+    },
+  }),
+
+  delete_cinematic_action: tool({
+    description:
+      'Delete one Film Mode action or camera shot by id. This removes only the timeline beat; it does not delete a scene camera object.',
+    inputSchema: z.object({ cinematicId: z.string(), actionId: z.string() }),
+    execute: async ({ cinematicId, actionId }) => {
+      const cinematic = store().activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+      if (!cinematic) return `No cinematic with id ${cinematicId}.`;
+      if (!cinematic.actions.some((action) => action.id === actionId)) return `No cinematic action with id ${actionId}.`;
+      store().removeCinematicAction(cinematicId, actionId);
+      return `Deleted cinematic action ${actionId}.`;
+    },
+  }),
+
+  delete_cinematic: tool({
+    description: 'Delete an entire Film Mode sequence by id. Use delete_cinematic_action when only one shot/beat should be removed.',
+    inputSchema: z.object({ cinematicId: z.string() }),
+    execute: async ({ cinematicId }) => {
+      if (!store().activeScene()?.cinematics?.some((item) => item.id === cinematicId)) return `No cinematic with id ${cinematicId}.`;
+      store().deleteCinematic(cinematicId);
+      return `Deleted cinematic ${cinematicId}.`;
     },
   }),
 
@@ -3244,7 +3570,7 @@ const rawEngineTools = {
 
   animate_on_timeline: tool({
     description:
-      'Create an object animation on a Film Mode timeline. This adds a transform track/keyframed clip for moving, rotating, and/or scaling a scene object over time. Use for prompts like "make mesh X move/turn/grow from time A to B".',
+      'Create or extend one editable object Transform track with two full keys. Reuses an existing binding instead of creating duplicate legacy clips. Use for prompts like "make mesh X move/turn/grow from time A to B"; use set_cinematic_keyframe for paths with more keys.',
     inputSchema: z.object({
       objectId: z.string(),
       cinematicId: z.string().optional().describe('Existing cinematic id. Omit to create/use an AI Cinematic.'),
@@ -3257,10 +3583,11 @@ const rawEngineTools = {
       toRotation: vec3.optional(),
       fromScale: vec3.optional(),
       toScale: vec3.optional(),
+      interpolation: z.enum(['smooth', 'linear', 'hold']).optional(),
       label: z.string().optional(),
       autoplay: z.boolean().optional(),
     }),
-    execute: async ({ objectId, cinematicId, name, startTime = 0, duration = 2, fromPosition, toPosition, fromRotation, toRotation, fromScale, toScale, label, autoplay }) => {
+    execute: async ({ objectId, cinematicId, name, startTime = 0, duration = 2, fromPosition, toPosition, fromRotation, toRotation, fromScale, toScale, interpolation, label, autoplay }) => {
       const object = findObject(objectId);
       if (!object) return `No object with id ${objectId}.`;
       let id = cinematicId;
@@ -3269,20 +3596,27 @@ const rawEngineTools = {
         id = store().activeScene()?.cinematics?.[0]?.id ?? store().createCinematic(name ?? 'AI Timeline Animation', Math.max(4, startTime + duration));
       }
       store().updateCinematic(id, { autoplay, duration: Math.max(store().activeScene()?.cinematics?.find((cinematic) => cinematic.id === id)?.duration ?? 0.5, startTime + duration) });
-      const actionId = store().addCinematicAction(id, {
-        type: 'transform',
-        time: startTime,
-        duration,
-        label: label ?? `Animate ${object.name}`,
-        objectId,
-        fromPosition: fromPosition ? asVec3(fromPosition) : object.transform.position,
-        toPosition: toPosition ? asVec3(toPosition) : undefined,
-        fromRotation: fromRotation ? asVec3(fromRotation) : object.transform.rotation,
-        toRotation: toRotation ? asVec3(toRotation) : undefined,
-        fromScale: fromScale ? asVec3(fromScale) : object.transform.scale,
-        toScale: toScale ? asVec3(toScale) : undefined,
+      const cinematic = findCinematic(id);
+      const existing = cinematic?.actions.find((action) => action.type === 'transform' && action.objectId === objectId && action.transformKeyframes?.length)
+        ?? cinematic?.actions.find((action) => action.type === 'transform' && action.objectId === objectId);
+      const startPose = {
+        position: fromPosition ? asVec3(fromPosition) : asVec3([...object.transform.position]),
+        rotation: fromRotation ? asVec3(fromRotation) : asVec3([...object.transform.rotation]),
+        scale: fromScale ? asVec3(fromScale) : asVec3([...object.transform.scale]),
+      };
+      const endPose = {
+        position: toPosition ? asVec3(toPosition) : asVec3([...startPose.position]),
+        rotation: toRotation ? asVec3(toRotation) : asVec3([...startPose.rotation]),
+        scale: toScale ? asVec3(toScale) : asVec3([...startPose.scale]),
+      };
+      const actionId = store().addCinematicTransformKeyframe(id, objectId, startTime, startPose, existing?.id);
+      if (!actionId) return `Couldn't add timeline animation.`;
+      store().addCinematicTransformKeyframe(id, objectId, startTime + duration, endPose, actionId);
+      store().updateCinematicAction(id, actionId, {
+        label: label ?? existing?.label ?? `Animate ${object.name}`,
+        interpolation: interpolation ?? existing?.interpolation ?? 'smooth',
       });
-      return actionId ? `Added timeline animation ${actionId} for ${object.name} in cinematic ${id}.` : `Couldn't add timeline animation.`;
+      return `Added two editable keys to Transform track ${actionId} for ${object.name} in cinematic ${id}.`;
     },
   }),
 
@@ -4404,6 +4738,24 @@ const rawEngineTools = {
     },
   }),
 
+  create_reflection_probe: tool({
+    description:
+      'Create a dedicated local Reflection Probe entity in one call (Unreal Sphere Reflection Capture style). Place one near reflective rooms, cars, polished floors, or wet areas; it is immediately selected and ready to tune.',
+    inputSchema: z.object({
+      position: vec3.optional(),
+      radius: z.number().positive().optional(),
+      resolution: z.number().optional(),
+      intensity: z.number().min(0).optional(),
+      refresh: z.enum(['static', 'realtime']).optional(),
+      giIntensity: z.number().min(0).optional(),
+    }),
+    execute: async ({ position, radius, resolution, intensity, refresh, giIntensity }) => {
+      const id = store().createReflectionProbe(position ? asVec3(position) : undefined);
+      store().setReflectionProbe(id, { enabled: true, radius, resolution, intensity, refresh, giIntensity });
+      return `Created Reflection Probe ${id}.`;
+    },
+  }),
+
   set_reflection_probe: tool({
     description:
       'Add or configure a LOCAL reflection probe on an object (Unity Reflection Probe / Unreal Sphere Reflection Capture). It captures a cubemap of the surroundings at the object\'s position and feeds it as the reflection/environment map for every metallic/glossy mesh within `radius` — so mirrors, polished floors, chrome, glass, and cars reflect their REAL local surroundings (room walls, nearby props) instead of only the single global scene sky. Nearest probe wins where several overlap. Place a probe in the middle of each reflective area (a room, a showroom, a puddle) and set radius to cover it. Use enabled:false to remove it. Default refresh is "static" (baked once — near-free at runtime); use "realtime" only when the surroundings move.',
@@ -4687,6 +5039,24 @@ const rawEngineTools = {
       if (!findObject(id)) return `No object with id ${id}.`;
       const ids = store().duplicateObject(id, { count, offset: offset ? asVec3(offset) : undefined });
       return `Created ${ids.length} copy(ies): ${ids.join(', ')}.`;
+    },
+  }),
+
+  create_instanced_grid: tool({
+    description:
+      'Create a GPU-instanced rectangular grid from one selected/static imported model. The copies stay individually editable in the scene, but Play/export collapses matching safe models into real InstancedMesh draws. Use this for repeated props, pillars, lamps, rocks, or architecture. The source must be root-level with baked opaque materials and no physics/script/animator.',
+    inputSchema: z.object({
+      sourceId: z.string(),
+      rows: z.number().int().min(1).max(20).optional(),
+      columns: z.number().int().min(1).max(20).optional(),
+      spacingX: z.number().positive().optional(),
+      spacingZ: z.number().positive().optional(),
+    }),
+    execute: async ({ sourceId, rows, columns, spacingX, spacingZ }) => {
+      if (!findObject(sourceId)) return `No object with id ${sourceId}.`;
+      const ids = store().createInstancedGrid(sourceId, { rows, columns, spacingX, spacingZ });
+      if (!ids.length) return 'That object is not safe for GPU instancing, or the grid must contain between 4 and 400 cells.';
+      return `Created a ${rows ?? 3}×${columns ?? 3} GPU-instanced model grid (${ids.length} editable objects).`;
     },
   }),
 

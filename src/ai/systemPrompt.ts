@@ -16,6 +16,23 @@ const DEFAULT_SNAPSHOT_LIMIT = 16;
 const limitItems = <T>(items: T[], limit: number): Array<T | { omitted: number; total: number }> =>
   items.length > limit ? [...items.slice(0, limit), { omitted: items.length - limit, total: items.length }] : items;
 
+const sceneObjectPath = (
+  objects: Array<{ id: string; name: string; parentId?: string }>,
+  objectId: string,
+): string | null => {
+  const names: string[] = [];
+  const visited = new Set<string>();
+  let current = objects.find((object) => object.id === objectId);
+  if (!current) return null;
+  while (current && !visited.has(current.id)) {
+    names.unshift(current.name);
+    visited.add(current.id);
+    current = current.parentId ? objects.find((object) => object.id === current!.parentId) : undefined;
+  }
+  if (current) names.unshift('[cyclic hierarchy]');
+  return names.join(' / ');
+};
+
 /** Compact, token-friendly snapshot of the current project for the model. */
 export function buildSceneSnapshot(options: SceneSnapshotOptions = {}) {
   const detail = options.detail ?? 'tiny';
@@ -564,32 +581,113 @@ export function buildSceneSnapshot(options: SceneSnapshotOptions = {}) {
         : null,
       ambientSoundId: scene.ambientSoundId ?? null,
       musicSoundId: scene.musicSoundId ?? null,
-      cinematics: (scene.cinematics ?? []).map((cinematic) => ({
-        id: cinematic.id,
-        name: cinematic.name,
-        duration: cinematic.duration,
-        autoplay: Boolean(cinematic.autoplay),
-        actionCount: cinematic.actions.length,
-        cameraShots: limitItems(
-          cinematic.actions
-            .filter((action) => action.type === 'camera')
-            .sort((a, b) => a.time - b.time)
-            .map((action) => ({
-              id: action.id,
-              label: action.label ?? null,
-              time: action.time,
-              duration: action.duration ?? null,
-              objectId: action.objectId ?? null,
-              fov: action.fov ?? action.keyframes?.[0]?.fov ?? null,
-              blend: action.blend ?? 0,
-              cut: (action.blend ?? 0) <= 0 ? 'hard' : 'blend',
-              keyframes: action.keyframes?.length ?? 0,
-            })),
-          cinematicSummaryLimit,
-        ),
-        look: cinematic.look,
-      })),
+      cinematics: (scene.cinematics ?? []).map((cinematic, cinematicIndex) => {
+        const includeActionSummaries = detail !== 'tiny'
+          || (scene.id === state.activeSceneId && (state.activeCinematicId ? cinematic.id === state.activeCinematicId : cinematicIndex === 0));
+        const binding = (objectId: string | undefined) => {
+          if (!objectId) return null;
+          const object = scene.objects.find((item) => item.id === objectId);
+          return {
+            id: objectId,
+            name: object?.name ?? null,
+            kind: object?.kind ?? null,
+            path: sceneObjectPath(scene.objects, objectId),
+            status: object ? 'ok' : 'missing',
+          };
+        };
+        const keyTimes = (times: number[]) => limitItems([...times].sort((a, b) => a - b), Math.min(cinematicSummaryLimit, 12));
+        const actionTypeCounts = cinematic.actions.reduce<Record<string, number>>((counts, action) => {
+          counts[action.type] = (counts[action.type] ?? 0) + 1;
+          return counts;
+        }, {});
+        return {
+          id: cinematic.id,
+          name: cinematic.name,
+          duration: cinematic.duration,
+          frameRate: cinematic.frameRate ?? 24,
+          folder: cinematic.folder ?? null,
+          takeOf: cinematic.takeOf ?? null,
+          takeNumber: cinematic.takeNumber ?? null,
+          autoplay: Boolean(cinematic.autoplay),
+          skippable: cinematic.skippable ?? true,
+          actionCount: cinematic.actions.length,
+          actionTypeCounts,
+          markers: limitItems(
+            [...(cinematic.markers ?? [])]
+              .sort((a, b) => a.time - b.time)
+              .map((marker) => ({ id: marker.id, time: marker.time, label: marker.label, determinismFence: marker.determinismFence ?? false })),
+            cinematicSummaryLimit,
+          ),
+          cameraShots: limitItems(
+            cinematic.actions
+              .filter((action) => action.type === 'camera')
+              .sort((a, b) => a.time - b.time)
+              .map((action) => ({
+                id: action.id,
+                label: action.label ?? null,
+                time: action.time,
+                duration: action.duration ?? null,
+                binding: binding(action.objectId),
+                fov: action.fov ?? action.keyframes?.[0]?.fov ?? null,
+                blend: action.blend ?? 0,
+                cut: (action.blend ?? 0) <= 0 ? 'hard' : 'blend',
+                interpolation: action.interpolation ?? 'smooth',
+                keyframes: action.keyframes?.length ?? 0,
+                keyframeTimes: keyTimes(action.keyframes?.map((frame) => frame.time) ?? []),
+              })),
+            cinematicSummaryLimit,
+          ),
+          objectTracks: includeActionSummaries ? limitItems(
+            cinematic.actions
+              .filter((action) => action.type === 'transform')
+              .sort((a, b) => a.time - b.time)
+              .map((action) => ({
+                id: action.id,
+                label: action.label ?? null,
+                time: action.time,
+                duration: action.duration ?? null,
+                binding: binding(action.objectId),
+                interpolation: action.interpolation ?? action.ease ?? 'smooth',
+                mode: action.transformKeyframes?.length ? 'keyframed' : 'legacy-range',
+                keyframes: action.transformKeyframes?.length ?? 0,
+                keyframeTimes: keyTimes(action.transformKeyframes?.map((frame) => frame.time) ?? []),
+              })),
+            cinematicSummaryLimit,
+          ) : [],
+          otherActions: includeActionSummaries ? limitItems(
+            cinematic.actions
+              .filter((action) => action.type !== 'camera' && action.type !== 'transform')
+              .sort((a, b) => a.time - b.time)
+              .map((action) => ({
+                id: action.id,
+                type: action.type,
+                label: action.label ?? null,
+                time: action.time,
+                duration: action.duration ?? null,
+                binding: binding(action.objectId),
+                keyframes: action.materialKeyframes?.length ?? 0,
+                keyframeTimes: keyTimes(action.materialKeyframes?.map((frame) => frame.time) ?? []),
+              })),
+            cinematicSummaryLimit,
+          ) : [],
+          look: cinematic.look,
+        };
+      }),
     })),
+    filmMode: {
+      activeCinematicId: state.activeCinematicId || null,
+      playhead: state.runtimeCinematic
+        ? { sequenceId: state.runtimeCinematic.sequenceId, time: state.runtimeCinematic.time, source: 'play' }
+        : state.editorCinematicPreview
+          ? { sequenceId: state.editorCinematicPreview.sequenceId, time: state.editorCinematicPreview.time, source: 'preview' }
+          : null,
+      selectedKeyframe: state.selectedCinematicKeyframe ?? null,
+      selectedObjectIds: state.selectedObjectIds.length ? state.selectedObjectIds : state.selectedObjectId ? [state.selectedObjectId] : [],
+      autoKey: state.cinematicRecording,
+      liveCameraRecord: state.playtimeCameraRecording,
+      viewportMode: state.cinematicViewportMode,
+      pathMode: state.cinematicPathMode,
+    },
     activeEnvironment,
     // Open-world activation streaming for the active scene (undefined = off).
     streaming: activeScene?.streaming ?? null,
@@ -714,6 +812,8 @@ You help the user build their game by calling tools that directly modify their s
 ## Fast level building (layout tools)
 - These bulk tools exist so you can block out and arrange a level in a FEW calls instead of one-object-at-a-time. The snapshot now includes each object's \`parentId\`, \`rotation\` and \`scale\` so you can reason about hierarchy and arrangement before moving things.
 - **duplicate_object(id, count?, offset?)** — clone an object AND all its children \`count\` times, each copy stepped by \`offset\` (default [0.8,0,0.8]). Use for rows/columns of identical things (a picket fence, a row of columns, a stack of crates). Returns the new root ids. Prefer this over calling create_object repeatedly.
+- **create_instanced_grid(sourceId, rows?, columns?, spacingX?, spacingZ?)** — create an editable repeated-model grid that Play/export collapses into real GPU instances. Use for safe static imported props, lamps, pillars, rocks, and architecture.
+- **create_reflection_probe(position?, radius?, ...)** — create a dedicated local reflection capture in one call (Unreal Sphere Reflection Capture style). Place one per reflective room/area; use set_reflection_probe for tuning.
 - **spawn_grid(kind, rows, cols, spacing?, origin?, color?, physics?)** — drop a rows×cols grid of one primitive on the X/Z plane in a single call. The fastest way to tile a floor, raise a wall of crates, or scatter pillars. Cap rows×cols at 400. Pass physics {bodyType:"fixed"} for static level geometry.
 - **align_objects(ids, axis, mode, value?)** — make objects share one coordinate. axis x|y|z; mode min/max/center (group bounds), first (match the first id), or value (explicit \`value\`). E.g. sit a set of props on the floor with axis "y", mode "value", value 0.
 - **distribute_objects(ids, axis, spacing?)** — evenly space ≥3 objects along an axis; omit spacing to spread them across their current span. Pairs well with align_objects to make tidy rows.
@@ -946,13 +1046,17 @@ export const COMPACT_ENGINE_GUIDE = `You are Feather Assistant, the in-editor AI
 
 Rules:
 - Active-scene tools edit only Snapshot.objects. Use ids from the snapshot or inspection tools.
-- Start with the tiny snapshot. Call list_scene("compact"/"standard") or inspect_object/inspect_blueprint/inspect_animator_controller only when needed. Use "full" sparingly.
+- Start with the tiny snapshot. Call list_scene("compact"/"standard") or inspect_object/inspect_blueprint/inspect_animator_controller only when needed. For an existing cutscene, call inspect_cinematic before changing its tracks. Use "full" sparingly.
 - Prefer high-level/bulk tools over many small calls: create_character_pawn, create_third_person_template, create_spline_studio_template (asset-free polished Spline-like product stage with candy materials + kinetic motion), create_meadow_template (playable BOTW-style interactive-vegetation slice — character in a rolling meadow of grass/wildflowers that part around them), create_cube_realm_template (Cubelands-inspired action slice — combo combat, day cycle, shrine puzzle), create_first_person_template, create_driving_template, create_timeline_showcase_template (six inspectable Timeline mechanisms plus a reusable Vault Door prefab), create_storyboard_cinematic, create_ui_template, add_gameplay_kit, spawn_grid, duplicate_object, group_objects, add_ui_preset.
 - For "fix", "debug", or "why" requests, inspect the focused object/blueprint/controller first, then make the smallest useful tool change.
 - Objects: kind + transform. +Y is up. Physics must be enabled for collision; fixed = static, dynamic = moves/falls, kinematic = scripted mover, trigger = overlap only.
 - Scene Settings: use set_scene_environment for sky/fog/sun/base environment light, and set_scene_audio for ambientSoundId/musicSoundId loops. They are scene-level settings, not Blueprint nodes. For atmospheric/cinematic/foggy/dusty moods prefer **volumetric fog** (volumetricFogEnabled + volumetricFogDensity/Color/scattering/sunStrength) over flat linear fog — it adds height-based mist, a sun glow, and god-ray shafts (shafts show on High/Epic quality). It auto-replaces linear fog when on.
 - Open-world terrain: use create_terrain/update_terrain for large landscapes instead of tiling plane objects. It streams render chunks around the camera/player, streams Rapier heightfield physics chunks near active bodies, supports material layers, sculpt_terrain, paint_terrain, and instanced/custom foliage settings.
 - Film Mode cinematics: for complete intros/reveals/handoffs, prefer **create_storyboard_cinematic** first — it creates a new Sequencer-style sequence with film look, fades, shots or a smooth camera path, optional autoplay, and an optional end event in one safe call. Use **duplicate_cinematic_take** before alternate versions and **add_cinematic_marker** for named beats/user notes. Use create_cinematic/add_cinematic_action when you need custom low-level beats: camera cuts, temporary cinematic-only spawns, animation montages, sounds, custom events, visibility, fades, **material/property tracks** (type material with toMaterial/materialKeyframes), **time dilation** (type timeDilation with timeScale/fromTimeScale/toTimeScale), and **subsequences** (type subsequence with cinematicId). Camera beats take position+lookAt+fov. For a MOVING camera, prefer a single camera beat with a keyframes array (each keyframe has time, position, lookAt, fov) — set interpolation:"linear" for straight constant moves or "hold" for stepped keys. For separate static shots that cut, prefer **add_cinematic_shot**. **Camera constraints** (single-shot camera beats, no keyframes): set lookAtObjectId to live-aim a tracking shot at a moving object, followObjectId (+ followOffset like [0,2.5,-6]) to ride/trail it, focusObjectId for an auto rack-focus that tracks that object's distance (needs aperture>0), and shake (0–1, with optional shakeFrequency) for a handheld feel — all resolved every frame, so you don't hand-key a camera that just follows a mover. **Text/title beats** (type "text"): on-screen titles/subtitles/lower-thirds/credits via text + textStyle (subtitle/title/lowerThird/credit) + textColor; they fade in/out over the beat's duration. The Cinematic panel's Cameras & Cuts workflow is a shot list: New camera + cut and Cut from viewport create hard cuts by default; use blend > 0 only for an intentional smooth transition. **For transitions between shots, prefer add_cinematic_transition(cinematicId, time, style)** — the one-click way: cut (instant), crossfade (camera smoothly blends from the previous shot into the next), fade (dip to black & back), flash (dip to white & back), wipe (a colour edge sweeps across the frame & back, set direction). fade/flash/wipe drop a centered dip overlay; cut/crossfade retune the camera shot at/after the time. There's a matching one-click Transition bar (Cut · Crossfade · Fade · Flash · Wipe) in the panel. **For shots, prefer add_cinematic_library_shot(cinematicId, shotType, subjectObjectId?, time?)** — prebuilt, auto-framed shots (wide / closeup / low-angle / dolly-in / crane-up / whip-pan / orbit) you can chain to assemble a shot list fast, then fine-tune; the panel has a matching Shot library. The viewport shows the camera path (a dashed route line + a frustum per shot) and shots are draggable in 3D; a one-click Handheld button adds a living-camera wobble (the shake field). FOV is the zoom control (about 28 close, 50 normal, 78 wide). Existing shot ids appear in snapshot cameraShots; use **update_cinematic_action** to retime shots, rename them, change FOV/zoom, or switch hard cuts to blends. To animate an OBJECT, prefer a single transform beat with objectId + a transformKeyframes array. Use animate_on_timeline for simple one-shot object moves. Use create_film_mode_template for a worked, ready-to-watch example: THE SUMMIT, a self-running 32s cold-dawn opening on a mountain peak above a sea of clouds (a hero walks a banner-lined ridge to a dark monolith; the opening shot is a macro rack-focus on RIPPLING CLOTH — three pole flags, two hanging summit banners and the hero's cape are real cloth sheets all driven by the ONE global scene wind; volumetric height fog forms the cloud sea and the low dawn sun drives god rays; runes ignite bottom-up via material tracks as the hero arrives and the core seam pulse-overloads; then at t=24 — on the music hit — a white-cyan fadeDip flash as the monolith visibility-swaps to keyframed debris shards + burst emitters + an expanding shockwave disc with violent shake, and the FEATHER ENGINE pixel-font wordmark strokes fly in from scattered offsets on per-stroke transform tracks, snap into the logo, and do a neon-flicker ignition under a settling reveal crane — with film-style text overlay cards riding the ascent and an orchestral bed + wind/crack/impact/chime SFX wired as \`sound\` beats). The Cinematic panel has Export WebM and Export MP4 (lazy ffmpeg.wasm transcode) buttons that do a **frame-locked offline render** — each frame is rendered at the sequence frame rate with no dropped frames on a hitch, and the film overlay (letterbox / titles / fade / vignette) is composited into the output. The audio lane also draws the waveform of each sound beat so cuts can be synced to the music.
+- **Simple Film Mode workflow:** Add shot → optionally arm Live Camera Record → Play. Live Camera Record possesses the camera during Play (WASD + RMB look + Q/E vertical) and saves a non-destructive new take on Stop. Camera rows have separate Select/Cut/Delete actions; deleting a scene camera freezes linked shot framing. Use **delete_cinematic_action** for one shot/beat and **delete_cinematic** only for a whole sequence.
+- **Object tracks in Film Mode:** **Add Object Track** opens a searchable scene-object picker; untracked objects are first, existing bindings say “On timeline”, the current multi-selection can be added together, and objects can be dropped from the Objects hierarchy. Adding an untracked object creates its Transform row and first key at the playhead; choosing a tracked object reveals that row without adding a duplicate. Each Camera/Object row has a ◆+ key button, and **S** keys the selected object. Tell users this workflow when they ask how to add scene actors to a cinematic.
+- **AI cinematic editing:** inspect_cinematic first, then use **set_cinematic_keyframe** for camera or object keys and **delete_cinematic_keyframe** for one key. These tools create/reuse the correct track, replace a key on the same sequence frame, and keep the sequence duration reachable. Reuse the returned/action snapshot actionId; do not create parallel Transform actions for one object unless the user explicitly wants layered clips. Object key position/rotation/scale are the object's complete **LOCAL (parent-relative)** transform, rotations are radians, and key times are absolute sequence seconds. When changing only position, preserve sampled rotation/scale; one key is a static hold and two or more keys create motion.
+- **Complex cinematic recipe:** create or duplicate a take → add named markers for story beats → author the camera shot list/path → key subject and prop tracks → add animation/material/audio/event/fade/time-dilation beats → set the film look → inspect again and preview. Prefer create_storyboard_cinematic for a strong first pass, then refine surgically with inspected action ids and set_cinematic_keyframe.
 - **Cinematic film look + depth of field (making cutscenes look like film):** call **set_cinematic_look** to add letterbox bars (letterbox: 2.39/2.35 scope, 1.85 flat), film grain (0–1), an extra vignette (0–1), **camera motion blur** (motionBlur 0–1 — pans/dollies smear like film; only applies while the cinematic camera is live), **anamorphic** (0–1, bright neon/highlights smear into a blue horizontal lens-flare streak — the signature neon-cinema look), **chromaticAberration** (0–1, RGB edge fringing / sci-fi look), **lightLeak** (0–1, warm film-burn streaks drifting across the frame), **lensDirt** (0–1, procedural lens grime that lights up where bright neon/highlights hit it), and a real **color grade** rendered as a post-processing shader on the cinematic camera (it grades the 3D render itself, not a flat overlay). The grade is a preset (warm / teal-orange / noir / cool / sepia) that seeds manual params, PLUS optional overrides — exposure, contrast, saturation, temperature (−1 cool .. 1 warm), and a custom tint (hex) + tintAmount — all scaled by gradeIntensity (0–1). Pass a preset for a quick look, or grade:"custom" with the params to dial in your own. All of it shows while it plays and while scrubbing the preview. For **depth of field / focus pulls**, give camera beats (or add_cinematic_shot, or camera keyframes) a focusDistance (world units ahead of the camera) + aperture (bokeh strength; 0 = sharp, 3–6 = shallow). Focus distance blends between shots, so two blended shots with different focusDistance produce a **rack-focus pull** during the dolly; on a keyframe track it splines across keyframes. DoF renders during Play and in the exported game (it's a post effect on the cinematic camera). A good "cinematic" recipe: 2.39 letterbox + a warm or teal-orange grade + light grain, plus a shallow focus on the subject during a slow push-in. Prefer this over hand-built Blueprint timelines for cutscenes. **The player is INVULNERABLE while any cinematic is playing** (the camera/control is locked in the cutscene, so contact/melee/projectile damage to the player is suppressed until it ends) — so an autoplay intro can't get the locked player killed by nearby enemies. A cinematic \`event\` beat fires a named custom event at its timestamp (use it to start gameplay/objectives when the intro ends), and \`autoplay:true\` makes a scene's cinematic play on Play.
 - **Playing a cinematic from gameplay (triggers):** to play a cutscene when the player reaches a spot or interacts (e.g. walks up to a vendor/NPC), wire a "Play Cinematic" node (action.playCinematic, set its cinematicId) to an event: most often "Trigger Enter" on a fixed isTrigger volume (filter otherObjectId to the Player so only the player fires it) → Play Cinematic; or "Interact" (E-key prompt) on the vendor → Play Cinematic for a talk-to-play; or "Collision Enter"/"Custom Event". A typical vendor scene: a fixed trigger box near the vendor with a blueprint Trigger Enter(otherObjectId=Player) → Play Cinematic(vendorScene); add a Set Variable/Destroy/cooldown guard if it should fire only once. This runs in editor Play AND in the exported game/plugin (the player runtime ticks the same graph + renders the cinematic camera/fades). You (the assistant) can also play one immediately with the play_cinematic tool (it enters Play and runs it) — use that to preview, and the Play Cinematic node for in-game triggering.
 - Visual scripting: open/create blueprint, add nodes, connect exec/value handles, attach to object. Pin-to-empty-space search filters and auto-connects compatible picks; A opens search, F frames, Ctrl+Space focuses/restores Scripting. Avoid Update->Spawn unless intentionally continuous. When BUILDING a graph for the user, add "Comment" nodes (message = the explanation, resizable frames, never execute) behind each logical group so the graph is self-documenting.

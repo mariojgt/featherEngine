@@ -347,12 +347,14 @@ export function CinematicPanel() {
   // needs cinematics/track structure, so it must not re-render 60×/s while playing.
   const scene = useStableActiveScene();
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
+  const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
   const objects = useStableActiveObjects();
   const animations = useEditorStore((state) => state.animations);
   const assets = useEditorStore((state) => state.assets);
   const activeCinematicId = useEditorStore((state) => state.activeCinematicId);
   const runtimeCinematic = useEditorStore((state) => state.runtimeCinematic);
   const editorPreview = useEditorStore((state) => state.editorCinematicPreview);
+  const editorPreviewTransforms = useEditorStore((state) => state.editorCinematicPreviewTransforms);
   const createCinematic = useEditorStore((state) => state.createCinematic);
   const updateCinematic = useEditorStore((state) => state.updateCinematic);
   const setCinematicLook = useEditorStore((state) => state.setCinematicLook);
@@ -360,6 +362,8 @@ export function CinematicPanel() {
   const duplicateCinematicTake = useEditorStore((state) => state.duplicateCinematicTake);
   const setActiveCinematic = useEditorStore((state) => state.setActiveCinematic);
   const createObjectWithProps = useEditorStore((state) => state.createObjectWithProps);
+  const deleteObject = useEditorStore((state) => state.deleteObject);
+  const selectObject = useEditorStore((state) => state.selectObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
   const addCinematicMarker = useEditorStore((state) => state.addCinematicMarker);
   const removeCinematicMarker = useEditorStore((state) => state.removeCinematicMarker);
@@ -371,14 +375,27 @@ export function CinematicPanel() {
   const clearCinematicPreview = useEditorStore((state) => state.clearCinematicPreview);
   const playCinematic = useEditorStore((state) => state.playCinematic);
   const stopCinematic = useEditorStore((state) => state.stopCinematic);
+  const addCinematicCameraKeyframe = useEditorStore((state) => state.addCinematicCameraKeyframe);
   const addCinematicTransformKeyframe = useEditorStore((state) => state.addCinematicTransformKeyframe);
   const cinematicRecording = useEditorStore((state) => state.cinematicRecording);
   const setCinematicRecording = useEditorStore((state) => state.setCinematicRecording);
+  const cinematicViewportMode = useEditorStore((state) => state.cinematicViewportMode);
+  const setCinematicViewportMode = useEditorStore((state) => state.setCinematicViewportMode);
+  const cinematicPathMode = useEditorStore((state) => state.cinematicPathMode);
+  const setCinematicPathMode = useEditorStore((state) => state.setCinematicPathMode);
+  const playtimeCameraRecording = useEditorStore((state) => state.playtimeCameraRecording);
+  const playtimeCameraSessionId = useEditorStore((state) => state.playtimeCameraSession?.sequenceId);
+  const setPlaytimeCameraRecording = useEditorStore((state) => state.setPlaytimeCameraRecording);
   const selectedKeyframe = useEditorStore((state) => state.selectedCinematicKeyframe);
   const selectCinematicKeyframe = useEditorStore((state) => state.selectCinematicKeyframe);
   const [selectedActionId, setSelectedActionId] = useState('');
   const [cinematicSearch, setCinematicSearch] = useState('');
   const [snapTimeline, setSnapTimeline] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [objectTrackPickerOpen, setObjectTrackPickerOpen] = useState(false);
+  const [objectTrackSearch, setObjectTrackSearch] = useState('');
+  const [objectTrackDragOver, setObjectTrackDragOver] = useState(false);
+  const objectTrackPickerRef = useRef<HTMLDivElement>(null);
   const [movieStatus, setMovieStatus] = useState('');
   // After a successful WebM/MP4 export, remember where it was saved so we can offer a "Show in
   // folder" button. Cleared at the start of the next export. Only populated on desktop (Tauri's
@@ -432,8 +449,9 @@ export function CinematicPanel() {
   const active = cinematics.find((cinematic) => cinematic.id === activeCinematicId) ?? cinematics[0];
   const selected = objects.find((object) => object.id === selectedObjectId);
   const cameraObjects = useMemo(() => objects.filter((object) => object.kind === 'camera'), [objects]);
-  const selectedCamera = selected?.kind === 'camera' ? selected : objects.find((object) => object.kind === 'camera');
+  const selectedCamera = selected?.kind === 'camera' ? selected : undefined;
   const running = Boolean(runtimeCinematic && active && runtimeCinematic.sequenceId === active.id);
+  const liveCameraRecording = Boolean(active && playtimeCameraSessionId === active.id);
   const previewing = Boolean(editorPreview && active && editorPreview.sequenceId === active.id);
   const runtimeTime = running ? runtimeCinematic?.time ?? 0 : 0;
   const activeActionIds = active?.actions.map((action) => action.id).join('|') ?? '';
@@ -461,6 +479,45 @@ export function CinematicPanel() {
   useEffect(() => {
     if (selectedKeyframe) setSelectedActionId(selectedKeyframe.actionId);
   }, [selectedKeyframe]);
+
+  // Never leave the viewport in keyframe-edit mode after its action/key has been removed or the
+  // active sequence changes underneath it.
+  useEffect(() => {
+    if (!selectedKeyframe) return;
+    const action = active?.actions.find((item) => item.id === selectedKeyframe.actionId);
+    const frames = action?.type === 'camera' ? action.keyframes : action?.type === 'transform' ? action.transformKeyframes : undefined;
+    const isStaticCamera = action?.type === 'camera' && selectedKeyframe.index === -1;
+    if (!action || (!isStaticCamera && !frames?.[selectedKeyframe.index])) selectCinematicKeyframe(null);
+  }, [active, activeId, activeActionIds, selectedKeyframe, selectCinematicKeyframe]);
+
+  useEffect(() => {
+    if (!objectTrackPickerOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !objectTrackPickerRef.current?.contains(event.target)) {
+        setObjectTrackPickerOpen(false);
+        setObjectTrackSearch('');
+        setObjectTrackDragOver(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setObjectTrackPickerOpen(false);
+        setObjectTrackSearch('');
+        setObjectTrackDragOver(false);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [objectTrackPickerOpen]);
+
+  useEffect(() => {
+    setObjectTrackPickerOpen(false);
+    setObjectTrackSearch('');
+  }, [activeId]);
 
   const setPreviewTime = (time: number) => {
     if (!active || running) return;
@@ -537,6 +594,26 @@ export function CinematicPanel() {
       blend: 0,
       ease: 'smooth',
     });
+  };
+
+  const playActiveCinematic = () => {
+    if (!active) return;
+    if (running) {
+      stopCinematic();
+      return;
+    }
+    // Live possession needs an initial lens pose. If this is a brand-new sequence, use the editor
+    // view as Shot 1 automatically so the user can simply arm, press Play, and start moving.
+    if (playtimeCameraRecording && sortedCameraShots.length === 0) {
+      if (!editorCameraPose.valid) {
+        useProjectStore.setState({
+          toast: { kind: 'error', message: 'Move the editor viewport once so Film Mode can capture its starting camera.' },
+        });
+        return;
+      }
+      addViewportShot();
+    }
+    playCinematic(active.id);
   };
 
   const createCameraFromViewport = (addShot = true) => {
@@ -801,78 +878,200 @@ export function CinematicPanel() {
     const minTime = Math.min(0, ...sorted.map((frame) => frame.time));
     const maxTime = Math.max(0.5, ...sorted.map((frame) => frame.time));
     updateCinematicAction(active.id, actionId, { keyframes: sorted, time: minTime, duration: Math.max(0.5, maxTime - minTime) });
+    const preview = useEditorStore.getState().editorCinematicPreview;
+    if (preview?.sequenceId === active.id) previewCinematic(active.id, preview.time);
   };
 
-  const viewportKeyframe = (time: number): CinematicCameraKeyframe => ({
-    time: Number(Math.max(0, time).toFixed(3)),
-    position: [...editorCameraPose.position],
-    lookAt: [...editorCameraPose.lookAt],
-    fov: Math.round(editorCameraPose.fov),
-  });
+  // Camera keys are captured from the free editor camera. In Camera View the viewport is showing
+  // the already-evaluated sequence pose, so capture is deliberately disabled to avoid baking the
+  // preview back into itself.
+  const canCaptureCamera = cinematicViewportMode === 'edit' && editorCameraPose.valid;
+  const viewportKeyframe = (time: number): CinematicCameraKeyframe | undefined => {
+    if (!canCaptureCamera) return undefined;
+    return {
+      time: Number(Math.max(0, time).toFixed(3)),
+      position: [...editorCameraPose.position],
+      lookAt: [...editorCameraPose.lookAt],
+      fov: Math.round(editorCameraPose.fov),
+    };
+  };
+
+  const selectInsertedKey = (actionId: string, kind: 'camera' | 'transform', time: number) => {
+    if (!active) return;
+    const sequence = useEditorStore.getState().activeScene()?.cinematics?.find((item) => item.id === active.id);
+    const action = sequence?.actions.find((item) => item.id === actionId);
+    const frames = kind === 'camera' && action?.type === 'camera'
+      ? action.keyframes
+      : kind === 'transform' && action?.type === 'transform'
+        ? action.transformKeyframes
+        : undefined;
+    if (!frames?.length) return;
+    const sequenceFrame = Math.round(time * frameRate);
+    const index = frames.findIndex((frame) => Math.round(frame.time * frameRate) === sequenceFrame);
+    if (index < 0) return;
+    setSelectedActionId(actionId);
+    selectCinematicKeyframe(actionId, index);
+  };
 
   // The core "keyframe the camera" gesture: capture the live viewport framing at the playhead.
-  // Appends to the selected camera track (or the first one), creating a track if none exists.
-  // Re-keying within 0.06s of an existing keyframe replaces it, so you can refine a pose in place.
-  const addCameraKeyframe = () => {
-    if (!active || running || previewing || !editorCameraPose.valid) return;
+  // The store owns frame snapping/upsert rules so toolbar, row-diamond, Auto Key, and S-key gestures
+  // all behave identically. An explicit target keeps multiple camera tracks unambiguous.
+  const addCameraKeyframe = (targetActionId?: string) => {
+    if (!active || running) return;
     const frame = viewportKeyframe(beatTime);
-    const target =
-      selectedAction?.type === 'camera' ? selectedAction : active.actions.find((action) => action.type === 'camera' && action.keyframes?.length);
-    if (!target) {
-      const id = addCinematicAction(active.id, {
-        type: 'camera',
-        time: frame.time,
-        duration: 0.5,
-        label: 'Camera track',
-        ease: 'smooth',
-        keyframes: [frame],
-      });
-      if (id) {
-        setSelectedActionId(id);
-        applyKeyframes(id, [frame]);
-        previewCinematic(active.id, frame.time);
-      }
-      return;
-    }
-    const existing = target.keyframes ?? [];
-    const kept = existing.filter((keyframe) => Math.abs(keyframe.time - frame.time) > 0.06);
-    applyKeyframes(target.id, [...kept, frame]);
-    setSelectedActionId(target.id);
-    previewCinematic(active.id, frame.time);
+    if (!frame) return;
+    const selectedTarget = selectedAction?.type === 'camera' && selectedAction.keyframes?.length ? selectedAction.id : undefined;
+    const actionId = addCinematicCameraKeyframe(active.id, beatTime, frame, targetActionId ?? selectedTarget);
+    if (actionId) selectInsertedKey(actionId, 'camera', beatTime);
   };
 
   const recaptureKeyframe = (action: CinematicAction, index: number) => {
-    if (!editorCameraPose.valid || !action.keyframes) return;
+    if (!action.keyframes) return;
+    const captured = viewportKeyframe(action.keyframes[index]?.time ?? beatTime);
+    if (!captured) return;
     const frames = action.keyframes.map((keyframe, i) =>
-      i === index ? { ...keyframe, position: [...editorCameraPose.position], lookAt: [...editorCameraPose.lookAt], fov: Math.round(editorCameraPose.fov) } as CinematicCameraKeyframe : keyframe,
+      i === index ? { ...keyframe, position: captured.position, lookAt: captured.lookAt, fov: captured.fov } as CinematicCameraKeyframe : keyframe,
     );
     applyKeyframes(action.id, frames);
   };
 
   const removeKeyframe = (action: CinematicAction, index: number) => {
     if (!active || !action.keyframes) return;
+    const removed = action.keyframes[index];
+    if (!removed) return;
     const frames = action.keyframes.filter((_, i) => i !== index);
-    if (frames.length) applyKeyframes(action.id, frames);
-    else updateCinematicAction(active.id, action.id, { keyframes: [] });
+    if (frames.length) {
+      applyKeyframes(action.id, frames);
+      if (selectedKeyframe?.actionId === action.id) {
+        const nextIndex = selectedKeyframe.index > index ? selectedKeyframe.index - 1 : Math.min(selectedKeyframe.index, frames.length - 1);
+        selectCinematicKeyframe(action.id, nextIndex);
+      }
+      return;
+    }
+    // A one-key track is still a useful shot. Removing its final key converts it into that static
+    // shot instead of leaving an invisible, unusable empty camera action behind.
+    updateCinematicAction(active.id, action.id, {
+      keyframes: undefined,
+      time: removed.time,
+      duration: 0.5,
+      position: removed.position,
+      lookAt: removed.lookAt,
+      fov: removed.fov,
+      focusDistance: removed.focusDistance ?? action.focusDistance,
+      aperture: removed.aperture ?? action.aperture,
+    });
+    selectCinematicKeyframe(null);
+    previewCinematic(active.id, removed.time);
   };
 
-  const setKeyframeTime = (action: CinematicAction, index: number, time: number) => {
-    if (!action.keyframes) return;
-    const frames = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, time: Math.max(0, time) } : keyframe));
+  const setKeyframeTime = (action: CinematicAction, index: number, time: number): number | undefined => {
+    if (!active || !action.keyframes?.[index]) return undefined;
+    // Keep array indices stable while editing: a key may approach its neighbours but cannot cross
+    // them and silently turn the selected diamond into a different key.
+    const epsilon = 0.001;
+    const minimum = index > 0 ? action.keyframes[index - 1].time + epsilon : 0;
+    const maximum = index < action.keyframes.length - 1 ? action.keyframes[index + 1].time - epsilon : active.duration;
+    const nextTime = Number(Math.min(Math.max(snapTime(time), minimum), Math.max(minimum, maximum)).toFixed(4));
+    const frames = action.keyframes.map((keyframe, i) => (i === index ? { ...keyframe, time: nextTime } : keyframe));
     applyKeyframes(action.id, frames);
+    previewCinematic(active.id, nextTime);
+    return nextTime;
   };
 
   // ----- Object transform keyframe tracks (the store action handles create/merge/clip-span) -----
 
   // Key the selected object at the playhead, creating its track if needed. This is also how an
   // object is "added to the sequence" — its first keyframe makes a track.
+  const keyObjectAtPlayhead = (objectId: string, targetActionId?: string, time = beatTime) => {
+    if (!active || running) return;
+    const state = useEditorStore.getState();
+    const object = state.activeScene()?.objects.find((item) => item.id === objectId);
+    const pose = editorPreviewTransforms[objectId] ?? object?.transform;
+    if (!pose) return;
+    const actionId = addCinematicTransformKeyframe(active.id, objectId, time, pose, targetActionId);
+    if (!actionId) return;
+    selectObject(objectId);
+    selectInsertedKey(actionId, 'transform', time);
+  };
+
   const keyframeSelectedObject = () => {
-    if (!active || !selected || running) return;
-    const id = addCinematicTransformKeyframe(active.id, selected.id, beatTime);
-    if (id) {
-      setSelectedActionId(id);
-      previewCinematic(active.id, beatTime);
+    if (selected) keyObjectAtPlayhead(selected.id);
+  };
+
+  const objectTrackFor = (objectId: string) => {
+    const tracks = active?.actions.filter((action) => action.type === 'transform' && action.objectId === objectId) ?? [];
+    return tracks.find((action) => action.transformKeyframes?.length) ?? tracks[0];
+  };
+
+  const selectedForTrackIds = (
+    selectedObjectIds.includes(selectedObjectId)
+      ? selectedObjectIds
+      : selectedObjectId
+        ? [selectedObjectId]
+        : []
+  ).filter((id) => objects.some((object) => object.id === id));
+
+  const sceneObjectPath = (objectId: string) => {
+    const names: string[] = [];
+    const visited = new Set<string>();
+    let current = objects.find((object) => object.id === objectId);
+    while (current && !visited.has(current.id)) {
+      names.unshift(current.name);
+      visited.add(current.id);
+      current = current.parentId ? objects.find((object) => object.id === current!.parentId) : undefined;
     }
+    return names.join(' / ');
+  };
+
+  const duplicateObjectNames = new Set(
+    objects
+      .filter((object, index) => objects.findIndex((candidate) => candidate.name === object.name) !== index)
+      .map((object) => object.name),
+  );
+  const normalizedObjectTrackSearch = objectTrackSearch.trim().toLowerCase();
+  const visibleObjectTrackOptions = [...objects]
+    .filter((object) => {
+      if (!normalizedObjectTrackSearch) return true;
+      return `${sceneObjectPath(object.id)} ${object.kind} ${object.id}`.toLowerCase().includes(normalizedObjectTrackSearch);
+    })
+    .sort((a, b) => {
+      const boundOrder = Number(Boolean(objectTrackFor(a.id))) - Number(Boolean(objectTrackFor(b.id)));
+      return boundOrder || sceneObjectPath(a.id).localeCompare(sceneObjectPath(b.id));
+    });
+  const trackedObjectCount = objects.filter((object) => Boolean(objectTrackFor(object.id))).length;
+  const selectedUntrackedIds = selectedForTrackIds.filter((id) => !objectTrackFor(id));
+  const selectedUntrackedCount = selectedUntrackedIds.length;
+
+  const closeObjectTrackPicker = () => {
+    setObjectTrackPickerOpen(false);
+    setObjectTrackSearch('');
+    setObjectTrackDragOver(false);
+  };
+
+  const addOrFocusObjectTrack = (objectId: string) => {
+    if (!active || running || !objects.some((object) => object.id === objectId)) return;
+    const existing = objectTrackFor(objectId);
+    if (existing) {
+      selectObject(objectId);
+      setSelectedActionId(existing.id);
+      selectCinematicKeyframe(null);
+      setPreviewTime(beatTime);
+    } else {
+      keyObjectAtPlayhead(objectId);
+    }
+    closeObjectTrackPicker();
+  };
+
+  const addSelectedObjectTracks = () => {
+    if (!active || running || !selectedForTrackIds.length) return;
+    const objectIds = [...selectedForTrackIds];
+    const untracked = objectIds.filter((id) => !objectTrackFor(id));
+    if (!untracked.length) {
+      addOrFocusObjectTrack(objectIds[0]);
+      return;
+    }
+    untracked.forEach((objectId) => keyObjectAtPlayhead(objectId));
+    closeObjectTrackPicker();
   };
 
   const applyTransformKeyframes = (actionId: string, frames: CinematicTransformKeyframe[]) => {
@@ -886,14 +1085,28 @@ export function CinematicPanel() {
   const removeTransformKeyframe = (action: CinematicAction, index: number) => {
     if (!active || !action.transformKeyframes) return;
     const frames = action.transformKeyframes.filter((_, i) => i !== index);
-    if (frames.length) applyTransformKeyframes(action.id, frames);
-    else updateCinematicAction(active.id, action.id, { transformKeyframes: [] });
+    if (frames.length) {
+      applyTransformKeyframes(action.id, frames);
+      if (selectedKeyframe?.actionId === action.id) {
+        const nextIndex = selectedKeyframe.index > index ? selectedKeyframe.index - 1 : Math.min(selectedKeyframe.index, frames.length - 1);
+        selectCinematicKeyframe(action.id, nextIndex);
+      }
+      return;
+    }
+    removeCinematicAction(active.id, action.id);
+    selectCinematicKeyframe(null);
   };
 
-  const setTransformKeyframeTime = (action: CinematicAction, index: number, time: number) => {
-    if (!action.transformKeyframes) return;
-    const frames = action.transformKeyframes.map((keyframe, i) => (i === index ? { ...keyframe, time: Math.max(0, time) } : keyframe));
+  const setTransformKeyframeTime = (action: CinematicAction, index: number, time: number): number | undefined => {
+    if (!active || !action.transformKeyframes?.[index]) return undefined;
+    const epsilon = 0.001;
+    const minimum = index > 0 ? action.transformKeyframes[index - 1].time + epsilon : 0;
+    const maximum = index < action.transformKeyframes.length - 1 ? action.transformKeyframes[index + 1].time - epsilon : active.duration;
+    const nextTime = Number(Math.min(Math.max(snapTime(time), minimum), Math.max(minimum, maximum)).toFixed(4));
+    const frames = action.transformKeyframes.map((keyframe, i) => (i === index ? { ...keyframe, time: nextTime } : keyframe));
     applyTransformKeyframes(action.id, frames);
+    previewCinematic(active.id, nextTime);
+    return nextTime;
   };
 
   // ----- Selected keyframe (shared with the 3D path gizmo): edit its transform directly -----
@@ -911,8 +1124,16 @@ export function CinematicPanel() {
     const action = active.actions.find((item) => item.id === selectedKeyframe.actionId);
     if (!action) return;
     if (action.type === 'camera' && action.keyframes) {
+      if (typeof patch.time === 'number') {
+        setKeyframeTime(action, selectedKeyframe.index, patch.time);
+        return;
+      }
       applyKeyframes(action.id, action.keyframes.map((keyframe, i) => (i === selectedKeyframe.index ? { ...keyframe, ...patch } : keyframe)) as CinematicCameraKeyframe[]);
     } else if (action.type === 'transform' && action.transformKeyframes) {
+      if (typeof patch.time === 'number') {
+        setTransformKeyframeTime(action, selectedKeyframe.index, patch.time);
+        return;
+      }
       applyTransformKeyframes(action.id, action.transformKeyframes.map((keyframe, i) => (i === selectedKeyframe.index ? { ...keyframe, ...patch } : keyframe)) as CinematicTransformKeyframe[]);
     }
   };
@@ -959,9 +1180,7 @@ export function CinematicPanel() {
       updateCinematicAction(active.id, drag.actionId, { time, duration: Math.max(0.1, end - time) });
       previewCinematic(active.id, time);
     } else if (drag.kind === 'ckf' && drag.index != null) {
-      const time = timeFromPointer(event.clientX);
-      setKeyframeTime(target, drag.index, time);
-      previewCinematic(active.id, time);
+      setKeyframeTime(target, drag.index, timeFromPointer(event.clientX));
     } else if (drag.kind === 'tkf' && drag.index != null) {
       const time = timeFromPointer(event.clientX);
       setTransformKeyframeTime(target, drag.index, time);
@@ -972,7 +1191,7 @@ export function CinematicPanel() {
   const onTimelinePointerUp = (action: CinematicAction) => {
     const drag = dragRef.current;
     dragRef.current = null;
-    if (drag && !drag.moved && !running) previewCinematic(active!.id, action.time);
+    if (drag && !drag.moved && !running && drag.kind !== 'ckf' && drag.kind !== 'tkf') previewCinematic(active!.id, action.time);
   };
 
   const beginClipDrag = (event: React.PointerEvent, action: CinematicAction) => {
@@ -1030,11 +1249,18 @@ export function CinematicPanel() {
     actions
       .filter((action) => action.type === 'transform')
       .forEach((action) => {
-        const key = action.objectId ?? '∅';
+        const key = action.objectId ?? `missing-${action.id}`;
         (byObject.get(key) ?? byObject.set(key, []).get(key)!).push(action);
       });
     byObject.forEach((acts, objectId) => {
-      rows.push({ id: `obj-${objectId}`, label: objects.find((object) => object.id === objectId)?.name ?? 'Object', kind: 'object', objectId, actions: acts });
+      const object = objects.find((item) => item.id === objectId);
+      rows.push({
+        id: `obj-${objectId}`,
+        label: object?.name ?? 'Missing Object',
+        kind: 'object',
+        objectId: object?.id,
+        actions: acts,
+      });
     });
     const groups: { id: string; label: string; types: CinematicActionType[] }[] = [
       { id: 'animation', label: 'Animation', types: ['animation'] },
@@ -1049,6 +1275,38 @@ export function CinematicPanel() {
     });
     return rows;
   };
+  // Camera and keyed objects are the everyday Sequencer workflow. Advanced mode only adds the
+  // less common clip/event lanes; users should never need it just to animate an actor.
+  const timelineTracks = active ? buildSeqTracks(active.actions).filter((track) => showAdvanced || track.kind === 'camera' || track.kind === 'object') : [];
+
+  const selectedTrackAction = (track: SeqTrack) =>
+    track.actions.find((action) => action.id === selectedActionId) ??
+    track.actions.find((action) => action.type === 'camera' && action.keyframes?.length) ??
+    track.actions.find((action) => action.type === 'transform' && action.transformKeyframes?.length) ??
+    track.actions[0];
+
+  const selectTimelineTrack = (track: SeqTrack) => {
+    const action = selectedTrackAction(track);
+    if (track.kind === 'object' && track.objectId) selectObject(track.objectId);
+    if (action) setSelectedActionId(action.id);
+  };
+
+  const keyTimelineTrack = (track: SeqTrack) => {
+    const action = selectedTrackAction(track);
+    if (track.kind === 'camera') {
+      const targetId = action?.type === 'camera' && action.keyframes?.length ? action.id : undefined;
+      addCameraKeyframe(targetId);
+    } else if (track.kind === 'object' && track.objectId) {
+      const targetId = action?.type === 'transform' ? action.id : undefined;
+      keyObjectAtPlayhead(track.objectId, targetId);
+    }
+  };
+
+  const trackKeyCount = (track: SeqTrack) => track.actions.reduce((total, action) => {
+    if (action.type === 'camera' && action.keyframes?.length) return total + action.keyframes.length;
+    if (action.type === 'transform' && action.transformKeyframes?.length) return total + action.transformKeyframes.length;
+    return total + 1;
+  }, 0);
 
   const pct = (time: number) => (active ? Math.min(100, Math.max(0, (time / Math.max(active.duration, 0.5)) * 100)) : 0);
 
@@ -1068,10 +1326,7 @@ export function CinematicPanel() {
             key={`${action.id}-span`}
             className={`seq-track-span${action.id === selectedActionId ? ' active' : ''}`}
             style={{ left: `${pct(lo)}%`, width: `${Math.max(1.5, pct(hi) - pct(lo))}%` }}
-            title={`${actionTitle(action)} — drag to shift the whole track`}
-            onPointerDown={(event) => beginClipDrag(event, action)}
-            onPointerMove={onTimelinePointerMove}
-            onPointerUp={() => onTimelinePointerUp(action)}
+            title={`${actionTitle(action)} keyframe range`}
           />,
         );
         kfs.forEach((frame, index) => {
@@ -1081,10 +1336,14 @@ export function CinematicPanel() {
               className={`cinematic-keyframe-pip${selectedKeyframe?.actionId === action.id && selectedKeyframe.index === index ? ' active' : ''}`}
               style={{ left: `${pct(frame.time)}%`, top: '50%' }}
               title={`Keyframe ${index + 1} @ ${frame.time.toFixed(2)}s (drag to move · click to edit in 3D)`}
+              aria-label={`${actionTitle(action)} keyframe ${index + 1} at ${frame.time.toFixed(2)} seconds`}
+              data-cinematic-action-id={action.id}
+              data-keyframe-index={index}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 event.currentTarget.setPointerCapture?.(event.pointerId);
                 dragRef.current = { kind: action.type === 'camera' ? 'ckf' : 'tkf', actionId: action.id, index, startX: event.clientX, startTime: frame.time, moved: false };
+                if (action.type === 'transform' && action.objectId) selectObject(action.objectId);
                 setSelectedActionId(action.id);
                 selectCinematicKeyframe(action.id, index);
               }}
@@ -1179,7 +1438,7 @@ export function CinematicPanel() {
           <span>{frames.length} keyframe{frames.length === 1 ? '' : 's'}</span>
           <small>{frames.length < 2 ? 'Add another to animate' : 'Camera flies through them'}</small>
         </div>
-        <button className="full-button primary" disabled={running || previewing || !editorCameraPose.valid} title="Capture the current viewport framing as a keyframe at the playhead" onClick={addCameraKeyframe}>
+        <button className="full-button primary" disabled={running || !canCaptureCamera} title="Capture the current viewport framing as a keyframe at the playhead" onClick={() => addCameraKeyframe()}>
           <Camera size={14} aria-hidden />
           Add keyframe at playhead
         </button>
@@ -1201,7 +1460,7 @@ export function CinematicPanel() {
                 <button className="icon-button" title="Jump playhead to this keyframe" disabled={running} onClick={() => setPreviewTime(frame.time)}>
                   <Eye size={14} aria-hidden />
                 </button>
-                <button className="icon-button" title="Recapture this keyframe from the current viewport" disabled={!editorCameraPose.valid || running || previewing} onClick={() => recaptureKeyframe(action, index)}>
+                <button className="icon-button" title="Recapture this keyframe from the current viewport" disabled={!canCaptureCamera || running} onClick={() => recaptureKeyframe(action, index)}>
                   <Camera size={14} aria-hidden />
                 </button>
                 <input
@@ -1377,7 +1636,7 @@ export function CinematicPanel() {
                 className="full-button"
                 disabled={!editorCameraPose.valid || running || previewing}
                 title="Turn this shot into an animated camera track, seeding the first keyframe from the viewport"
-                onClick={addCameraKeyframe}
+                onClick={() => addCameraKeyframe()}
               >
                 Animate (start keyframe track)
               </button>
@@ -1873,8 +2132,62 @@ export function CinematicPanel() {
           </div>
 
           {active && (
+            <section className="cinematic-simple-workflow" aria-label="Simple cinematic workflow">
+              <div className="cinematic-simple-head">
+                <div>
+                  <strong>Make a cinematic</strong>
+                  <span>Frame it, add a shot, then press Play.</span>
+                </div>
+                <button type="button" className="mini-toggle" aria-pressed={showAdvanced} onClick={() => setShowAdvanced((value) => !value)}>
+                  {showAdvanced ? 'Hide advanced' : 'Advanced'}
+                </button>
+              </div>
+              <div className="cinematic-simple-steps">
+                <div className="cinematic-simple-step">
+                  <span>1</span>
+                  <div>
+                    <strong>Add the view</strong>
+                    <small>Move the editor camera to frame your shot.</small>
+                  </div>
+                  <button className="full-button primary" disabled={running || !editorCameraPose.valid} onClick={addViewportShot}>
+                    <Scissors size={14} aria-hidden /> Add shot
+                  </button>
+                </div>
+                <div className={`cinematic-simple-step live${playtimeCameraRecording || liveCameraRecording ? ' armed' : ''}`}>
+                  <span>2</span>
+                  <div>
+                    <strong>Optional: Playtime record</strong>
+                    <small>Possess the camera and fly it while the scene plays.</small>
+                  </div>
+                  <button
+                    className={`full-button cinematic-record${playtimeCameraRecording || liveCameraRecording ? ' armed' : ''}`}
+                    disabled={running}
+                    aria-pressed={playtimeCameraRecording}
+                    title="On Play, take control of the cinematic camera and save the movement as a new take"
+                    onClick={() => setPlaytimeCameraRecording(!playtimeCameraRecording)}
+                  >
+                    <CircleDot size={14} aria-hidden />
+                    {playtimeCameraRecording ? 'Playtime record armed' : 'Record live camera'}
+                  </button>
+                </div>
+                <div className="cinematic-simple-step">
+                  <span>3</span>
+                  <div>
+                    <strong>{liveCameraRecording ? 'Recording now' : 'Watch it'}</strong>
+                    <small>{liveCameraRecording ? 'Fly the camera in the viewport, then Stop to save.' : 'Runs the normal cinematic, with live control only when armed.'}</small>
+                  </div>
+                  <button className={`full-button${liveCameraRecording ? ' danger' : ''}`} onClick={playActiveCinematic}>
+                    {running ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
+                    {liveCameraRecording ? 'Stop & save take' : running ? 'Stop' : 'Play cinematic'}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {active && (
             <>
-              <section className="inspector-section">
+              {showAdvanced && <section className="inspector-section">
                 <h3>Timeline</h3>
                 <label className="field-row">
                   <span>Duration</span>
@@ -1942,7 +2255,7 @@ export function CinematicPanel() {
                     ))}
                   </div>
                 )}
-              </section>
+              </section>}
               <section className="inspector-section cinematic-camera-workflow">
                 <h3>Cameras &amp; Cuts</h3>
                 <div className="cinematic-camera-buttons">
@@ -1968,41 +2281,47 @@ export function CinematicPanel() {
                 {cameraObjects.length > 0 && (
                   <div className="cinematic-camera-list">
                     {cameraObjects.map((camera) => (
-                      <button
-                        key={camera.id}
-                        type="button"
-                        className={camera.id === selectedObjectId ? 'active' : undefined}
-                        title={`Add ${camera.name} as a hard cut at ${beatTime.toFixed(2)}s`}
-                        onClick={() => addShotFromCamera(camera.id, true)}
-                      >
-                        <Camera size={14} aria-hidden />
-                        <span>{camera.name}</span>
-                        <small>Cut</small>
-                      </button>
+                      <div key={camera.id} className={`cinematic-camera-row${camera.id === selectedObjectId ? ' active' : ''}`}>
+                        <button type="button" className="cinematic-camera-select" title={`Select ${camera.name}`} onClick={() => selectObject(camera.id)}>
+                          <Camera size={14} aria-hidden />
+                          <span>{camera.name}</span>
+                        </button>
+                        <button type="button" className="cinematic-row-action" disabled={running} title={`Add ${camera.name} as a cut at ${beatTime.toFixed(2)}s`} onClick={() => addShotFromCamera(camera.id, true)}>
+                          <Scissors size={13} aria-hidden /> Cut
+                        </button>
+                        <button type="button" className="cinematic-row-delete" disabled={running} title={`Delete ${camera.name}; linked shots keep their framing`} aria-label={`Delete camera ${camera.name}`} onClick={() => deleteObject(camera.id)}>
+                          <Trash2 size={13} aria-hidden />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
                 {sortedCameraShots.length > 0 && (
                   <div className="cinematic-shot-strip">
                     {sortedCameraShots.map((shot, index) => (
-                      <button
-                        key={shot.id}
-                        type="button"
-                        className={shot.id === selectedActionId ? 'active' : undefined}
-                        title={`${shot.label ?? `Shot ${index + 1}`} at ${shot.time.toFixed(2)}s`}
-                        onClick={() => {
-                          setSelectedActionId(shot.id);
-                          setPreviewTime(shot.time);
-                        }}
-                      >
-                        <span>{index + 1}</span>
-                        <strong>{shot.label ?? `Shot ${index + 1}`}</strong>
-                        <em>{(shot.blend ?? 0) > 0 ? `${shot.blend!.toFixed(1)}s blend` : 'cut'}</em>
-                      </button>
+                      <div key={shot.id} className={`cinematic-shot-row${shot.id === selectedActionId ? ' active' : ''}`}>
+                        <button
+                          type="button"
+                          className="cinematic-shot-select"
+                          title={`${shot.label ?? `Shot ${index + 1}`} at ${shot.time.toFixed(2)}s`}
+                          onClick={() => {
+                            setSelectedActionId(shot.id);
+                            setPreviewTime(shot.time);
+                          }}
+                        >
+                          <span>{index + 1}</span>
+                          <strong>{shot.label ?? `Shot ${index + 1}`}</strong>
+                          <em>{(shot.blend ?? 0) > 0 ? `${shot.blend!.toFixed(1)}s blend` : 'cut'}</em>
+                        </button>
+                        <button type="button" className="cinematic-row-delete" disabled={running} title="Delete this shot only" aria-label={`Delete shot ${shot.label ?? index + 1}`} onClick={() => removeCinematicAction(active.id, shot.id)}>
+                          <Trash2 size={13} aria-hidden />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
               </section>
+              {showAdvanced && <>
               <section className="inspector-section cinematic-shot-templates">
                 <h3>Shot templates</h3>
                 <div className="cinematic-template-grid">
@@ -2189,27 +2508,210 @@ export function CinematicPanel() {
                   />
                 </label>
               </section>
+              </>}
               <section className="inspector-section">
-                <h3>Recording</h3>
-                <button
-                  className={`full-button cinematic-record${cinematicRecording ? ' armed' : ''}`}
-                  disabled={running}
-                  title="Record mode: move the viewport camera or drag an object to auto-key it at the playhead"
-                  onClick={() => setCinematicRecording(!cinematicRecording)}
+                <h3>Timeline &amp; Preview</h3>
+                <div
+                  ref={objectTrackPickerRef}
+                  className={`seq-object-track-control${objectTrackDragOver ? ' drag-over' : ''}`}
+                  onDragEnter={(event) => {
+                    if (!running && event.dataTransfer.types.includes('application/x-nodeforge-object')) {
+                      event.preventDefault();
+                      setObjectTrackDragOver(true);
+                    }
+                  }}
+                  onDragOver={(event) => {
+                    if (!running && event.dataTransfer.types.includes('application/x-nodeforge-object')) {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'copy';
+                      setObjectTrackDragOver(true);
+                    }
+                  }}
+                  onDragLeave={(event) => {
+                    const next = event.relatedTarget;
+                    if (!(next instanceof Node) || !event.currentTarget.contains(next)) setObjectTrackDragOver(false);
+                  }}
+                  onDrop={(event) => {
+                    const objectId = event.dataTransfer.getData('application/x-nodeforge-object');
+                    setObjectTrackDragOver(false);
+                    if (!objectId || running) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    addOrFocusObjectTrack(objectId);
+                  }}
                 >
-                  <CircleDot size={14} aria-hidden />
-                  {cinematicRecording ? 'Recording — move things to key them' : 'Record (auto-key on move)'}
-                </button>
-                <div className="cinematic-transport" aria-label="Cinematic preview controls">
                   <button
-                    className={previewing && !cinematicRecording ? 'active' : undefined}
-                    title="Camera preview — look through the cinematic camera in the viewport. Scrub the timeline to watch the shot update."
-                    disabled={running || cinematicRecording}
-                    onClick={() => (previewing ? clearCinematicPreview() : setPreviewTime(timelineTime || 0))}
+                    type="button"
+                    className="full-button seq-object-track-trigger"
+                    aria-label="Add Object Track"
+                    aria-expanded={objectTrackPickerOpen}
+                    aria-controls="cinematic-object-track-picker"
+                    disabled={running || !objects.length}
+                    title={objects.length ? 'Choose any scene object, or drag one here from the Hierarchy' : 'This scene has no objects to add'}
+                    onClick={() => {
+                      if (objectTrackPickerOpen) closeObjectTrackPicker();
+                      else setObjectTrackPickerOpen(true);
+                    }}
                   >
-                    <Video size={14} aria-hidden />
-                    <span>{previewing && !cinematicRecording ? 'Previewing camera' : 'Camera preview'}</span>
+                    <Plus size={15} aria-hidden />
+                    <span>
+                      <strong>Add Object Track</strong>
+                      <small>Choose or drop a scene object</small>
+                    </span>
+                    <em>{trackedObjectCount}/{objects.length}</em>
                   </button>
+                  {objectTrackDragOver && <div className="seq-object-track-drop-hint">Drop to add this object at {beatTime.toFixed(2)}s</div>}
+                  {objectTrackPickerOpen && (
+                    <div id="cinematic-object-track-picker" className="seq-object-track-picker" role="dialog" aria-label="Add scene object to timeline">
+                      <div className="seq-object-track-picker-head">
+                        <div>
+                          <strong>Add Scene Object</strong>
+                          <small>Creates its Transform track and first key at {beatTime.toFixed(2)}s.</small>
+                        </div>
+                        <button type="button" aria-label="Close object track picker" title="Close" onClick={closeObjectTrackPicker}>×</button>
+                      </div>
+                      <label className="seq-object-track-search">
+                        <Search size={14} aria-hidden />
+                        <input
+                          autoFocus
+                          type="search"
+                          value={objectTrackSearch}
+                          placeholder="Search scene objects…"
+                          aria-label="Search scene objects"
+                          onChange={(event) => setObjectTrackSearch(event.target.value)}
+                        />
+                      </label>
+                      {selectedForTrackIds.length > 0 && (
+                        <button
+                          type="button"
+                          className="seq-object-track-selected"
+                          onClick={addSelectedObjectTracks}
+                          title={selectedUntrackedCount ? 'Add every selected object that is not already on the timeline' : 'Reveal the selected object’s existing track'}
+                        >
+                          <span>Selection</span>
+                          <strong>
+                            {selectedUntrackedCount
+                              ? `+ Add ${selectedUntrackedCount === 1 ? objects.find((object) => object.id === selectedUntrackedIds[0])?.name ?? 'selected object' : `${selectedUntrackedCount} selected objects`}`
+                              : 'Show selected track'}
+                          </strong>
+                        </button>
+                      )}
+                      <div className="seq-object-track-list">
+                        {visibleObjectTrackOptions.map((object) => {
+                          const track = objectTrackFor(object.id);
+                          const path = sceneObjectPath(object.id);
+                          const parentPath = path.includes(' / ') ? path.slice(0, path.lastIndexOf(' / ')) : 'Scene root';
+                          const disambiguator = duplicateObjectNames.has(object.name) ? ` · ${object.id.slice(-6)}` : '';
+                          const kind = object.kind === 'camera' ? 'Camera actor transform' : `${object.kind[0].toUpperCase()}${object.kind.slice(1)}`;
+                          return (
+                            <button
+                              key={object.id}
+                              type="button"
+                              className={`seq-object-track-option${track ? ' bound' : ''}`}
+                              data-cinematic-object-id={object.id}
+                              data-object-kind={object.kind}
+                              aria-label={track ? `Show ${path} track` : `Add ${path} to timeline`}
+                              onClick={() => addOrFocusObjectTrack(object.id)}
+                            >
+                              <i className="seq-object-kind-dot" aria-hidden data-kind={object.kind} />
+                              <span>
+                                <strong>{object.name}</strong>
+                                <small>{kind} · {parentPath}{disambiguator}</small>
+                              </span>
+                              <em>{track ? '✓ On timeline' : '+ Add'}</em>
+                            </button>
+                          );
+                        })}
+                        {!visibleObjectTrackOptions.length && (
+                          <p className="seq-object-track-empty">No scene objects match “{objectTrackSearch}”.</p>
+                        )}
+                      </div>
+                      <p className="seq-object-track-foot">Tip: drag an object from the Hierarchy onto the Add Object Track control.</p>
+                    </div>
+                  )}
+                </div>
+                <div className="seq-author-toolbar" aria-label="Sequencer key controls">
+                  <button
+                    className="full-button primary"
+                    disabled={running || !canCaptureCamera}
+                    title={cinematicViewportMode === 'camera' ? 'Switch to Edit Paths to capture the free editor camera' : 'Capture the free editor camera on this frame'}
+                    onClick={() => addCameraKeyframe()}
+                  >
+                    <span className="seq-add-key-diamond" aria-hidden>◆</span>
+                    Add Camera Key
+                  </button>
+                  <button
+                    className="full-button"
+                    disabled={running || !selected}
+                    title={selected
+                      ? objectTrackFor(selected.id)
+                        ? `Key ${selected.name} on this frame (shortcut: S)`
+                        : `Add ${selected.name} to the timeline with its first key at this frame`
+                      : 'Select an object, or use Add Object Track to choose one'}
+                    onClick={keyframeSelectedObject}
+                  >
+                    <span className="seq-add-key-diamond object" aria-hidden>◆</span>
+                    {selected
+                      ? objectTrackFor(selected.id)
+                        ? `Key ${selected.name}`
+                        : `Add ${selected.name} Track`
+                      : 'Key Selected Object'}
+                  </button>
+                  <button
+                    className={`full-button cinematic-record${cinematicRecording ? ' armed' : ''}`}
+                    disabled={running}
+                    aria-pressed={cinematicRecording}
+                    title="Auto Key: moving the free camera or an object writes a key at the playhead"
+                    onClick={() => setCinematicRecording(!cinematicRecording)}
+                  >
+                    <CircleDot size={14} aria-hidden />
+                    {cinematicRecording ? 'Auto Key On' : 'Auto Key'}
+                  </button>
+                </div>
+                <div className="seq-view-toolbar">
+                  <div className="seq-mode-switch" role="group" aria-label="Cinematic viewport mode">
+                    <button
+                      type="button"
+                      className={cinematicViewportMode === 'edit' ? 'active' : undefined}
+                      aria-pressed={cinematicViewportMode === 'edit'}
+                      title="Use the free editor camera and show editable motion paths"
+                      onClick={() => {
+                        if (!previewing) setPreviewTime(beatTime);
+                        setCinematicViewportMode('edit');
+                      }}
+                    >
+                      <Eye size={14} aria-hidden /> Edit Paths
+                    </button>
+                    <button
+                      type="button"
+                      className={cinematicViewportMode === 'camera' ? 'active' : undefined}
+                      aria-pressed={cinematicViewportMode === 'camera'}
+                      disabled={running || cinematicRecording}
+                      title="Look through the evaluated cinematic camera"
+                      onClick={() => {
+                        if (!previewing) setPreviewTime(beatTime);
+                        setCinematicViewportMode('camera');
+                      }}
+                    >
+                      <Video size={14} aria-hidden /> Camera View
+                    </button>
+                  </div>
+                  <label className="seq-path-mode">
+                    <span>Paths</span>
+                    <select
+                      aria-label="Motion path visibility"
+                      value={cinematicPathMode}
+                      disabled={cinematicViewportMode === 'camera'}
+                      onChange={(event) => setCinematicPathMode(event.target.value as 'all' | 'selected' | 'off')}
+                    >
+                      <option value="all">All</option>
+                      <option value="selected">Selected</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </label>
+                  <span className="seq-shortcut-hint"><kbd>S</kbd> key selected object</span>
+                </div>
+                <div className="cinematic-transport" aria-label="Cinematic preview controls">
                   <button title="Jump to start" disabled={running} onClick={() => setPreviewTime(0)}>
                     <SkipBack size={14} aria-hidden />
                   </button>
@@ -2222,7 +2724,7 @@ export function CinematicPanel() {
                   <button title="Jump to end" disabled={running} onClick={() => setPreviewTime(active.duration)}>
                     <SkipForward size={14} aria-hidden />
                   </button>
-                  <button title="Clear editor preview" disabled={!previewing || running} onClick={() => clearCinematicPreview()}>
+                  <button title="Clear editor preview" disabled={!previewing || running} onClick={() => { clearCinematicPreview(); setCinematicViewportMode('edit'); }}>
                     <RotateCcw size={14} aria-hidden />
                   </button>
                   <output>{beatTime.toFixed(2)}s</output>
@@ -2240,26 +2742,52 @@ export function CinematicPanel() {
                   />
                 </label>
                 <div className="cinematic-actions-row">
-                  <button className="full-button" onClick={() => (running ? stopCinematic() : playCinematic(active.id))}>
+                  <button className="full-button" onClick={playActiveCinematic}>
                     {running ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
                     {running ? 'Stop' : 'Play'}
                   </button>
-                  <button className="full-button danger" onClick={() => deleteCinematic(active.id)}>
+                  {showAdvanced && <button className="full-button danger" title="Delete this entire sequence" onClick={() => deleteCinematic(active.id)}>
                     <Trash2 size={14} aria-hidden />
-                    Delete
-                  </button>
+                    Delete sequence
+                  </button>}
                 </div>
 
                 <div className="seq-timeline2" aria-label="Cinematic timeline">
                   <div className="seq-grid">
                     <div className="seq-labels">
                       <div className="seq-labels-spacer" />
-                      {buildSeqTracks(active.actions).map((track) => (
-                        <div key={track.id} className="seq-label-row" title={track.label}>
-                          <span className="seq-label-name">{track.label}</span>
-                          <small>{track.actions.length}</small>
-                        </div>
-                      ))}
+                      {timelineTracks.map((track) => {
+                        const keyable = track.kind === 'camera' || track.kind === 'object';
+                        const disabled = running || (track.kind === 'camera' ? !canCaptureCamera : !track.objectId);
+                        return (
+                          <div key={track.id} className="seq-label-row" title={track.label}>
+                            <button
+                              type="button"
+                              className="seq-track-name-button"
+                              onClick={() => selectTimelineTrack(track)}
+                              title={track.kind === 'object' ? `Select ${track.label}` : `Select ${track.label} track`}
+                            >
+                              <span className="seq-label-name">{track.label}</span>
+                              <small>{trackKeyCount(track)}</small>
+                            </button>
+                            {keyable && (
+                              <button
+                                type="button"
+                                className={`seq-track-key-button${track.kind === 'object' ? ' object' : ''}`}
+                                disabled={disabled}
+                                aria-label={`Add key to ${track.label} at ${beatTime.toFixed(2)} seconds`}
+                                title={`Add a ${track.label} key at the playhead`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  keyTimelineTrack(track);
+                                }}
+                              >
+                                <span aria-hidden>◆</span><i aria-hidden>+</i>
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     <div className="seq-lanes-col">
                       <div className="seq-ruler2" onPointerDown={beginScrub} onPointerMove={onScrubMove} onPointerUp={endScrub} title="Click or drag to scrub">
@@ -2279,7 +2807,7 @@ export function CinematicPanel() {
                       </div>
                       <div className="seq-rows" ref={tracksRef}>
                         <div className="seq-playhead2" style={{ left: `${playhead}%` }} />
-                        {buildSeqTracks(active.actions).map((track) => {
+                        {timelineTracks.map((track) => {
                           const isSel =
                             !!selectedAction &&
                             ((track.kind === 'camera' && selectedAction.type === 'camera') ||
@@ -2302,10 +2830,15 @@ export function CinematicPanel() {
                       </div>
                     </div>
                   </div>
-                  <p className="field-hint seq-hint">Click the ruler to scrub · drag clips/diamonds to retime · Record, then move the camera/objects to auto-key.</p>
+                  <p className="field-hint seq-hint">
+                    {showAdvanced
+                      ? 'Click the ruler to scrub · drag clips or diamonds to retime · click a diamond to edit its key.'
+                      : 'Use a row’s ◆+ to key this frame · click a diamond to edit it · drag it to retime.'}
+                  </p>
                 </div>
               </section>
 
+              {showAdvanced && <>
               <div className="inspector-section cinematic-transition-bar">
                 <label className="cinematic-transition-title">Transition at playhead</label>
                 <div className="cinematic-transition-row">
@@ -2336,9 +2869,9 @@ export function CinematicPanel() {
                 <div className="cinematic-quick-grid">
                   <button
                     className="full-button primary"
-                    disabled={running || previewing || !editorCameraPose.valid}
+                    disabled={running || !canCaptureCamera}
                     title="Capture the current viewport framing as a camera keyframe at the playhead"
-                    onClick={addCameraKeyframe}
+                    onClick={() => addCameraKeyframe()}
                   >
                     <Camera size={14} aria-hidden />
                     Add camera keyframe
@@ -2353,7 +2886,7 @@ export function CinematicPanel() {
                   </button>
                   <button
                     className="full-button"
-                    disabled={running || previewing || !editorCameraPose.valid}
+                    disabled={running || !canCaptureCamera}
                     title="Add a single static camera shot at the playhead (hard cut / blended)"
                     onClick={addViewportShot}
                   >
@@ -2471,17 +3004,23 @@ export function CinematicPanel() {
                   </button>
                 </div>
               </details>
+              </>}
 
               {selectedKeyframeInfo && (
-                <section className="inspector-section cinematic-action-editor">
+                <section className="inspector-section cinematic-action-editor" aria-label={selectedKeyframeInfo.camera ? 'Camera keyframe editor' : 'Object keyframe editor'}>
                   <div className="cinematic-editor-heading">
-                    <h3>Selected Keyframe</h3>
+                    <h3>{selectedKeyframeInfo.camera ? 'Camera Keyframe' : 'Object Keyframe'}</h3>
                     <span>#{selectedKeyframe!.index + 1}</span>
                   </div>
-                  <p className="field-hint">Drag the gold handle in the viewport to move it, or edit its transform here.</p>
+                  <p className="field-hint">
+                    {selectedKeyframeInfo.camera
+                      ? 'Drag the gold position or cyan aim handle in the viewport, then use the controls below.'
+                      : 'Drag the gold handle in the viewport to move it, or edit its transform here.'}
+                  </p>
                   <label className="field-row">
                     <span>Time</span>
                     <input
+                      aria-label={selectedKeyframeInfo.camera ? 'Camera keyframe time' : 'Object keyframe time'}
                       type="number"
                       min={0}
                       step={0.05}
@@ -2489,37 +3028,65 @@ export function CinematicPanel() {
                       onChange={(event) => updateSelectedKeyframe({ time: Math.max(0, Number(event.target.value)) })}
                     />
                   </label>
-                  <VectorEditor
-                    label="Position"
-                    value={(selectedKeyframeInfo.camera ?? selectedKeyframeInfo.object)?.position}
-                    onChange={(value) => updateSelectedKeyframe({ position: value })}
-                  />
                   {selectedKeyframeInfo.camera ? (
                     <>
-                      <p className="field-hint">Drag the cyan aim handle in the viewport to point the camera, or set its target here.</p>
-                      <VectorEditor label="Look at" value={selectedKeyframeInfo.camera.lookAt} onChange={(value) => updateSelectedKeyframe({ lookAt: value })} />
-                      <button
-                        className="full-button"
-                        disabled={!selected || selected.kind === 'camera'}
-                        title={selected && selected.kind !== 'camera' ? `Aim this shot at ${selected.name}` : 'Select a (non-camera) object to aim at'}
-                        onClick={() => selected && selected.kind !== 'camera' && updateSelectedKeyframe({ lookAt: selected.transform.position })}
-                      >
-                        Aim at selected object
-                      </button>
                       <label className="field-row">
                         <span>FOV</span>
-                        <input type="number" min={10} max={140} value={selectedKeyframeInfo.camera.fov} onChange={(event) => updateSelectedKeyframe({ fov: Number(event.target.value) })} />
+                        <input aria-label="Camera keyframe FOV" type="number" min={10} max={140} value={selectedKeyframeInfo.camera.fov} onChange={(event) => updateSelectedKeyframe({ fov: Number(event.target.value) })} />
                       </label>
-                      <ZoomEditor
-                        label="Key zoom"
-                        value={selectedKeyframeInfo.camera.fov}
-                        onChange={(fov) => updateSelectedKeyframe({ fov })}
-                      />
+                      <div className="cinematic-editor-tools">
+                        <button className="full-button primary" disabled={running || !canCaptureCamera} onClick={() => recaptureKeyframe(selectedKeyframeInfo.action, selectedKeyframe!.index)}>
+                          <Camera size={14} aria-hidden />
+                          Use current view
+                        </button>
+                        <button className="full-button danger" onClick={() => removeKeyframe(selectedKeyframeInfo.action, selectedKeyframe!.index)}>
+                          <Trash2 size={14} aria-hidden />
+                          Delete key
+                        </button>
+                      </div>
+                      {showAdvanced && (
+                        <>
+                          <VectorEditor label="Position" value={selectedKeyframeInfo.camera.position} onChange={(value) => updateSelectedKeyframe({ position: value })} />
+                          <p className="field-hint">Drag the cyan aim handle in the viewport to point the camera, or set its target here.</p>
+                          <VectorEditor label="Look at" value={selectedKeyframeInfo.camera.lookAt} onChange={(value) => updateSelectedKeyframe({ lookAt: value })} />
+                          <button
+                            className="full-button"
+                            disabled={!selected || selected.kind === 'camera'}
+                            title={selected && selected.kind !== 'camera' ? `Aim this shot at ${selected.name}` : 'Select a (non-camera) object to aim at'}
+                            onClick={() => selected && selected.kind !== 'camera' && updateSelectedKeyframe({ lookAt: selected.transform.position })}
+                          >
+                            Aim at selected object
+                          </button>
+                          <ZoomEditor label="Key zoom" value={selectedKeyframeInfo.camera.fov} onChange={(fov) => updateSelectedKeyframe({ fov })} />
+                        </>
+                      )}
                     </>
                   ) : selectedKeyframeInfo.object ? (
                     <>
-                      <VectorEditor label="Rotation" value={selectedKeyframeInfo.object.rotation} onChange={(value) => updateSelectedKeyframe({ rotation: value })} />
-                      <VectorEditor label="Scale" value={selectedKeyframeInfo.object.scale} onChange={(value) => updateSelectedKeyframe({ scale: value })} />
+                      <div className="cinematic-editor-tools">
+                        <button
+                          className="full-button primary"
+                          disabled={running || !selectedKeyframeInfo.action.objectId}
+                          title="Replace this key with the object pose currently shown in the viewport"
+                          onClick={() => {
+                            const objectId = selectedKeyframeInfo.action.objectId;
+                            if (objectId) keyObjectAtPlayhead(objectId, selectedKeyframeInfo.action.id, selectedKeyframeInfo.object!.time);
+                          }}
+                        >
+                          Use current object pose
+                        </button>
+                        <button className="full-button danger" onClick={() => removeTransformKeyframe(selectedKeyframeInfo.action, selectedKeyframe!.index)}>
+                          <Trash2 size={14} aria-hidden />
+                          Delete key
+                        </button>
+                      </div>
+                      {showAdvanced && (
+                        <>
+                          <VectorEditor label="Position" value={selectedKeyframeInfo.object.position} onChange={(value) => updateSelectedKeyframe({ position: value })} />
+                          <VectorEditor label="Rotation" value={selectedKeyframeInfo.object.rotation} onChange={(value) => updateSelectedKeyframe({ rotation: value })} />
+                          <VectorEditor label="Scale" value={selectedKeyframeInfo.object.scale} onChange={(value) => updateSelectedKeyframe({ scale: value })} />
+                        </>
+                      )}
                     </>
                   ) : null}
                   <button className="full-button" onClick={() => selectCinematicKeyframe(null)}>
@@ -2528,7 +3095,7 @@ export function CinematicPanel() {
                 </section>
               )}
 
-              {selectedAction && (
+              {showAdvanced && selectedAction && (
                 <section className="inspector-section cinematic-action-editor">
                   <div className="cinematic-editor-heading">
                     <h3>Selected Beat</h3>

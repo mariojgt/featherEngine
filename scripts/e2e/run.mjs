@@ -1004,6 +1004,218 @@ spec('per-element CSS applies in the design canvas and in Play', async () => {
   }
 });
 
+spec('Film Mode exposes the simple workflow and deletes linked cameras safely', async () => {
+  const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=script' });
+  try {
+    const ids = await app.evaluate(`(() => {
+      const store = window.__featherStore;
+      const cinematicId = store.createCinematic('E2E Camera Take', 4);
+      const cameraId = store.createObjectWithProps('camera');
+      store.addCinematicShot(cinematicId, {
+        time: 0,
+        objectId: cameraId,
+        position: [0, 2, 6],
+        lookAt: [0, 1, 0],
+        fov: 50,
+        label: 'Opening shot',
+      });
+      const trackId = store.addCinematicAction(cinematicId, {
+        type: 'camera',
+        time: 0,
+        duration: 3,
+        label: 'Editable camera move',
+        keyframes: [
+          { time: 0.5, position: [0, 2, 6], lookAt: [0, 1, 0], fov: 50 },
+          { time: 2, position: [3, 3, 4], lookAt: [0, 1, 0], fov: 42 },
+        ],
+      });
+      const actorId = store.createObjectWithProps('cube', { name: 'E2E Actor', position: [-2, 0.5, 0] });
+      const actorTrackId = store.addCinematicAction(cinematicId, {
+        type: 'transform',
+        objectId: actorId,
+        time: 0,
+        duration: 3,
+        label: 'Actor movement',
+        interpolation: 'linear',
+        transformKeyframes: [
+          { time: 0.5, position: [-2, 0.5, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+          { time: 2, position: [2, 0.5, 0], rotation: [0, 1, 0], scale: [1, 1, 1] },
+        ],
+      });
+      const untrackedId = store.createObjectWithProps('sphere', { name: 'E2E Untracked Prop', position: [0, 1, 2] });
+      store.selectObject(actorId);
+      return { cinematicId, cameraId, trackId, actorId, actorTrackId, untrackedId };
+    })()`);
+
+    await clickViewMenuEntry(app, 'Film Mode');
+    await app.waitFor(`document.querySelector('.cinematic-simple-workflow')`, { label: 'simple Film Mode workflow' });
+    assert.equal(await app.count('.cinematic-simple-step'), 3, 'the default workflow should be exactly three steps');
+    assert.equal(await app.count('.cinematic-simple-workflow [aria-pressed="false"]'), 2, 'advanced controls and live record start off');
+    assert.deepEqual(
+      await app.overlaps(
+        '.cinematic-simple-workflow',
+        '.cinematic-simple-step > span, .cinematic-simple-step > div, .cinematic-simple-step > button',
+      ),
+      [],
+      'simple Film Mode controls should not collide at their docked width',
+    );
+
+    await app.evaluate(`document.querySelector('.cinematic-simple-workflow .cinematic-record')?.scrollIntoView({ block: 'center' })`);
+    await delay(100);
+    await app.realClick('.cinematic-simple-workflow .cinematic-record');
+    await app.waitFor(`document.querySelector('.cinematic-simple-workflow .cinematic-record')?.getAttribute('aria-pressed') === 'true'`, {
+      label: 'live camera recording armed',
+    });
+
+    assert.equal(await app.count('.seq-timeline2'), 1, 'the camera timeline should be visible without Advanced mode');
+    assert.equal(await app.count('.seq-label-row'), 2, 'Camera and animated Object rows should both be visible without Advanced mode');
+    assert.equal(await app.count('.seq-track-key-button'), 2, 'every standard Camera/Object row should expose a one-click add-key diamond');
+    assert.equal(await app.count('.seq-author-toolbar .cinematic-record'), 1, 'Auto Key should be visible without Advanced mode');
+    assert.equal(await app.count('.cinematic-keyframe-pip'), 4, 'camera and object keys should all be visible as timeline diamonds');
+    assert.equal(await app.count('[aria-label="Cinematic viewport mode"] button'), 2, 'Edit Paths and Camera View should be explicit viewport modes');
+
+    await app.evaluate(`document.querySelector('.seq-object-track-trigger')?.scrollIntoView({ block: 'center' })`);
+    await app.realClick('[aria-label="Add Object Track"]');
+    await app.waitFor(`document.querySelector('[aria-label="Add scene object to timeline"]')`, { label: 'scene object track picker opened' });
+    const untrackedOption = `[data-cinematic-object-id="${ids.untrackedId}"]`;
+    assert.equal(await app.count(untrackedOption), 1, 'untracked scene object should be offered exactly once');
+    assert.equal(await app.evaluate(`document.querySelector(${JSON.stringify(untrackedOption)}).classList.contains('bound')`), false, 'new scene object starts unbound');
+    await app.evaluate(`document.querySelector(${JSON.stringify(untrackedOption)})?.scrollIntoView({ block: 'center' })`);
+    await delay(100);
+    await app.realClick(untrackedOption);
+    await app.waitFor(`(() => {
+      const store = window.__featherStore;
+      const sequence = store.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)});
+      const action = sequence.actions.find((item) => item.type === 'transform' && item.objectId === ${JSON.stringify(ids.untrackedId)});
+      return action?.transformKeyframes?.length === 1 && store.selectedObjectId === ${JSON.stringify(ids.untrackedId)} && store.selectedCinematicKeyframe?.actionId === action.id;
+    })()`, { label: 'picker created and selected the untracked object’s first key' });
+    await app.waitFor(`document.querySelector('[aria-label="Object keyframe editor"]')`, { label: 'new object track opened its standard key editor' });
+    assert.equal(await app.count('.seq-label-row'), 3, 'new Object row should appear immediately');
+    assert.equal(await app.count('.seq-track-key-button'), 3, 'new Object row should expose its add-key diamond');
+    assert.equal(await app.count('.cinematic-keyframe-pip'), 5, 'new Object track should contain its first key');
+
+    const addedBeforeReveal = await app.evaluate(`(() => {
+      const sequence = window.__featherStore.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)});
+      const actions = sequence.actions.filter((item) => item.type === 'transform' && item.objectId === ${JSON.stringify(ids.untrackedId)});
+      return { actions: actions.length, keys: actions[0].transformKeyframes.length };
+    })()`);
+    await app.evaluate(`document.querySelector('.seq-object-track-trigger')?.scrollIntoView({ block: 'center' })`);
+    await delay(100);
+    await app.realClick('[aria-label="Add Object Track"]');
+    await app.waitFor(`document.querySelector(${JSON.stringify(untrackedOption)})?.classList.contains('bound')`, { label: 'picker marks the object as already on timeline' });
+    assert.ok((await app.text(untrackedOption)).includes('On timeline'), 'bound object should be visibly marked in the picker');
+    await app.evaluate(`document.querySelector(${JSON.stringify(untrackedOption)})?.scrollIntoView({ block: 'center' })`);
+    await delay(100);
+    await app.realClick(untrackedOption);
+    const addedAfterReveal = await app.evaluate(`(() => {
+      const sequence = window.__featherStore.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)});
+      const actions = sequence.actions.filter((item) => item.type === 'transform' && item.objectId === ${JSON.stringify(ids.untrackedId)});
+      return { actions: actions.length, keys: actions[0].transformKeyframes.length };
+    })()`);
+    assert.deepEqual(addedAfterReveal, addedBeforeReveal, 'choosing an existing binding should reveal it without adding or overwriting keys');
+
+    await app.evaluate(`document.querySelector('.seq-author-toolbar')?.scrollIntoView({ block: 'center' })`);
+    await app.realClick('.seq-author-toolbar .cinematic-record');
+    await app.waitFor(`window.__featherStore.cinematicRecording === true`, { label: 'standard Auto Key toggle armed' });
+    await app.realClick('.seq-author-toolbar .cinematic-record');
+    await app.waitFor(`window.__featherStore.cinematicRecording === false`, { label: 'standard Auto Key toggle disarmed' });
+
+    await app.evaluate(`window.__featherStore.selectObject(${JSON.stringify(ids.actorId)})`);
+    await app.page.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 's', code: 'KeyS', windowsVirtualKeyCode: 83 });
+    await app.page.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 's', code: 'KeyS', windowsVirtualKeyCode: 83 });
+    await app.waitFor(`window.__featherStore.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)}).actions.find((item) => item.id === ${JSON.stringify(ids.actorTrackId)}).transformKeyframes.length === 3`, {
+      label: 'S shortcut keys the selected actor at the playhead',
+    });
+    await app.evaluate(`window.__featherStore.previewCinematic(${JSON.stringify(ids.cinematicId)}, 1)`);
+    await app.waitFor(`window.__featherStore.editorCinematicPreview?.time === 1`, { label: 'object row test playhead positioned' });
+
+    const objectRowKey = `[aria-label^="Add key to E2E Actor "].object`;
+    await app.evaluate(`document.querySelector(${JSON.stringify(objectRowKey)})?.scrollIntoView({ block: 'center' })`);
+    const objectRowHit = await app.evaluate(`(() => {
+      const button = document.querySelector(${JSON.stringify(objectRowKey)});
+      if (!button) return null;
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        disabled: button.disabled,
+        width: rect.width,
+        height: rect.height,
+        hitSelf: hit === button || hit?.closest('.seq-track-key-button') === button,
+        hitClass: hit?.className ?? '',
+      };
+    })()`);
+    assert.ok(
+      objectRowHit && !objectRowHit.disabled && objectRowHit.width >= 22 && objectRowHit.height >= 22 && objectRowHit.hitSelf,
+      `object row key should be a clear, unobstructed pointer target: ${JSON.stringify(objectRowHit)}`,
+    );
+    await app.realClick(objectRowKey);
+    const keyedObjectState = await app.evaluate(`(() => {
+      const store = window.__featherStore;
+      const sequence = store.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)});
+      const action = sequence.actions.find((item) => item.id === ${JSON.stringify(ids.actorTrackId)});
+      return {
+        length: action.transformKeyframes.length,
+        times: action.transformKeyframes.map((frame) => frame.time),
+        selected: store.selectedCinematicKeyframe ?? null,
+        preview: store.editorCinematicPreview ?? null,
+        selectedObjectId: store.selectedObjectId,
+      };
+    })()`);
+    assert.equal(keyedObjectState.length, 4, `object row diamond should add a key at the playhead: ${JSON.stringify(keyedObjectState)}`);
+    await app.waitFor(`document.querySelector('[aria-label="Object keyframe editor"]')`, { label: 'object row key opens the standard object key editor' });
+
+    await app.waitFor(`document.querySelectorAll('.cinematic-path-key-label').length >= 8`, { label: 'numbered camera and object path keys visible in Edit Paths' });
+    await app.evaluate(`(() => {
+      const buttons = [...document.querySelectorAll('[aria-label="Cinematic viewport mode"] button')];
+      buttons.find((button) => button.textContent.includes('Camera View'))?.click();
+    })()`);
+    await app.waitFor(`window.__featherStore.cinematicViewportMode === 'camera'`, { label: 'Camera View mode enabled' });
+    await app.waitFor(`document.querySelectorAll('.cinematic-path-key-label').length === 0`, { label: 'paths hidden while looking through the cinematic camera' });
+    await app.evaluate(`(() => {
+      const buttons = [...document.querySelectorAll('[aria-label="Cinematic viewport mode"] button')];
+      buttons.find((button) => button.textContent.includes('Edit Paths'))?.click();
+    })()`);
+    await app.waitFor(`window.__featherStore.cinematicViewportMode === 'edit'`, { label: 'returned to free-camera path editing' });
+
+    const secondKey = `[data-cinematic-action-id="${ids.trackId}"][data-keyframe-index="1"]`;
+    await app.evaluate(`document.querySelector(${JSON.stringify(secondKey)})?.scrollIntoView({ block: 'center' })`);
+    await app.realClick(secondKey);
+    await app.waitFor(`document.querySelector('[aria-label="Camera keyframe editor"]')`, { label: 'camera keyframe editor opened' });
+    const selectedKey = await app.evaluate(`window.__featherStore.selectedCinematicKeyframe`);
+    assert.deepEqual(selectedKey, { actionId: ids.trackId, index: 1 }, 'clicking a diamond should select that exact key');
+
+    await app.evaluate(`(() => {
+      const input = document.querySelector('[aria-label="Camera keyframe time"]');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '2.25');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await app.waitFor(`(() => {
+      const sequence = window.__featherStore.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)});
+      const track = sequence.actions.find((action) => action.id === ${JSON.stringify(ids.trackId)});
+      return track.keyframes[1].time === 2.25 && window.__featherStore.selectedCinematicKeyframe?.index === 1;
+    })()`, { label: 'selected camera keyframe retimed in place' });
+
+    await app.evaluate(`document.querySelector("[aria-label^='Delete camera ']")?.scrollIntoView({ block: 'center' })`);
+    await app.realClick(`[aria-label^='Delete camera ']`);
+    await app.waitFor(`!window.__featherStore.activeScene().objects.some((object) => object.id === ${JSON.stringify(ids.cameraId)})`, {
+      label: 'camera removed from the scene',
+    });
+    const preservedShot = await app.evaluate(`(() => {
+      const sequence = window.__featherStore.activeScene().cinematics.find((item) => item.id === ${JSON.stringify(ids.cinematicId)});
+      const shot = sequence.actions.find((action) => action.type === 'camera');
+      return { exists: Boolean(shot), objectId: shot?.objectId ?? null, position: shot?.position ?? null };
+    })()`);
+    assert.deepEqual(
+      preservedShot,
+      { exists: true, objectId: null, position: [0, 2, 6] },
+      'deleting a camera should preserve the authored framing and clear its dangling reference',
+    );
+  } finally {
+    await app.dispose();
+  }
+});
+
 spec('model forge installs from the store, builds, paints, places and bakes a prop', async () => {
   const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=store' });
   try {

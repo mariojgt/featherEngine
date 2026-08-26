@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
+  Aperture,
   Box,
   Boxes,
   Camera,
@@ -111,6 +112,9 @@ function AddMenu() {
   const ref = useRef<HTMLDivElement>(null);
   const createObject = useEditorStore((state) => state.createObject);
   const createTree = useEditorStore((state) => state.createTree);
+  const createReflectionProbe = useEditorStore((state) => state.createReflectionProbe);
+  const createInstancedGrid = useEditorStore((state) => state.createInstancedGrid);
+  const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
@@ -140,6 +144,35 @@ function AddMenu() {
               <span>{label}</span>
             </button>
           ))}
+          <div className="file-menu-section">Rendering</div>
+          <button
+            onClick={() => {
+              setOpen(false);
+              createReflectionProbe();
+              focusWorkspacePanel('inspector');
+            }}
+          >
+            <Aperture size={14} aria-hidden />
+            <span>Reflection Probe</span>
+          </button>
+          <button
+            disabled={!selectedObjectId}
+            title="Select a safe static imported model first"
+            onClick={() => {
+              const ids = createInstancedGrid(selectedObjectId, { rows: 3, columns: 3 });
+              setOpen(false);
+              if (!ids.length) {
+                useProjectStore.setState({
+                  toast: { kind: 'error', message: 'Select a root-level static imported model with baked materials to create an instanced grid.' },
+                });
+                return;
+              }
+              focusWorkspacePanel('inspector');
+            }}
+          >
+            <Layers size={14} aria-hidden />
+            <span>GPU-Instanced Model Grid</span>
+          </button>
           <div className="file-menu-section">Trees</div>
           {treeTools.map(({ archetype, label }) => (
             <button

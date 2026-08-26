@@ -21,6 +21,7 @@ import { treeSpecFromArchetype } from '../tree/treeSpec';
 import { MODEL_STARTERS } from '../model/modelSpec';
 import { ensureModelForgeEnabled, openModelForgeStudio } from '../extensions/openModelForge';
 import { useModelForgeSession } from '../store/modelForgeSessionStore';
+import { customizedModelIds, isInstanceable } from '../three/modelInstancing';
 
 const axes = ['X', 'Y', 'Z'] as const;
 
@@ -462,6 +463,51 @@ function RendererSection({
           )}
         </>
       )}
+    </InspectorSection>
+  );
+}
+
+function InstancedGridSection({ object, materials }: { object: SceneObject; materials: MaterialDefinition[] }) {
+  const createInstancedGrid = useEditorStore((state) => state.createInstancedGrid);
+  const [rows, setRows] = useState(3);
+  const [columns, setColumns] = useState(3);
+  const [spacingX, setSpacingX] = useState(2);
+  const [spacingZ, setSpacingZ] = useState(2);
+  if (!object.renderer?.modelAssetId) return null;
+  const eligible = isInstanceable(object, customizedModelIds(materials));
+  const total = Math.max(0, Math.round(rows) * Math.round(columns));
+  return (
+    <InspectorSection title="GPU Instancing" defaultOpen={false}>
+      <p className="field-hint">
+        Build an editable model grid. In Play and exports, matching safe models collapse into real GPU-instanced draws.
+      </p>
+      <label className="field-row">
+        <span>Rows × Columns</span>
+        <span className="inline-with-button">
+          <NumberInput value={rows} min={1} max={20} step={1} onChange={(value) => setRows(Math.round(value))} />
+          <NumberInput value={columns} min={1} max={20} step={1} onChange={(value) => setColumns(Math.round(value))} />
+        </span>
+      </label>
+      <label className="field-row">
+        <span>X / Z spacing</span>
+        <span className="inline-with-button">
+          <NumberInput value={spacingX} min={0.01} step={0.25} onChange={setSpacingX} />
+          <NumberInput value={spacingZ} min={0.01} step={0.25} onChange={setSpacingZ} />
+        </span>
+      </label>
+      {!eligible && (
+        <p className="field-hint warning">
+          This model is not safe to batch yet. Keep it at the scene root with baked opaque materials and no physics, script, or animator.
+        </p>
+      )}
+      <button
+        className="full-button"
+        disabled={!eligible || total < 4 || total > 400}
+        onClick={() => createInstancedGrid(object.id, { rows, columns, spacingX, spacingZ })}
+      >
+        Create {total || 0}-instance grid
+      </button>
+      <p className="field-hint">Every copy stays individually editable; four or more matching copies batch automatically at runtime.</p>
     </InspectorSection>
   );
 }
@@ -3367,6 +3413,8 @@ export function InspectorPanel() {
               }}
             />
           )}
+
+          {object.renderer?.modelAssetId && <InstancedGridSection object={object} materials={materials} />}
 
           {object.renderer && (
             <AnimatorSection

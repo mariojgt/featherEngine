@@ -239,10 +239,20 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built Spline Studio showcase';
     case 'create_cinematic':
       return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
+    case 'inspect_cinematic':
+      return 'Inspected cinematic tracks';
+    case 'set_cinematic_keyframe':
+      return `Set ${input.trackType === 'camera' ? 'camera' : 'object'} cinematic key`;
+    case 'delete_cinematic_keyframe':
+      return 'Deleted cinematic key';
     case 'add_cinematic_action':
       return 'Added cinematic action';
     case 'update_cinematic_action':
       return 'Updated cinematic action';
+    case 'delete_cinematic_action':
+      return 'Deleted cinematic action';
+    case 'delete_cinematic':
+      return 'Deleted cinematic';
     case 'add_cinematic_shot':
       return 'Added camera shot';
     case 'add_cinematic_transition':
@@ -255,6 +265,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Animated on timeline';
     case 'play_cinematic':
       return input.stop ? 'Stopped cinematic' : 'Played cinematic';
+    case 'create_reflection_probe':
+      return 'Created reflection probe';
+    case 'create_instanced_grid':
+      return 'Created GPU-instanced grid';
     case 'list_bones':
       return 'Listed bones';
     case 'attach_to_bone':
