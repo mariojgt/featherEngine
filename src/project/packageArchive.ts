@@ -45,12 +45,21 @@ export interface PackageArchive {
   bytes: Map<string, Uint8Array>;
 }
 
+export interface PackageArchiveWriteOptions {
+  /** Optional fixed ZIP timestamp for reproducible catalog/build artifacts. */
+  mtime?: Date;
+}
+
 /**
  * Build the container. `bytes` supplies each asset's raw data keyed by asset id; assets without an
  * entry are written manifest-only (they keep whatever `source` they already carry and are fetched
  * at install time instead).
  */
-export function writePackageArchive(pkg: NodeForgePackage, bytes: Map<string, Uint8Array>): Uint8Array {
+export function writePackageArchive(
+  pkg: NodeForgePackage,
+  bytes: Map<string, Uint8Array>,
+  options: PackageArchiveWriteOptions = {},
+): Uint8Array {
   const files: Zippable = {};
   const manifestAssets: AssetItem[] = [];
 
@@ -75,7 +84,7 @@ export function writePackageArchive(pkg: NodeForgePackage, bytes: Map<string, Ui
 
   // Level 6: above it the size difference is marginal on this content and it costs real time on a
   // 22 MB asset.
-  return zipSync(files, { level: 6 });
+  return zipSync(files, { level: 6, ...(options.mtime ? { mtime: options.mtime } : {}) });
 }
 
 const STORED_EXTENSIONS = new Set(['.mp3', '.ogg', '.png', '.jpg', '.jpeg', '.webp', '.ktx2']);

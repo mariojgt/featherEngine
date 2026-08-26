@@ -19,7 +19,9 @@ runtime. The current API version is `0.2.0`.
 > a manifest-only `.nfpack` whose `meta.pluginId` names the module. The install persists (localStorage
 > via `src/store/pluginStore.ts`) and re-activates on every boot; removing it from the store card
 > deactivates it immediately. Since the package carries no code, everything that can run still
-> shipped with the engine. The `Arbor Forge` and `Model Forge` gallery plugins are the worked examples of the whole path.
+> shipped with the engine. `Arbor Forge`, `Model Forge`, and `Pixel Art Trees` are worked examples
+> of the whole path; Pixel Art Trees also demonstrates how a plugin can author a compact engine
+> recipe while the renderer remains a normal, collaboration-safe Feather subsystem.
 
 ## What works now
 
@@ -114,7 +116,9 @@ are error-isolated, so one faulty plugin does not take down unrelated plugins or
 ## Shipping a plugin through the Asset Store
 
 1. Author the plugin under `src/extensions/` against the public API (see
-   [`arborForge.tsx`](../src/extensions/arborForge.tsx) — it uses only `api.*`, never the raw stores).
+   [`arborForge.tsx`](../src/extensions/arborForge.tsx) or
+   [`pixelArtTrees/index.tsx`](../src/extensions/pixelArtTrees/index.tsx) — both use only `api.*`,
+   never the raw stores).
 2. Register it in [`availablePlugins.ts`](../src/extensions/availablePlugins.ts) (NOT
    `bundledPlugins.ts` — gallery plugins stay off until installed).
 3. Add a `kind: 'plugin'` pack to `scripts/build-store-catalog.mts` whose `meta.pluginId` is the

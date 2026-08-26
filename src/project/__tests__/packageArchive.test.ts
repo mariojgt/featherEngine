@@ -76,6 +76,14 @@ describe('.nfpack container', () => {
     expect([...(read.bytes.get('a2') ?? [])]).toEqual([...bytes]);
   });
 
+  it('can pin ZIP metadata for byte-stable store builds', () => {
+    const pkg = pkgWith([]);
+    const mtime = new Date('2026-01-01T00:00:00.000Z');
+    const first = writePackageArchive(pkg, new Map(), { mtime });
+    const second = writePackageArchive(pkg, new Map(), { mtime });
+    expect(first).toEqual(second);
+  });
+
   it('still opens a legacy plain-JSON package', () => {
     // Packages exported before the container change are bare JSON. They must not stop working.
     const legacy = new TextEncoder().encode(JSON.stringify(pkgWith([])));

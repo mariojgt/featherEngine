@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { extensionRegistry } from '../../extensions/host';
 import { AVAILABLE_PLUGINS } from '../../extensions/availablePlugins';
+import { PIXEL_ART_TREES_PLUGIN_ID } from '../../extensions/pixelArtTrees';
 import { useMarketplaceStore } from '../marketplaceStore';
 import { MODEL_FORGE_PLUGIN_ID, usePluginStore } from '../pluginStore';
 import { useProjectStore } from '../projectStore';
@@ -60,6 +61,21 @@ describe('store plugin install', () => {
     expect(listing!.pluginId).toBe(ARBOR_ID);
     // The catalog must only advertise modules this build actually compiles in.
     expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === listing!.pluginId)).toBe(true);
+  });
+
+  it('ships and activates Pixel Art Trees as its own removable store plugin', async () => {
+    await useMarketplaceStore.getState().load();
+    const listing = useMarketplaceStore.getState().packages.find(
+      (entry) => entry.pluginId === PIXEL_ART_TREES_PLUGIN_ID,
+    );
+    expect(listing?.kind).toBe('plugin');
+    expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
+
+    await useMarketplaceStore.getState().install(listing!);
+    expect(extensionRegistry.hasPlugin(PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
+    expect(extensionRegistry.getSnapshot().panels.some((panel) => panel.pluginId === PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
+    expect(usePluginStore.getState().disable(PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
+    expect(extensionRegistry.hasPlugin(PIXEL_ART_TREES_PLUGIN_ID)).toBe(false);
   });
 
   it('installs from the store WITHOUT an open project and activates the module', async () => {

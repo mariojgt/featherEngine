@@ -127,6 +127,20 @@ describe('tree spec normalization', () => {
     } as never);
     expect(spec.chop.breakPoints.map((b) => b.height)).toEqual([0.2, 0.8]);
   });
+
+  it('fills old projects with a disabled pixel look and clamps new pixel settings', () => {
+    const legacy = normalizeTreeSpec({ id: 'legacy' } as never);
+    expect(legacy.look.pixelArt).toEqual({ enabled: false, leafArt: 'broad', alphaCutoff: 0.45, billboard: true });
+
+    const painted = normalizeTreeSpec({
+      id: 'painted',
+      look: { pixelArt: { enabled: true, leafArt: 'not-real', alphaCutoff: 9, billboard: false } },
+    } as never);
+    expect(painted.look.pixelArt.enabled).toBe(true);
+    expect(painted.look.pixelArt.leafArt).toBe('broad');
+    expect(painted.look.pixelArt.alphaCutoff).toBe(0.95);
+    expect(painted.look.pixelArt.billboard).toBe(false);
+  });
 });
 
 describe('tree chopping', () => {

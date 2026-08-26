@@ -1,11 +1,12 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import type { SceneObject, TreeSpec } from '../types';
+import type { SceneObject, TreePixelArtSpec, TreeSpec } from '../types';
 import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { sunDirectionFromEnvironment } from './environmentSettings';
 import { generateTree } from '../tree/generateTree';
 import { normalizeTreeSpec } from '../tree/treeSpec';
+import { pixelCanopyTexture } from '../tree/pixelCanopy';
 import { MAX_FOLIAGE_INTERACTORS, foliageInteractorUniforms } from './foliageInteractors';
 import { getTreeChopState, treeChopVersion } from '../runtime/treeChop';
 
@@ -67,6 +68,8 @@ function makeTreeUniforms(): TreeUniforms {
 const VERTEX_HEAD = `
 attribute float aWind;
 attribute float aTrunkT;
+attribute vec3  aCardDelta;
+attribute vec2  aCardOffset;
 uniform float uTime;
 uniform vec3  uWind;
 uniform float uSwayAmplitude;
@@ -79,6 +82,25 @@ varying float vTreeCut;
 `;
 
 const VERTEX_BODY = `
+  // Pixel foliage cards carry their authored corner-to-centre delta and a 2D half-offset. Rebuild
+  // those cards in the camera plane so a crown never thins into edge-on splinters. Ordinary foliage
+  // has zeroes in both attributes, making this an exact no-op for every existing tree.
+  {
+    #ifdef USE_INSTANCING
+      mat3 nfCardM = mat3(modelViewMatrix) * mat3(instanceMatrix);
+    #else
+      mat3 nfCardM = mat3(modelViewMatrix);
+    #endif
+    float nfCardX = max(dot(nfCardM[0], nfCardM[0]), 1e-8);
+    float nfCardY = max(dot(nfCardM[1], nfCardM[1]), 1e-8);
+    float nfCardZ = max(dot(nfCardM[2], nfCardM[2]), 1e-8);
+    vec3 nfCardRight = vec3(nfCardM[0].x / nfCardX, nfCardM[1].x / nfCardY, nfCardM[2].x / nfCardZ);
+    vec3 nfCardUp = vec3(nfCardM[0].y / nfCardX, nfCardM[1].y / nfCardY, nfCardM[2].y / nfCardZ);
+    nfCardRight *= inversesqrt(max(dot(nfCardRight, nfCardRight), 1e-12));
+    nfCardUp *= inversesqrt(max(dot(nfCardUp, nfCardUp), 1e-12));
+    transformed += aCardDelta + nfCardRight * aCardOffset.x + nfCardUp * aCardOffset.y;
+  }
+
   // Discard-by-collapse: the standing half and the felled half are the SAME geometry drawn twice, each
   // hiding the vertices belonging to the other. Cheaper and far simpler than splitting buffers, and it
   // keeps one shared geometry for every instance of the spec.
@@ -165,9 +187,16 @@ const FOLIAGE_FRAGMENT_BODY = `
   }
 `;
 
-function makeTreeMaterial(kind: 'bark' | 'foliage', uniforms: TreeUniforms): THREE.MeshLambertMaterial {
+function makeTreeMaterial(
+  kind: 'bark' | 'foliage',
+  uniforms: TreeUniforms,
+  pixelArt?: TreePixelArtSpec,
+): THREE.MeshLambertMaterial {
+  const paintedCards = kind === 'foliage' && pixelArt?.enabled;
   const material = new THREE.MeshLambertMaterial({
     vertexColors: true,
+    map: paintedCards ? pixelCanopyTexture() : null,
+    alphaTest: paintedCards ? pixelArt.alphaCutoff : 0,
     side: kind === 'foliage' ? THREE.DoubleSide : THREE.FrontSide,
     // Foliage normals are baked radial/canopy blends from the generator; flat shading would throw
     // them away and re-derive hard facet normals — the old "plastic rock pile" look.
@@ -185,9 +214,14 @@ function makeTreeMaterial(kind: 'bark' | 'foliage', uniforms: TreeUniforms): THR
     shader.fragmentShader = fragmentHead + fragment;
   };
   // Must distinguish the variants or three reuses one compiled program for both.
-  material.customProgramCacheKey = () => `nf-tree-${kind}-v2`;
+  material.customProgramCacheKey = () => `nf-tree-${kind}-v3-${paintedCards ? 'pixel' : 'solid'}`;
   return material;
 }
+
+const pixelMaterialKey = (spec: TreeSpec | null): string => {
+  const pixel = spec?.look.pixelArt;
+  return pixel?.enabled ? `on:${pixel.alphaCutoff}` : 'off';
+};
 
 /** Per-frame uniform update shared by single trees and scattered forests. */
 function updateTreeUniforms(
@@ -230,7 +264,13 @@ export function TreeMesh({ object }: { object: SceneObject }) {
 
   const uniforms = useRef<TreeUniforms>(makeTreeUniforms());
   const barkMaterial = useMemo(() => makeTreeMaterial('bark', uniforms.current), []);
-  const foliageMaterial = useMemo(() => makeTreeMaterial('foliage', uniforms.current), []);
+  const paintedMaterialKey = pixelMaterialKey(spec);
+  const foliageMaterial = useMemo(
+    () => makeTreeMaterial('foliage', uniforms.current, spec?.look.pixelArt),
+    // Leaf-art choice lives in geometry UVs; only enablement/cutoff changes the material program.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [paintedMaterialKey],
+  );
 
   useFrame((state, delta) => {
     const u = uniforms.current;
@@ -290,7 +330,12 @@ export function ScatteredTrees({
 
   const uniforms = useRef<TreeUniforms>(makeTreeUniforms());
   const barkMaterial = useMemo(() => makeTreeMaterial('bark', uniforms.current), []);
-  const foliageMaterial = useMemo(() => makeTreeMaterial('foliage', uniforms.current), []);
+  const paintedMaterialKey = pixelMaterialKey(normalized);
+  const foliageMaterial = useMemo(
+    () => makeTreeMaterial('foliage', uniforms.current, normalized.look.pixelArt),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [paintedMaterialKey],
+  );
   const env = useEditorStore(selectActiveSceneEnvironment);
   const windVec = env?.wind ?? [0, 0, 0];
 

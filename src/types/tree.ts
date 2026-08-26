@@ -22,6 +22,34 @@ export type TreeArchetype = 'conifer' | 'broadleaf' | 'birch' | 'willow' | 'palm
  */
 export type TreeFoliageStrategy = 'blob' | 'cards' | 'clusters' | 'skirt' | 'fronds' | 'strands' | 'none';
 
+/**
+ * Painted leaf silhouettes available to pixel-art canopies.
+ *
+ * These are construction languages rather than species names: several species can share a fine,
+ * airy leaf while keeping different trunks, branching habits and colour palettes.
+ */
+export type TreePixelLeafArt =
+  | 'broad'
+  | 'star'
+  | 'fine'
+  | 'blossom'
+  | 'jungle'
+  | 'ribbon'
+  | 'needle'
+  | 'pod'
+  | 'quill';
+
+export interface TreePixelArtSpec {
+  /** Off for ordinary parametric trees; on uses the procedural cutout atlas on foliage cards. */
+  enabled: boolean;
+  /** The painted silhouette family sampled by every canopy card. */
+  leafArt: TreePixelLeafArt;
+  /** Alpha-test threshold. A cutout stays in the opaque render queue and casts crisp shadows. */
+  alphaCutoff: number;
+  /** Rebuild cards in camera space so no part of the canopy turns edge-on. */
+  billboard: boolean;
+}
+
 export interface TreeTrunkSpec {
   /** World units, 1–30. */
   height: number;
@@ -99,6 +127,8 @@ export interface TreeLookSpec {
   translucency: { color: string; scale: number; power: number };
   /** 0–1 canopy interior darkening baked into vertex colour. */
   aoStrength: number;
+  /** Optional-looking in old project files, but normalization always supplies a complete value. */
+  pixelArt: TreePixelArtSpec;
 }
 
 export interface TreeWindSpec {

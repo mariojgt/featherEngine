@@ -5,9 +5,10 @@ import { Copy, Plus, TreePine, Trash2 } from 'lucide-react';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
 import { generateTree } from '../tree/generateTree';
+import { PIXEL_LEAF_ARTS } from '../tree/pixelCanopy';
 import { treeSpecFromArchetype } from '../tree/treeSpec';
 import { TreeMesh } from '../three/TreeMesh';
-import type { SceneObject, TreeArchetype, TreeSpec } from '../types';
+import type { SceneObject, TreeArchetype, TreePixelLeafArt, TreeSpec } from '../types';
 import { RangeField } from './InspectorPanel';
 
 /**
@@ -258,6 +259,58 @@ export function TreeBuilderPanel() {
                 <input type="color" value={spec.look.foliageRamp[1] ?? spec.look.foliageRamp[0]} onChange={(event) => patch({ look: { ...spec.look, foliageRamp: [spec.look.foliageRamp[0], event.target.value] } })} />
               </label>
               <RangeField label="Canopy AO" value={spec.look.aoStrength} min={0} max={1} step={0.01} onChange={(aoStrength) => patch({ look: { ...spec.look, aoStrength } })} />
+
+              <h4 className="inspector-subhead">Pixel Canopy</h4>
+              <label className="node-field row">
+                <span>Painted Leaf Cards</span>
+                <input
+                  type="checkbox"
+                  checked={spec.look.pixelArt.enabled}
+                  onChange={(event) =>
+                    patch({
+                      look: { ...spec.look, pixelArt: { ...spec.look.pixelArt, enabled: event.target.checked } },
+                      foliage: event.target.checked ? { ...spec.foliage, strategy: 'cards' } : spec.foliage,
+                    })
+                  }
+                />
+              </label>
+              {spec.look.pixelArt.enabled && (
+                <>
+                  <label className="node-field">
+                    <span>Leaf Language</span>
+                    <select
+                      value={spec.look.pixelArt.leafArt}
+                      onChange={(event) =>
+                        patch({
+                          look: {
+                            ...spec.look,
+                            pixelArt: { ...spec.look.pixelArt, leafArt: event.target.value as TreePixelLeafArt },
+                          },
+                        })
+                      }
+                    >
+                      {PIXEL_LEAF_ARTS.map((leafArt) => <option key={leafArt} value={leafArt}>{leafArt}</option>)}
+                    </select>
+                  </label>
+                  <RangeField
+                    label="Cutout Edge"
+                    value={spec.look.pixelArt.alphaCutoff}
+                    min={0.05}
+                    max={0.95}
+                    step={0.01}
+                    onChange={(alphaCutoff) => patch({ look: { ...spec.look, pixelArt: { ...spec.look.pixelArt, alphaCutoff } } })}
+                  />
+                  <label className="node-field row">
+                    <span>Face Camera</span>
+                    <input
+                      type="checkbox"
+                      checked={spec.look.pixelArt.billboard}
+                      onChange={(event) => patch({ look: { ...spec.look, pixelArt: { ...spec.look.pixelArt, billboard: event.target.checked } } })}
+                    />
+                  </label>
+                  <p className="field-hint">The atlas is generated from code and stored as a recipe, so no external sprite files are needed.</p>
+                </>
+              )}
 
               <h4 className="inspector-subhead">Chopping</h4>
               <label className="node-field row">

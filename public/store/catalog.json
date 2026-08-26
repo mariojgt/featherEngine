@@ -292,6 +292,39 @@
       }
     },
     {
+      "id": "pkg-feather-plugin-pixel-art-trees",
+      "slug": "pixel-art-trees",
+      "title": "Pixel Art Trees — Procedural Vegetation Studio",
+      "description": "Create game-ready pixel vegetation without importing sprites: nine procedural leaf languages, five growth habits, live 3D seed previews, custom palettes and one-click terrain-snapped groves. Every result is a tiny deterministic Feather tree recipe, so forests stay editable, wind-animated, choppable, collaboration-safe and ready for export.",
+      "author": "Feather",
+      "version": "1.0.0",
+      "kind": "plugin",
+      "tags": [
+        "plugin",
+        "pixel-art",
+        "trees",
+        "vegetation",
+        "forest",
+        "rpg",
+        "environment"
+      ],
+      "license": "CC0-1.0",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjODNENjZCIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTgzQTJBIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPvCfjLI8L3RleHQ+PC9zdmc+",
+      "sizeBytes": 1133,
+      "downloadUrl": "packages/plugins/pixel-art-trees.nfpack",
+      "engineVersion": "0.8.0",
+      "pluginId": "feather.pixel-art-trees",
+      "contents": {
+        "prefabs": 0,
+        "materials": 0,
+        "blueprints": 0,
+        "assets": 0,
+        "scenes": 0,
+        "uiDocuments": 0
+      }
+    },
+    {
       "id": "pkg-feather-template-cinematic",
       "slug": "template-cinematic",
       "title": "The Summit",

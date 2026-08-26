@@ -1,4 +1,4 @@
-import type { TreeArchetype, TreeBreakPoint, TreeSpec } from '../types';
+import type { TreeArchetype, TreeBreakPoint, TreePixelLeafArt, TreeSpec } from '../types';
 
 /**
  * Deterministic PRNG (mulberry32) — small, fast, well-distributed.
@@ -20,6 +20,21 @@ export function treeRng(seed: number): () => number {
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const clampInt = (value: number, min: number, max: number) =>
   Math.trunc(clamp(Number.isFinite(value) ? value : min, min, max));
+
+const PIXEL_LEAF_ART = new Set<TreePixelLeafArt>([
+  'broad',
+  'star',
+  'fine',
+  'blossom',
+  'jungle',
+  'ribbon',
+  'needle',
+  'pod',
+  'quill',
+]);
+
+const isPixelLeafArt = (value: unknown): value is TreePixelLeafArt =>
+  typeof value === 'string' && PIXEL_LEAF_ART.has(value as TreePixelLeafArt);
 
 /** The neutral tree every archetype is a partial override of. */
 export function baseTreeSpec(): TreeSpec {
@@ -71,6 +86,7 @@ export function baseTreeSpec(): TreeSpec {
       foliageRamp: ['#3f6b32', '#8fbe4a'],
       translucency: { color: '#9ed070', scale: 0.55, power: 2.4 },
       aoStrength: 0.45,
+      pixelArt: { enabled: false, leafArt: 'broad', alphaCutoff: 0.45, billboard: true },
     },
     wind: {
       stiffnessCurve: 1.6,
@@ -316,6 +332,14 @@ export function normalizeTreeSpec(spec: Partial<TreeSpec> & { id: string }): Tre
       barkRamp: merged.look.barkRamp?.length ? merged.look.barkRamp.slice(0, 4) : base.look.barkRamp,
       foliageRamp: merged.look.foliageRamp?.length ? merged.look.foliageRamp.slice(0, 4) : base.look.foliageRamp,
       aoStrength: clamp(merged.look.aoStrength, 0, 1),
+      pixelArt: {
+        enabled: Boolean(merged.look.pixelArt?.enabled),
+        leafArt: isPixelLeafArt(merged.look.pixelArt?.leafArt)
+          ? merged.look.pixelArt.leafArt
+          : base.look.pixelArt.leafArt,
+        alphaCutoff: clamp(merged.look.pixelArt?.alphaCutoff ?? base.look.pixelArt.alphaCutoff, 0.05, 0.95),
+        billboard: merged.look.pixelArt?.billboard ?? base.look.pixelArt.billboard,
+      },
     },
     wind: {
       ...merged.wind,

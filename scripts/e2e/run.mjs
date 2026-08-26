@@ -129,6 +129,80 @@ spec('asset store installs the Arbor Forge plugin and its studio plants a grove'
   }
 });
 
+spec('Pixel Art Trees installs, renders all species and plants deterministic vegetation', async () => {
+  const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=store' });
+  try {
+    await app.evaluate(`localStorage.removeItem('nodeforge.plugins')`);
+    await app.evaluate(`location.reload()`);
+    await app.waitFor(`document.querySelector('.toolbar')`, { label: 'editor reloaded' });
+
+    await clickViewMenuEntry(app, 'Store');
+    await app.waitFor(`document.querySelector('.store-card')`, { label: 'catalog loaded' });
+    await app.evaluate(`(() => {
+      const card = [...document.querySelectorAll('.store-card')]
+        .find((candidate) => candidate.textContent.includes('Pixel Art Trees'));
+      card?.querySelector('.store-install-button')?.click();
+    })()`);
+    await app.waitFor(
+      `(JSON.parse(localStorage.getItem('nodeforge.plugins') ?? '{}').state?.enabledIds ?? []).includes('feather.pixel-art-trees')`,
+      { label: 'Pixel Art Trees persisted' },
+    );
+
+    await clickViewMenuEntry(app, 'Pixel Art Trees');
+    await app.waitFor(`document.querySelectorAll('.pixel-art-trees-species').length === 9`, {
+      label: 'nine pixel species rendered',
+    });
+    await app.waitFor(`document.querySelector('.pixel-art-trees-canvas canvas')`, { label: 'pixel tree preview rendered' });
+    const previewPixels = await app.pixelStats('.pixel-art-trees-canvas');
+    assert.ok(previewPixels.meanLuminance > 8, 'preview is not a blank black WebGL surface');
+    assert.ok(previewPixels.meanLuminance < 190, 'preview keeps its dark editor framing');
+
+    // Pick a fantasy leaf language, switch the growth habit, and verify the real recipe reaches the scene.
+    await app.evaluate(`(() => {
+      [...document.querySelectorAll('.pixel-art-trees-species')]
+        .find((button) => button.textContent.includes('Lanternwood'))?.click();
+      const habit = [...document.querySelectorAll('.pixel-art-trees-controls select')]
+        .find((select) => select.closest('label')?.textContent.includes('Growth habit'));
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      setter.call(habit, 'ancient');
+      habit.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await app.waitFor(
+      `document.querySelector('.tree-preview-meta')?.textContent.includes('Pixel Lanternwood — Ancient')`,
+      { label: 'Lanternwood ancient preview updated' },
+    );
+
+    const before = await app.evaluate(
+      `(() => { const s = window.__featherStore; return s.scenes.find((scene) => scene.id === s.activeSceneId).objects.length; })()`,
+    );
+    await app.evaluate(`(() => {
+      [...document.querySelectorAll('.pixel-art-trees-panel button')]
+        .find((button) => button.textContent.trim() === 'Plant This Tree')?.click();
+    })()`);
+    await app.waitFor(
+      `(() => {
+        const s = window.__featherStore;
+        const objects = s.scenes.find((scene) => scene.id === s.activeSceneId).objects;
+        return objects.length === ${before} + 1 && objects.some((object) =>
+          object.tree?.spec?.look?.pixelArt?.enabled && object.tree.spec.look.pixelArt.leafArt === 'pod');
+      })()`,
+      { label: 'painted Lanternwood tree landed' },
+    );
+
+    await app.evaluate(`(() => {
+      [...document.querySelectorAll('.pixel-art-trees-panel button')]
+        .find((button) => button.textContent.trim() === 'Plant Pixel Grove')?.click();
+    })()`);
+    // Default is 18 linked trees plus their grouping object.
+    await app.waitFor(
+      `(() => { const s = window.__featherStore; return s.scenes.find((scene) => scene.id === s.activeSceneId).objects.length === ${before} + 20; })()`,
+      { label: 'pixel grove landed' },
+    );
+  } finally {
+    await app.dispose();
+  }
+});
+
 spec('preferences plugin manager installs, opens and removes Arbor Forge', async () => {
   const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=store' });
   try {

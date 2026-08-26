@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { TreeSpec } from '../types';
+import { pixelCanopyUvRect } from './pixelCanopy';
 import { treeRng } from './treeSpec';
 
 /**
@@ -52,13 +53,26 @@ class MeshBuilder {
   colors: number[] = [];
   wind: number[] = [];
   trunkT: number[] = [];
+  /** Centre-minus-authored-corner; zero for geometry that is not a camera-facing card. */
+  cardDelta: number[] = [];
+  /** Card-space half-offset; zero for geometry that should keep its authored orientation. */
+  cardOffset: number[] = [];
   indices: number[] = [];
 
   get vertexCount(): number {
     return this.positions.length / 3;
   }
 
-  vertex(p: THREE.Vector3, n: THREE.Vector3, u: number, v: number, c: THREE.Color, w: number, t: number): number {
+  vertex(
+    p: THREE.Vector3,
+    n: THREE.Vector3,
+    u: number,
+    v: number,
+    c: THREE.Color,
+    w: number,
+    t: number,
+    billboard?: { delta: THREE.Vector3; offsetX: number; offsetY: number },
+  ): number {
     const index = this.vertexCount;
     this.positions.push(p.x, p.y, p.z);
     this.normals.push(n.x, n.y, n.z);
@@ -66,6 +80,8 @@ class MeshBuilder {
     this.colors.push(c.r, c.g, c.b);
     this.wind.push(w);
     this.trunkT.push(t);
+    this.cardDelta.push(billboard?.delta.x ?? 0, billboard?.delta.y ?? 0, billboard?.delta.z ?? 0);
+    this.cardOffset.push(billboard?.offsetX ?? 0, billboard?.offsetY ?? 0);
     return index;
   }
 
@@ -95,6 +111,12 @@ class MeshBuilder {
     wind: number,
     trunkT: number,
     shading?: THREE.Vector3 | { radialCenter: THREE.Vector3; canopyCenter?: THREE.Vector3; canopyBlend?: number },
+    card?: {
+      /** Atlas rectangle applied to the source geometry's ordinary 0..1 UVs. */
+      uvRect?: readonly [number, number, number, number];
+      /** Rebuild this plane around its centre in the camera plane at render time. */
+      billboard?: { center: THREE.Vector3; size: number };
+    },
   ): void {
     const pos = geo.getAttribute('position');
     const nor = geo.getAttribute('normal');
@@ -104,6 +126,7 @@ class MeshBuilder {
     const p = new THREE.Vector3();
     const n = new THREE.Vector3();
     const toward = new THREE.Vector3();
+    const billboardDelta = new THREE.Vector3();
     for (let i = 0; i < pos.count; i += 1) {
       p.fromBufferAttribute(pos, i).applyMatrix4(matrix);
       if (shading instanceof THREE.Vector3) {
@@ -118,7 +141,22 @@ class MeshBuilder {
       } else {
         n.fromBufferAttribute(nor, i).applyMatrix3(normalMatrix).normalize();
       }
-      this.vertex(p, n, uv ? uv.getX(i) : 0, uv ? uv.getY(i) : 0, color, wind, trunkT);
+      const sourceU = uv ? uv.getX(i) : 0;
+      const sourceV = uv ? uv.getY(i) : 0;
+      const [u, v] = card?.uvRect
+        ? [
+            THREE.MathUtils.lerp(card.uvRect[0], card.uvRect[2], sourceU),
+            THREE.MathUtils.lerp(card.uvRect[1], card.uvRect[3], sourceV),
+          ]
+        : [sourceU, sourceV];
+      const billboard = card?.billboard
+        ? {
+            delta: billboardDelta.copy(card.billboard.center).sub(p),
+            offsetX: (sourceU - 0.5) * card.billboard.size,
+            offsetY: (sourceV - 0.5) * card.billboard.size,
+          }
+        : undefined;
+      this.vertex(p, n, u, v, color, wind, trunkT, billboard);
     }
     const idx = geo.getIndex();
     if (idx) {
@@ -136,6 +174,8 @@ class MeshBuilder {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
     g.setAttribute('aWind', new THREE.Float32BufferAttribute(this.wind, 1));
     g.setAttribute('aTrunkT', new THREE.Float32BufferAttribute(this.trunkT, 1));
+    g.setAttribute('aCardDelta', new THREE.Float32BufferAttribute(this.cardDelta, 3));
+    g.setAttribute('aCardOffset', new THREE.Float32BufferAttribute(this.cardOffset, 2));
     g.setIndex(this.indices);
     g.computeBoundingBox();
     g.computeBoundingSphere();
@@ -740,7 +780,21 @@ function emitCards(
         const outward = center.clone().sub(centroid);
         outward.setLength(1);
         if (!Number.isFinite(outward.x)) outward.copy(UP);
-        builder.addGeometry(CARD_GEO, matrix, jitterColor(shade(center), rand), wind, tipTrunkT, outward);
+        const pixel = spec.look.pixelArt;
+        builder.addGeometry(
+          CARD_GEO,
+          matrix,
+          jitterColor(shade(center), rand),
+          wind,
+          tipTrunkT,
+          outward,
+          pixel.enabled
+            ? {
+                uvRect: pixelCanopyUvRect(pixel.leafArt, Math.floor(rand() * 3)),
+                billboard: pixel.billboard ? { center, size: s } : undefined,
+              }
+            : undefined,
+        );
       }
     }
   }
@@ -845,11 +899,19 @@ function reduceForLod(spec: TreeSpec, lod: number): TreeSpec {
       branches: { ...spec.branches, levels: 0, countPerLevel: [] },
       foliage: {
         ...spec.foliage,
-        strategy: spec.foliage.strategy === 'none' ? 'none' : 'clusters',
+        // Pixel trees must keep card UVs at distance; mapping the cutout atlas onto a solid LOD
+        // cluster would punch arbitrary holes through it. Ordinary trees still collapse to blobs.
+        strategy:
+          spec.foliage.strategy === 'none'
+            ? 'none'
+            : spec.look.pixelArt.enabled
+              ? 'cards'
+              : 'clusters',
         density: 1,
-        size: spec.foliage.size * 2.4,
+        size: spec.foliage.size * (spec.look.pixelArt.enabled ? 1.25 : 2.4),
         sizeVariance: 0,
         crownFill: 1,
+        cardsPerCluster: spec.look.pixelArt.enabled ? 3 : spec.foliage.cardsPerCluster,
       },
     };
   }

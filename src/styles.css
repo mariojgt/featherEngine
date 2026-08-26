@@ -12327,6 +12327,163 @@ body.is-scrubbing * {
   text-overflow: ellipsis;
 }
 
+/* Pixel Art Trees (store plugin): a compact species browser around one real renderer preview. */
+.pixel-art-trees-panel .terrain-toolbox,
+.pixel-art-trees-panel .terrain-preview-column,
+.pixel-art-trees-panel .terrain-controls {
+  animation: pixel-art-trees-in 220ms cubic-bezier(0.2, 0, 0, 1) backwards;
+}
+.pixel-art-trees-panel .terrain-preview-column { animation-delay: 45ms; }
+.pixel-art-trees-panel .terrain-controls { animation-delay: 90ms; }
+@keyframes pixel-art-trees-in {
+  from { opacity: 0; translate: 0 6px; }
+}
+.pixel-art-trees-gallery {
+  overflow-y: auto;
+  background:
+    linear-gradient(rgba(15, 23, 19, 0.84), rgba(12, 17, 22, 0.96)),
+    repeating-conic-gradient(rgba(121, 190, 96, 0.09) 0 25%, transparent 0 50%) 0 / 12px 12px;
+}
+.pixel-art-trees-intro {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding: 9px;
+  border: 1px solid rgba(126, 205, 103, 0.18);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(68, 116, 65, 0.1);
+}
+.pixel-art-trees-intro strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.pixel-art-trees-intro p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.pixel-art-trees-kicker {
+  color: #93db75;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+.pixel-art-trees-species-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.pixel-art-trees-species {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(7, 11, 14, 0.34);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+.pixel-art-trees-species:hover {
+  border-color: rgba(142, 218, 113, 0.56);
+  translate: 0 -1px;
+}
+.pixel-art-trees-species.active {
+  border-color: #79cb61;
+  background: rgba(75, 134, 66, 0.14);
+  box-shadow: 0 0 0 1px rgba(121, 203, 97, 0.3) inset;
+}
+.pixel-art-trees-species > span:nth-child(2) {
+  display: -webkit-box;
+  min-height: 24px;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.pixel-art-trees-species small {
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+.pixel-art-trees-species-art {
+  position: relative;
+  display: block;
+  height: 38px;
+  overflow: hidden;
+  border-radius: 5px;
+  background:
+    radial-gradient(circle at 30% 58%, var(--pixel-leaf-inner) 0 18%, transparent 19%),
+    radial-gradient(circle at 50% 36%, var(--pixel-leaf-outer) 0 23%, transparent 24%),
+    radial-gradient(circle at 71% 60%, var(--pixel-leaf-inner) 0 19%, transparent 20%),
+    linear-gradient(90deg, transparent 45%, var(--pixel-bark) 46% 54%, transparent 55%),
+    linear-gradient(#18242c, #10171c);
+  image-rendering: pixelated;
+}
+.pixel-art-trees-species-art::after {
+  position: absolute;
+  inset: 0;
+  background: repeating-conic-gradient(rgba(255, 255, 255, 0.07) 0 25%, transparent 0 50%) 0 / 5px 5px;
+  content: '';
+  mix-blend-mode: overlay;
+}
+.pixel-art-trees-canvas {
+  position: relative;
+  min-height: 290px;
+  overflow: hidden;
+  border-radius: 10px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 12px 30px rgba(0, 0, 0, 0.32);
+}
+.pixel-art-trees-live-badge {
+  position: absolute;
+  z-index: 2;
+  top: 9px;
+  left: 9px;
+  padding: 4px 6px;
+  border: 1px solid rgba(145, 222, 116, 0.38);
+  border-radius: 4px;
+  background: rgba(10, 19, 14, 0.78);
+  color: #9be17e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+.pixel-art-trees-panel .tree-seed-strip {
+  grid-template-columns: repeat(5, 1fr);
+}
+.pixel-art-trees-controls .inspector-subhead {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.pixel-art-trees-color-row input[type='color'] {
+  width: 42px;
+  min-width: 42px;
+  height: 26px;
+  padding: 2px;
+}
+.pixel-art-trees-grove-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.pixel-art-trees-status {
+  padding: 7px 8px;
+  border-left: 2px solid rgba(126, 205, 103, 0.55);
+  background: rgba(68, 116, 65, 0.08);
+}
+
 /* --- Asset Store -------------------------------------------------------------------------------
    Card grid for the marketplace catalog. Cards are fixed-width tracks so a 1-column popped-out
    window and a wide docked panel both stay readable without a media query. */
