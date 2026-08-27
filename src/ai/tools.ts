@@ -50,7 +50,7 @@ import { createPhysicsLabTemplate } from '../project/physicsLabTemplate';
 import { createTimelineShowcaseTemplate } from '../project/timelineShowcaseTemplate';
 import { createSimRacingTemplate } from '../project/simRacingTemplate';
 import { createSplineStudioTemplate } from '../project/splineStudioTemplate';
-import { createStoryboardCinematic, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
+import { createStoryboardCinematic, polishCinematicLook, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, findRenderPreset, lightingPresetIds, materialPresetIds, materialPresetPatch, renderPresetIds } from '../three/presets';
 import { applyPhysicsMaterialPreset, physicsMaterialPresetIds } from '../runtime/physicsMaterials';
@@ -3365,7 +3365,7 @@ const rawEngineTools = {
 
   create_storyboard_cinematic: tool({
     description:
-      'Create a complete Sequencer-style storyboard cinematic in one call: a new sequence with film look, fades, camera shots or a smooth camera path, optional autoplay, and an optional end event for gameplay handoff. Prefer this over many low-level add_cinematic_action calls when the user asks for an intro, reveal, boss arrival, vista flyover, or simple cutscene.',
+      'Create a complete Sequencer-style storyboard cinematic in one call: a new sequence with film look, fades, title card, camera shots or a smooth camera path, optional autoplay, and an optional end event for gameplay handoff. Prefer this over many low-level add_cinematic_action calls when the user asks for an intro, reveal, boss arrival, vista flyover, or simple cutscene. The Film Mode panel Quick Cinematic gallery uses the same presets.',
     inputSchema: z.object({
       name: z.string().optional(),
       preset: z.enum(STORYBOARD_PRESETS).optional().describe('three-shot-intro = establishing/push/reveal; orbit-reveal = one smooth camera path; gameplay-handoff = intro that ends near a gameplay camera angle; dramatic-reveal = low-angle hero hold that cranes up into a wide reveal; product-turntable = full 360° orbit around the subject.'),
@@ -3375,13 +3375,16 @@ const rawEngineTools = {
       autoplay: z.boolean().optional(),
       includeFades: z.boolean().optional(),
       endEventName: z.string().optional().describe('Optional custom event fired near the end, e.g. cinematic_finished/start_gameplay.'),
+      title: z.string().optional().describe('On-screen title card near the start. Defaults per preset when omitted.'),
+      subtitle: z.string().optional().describe('Optional subtitle / lower-third under the title.'),
       letterbox: z.number().min(0).max(3).optional(),
       grade: z.enum(['none', 'warm', 'teal-orange', 'noir', 'cool', 'sepia', 'custom']).optional(),
       gradeIntensity: z.number().min(0).max(1).optional(),
       grain: z.number().min(0).max(1).optional(),
       vignette: z.number().min(0).max(1).optional(),
+      motionBlur: z.number().min(0).max(1).optional().describe('Camera motion blur 0–1; orbit/turntable presets default mild blur.'),
     }),
-    execute: async ({ name, preset, subjectObjectId, focusPoint, duration, autoplay, includeFades, endEventName, letterbox, grade, gradeIntensity, grain, vignette }) => {
+    execute: async ({ name, preset, subjectObjectId, focusPoint, duration, autoplay, includeFades, endEventName, title, subtitle, letterbox, grade, gradeIntensity, grain, vignette, motionBlur }) => {
       if (subjectObjectId && !findObject(subjectObjectId)) return `No object with id ${subjectObjectId}.`;
       const result = createStoryboardCinematic({
         name,
@@ -3392,11 +3395,23 @@ const rawEngineTools = {
         autoplay,
         includeFades,
         endEventName,
-        look: { letterbox, grade, gradeIntensity, grain, vignette },
+        title,
+        subtitle,
+        look: { letterbox, grade, gradeIntensity, grain, vignette, motionBlur },
       });
       if (!result) return 'No active scene to add a storyboard cinematic to.';
       const subject = result.subjectName ? ` around ${result.subjectName}` : '';
       return `Created ${result.preset} storyboard cinematic${subject}: cinematicId ${result.cinematicId}, ${result.actionCount} actions, focus [${result.focus.join(', ')}].`;
+    },
+  }),
+
+  polish_cinematic_look: tool({
+    description:
+      'Apply one-click film polish to an existing Film Mode cinematic: letterbox 2.39, warm grade, grain, vignette, and fade bookends if the sequence has no fades yet. Use when the user wants a blank/rough cutscene to look more cinematic without rebuilding shots.',
+    inputSchema: z.object({ cinematicId: z.string() }),
+    execute: async ({ cinematicId }) => {
+      const ok = polishCinematicLook(cinematicId);
+      return ok ? `Applied film polish to cinematic ${cinematicId}.` : `No cinematic with id ${cinematicId}.`;
     },
   }),
 

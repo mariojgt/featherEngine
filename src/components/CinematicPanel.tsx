@@ -6,7 +6,13 @@ import { useProjectStore } from '../store/projectStore';
 import { editorCameraPose } from '../three/EditorCamera';
 import type { CinematicAction, CinematicActionType, CinematicCameraKeyframe, CinematicEase, CinematicGrade, CinematicInterpolation, CinematicLook, CinematicTransformKeyframe, MaterialOverrides, RuntimeCinematicFade, RuntimeCinematicText, SceneObjectKind, Vector3Tuple } from '../types';
 import { GRADE_PRESETS, resolveGrade } from '../three/ColorGrade';
-import { createStoryboardCinematic, type StoryboardPreset } from '../project/cinematicStoryboard';
+import {
+  createStoryboardCinematic,
+  polishCinematicLook,
+  STORYBOARD_PRESETS,
+  STORYBOARD_PRESET_META,
+  type StoryboardPreset,
+} from '../project/cinematicStoryboard';
 import { SHOT_LIBRARY, addLibraryShot, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { getPlatform } from '../platform';
 
@@ -397,6 +403,7 @@ export function CinematicPanel() {
   const [objectTrackDragOver, setObjectTrackDragOver] = useState(false);
   const objectTrackPickerRef = useRef<HTMLDivElement>(null);
   const [movieStatus, setMovieStatus] = useState('');
+  const [quickTitle, setQuickTitle] = useState('');
   // After a successful WebM/MP4 export, remember where it was saved so we can offer a "Show in
   // folder" button. Cleared at the start of the next export. Only populated on desktop (Tauri's
   // save dialog returns an absolute path); on web we set it to null since the browser controls
@@ -555,18 +562,70 @@ export function CinematicPanel() {
     [active?.actions],
   );
 
-  const createStoryboard = (preset: StoryboardPreset) => {
+  const createStoryboard = (preset: StoryboardPreset, titleOverride?: string) => {
     const result = createStoryboardCinematic({
       preset,
       subjectObjectId: selected?.kind === 'camera' ? undefined : selected?.id,
       autoplay: preset === 'gameplay-handoff',
       endEventName: preset === 'gameplay-handoff' ? 'cinematic_finished' : undefined,
+      title: (titleOverride ?? quickTitle).trim() || undefined,
     });
     if (result) {
       setSelectedActionId('');
+      setQuickTitle('');
       previewCinematic(result.cinematicId, 0);
     }
   };
+
+  const subjectHint = selected && selected.kind !== 'camera'
+    ? `Framing selected “${selected.name}”`
+    : 'Framing the whole scene — select an object to frame it';
+
+  const renderQuickCinematicGallery = (opts?: { compact?: boolean }) => (
+    <div className={`cinematic-quick-gallery${opts?.compact ? ' compact' : ''}`}>
+      {!opts?.compact && (
+        <>
+          <Clapperboard size={28} aria-hidden />
+          <h3>Quick Cinematic</h3>
+          <p>One click builds a polished sequence — film look, fades, auto-framed shots, and a title card. Tweak afterward.</p>
+        </>
+      )}
+      {opts?.compact && (
+        <p className="cinematic-hint">No camera shots yet — pick a Quick Cinematic template, or keep editing below.</p>
+      )}
+      <p className="cinematic-hint">{subjectHint}</p>
+      <label className="field-row cinematic-quick-title">
+        <span>Title</span>
+        <input
+          value={quickTitle}
+          placeholder="Opening / Reveal / …"
+          onChange={(event) => setQuickTitle(event.target.value)}
+        />
+      </label>
+      <div className="cinematic-quick-cards">
+        {STORYBOARD_PRESETS.map((preset) => {
+          const meta = STORYBOARD_PRESET_META[preset];
+          return (
+            <button
+              key={preset}
+              type="button"
+              className="cinematic-quick-card"
+              title={meta.blurb}
+              onClick={() => createStoryboard(preset)}
+            >
+              <strong>{meta.label}</strong>
+              <span>{meta.blurb}</span>
+            </button>
+          );
+        })}
+      </div>
+      {!opts?.compact && (
+        <button className="full-button" onClick={() => createCinematic('Opening Shot', 8)}>
+          Blank sequence
+        </button>
+      )}
+    </div>
+  );
 
   // Snap a camera beat onto the exact framing the editor viewport currently shows.
   const captureViewportInto = (action: CinematicAction) => {
@@ -2100,9 +2159,7 @@ export function CinematicPanel() {
         <div className="empty-state compact">No active scene.</div>
       ) : cinematics.length === 0 ? (
         <div className="cinematic-empty">
-          <Clapperboard size={28} aria-hidden />
-          <p>Create a cinematic sequence for camera cuts, fades, animation beats, sounds, and temporary scene objects.</p>
-          <button className="full-button" onClick={() => createCinematic('Opening Shot', 8)}>Create Film Mode sequence</button>
+          {renderQuickCinematicGallery()}
         </div>
       ) : (
         <>
@@ -2256,6 +2313,11 @@ export function CinematicPanel() {
                   </div>
                 )}
               </section>}
+              {cameraShotCount === 0 && (
+                <section className="inspector-section cinematic-quick-coach">
+                  {renderQuickCinematicGallery({ compact: true })}
+                </section>
+              )}
               <section className="inspector-section cinematic-camera-workflow">
                 <h3>Cameras &amp; Cuts</h3>
                 <div className="cinematic-camera-buttons">
@@ -2324,31 +2386,37 @@ export function CinematicPanel() {
               {showAdvanced && <>
               <section className="inspector-section cinematic-shot-templates">
                 <h3>Shot templates</h3>
+                <p className="cinematic-hint">{subjectHint} · creates a new sequence</p>
                 <div className="cinematic-template-grid">
-                  <button className="full-button" title="Create a new sequence with an establishing shot, push-in, reveal, fades, and film look" onClick={() => createStoryboard('three-shot-intro')}>
-                    <Clapperboard size={14} aria-hidden />
-                    3-shot intro
-                  </button>
-                  <button className="full-button" title="Create a new sequence with one smooth orbit camera path around the selected object or scene center" onClick={() => createStoryboard('orbit-reveal')}>
-                    <Camera size={14} aria-hidden />
-                    Orbit reveal
-                  </button>
-                  <button className="full-button" title="Create a new autoplay intro that ends with a cinematic_finished event for gameplay handoff" onClick={() => createStoryboard('gameplay-handoff')}>
-                    <Play size={14} aria-hidden />
-                    Gameplay handoff
-                  </button>
-                  <button className="full-button" title="Create a new sequence: a low-angle hero hold that cranes up into a wide reveal" onClick={() => createStoryboard('dramatic-reveal')}>
-                    <Clapperboard size={14} aria-hidden />
-                    Dramatic reveal
-                  </button>
-                  <button className="full-button" title="Create a new sequence: a full 360° turntable orbit around the subject" onClick={() => createStoryboard('product-turntable')}>
-                    <Camera size={14} aria-hidden />
-                    Turntable
-                  </button>
+                  {STORYBOARD_PRESETS.map((preset) => {
+                    const meta = STORYBOARD_PRESET_META[preset];
+                    return (
+                      <button
+                        key={preset}
+                        className="full-button"
+                        title={meta.blurb}
+                        onClick={() => createStoryboard(preset)}
+                      >
+                        <Clapperboard size={14} aria-hidden />
+                        {meta.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </section>
               <section className="inspector-section">
                 <h3>Film look</h3>
+                <button
+                  className="full-button"
+                  title="Apply letterbox, warm grade, grain, vignette, and fade bookends if missing"
+                  onClick={() => {
+                    if (!active) return;
+                    polishCinematicLook(active.id);
+                    if (!running) previewCinematic(active.id, beatTime);
+                  }}
+                >
+                  Apply film polish
+                </button>
                 <label className="field-row">
                   <span>Letterbox</span>
                   <select

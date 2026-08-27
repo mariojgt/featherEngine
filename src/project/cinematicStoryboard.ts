@@ -4,6 +4,30 @@ import type { CinematicGrade, CinematicLook, RuntimeCinematicCamera, SceneObject
 export const STORYBOARD_PRESETS = ['three-shot-intro', 'orbit-reveal', 'gameplay-handoff', 'dramatic-reveal', 'product-turntable'] as const;
 export type StoryboardPreset = (typeof STORYBOARD_PRESETS)[number];
 
+/** Shared labels + blurbs for the Quick Cinematic UI and the AI guide. */
+export const STORYBOARD_PRESET_META: Record<StoryboardPreset, { label: string; blurb: string }> = {
+  'three-shot-intro': {
+    label: 'Three-Shot Intro',
+    blurb: 'Wide → push-in → reveal with fades, title, and film look.',
+  },
+  'orbit-reveal': {
+    label: 'Orbit Reveal',
+    blurb: 'One smooth orbit around your subject with gentle motion blur.',
+  },
+  'gameplay-handoff': {
+    label: 'Gameplay Handoff',
+    blurb: 'Autoplay intro that lands near a playable camera and fires cinematic_finished.',
+  },
+  'dramatic-reveal': {
+    label: 'Dramatic Reveal',
+    blurb: 'Low hero hold that cranes up into a wide reveal — big-moment energy.',
+  },
+  'product-turntable': {
+    label: 'Product Turntable',
+    blurb: 'Full 360° showcase orbit — great for props and heroes.',
+  },
+};
+
 export interface StoryboardCinematicOptions {
   name?: string;
   preset?: StoryboardPreset;
@@ -14,6 +38,10 @@ export interface StoryboardCinematicOptions {
   includeFades?: boolean;
   endEventName?: string;
   look?: Partial<CinematicLook>;
+  /** On-screen title card near the start. Defaults per preset when omitted. */
+  title?: string;
+  /** Optional subtitle / lower-third under the title. */
+  subtitle?: string;
 }
 
 export interface StoryboardCinematicResult {
@@ -31,12 +59,21 @@ const DEFAULT_LOOK: CinematicLook = {
   vignette: 0.25,
 };
 
-const PRESET_NAMES: Record<StoryboardPreset, string> = {
-  'three-shot-intro': 'Three-Shot Intro',
-  'orbit-reveal': 'Orbit Reveal',
-  'gameplay-handoff': 'Gameplay Handoff',
-  'dramatic-reveal': 'Dramatic Reveal',
-  'product-turntable': 'Product Turntable',
+/** Per-preset film-look overrides layered on DEFAULT_LOOK. */
+const PRESET_LOOK: Record<StoryboardPreset, Partial<CinematicLook>> = {
+  'three-shot-intro': { grade: 'warm', grain: 0.12, vignette: 0.28 },
+  'orbit-reveal': { grade: 'teal-orange', motionBlur: 0.35, grain: 0.08, vignette: 0.22 },
+  'gameplay-handoff': { grade: 'warm', letterbox: 2.39, grain: 0.08, vignette: 0.2 },
+  'dramatic-reveal': { grade: 'cool', motionBlur: 0.25, grain: 0.14, vignette: 0.35 },
+  'product-turntable': { grade: 'teal-orange', motionBlur: 0.4, grain: 0.06, vignette: 0.18 },
+};
+
+const DEFAULT_TITLES: Record<StoryboardPreset, string> = {
+  'three-shot-intro': 'Opening',
+  'orbit-reveal': 'Reveal',
+  'gameplay-handoff': 'Get Ready',
+  'dramatic-reveal': 'The Reveal',
+  'product-turntable': 'Showcase',
 };
 
 const vec = (x: number, y: number, z: number): Vector3Tuple => [x, y, z];
@@ -51,12 +88,21 @@ function isRenderableSubject(object: SceneObject) {
   return object.kind !== 'camera' && object.kind !== 'light' && object.kind !== 'empty' && object.kind !== 'terrain';
 }
 
+/** Prefer a slightly generous radius so imported meshes / characters don't get tiny close-ups. */
+function subjectRadius(subject: SceneObject) {
+  const scale = subject.transform.scale;
+  const maxAxis = Math.max(scale[0], scale[1], scale[2]);
+  // Characters and imported meshes often sit near unit scale even when the mesh is taller — bump the floor.
+  const kindBump = subject.character || subject.renderer?.modelAssetId ? 2.4 : 1.5;
+  return Math.max(kindBump, maxAxis * 1.8, Math.abs(subject.transform.position[1]) * 0.15);
+}
+
 export function focusFromScene(objects: SceneObject[], subjectObjectId?: string, focusPoint?: Vector3Tuple) {
   const subject = subjectObjectId ? objects.find((object) => object.id === subjectObjectId) : undefined;
   if (focusPoint) return { focus: focusPoint, radius: 3, subject };
   if (subject) {
     const scale = subject.transform.scale;
-    const radius = Math.max(1.5, Math.max(scale[0], scale[1], scale[2]) * 1.8);
+    const radius = subjectRadius(subject);
     return {
       focus: add(subject.transform.position, vec(0, Math.max(0.5, scale[1] * 0.35), 0)),
       radius,
@@ -72,13 +118,14 @@ export function focusFromScene(objects: SceneObject[], subjectObjectId?: string,
   renderables.forEach((object) => {
     const p = object.transform.position;
     const s = object.transform.scale;
+    const pad = object.character || object.renderer?.modelAssetId ? 0.75 : 0.5;
     for (let i = 0; i < 3; i++) {
-      min[i] = Math.min(min[i], p[i] - s[i] * 0.5);
-      max[i] = Math.max(max[i], p[i] + s[i] * 0.5);
+      min[i] = Math.min(min[i], p[i] - s[i] * pad);
+      max[i] = Math.max(max[i], p[i] + s[i] * pad);
     }
   });
   const focus = vec((min[0] + max[0]) * 0.5, Math.max(0.8, (min[1] + max[1]) * 0.5), (min[2] + max[2]) * 0.5);
-  const radius = Math.max(3, Math.min(16, Math.hypot(max[0] - min[0], max[2] - min[2]) * 0.35));
+  const radius = Math.max(3, Math.min(18, Math.hypot(max[0] - min[0], max[2] - min[2]) * 0.38));
   return { focus, radius, subject: undefined };
 }
 
@@ -118,6 +165,74 @@ function addEndEvent(cinematicId: string, duration: number, eventName?: string) 
     label: `Fire ${eventName}`,
     eventName,
   });
+}
+
+function addTitleCards(
+  cinematicId: string,
+  duration: number,
+  title: string | undefined,
+  subtitle: string | undefined,
+  preset: StoryboardPreset,
+) {
+  const store = useEditorStore.getState();
+  const resolvedTitle = (title ?? DEFAULT_TITLES[preset]).trim();
+  if (resolvedTitle) {
+    store.addCinematicAction(cinematicId, {
+      type: 'text',
+      time: 0.35,
+      duration: Math.min(2.8, duration * 0.32),
+      label: 'Title',
+      text: resolvedTitle,
+      textStyle: 'title',
+      textColor: '#ffffff',
+    });
+  }
+  const resolvedSubtitle = subtitle?.trim();
+  if (resolvedSubtitle) {
+    store.addCinematicAction(cinematicId, {
+      type: 'text',
+      time: 0.9,
+      duration: Math.min(2.4, duration * 0.28),
+      label: 'Subtitle',
+      text: resolvedSubtitle,
+      textStyle: 'subtitle',
+      textColor: '#e8eef8',
+    });
+  } else if (preset === 'gameplay-handoff') {
+    store.addCinematicAction(cinematicId, {
+      type: 'text',
+      time: Math.max(0.5, duration - 2.4),
+      duration: 2,
+      label: 'Handoff prompt',
+      text: 'Press to continue',
+      textStyle: 'lowerThird',
+      textColor: '#f4f7fb',
+    });
+  }
+}
+
+/**
+ * One-click film polish for an existing sequence: letterbox, grade, grain, vignette,
+ * and fade bookends when none exist yet. Safe to re-run (won't duplicate fades if already present).
+ */
+export function polishCinematicLook(cinematicId: string): boolean {
+  const store = useEditorStore.getState();
+  const cinematic = store.activeScene()?.cinematics?.find((item) => item.id === cinematicId);
+  if (!cinematic) return false;
+
+  const look: CinematicLook = {
+    ...DEFAULT_LOOK,
+    ...stripUndefined(cinematic.look ?? {}),
+    letterbox: cinematic.look?.letterbox && cinematic.look.letterbox > 0 ? cinematic.look.letterbox : 2.39,
+    grade: cinematic.look?.grade && cinematic.look.grade !== 'none' ? cinematic.look.grade : 'warm',
+    grain: cinematic.look?.grain ?? 0.1,
+    vignette: cinematic.look?.vignette ?? 0.25,
+  };
+  store.setCinematicLook(cinematicId, look);
+
+  const hasFade = cinematic.actions.some((action) => action.type === 'fade');
+  if (!hasFade) addFadeBookends(cinematicId, cinematic.duration);
+  return true;
 }
 
 function addThreeShotIntro(cinematicId: string, focus: Vector3Tuple, radius: number, duration: number) {
@@ -322,13 +437,21 @@ export function createStoryboardCinematic(options: StoryboardCinematicOptions = 
   if (!scene) return undefined;
 
   const preset = options.preset ?? 'three-shot-intro';
-  const duration = Math.max(3, options.duration ?? (preset === 'orbit-reveal' ? 8 : 9));
+  const duration = Math.max(3, options.duration ?? (preset === 'orbit-reveal' ? 8 : preset === 'product-turntable' ? 10 : 9));
   const objects = selectActiveObjects(store);
   const { focus, radius, subject } = focusFromScene(objects, options.subjectObjectId, options.focusPoint);
-  const cinematicId = store.createCinematic(options.name ?? PRESET_NAMES[preset], duration);
-  store.updateCinematic(cinematicId, { autoplay: options.autoplay, skippable: true, duration });
+  const cinematicId = store.createCinematic(options.name ?? STORYBOARD_PRESET_META[preset].label, duration);
+  store.updateCinematic(cinematicId, {
+    autoplay: options.autoplay,
+    skippable: true,
+    duration,
+  });
 
-  const look: CinematicLook = { ...DEFAULT_LOOK, ...stripUndefined(options.look ?? {}) };
+  const look: CinematicLook = {
+    ...DEFAULT_LOOK,
+    ...PRESET_LOOK[preset],
+    ...stripUndefined(options.look ?? {}),
+  };
   if (look.grade === undefined) look.grade = DEFAULT_LOOK.grade as CinematicGrade;
   store.setCinematicLook(cinematicId, look);
 
@@ -338,6 +461,8 @@ export function createStoryboardCinematic(options: StoryboardCinematicOptions = 
   else if (preset === 'dramatic-reveal') addDramaticReveal(cinematicId, focus, radius, duration);
   else if (preset === 'product-turntable') addProductTurntable(cinematicId, focus, radius, duration);
   else addThreeShotIntro(cinematicId, focus, radius, duration);
+
+  addTitleCards(cinematicId, duration, options.title, options.subtitle, preset);
   addEndEvent(cinematicId, duration, options.endEventName);
 
   store.setActiveCinematic(cinematicId);

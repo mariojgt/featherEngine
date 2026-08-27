@@ -245,6 +245,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Set ${input.trackType === 'camera' ? 'camera' : 'object'} cinematic key`;
     case 'delete_cinematic_keyframe':
       return 'Deleted cinematic key';
+    case 'create_storyboard_cinematic':
+      return `Built ${typeof input.preset === 'string' ? input.preset : 'storyboard'} cinematic`;
+    case 'polish_cinematic_look':
+      return 'Applied film polish';
     case 'add_cinematic_action':
       return 'Added cinematic action';
     case 'update_cinematic_action':

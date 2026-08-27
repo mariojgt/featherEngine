@@ -9345,7 +9345,7 @@ body.is-scrubbing * {
   gap: 12px;
   place-items: center;
   margin: 14px 0;
-  padding: 40px 20px;
+  padding: 24px 16px;
   border: 1.5px dashed var(--border-strong);
   border-radius: var(--radius-lg);
   color: var(--muted);
@@ -9355,6 +9355,89 @@ body.is-scrubbing * {
 .cinematic-empty svg {
   color: var(--accent);
   opacity: 0.7;
+}
+
+.cinematic-quick-gallery {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+  place-items: stretch;
+  text-align: left;
+}
+
+.cinematic-quick-gallery > svg {
+  justify-self: center;
+}
+
+.cinematic-quick-gallery > h3 {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.cinematic-quick-gallery > p {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.cinematic-quick-gallery.compact {
+  max-width: none;
+}
+
+.cinematic-quick-gallery.compact > .cinematic-hint:first-child {
+  text-align: left;
+}
+
+.cinematic-quick-title {
+  margin: 0;
+}
+
+.cinematic-quick-cards {
+  display: grid;
+  gap: 8px;
+}
+
+.cinematic-quick-card {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 10, 15, 0.4);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--motion) var(--ease),
+    background var(--motion) var(--ease);
+}
+
+.cinematic-quick-card:hover {
+  border-color: var(--accent);
+  background: rgba(91, 140, 255, 0.08);
+}
+
+.cinematic-quick-card strong {
+  font-size: var(--text-xs);
+}
+
+.cinematic-quick-card span {
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.cinematic-quick-coach {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  background: rgba(8, 10, 15, 0.22);
 }
 
 .cinematic-list,
