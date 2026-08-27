@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import type { ModelPartShape } from '../types';
 
 /**
- * Ephemeral Model Forge session for in-viewport kit-bashing (Spline-style).
+ * Ephemeral Model Forge session for in-viewport kit-bashing. The studio expands `mesh` into the
+ * Blender-like Edit workspace with vertex/edge/face control-cage selection.
  * Not persisted — it follows the current selection and editor tools.
  */
 export type ModelForgeMode = 'build' | 'paint' | 'mesh';

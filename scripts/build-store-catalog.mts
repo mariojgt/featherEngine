@@ -1111,9 +1111,9 @@ const MODEL_FORGE_PLUGIN = {
     pluginId: 'feather.model-forge',
     name: 'Model Forge — Prototype Modeler',
     description:
-      'Prototype props without leaving the engine: kit-bash five primitives (box, cylinder, sphere, cone, wedge) into fences, crates, tiles and arches, paint faces from a stylized palette, and pick the finish — smooth Spline-style rounded corners with a satin sheen, or crisp flat-shaded Meshy facets. Placed copies stay live-linked and restyle as you edit the asset; when a prop graduates, bake it into a real GLB model asset — thumbnailed, placeable anywhere, shipped in exports, and openable in Blender.',
+      'Prototype props without leaving the engine in a Blender-inspired Object, Edit and Paint workspace. Kit-bash five primitives, shape box control cages by vertex, edge or face, search twelve starter models, paint from a stylized palette, and choose smooth rounded or crisp flat finishes. Placed copies stay live-linked; finished props bake into real GLB assets for projects and exports.',
     author: 'Feather',
-    version: '1.0.0',
+    version: '1.1.0',
     tags: ['plugin', 'modeling', 'props', 'stylized', 'prototyping'],
     thumbnail: thumbnail('#E9A13B', '#4A2508', '\u{1F528}'),
   },

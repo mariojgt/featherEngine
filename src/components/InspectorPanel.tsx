@@ -18,7 +18,7 @@ import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime
 import { WATER_STYLE_PRESETS } from '../three/presets';
 import { withTerrainDefaults } from '../terrain/terrain';
 import { treeSpecFromArchetype } from '../tree/treeSpec';
-import { MODEL_STARTERS } from '../model/modelSpec';
+import { MODEL_STARTERS, QUICK_MODEL_STARTER_IDS } from '../model/modelSpec';
 import { ensureModelForgeEnabled, openModelForgeStudio } from '../extensions/openModelForge';
 import { useModelForgeSession } from '../store/modelForgeSessionStore';
 import { customizedModelIds, isInstanceable } from '../three/modelInstancing';
@@ -2194,7 +2194,7 @@ function ModelForgeSection({ object }: { object: SceneObject }) {
         <>
           <p className="field-hint">
             Prototype prop “{spec.name}” — {spec.parts.length} part{spec.parts.length === 1 ? '' : 's'}. Add primitives
-            in the viewport bar, paint faces, or open the studio to sculpt box corners.
+            in the viewport bar, paint faces, or open the studio to edit box vertices, edges, and faces.
           </p>
           <label className="field-row">
             <span>Library asset</span>
@@ -2229,7 +2229,7 @@ function ModelForgeSection({ object }: { object: SceneObject }) {
             Turn this object into a kit-bashable prototype (Spline-style primitives in the scene — not a Blender import).
           </p>
           <div className="insert-popover-grid" style={{ position: 'static', display: 'grid' }}>
-            {MODEL_STARTERS.filter((starter) => ['blank', 'crate', 'barrel', 'arch'].includes(starter.id)).map((starter) => (
+            {MODEL_STARTERS.filter((starter) => QUICK_MODEL_STARTER_IDS.includes(starter.id)).map((starter) => (
               <button key={starter.id} type="button" className="full-button" title={starter.tagline} onClick={() => convert(starter.id)}>
                 {starter.name}
               </button>

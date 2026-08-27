@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { selectActiveObjects, useEditorStore } from '../editorStore';
-import { MODEL_FACE_GROUPS, MODEL_STARTERS } from '../../model/modelSpec';
+import {
+  BOX_EDGE_CORNERS,
+  BOX_FACE_CORNERS,
+  MODEL_FACE_GROUPS,
+  MODEL_STARTERS,
+  QUICK_MODEL_STARTER_IDS,
+  boxComponentCorners,
+  boxComponentCount,
+} from '../../model/modelSpec';
+import { clearHistory, initHistory, redo, undo } from '../history';
 
 /**
  * The store actions behind the Model Forge panel and the AI's model tools. What matters: starters
@@ -16,6 +25,24 @@ describe('Model Forge store actions', () => {
     for (const spec of useEditorStore.getState().modelSpecs.filter((entry) => entry.id !== 'model-starter-crate')) {
       useEditorStore.getState().deleteModelSpec(spec.id);
     }
+    initHistory();
+    clearHistory();
+  });
+
+  it('ships a broader, valid starter gallery and a complete box control cage', () => {
+    const ids = MODEL_STARTERS.map((starter) => starter.id);
+    expect(ids).toEqual(expect.arrayContaining(['table', 'chair', 'stairs', 'lamp', 'rock', 'robot']));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(MODEL_STARTERS.every((starter) => starter.build().length > 0)).toBe(true);
+    expect(QUICK_MODEL_STARTER_IDS.every((id) => ids.includes(id))).toBe(true);
+
+    expect(boxComponentCount('vertex')).toBe(8);
+    expect(boxComponentCount('edge')).toBe(12);
+    expect(boxComponentCount('face')).toBe(6);
+    expect(BOX_EDGE_CORNERS).toHaveLength(12);
+    expect(BOX_FACE_CORNERS).toHaveLength(6);
+    expect(boxComponentCorners('face', 0)).toEqual([1, 3, 5, 7]);
+    expect(new Set(BOX_EDGE_CORNERS.flat())).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]));
   });
 
   it('createModelSpec from a starter lands a normalized library asset', () => {
@@ -148,5 +175,20 @@ describe('Model Forge store actions', () => {
 
     const exported = useEditorStore.getState().exportProject();
     expect(exported.modelSpecs?.some((entry) => entry.id === specId)).toBe(true);
+  });
+
+  it('includes Model Forge asset edits in local undo and redo', () => {
+    const specId = useEditorStore.getState().createModelSpec('chair')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    clearHistory();
+
+    useEditorStore.getState().updateModelPart(specId, partId, { position: [3, 2, 1] });
+    expect(useEditorStore.getState().undoDepth).toBe(1);
+    expect(useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].position).toEqual([3, 2, 1]);
+
+    undo();
+    expect(useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].position).toEqual([0, 0.62, 0]);
+    redo();
+    expect(useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].position).toEqual([3, 2, 1]);
   });
 });

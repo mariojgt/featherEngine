@@ -1665,9 +1665,9 @@ const rawEngineTools = {
 
   create_model_spec: tool({
     description:
-      'Add a prototype-model asset (Model Forge) to the library from a starter kit: blank (one box), crate, fence, barrel, tile, arch. Then shape it with add_model_part/update_model_part, paint it with paint_model_part, and place it with place_model. For a prop the user describes, start from blank and kit-bash a FEW chunky parts.',
+      'Add a prototype-model asset (Model Forge) from a starter kit: blank, crate, fence, barrel, tile, arch, table, chair, stairs, lamp, rock, or robot. Then shape it with add_model_part/update_model_part, paint it with paint_model_part, and place it with place_model. For a custom prop, start from blank and kit-bash a FEW chunky parts.',
     inputSchema: z.object({
-      starter: z.enum(['blank', 'crate', 'fence', 'barrel', 'tile', 'arch']).optional().describe('Defaults to blank.'),
+      starter: z.enum(['blank', 'crate', 'fence', 'barrel', 'tile', 'arch', 'table', 'chair', 'stairs', 'lamp', 'rock', 'robot']).optional().describe('Defaults to blank.'),
       name: z.string().optional(),
     }),
     execute: async ({ starter, name }) => {

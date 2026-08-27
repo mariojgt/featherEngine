@@ -1,4 +1,4 @@
-import type { ProjectGraph, Scene, ScriptBlueprint } from '../types';
+import type { ModelSpec, ProjectGraph, Scene, ScriptBlueprint } from '../types';
 import { useEditorStore } from './editorStore';
 import { canEditCollaborativeProject, collaborationAccess } from '../collaboration/access';
 
@@ -19,8 +19,10 @@ type HistoryEntry = {
   scenes: Scene[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
+  modelSpecs: ModelSpec[];
   activeSceneId: string;
   activeBlueprintId: string;
+  activeModelSpecId: string;
   selectedObjectId: string;
   selectedObjectIds: string[];
   selectedGraphNodeId?: string;
@@ -66,8 +68,10 @@ const snapshotFrom = (state: {
   scenes: Scene[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
+  modelSpecs: ModelSpec[];
   activeSceneId: string;
   activeBlueprintId: string;
+  activeModelSpecId: string;
   selectedObjectId: string;
   selectedObjectIds: string[];
   selectedGraphNodeId?: string;
@@ -75,8 +79,10 @@ const snapshotFrom = (state: {
   scenes: state.scenes,
   blueprints: state.blueprints,
   graphs: state.graphs,
+  modelSpecs: state.modelSpecs,
   activeSceneId: state.activeSceneId,
   activeBlueprintId: state.activeBlueprintId,
+  activeModelSpecId: state.activeModelSpecId,
   selectedObjectId: state.selectedObjectId,
   selectedObjectIds: state.selectedObjectIds,
   selectedGraphNodeId: state.selectedGraphNodeId,
@@ -201,8 +207,10 @@ const apply = (entry: HistoryEntry) => {
     scenes: entry.scenes,
     blueprints,
     graphs: entry.graphs,
+    modelSpecs: entry.modelSpecs,
     activeSceneId: entry.activeSceneId,
     activeBlueprintId: entry.activeBlueprintId,
+    activeModelSpecId: entry.activeModelSpecId,
     selectedObjectId: entry.selectedObjectId,
     selectedObjectIds: entry.selectedObjectIds,
     selectedGraphNodeId: entry.selectedGraphNodeId,
@@ -256,6 +264,7 @@ export const initHistory = () => {
     // so compare those transient flags explicitly rather than treating every new array as an edit.
     if (
       state.scenes === prev.scenes &&
+      state.modelSpecs === prev.modelSpecs &&
       !blueprintContentChanged(state.blueprints, prev.blueprints) &&
       !graphContentChanged(state.graphs, prev.graphs)
     ) return;

@@ -53,7 +53,7 @@ export function ViewportModelForgeBar({ object }: { object: SceneObject }) {
         </span>
         <div className="model-toolbar-seg" role="tablist" aria-label="Model Forge mode">
           <button type="button" className={mode === 'build' ? 'active' : undefined} onClick={() => setMode('build')}>
-            <Hammer size={12} aria-hidden /> Build
+            <Hammer size={12} aria-hidden /> Object
           </button>
           <button type="button" className={mode === 'paint' ? 'active' : undefined} onClick={() => setMode('paint')}>
             <Paintbrush size={12} aria-hidden /> Paint
@@ -61,14 +61,14 @@ export function ViewportModelForgeBar({ object }: { object: SceneObject }) {
           <button
             type="button"
             className={mode === 'mesh' ? 'active' : undefined}
-            title="Sculpt box corners in the Model Forge studio"
+            title="Edit box vertices, edges, and faces in the Model Forge studio"
             onClick={() => {
               setMode('mesh');
               store().setActiveModelSpec(specId);
               openModelForgeStudio();
             }}
           >
-            Mesh
+            Edit
           </button>
         </div>
         <button
@@ -208,7 +208,7 @@ export function ViewportModelForgeBar({ object }: { object: SceneObject }) {
 
       {mode === 'mesh' && (
         <p className="model-forge-bar-hint">
-          Mesh opens the studio — drag corner dots on a box part. Soft bevel stays live.
+          Edit opens the studio — select and transform box vertices, edges, or faces. Soft bevel stays live.
         </p>
       )}
 

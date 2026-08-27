@@ -149,7 +149,7 @@ export interface FeatherPluginAPI {
   readonly models: {
     /** Detached copies of the project's prototype-model assets. */
     library(): ReadonlyArray<Readonly<ModelSpec>>;
-    /** The engine's starter kits (blank, crate, fence, barrel, tile, arch) — static data. */
+    /** The engine's built-in starter kits — static data exposed for galleries and quick-add flows. */
     starters(): ReadonlyArray<Readonly<FeatherModelStarterInfo>>;
     /** Add a starter kit to the library. Returns the new asset's id. */
     createFromStarter(starterId: string, name?: string): string;

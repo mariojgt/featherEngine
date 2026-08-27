@@ -80,7 +80,7 @@ import { TreeMesh } from '../three/TreeMesh';
 import { ModelMesh } from '../three/ModelMesh';
 import { ViewportModelForgeBar } from './ViewportModelForgeBar';
 import { ensureModelForgeEnabled } from '../extensions/openModelForge';
-import { MODEL_STARTERS } from '../model/modelSpec';
+import { MODEL_STARTERS, QUICK_MODEL_STARTER_IDS } from '../model/modelSpec';
 import { useModelForgeSession } from '../store/modelForgeSessionStore';
 import { highestTerrainWorldHeight } from '../terrain/terrain';
 import type { MaterialOverrides, SceneObject, SceneObjectKind } from '../types';
@@ -2445,7 +2445,7 @@ export function ViewportPanel() {
             </div>
             <div className="insert-popover-title">Prototype prop</div>
             <div className="insert-popover-grid">
-              {MODEL_STARTERS.filter((starter) => ['blank', 'crate', 'barrel', 'arch'].includes(starter.id)).map((starter) => (
+              {MODEL_STARTERS.filter((starter) => QUICK_MODEL_STARTER_IDS.includes(starter.id)).map((starter) => (
                 <button key={starter.id} type="button" title={starter.tagline} onClick={() => quickAddPrototype(starter.id)}>
                   {starter.name}
                 </button>

@@ -13683,7 +13683,7 @@ body.is-scrubbing * {
 }
 .model-forge-canvas {
   position: relative;
-  min-height: 280px;
+  min-height: 360px;
   border-radius: 10px;
   overflow: hidden;
   box-shadow:
@@ -13694,7 +13694,7 @@ body.is-scrubbing * {
   position: absolute;
   z-index: 2;
   top: 10px;
-  left: 10px;
+  left: 52px;
   right: 10px;
   display: flex;
   align-items: center;
@@ -13730,7 +13730,7 @@ body.is-scrubbing * {
 }
 .model-forge-hud-fit {
   pointer-events: auto;
-  margin-left: auto;
+  margin-left: 0;
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -13991,4 +13991,291 @@ body.is-scrubbing * {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+
+/* Studio shell: the left column is a real asset/starter browser, while the canvas carries the
+   high-frequency modeling tools. Keeping these controls over the viewport mirrors DCC editors and
+   leaves the inspector for precise values. */
+.model-forge-panel:focus {
+  outline: none;
+}
+.model-forge-panel .terrain-toolbox,
+.model-forge-panel .terrain-controls {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.model-panel-kicker {
+  color: var(--text-dim, #7f8999);
+  font-size: var(--text-3xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.model-starter-browser {
+  display: grid;
+  gap: 6px;
+}
+.model-starter-browser .inspector-subhead {
+  margin: 2px 0 0;
+}
+.model-starter-search {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(8, 10, 15, 0.35);
+  color: var(--text);
+  font-size: var(--text-2xs);
+}
+.model-starter-grid {
+  grid-template-columns: 1fr;
+}
+.model-starter-grid button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 8px;
+  text-align: left;
+}
+.model-starter-grid button > span {
+  color: var(--text);
+  font-weight: 600;
+}
+.model-starter-grid button > small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-dim, #7f8999);
+  font-size: var(--text-3xs);
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.model-starter-empty {
+  grid-column: 1 / -1;
+  margin: 4px 0;
+}
+
+.model-forge-view-controls {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(8, 10, 15, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(10px);
+}
+.model-forge-view-controls > button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 29px;
+  height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim, #8b93a1);
+  font-size: var(--text-3xs);
+  cursor: pointer;
+}
+.model-forge-view-controls > button:hover,
+.model-forge-view-controls > button.active {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text, #e7ebf2);
+}
+.model-forge-view-controls > button.active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent-strong);
+}
+
+.model-forge-tool-rail {
+  position: absolute;
+  z-index: 4;
+  top: 52px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 9px;
+  background: rgba(8, 10, 15, 0.76);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 8px 20px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+}
+.model-forge-tool-rail button {
+  appearance: none;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #aab3c1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.model-forge-tool-rail button:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+.model-forge-tool-rail button:active {
+  transform: scale(0.93);
+}
+.model-forge-tool-rail button.active {
+  background: color-mix(in srgb, var(--accent) 24%, rgba(255, 255, 255, 0.06));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 65%, transparent);
+  color: var(--accent-strong);
+}
+.model-forge-tool-divider {
+  height: 1px;
+  margin: 2px 3px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.model-forge-add-popover {
+  position: absolute;
+  z-index: 5;
+  top: 170px;
+  left: 50px;
+  display: grid;
+  width: 154px;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  background: rgba(14, 18, 25, 0.94);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
+}
+.model-forge-add-popover strong {
+  padding: 3px 5px 6px;
+  color: var(--text-dim, #8b93a1);
+  font-size: var(--text-3xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.model-forge-add-popover button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-2xs);
+  text-align: left;
+  cursor: pointer;
+}
+.model-forge-add-popover button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--accent-strong);
+}
+.model-forge-component-bar {
+  position: absolute;
+  z-index: 4;
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 9px;
+  background: rgba(8, 10, 15, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 8px 22px rgba(0, 0, 0, 0.3);
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+.model-forge-component-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #aab3c1;
+  font-size: var(--text-3xs);
+  cursor: pointer;
+}
+.model-forge-component-bar button:hover,
+.model-forge-component-bar button.active {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+.model-forge-component-bar button.active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 58%, transparent);
+  color: var(--accent-strong);
+}
+.model-forge-component-bar > span {
+  padding: 0 7px;
+  color: var(--text-dim, #8b93a1);
+  font-size: var(--text-3xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-toolbar-seg button:disabled {
+  opacity: 0.38;
+  cursor: default;
+  transform: none;
+}
+.model-forge-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  color: var(--text-dim, #7f8999);
+  font-size: var(--text-3xs);
+}
+.model-forge-shortcuts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.model-forge-shortcuts kbd {
+  min-width: 18px;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom-color: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted, #9aa3b2);
+  font-family: inherit;
+  font-size: 9px;
+  text-align: center;
+}
+.model-cage-summary {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.model-cage-summary .inspector-subhead,
+.model-cage-summary .field-hint {
+  margin: 0;
+}
+.model-cage-summary .model-toolbar-seg {
+  width: 100%;
+}
+.model-cage-summary .model-toolbar-seg button {
+  flex: 1;
+  justify-content: center;
+}
+
+@media (max-width: 1100px) {
+  .model-forge-panel .terrain-editor-body.tree-builder-body {
+    grid-template-columns: minmax(160px, 190px) minmax(360px, 1fr) minmax(210px, 250px);
+  }
+  .model-forge-view-controls > button {
+    padding-inline: 5px;
+  }
 }

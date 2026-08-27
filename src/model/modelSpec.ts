@@ -60,6 +60,32 @@ export const BOX_CORNER_LABELS: readonly string[] = Array.from({ length: 8 }, (_
   `${index & 2 ? 'Top' : 'Bottom'} ${index & 4 ? 'Front' : 'Back'} ${index & 1 ? 'Right' : 'Left'}`,
 );
 
+/** Fixed box control-cage topology. Edit mode transforms these logical components while the
+ * serialized model remains the same tiny eight-corner hull. Face order deliberately matches
+ * `MODEL_FACE_GROUPS.box` / Three.js BoxGeometry material groups. */
+export const BOX_EDGE_CORNERS: readonly (readonly [number, number])[] = [
+  [0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3], [2, 6], [3, 7], [4, 5], [4, 6], [5, 7], [6, 7],
+];
+
+export const BOX_FACE_CORNERS: readonly (readonly [number, number, number, number])[] = [
+  [1, 3, 5, 7], // Right (+X)
+  [0, 2, 4, 6], // Left (-X)
+  [2, 3, 6, 7], // Top (+Y)
+  [0, 1, 4, 5], // Bottom (-Y)
+  [4, 5, 6, 7], // Front (+Z)
+  [0, 1, 2, 3], // Back (-Z)
+];
+
+export type BoxComponentMode = 'vertex' | 'edge' | 'face';
+
+export const boxComponentCount = (mode: BoxComponentMode): number =>
+  mode === 'vertex' ? 8 : mode === 'edge' ? BOX_EDGE_CORNERS.length : BOX_FACE_CORNERS.length;
+
+export const boxComponentCorners = (mode: BoxComponentMode, index: number): readonly number[] => {
+  if (mode === 'vertex') return index >= 0 && index < 8 ? [index] : [];
+  return (mode === 'edge' ? BOX_EDGE_CORNERS[index] : BOX_FACE_CORNERS[index]) ?? [];
+};
+
 const SHAPE_SET: ReadonlySet<string> = new Set(MODEL_PART_SHAPES);
 
 const vec = (value: unknown, fallback: Vector3Tuple): Vector3Tuple => {
@@ -211,7 +237,91 @@ export const MODEL_STARTERS: readonly ModelStarter[] = [
       P('box', 'Cap', [0, 2.46, 0], [2.6, 0.12, 0.6], 4),
     ],
   },
+  {
+    id: 'table',
+    name: 'Work Table',
+    tagline: 'A sturdy tabletop, apron, and four legs — a useful interior blockout.',
+    build: () => [
+      P('box', 'Top', [0, 1.02, 0], [2.2, 0.18, 1.2], 1),
+      P('box', 'Apron Front', [0, 0.85, 0.49], [1.9, 0.22, 0.1], 2),
+      P('box', 'Apron Back', [0, 0.85, -0.49], [1.9, 0.22, 0.1], 2),
+      P('box', 'Leg Front Left', [-0.9, 0.45, 0.42], [0.16, 0.9, 0.16], 2),
+      P('box', 'Leg Front Right', [0.9, 0.45, 0.42], [0.16, 0.9, 0.16], 2),
+      P('box', 'Leg Back Left', [-0.9, 0.45, -0.42], [0.16, 0.9, 0.16], 2),
+      P('box', 'Leg Back Right', [0.9, 0.45, -0.42], [0.16, 0.9, 0.16], 2),
+    ],
+  },
+  {
+    id: 'chair',
+    name: 'Chair',
+    tagline: 'Seat, tapered back, and four legs — ready for a room or café.',
+    build: () => [
+      P('box', 'Seat', [0, 0.62, 0], [1, 0.16, 1], 1),
+      P('box', 'Back', [0, 1.22, -0.43], [0.9, 0.85, 0.14], 1, [-0.08, 0, 0]),
+      P('box', 'Leg Front Left', [-0.38, 0.28, 0.36], [0.12, 0.56, 0.12], 2),
+      P('box', 'Leg Front Right', [0.38, 0.28, 0.36], [0.12, 0.56, 0.12], 2),
+      P('box', 'Leg Back Left', [-0.38, 0.28, -0.36], [0.12, 0.56, 0.12], 2),
+      P('box', 'Leg Back Right', [0.38, 0.28, -0.36], [0.12, 0.56, 0.12], 2),
+    ],
+  },
+  {
+    id: 'stairs',
+    name: 'Stair Flight',
+    tagline: 'Five snap-friendly steps for greyboxing routes and entrances.',
+    build: () => Array.from({ length: 5 }, (_, index) =>
+      P('box', `Step ${index + 1}`, [0, 0.15 * (index + 1), index * 0.34], [1.8, 0.3 * (index + 1), 0.68], index % 2 ? 4 : 3),
+    ),
+  },
+  {
+    id: 'lamp',
+    name: 'Floor Lamp',
+    tagline: 'A compact base, stem, bulb, and bold cone shade.',
+    build: () => [
+      P('cylinder', 'Base', [0, 0.08, 0], [0.72, 0.16, 0.72], 9),
+      P('cylinder', 'Stem', [0, 0.82, 0], [0.12, 1.48, 0.12], 9),
+      P('sphere', 'Bulb', [0, 1.55, 0], [0.28, 0.28, 0.28], 0),
+      P('cone', 'Shade', [0, 1.68, 0], [0.86, 0.62, 0.86], 6, [0, 0, Math.PI]),
+      P('sphere', 'Finial', [0, 2.02, 0], [0.12, 0.12, 0.12], 9),
+    ],
+  },
+  {
+    id: 'rock',
+    name: 'Low-poly Rock',
+    tagline: 'A sculpted eight-point hull that demonstrates Edit mode immediately.',
+    build: () => [
+      makeModelPart('box', {
+        name: 'Rock',
+        position: [0, 0.52, 0],
+        rotation: [0.06, 0.35, -0.04],
+        scale: [1.35, 0.9, 1.05],
+        colorSlot: 4,
+        corners: {
+          0: [0.12, 0.02, 0.08], 1: [-0.08, -0.04, 0.02], 2: [0.2, -0.12, 0.12], 3: [-0.16, 0.08, 0.02],
+          4: [-0.05, 0.08, -0.14], 5: [0.1, -0.03, -0.04], 6: [-0.12, -0.08, -0.08], 7: [0.04, 0.12, -0.12],
+        },
+      }),
+    ],
+  },
+  {
+    id: 'robot',
+    name: 'Robot Dummy',
+    tagline: 'A readable character blockout for scale, cameras, and interaction tests.',
+    build: () => [
+      P('box', 'Torso', [0, 1.35, 0], [0.8, 0.9, 0.45], 8),
+      P('box', 'Pelvis', [0, 0.82, 0], [0.65, 0.28, 0.4], 9),
+      P('sphere', 'Head', [0, 2.02, 0], [0.58, 0.58, 0.58], 0),
+      P('cylinder', 'Arm Left', [-0.58, 1.35, 0], [0.18, 0.9, 0.18], 8, [0, 0, -0.08]),
+      P('cylinder', 'Arm Right', [0.58, 1.35, 0], [0.18, 0.9, 0.18], 8, [0, 0, 0.08]),
+      P('cylinder', 'Leg Left', [-0.22, 0.4, 0], [0.22, 0.8, 0.22], 9),
+      P('cylinder', 'Leg Right', [0.22, 0.4, 0], [0.22, 0.8, 0.22], 9),
+      P('sphere', 'Eye Left', [-0.13, 2.08, 0.27], [0.09, 0.09, 0.06], 6),
+      P('sphere', 'Eye Right', [0.13, 2.08, 0.27], [0.09, 0.09, 0.06], 6),
+    ],
+  },
 ];
+
+/** Compact subset used by viewport/inspector quick-add surfaces; the full studio shows every kit. */
+export const QUICK_MODEL_STARTER_IDS: readonly string[] = ['blank', 'crate', 'chair', 'stairs', 'lamp', 'rock'];
 
 export const getModelStarter = (starterId: string): ModelStarter | undefined =>
   MODEL_STARTERS.find((starter) => starter.id === starterId);

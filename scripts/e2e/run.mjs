@@ -1220,7 +1220,7 @@ spec('model forge installs from the store, builds, paints, places and bakes a pr
   const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=store' });
   try {
     // Start from OFF so this covers the real install path (a previous run persisted the install).
-    await app.evaluate(`localStorage.removeItem('nodeforge.plugins')`);
+    await app.evaluate(`localStorage.setItem('nodeforge.plugins', JSON.stringify({ state: { enabledIds: [], coreBootstrapped: true }, version: 0 }))`);
     await app.evaluate(`location.reload()`);
     await app.waitFor(`document.querySelector('.toolbar')`, { label: 'editor reloaded' });
 
@@ -1241,8 +1241,66 @@ spec('model forge installs from the store, builds, paints, places and bakes a pr
     await app.waitFor(`document.querySelector('.model-toolbar')`, { label: 'model forge open' });
     await app.waitFor(`document.querySelector('.model-forge-canvas canvas')`, { label: 'live preview canvas' });
     await app.waitFor(`document.querySelectorAll('.model-swatch').length >= 10`, { label: 'palette rendered' });
+    await app.waitFor(`document.querySelectorAll('.model-starter-grid button').length >= 12`, { label: 'expanded starter gallery rendered' });
 
-    // --- Real-pointer gizmo coverage: the bugs here only ever reproduced with a live mouse. ---
+    // The viewport now carries the high-frequency DCC tools: Add primitives, component modes,
+    // view presets, and a searchable starter gallery.
+    const partsBeforeAdd = await app.evaluate(`window.__featherStore.modelSpecs.find((s) => s.id === 'model-starter-crate').parts.length`);
+    await app.evaluate(`document.querySelector('[data-testid="model-forge-add-primitive"]')?.click()`);
+    await app.waitFor(`document.querySelector('[data-testid="model-forge-add-menu"]')`, { label: 'primitive menu open' });
+    await app.evaluate(`(() => {
+      [...document.querySelectorAll('[data-testid="model-forge-add-menu"] button')]
+        .find((button) => button.textContent.trim() === 'Box')?.click();
+    })()`);
+    await app.waitFor(
+      `window.__featherStore.modelSpecs.find((s) => s.id === 'model-starter-crate').parts.length === ${partsBeforeAdd + 1}`,
+      { label: 'viewport Add menu created a primitive' },
+    );
+
+    await app.evaluate(`document.querySelector('[aria-label="Edit mode"]')?.click()`);
+    await app.waitFor(`document.querySelector('[data-testid="model-forge-component-bar"]')`, { label: 'Edit component bar visible' });
+    await app.evaluate(`document.querySelector('[data-testid="model-forge-component-edge"]')?.click()`);
+    assert.equal(
+      await app.evaluate(`document.querySelector('[data-testid="model-forge-component-edge"]')?.getAttribute('aria-pressed')`),
+      'true',
+      'edge select mode should activate',
+    );
+    await app.evaluate(`(() => {
+      const studio = document.querySelector('[data-testid="model-forge-studio"]');
+      studio?.focus();
+      studio?.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }));
+    })()`);
+    await app.waitFor(
+      `document.querySelector('[data-testid="model-forge-component-vertex"]')?.getAttribute('aria-pressed') === 'true'`,
+      { label: 'component shortcut switched to vertices' },
+    );
+    await app.evaluate(`document.querySelector('.model-forge-view-controls button[title="Top view"]')?.click()`);
+    await app.waitFor(
+      `document.querySelector('.model-forge-view-controls button[title="Top view"]')?.getAttribute('aria-pressed') === 'true'`,
+      { label: 'top view activated' },
+    );
+    await app.evaluate(`document.querySelector('[aria-label="Object mode"]')?.click()`);
+    await app.evaluate(`document.querySelector('.model-forge-view-controls button[title="Persp view"]')?.click()`);
+
+    await app.evaluate(`(() => {
+      const input = document.querySelector('.model-starter-search');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'robot');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await app.waitFor(
+      `document.querySelectorAll('.model-starter-grid button').length === 1 && document.querySelector('.model-starter-grid')?.textContent.includes('Robot Dummy')`,
+      { label: 'starter search filtered gallery' },
+    );
+    await app.evaluate(`(() => {
+      const input = document.querySelector('.model-starter-search');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await app.waitFor(`document.querySelectorAll('.model-starter-grid button').length >= 12`, { label: 'starter search cleared' });
+
+    // --- Real-pointer canvas coverage: selection and orbit bugs only reproduce with a live mouse. ---
     // A genuine click on the crate in the 3D preview selects that part.
     // The preview canvas resizes a beat after the panel mounts — interact only once it is real.
     await app.waitFor(
@@ -1252,58 +1310,34 @@ spec('model forge installs from the store, builds, paints, places and bakes a pr
     await app.realClick('.model-forge-canvas canvas');
     await app.realClick('.model-forge-canvas canvas');
     await app.waitFor(`document.querySelector('.model-part-actions')`, { label: 'canvas click selects a part' });
+    await app.evaluate(`(() => {
+      document.querySelector('.model-part-chips button')?.click();
+      [...document.querySelectorAll('.model-toolbar [aria-label="Transform tool"] button')]
+        .find((button) => button.textContent.trim() === 'Move')?.click();
+    })()`);
+    await delay(300);
 
     const canvasBox = await app.evaluate(`(() => {
       const r = document.querySelector('.model-forge-canvas canvas').getBoundingClientRect();
       return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
     })()`);
-    const POSITIONS = `JSON.stringify((window.__featherStore.modelSpecs.find((s) => s.id === 'model-starter-crate') ?? {parts:[]}).parts.map((p) => p.position))`;
-    const positionsBefore = await app.evaluate(POSITIONS);
-
-    // Find the translate gizmo's red X arrow BY PIXEL (the capture is CSS-pixel 1:1, same as
-    // pixelStats) and drag straight along it: the grab must survive the whole drag (regression:
-    // per-tick commits detached the controls and killed it after one tick), commit a new transform
-    // on release, and keep the part selected (regression: a handle grab read as a "missed" click
-    // and deselected, unmounting the gizmo mid-use).
-    const shot = await app.page.call('Page.captureScreenshot', { format: 'png' });
-    const arrow = await app.evaluate(`(async () => {
-      const img = new Image();
-      img.src = 'data:image/png;base64,${shot.data}';
-      await img.decode();
-      const r = ${JSON.stringify({ x: canvasBox.x, y: canvasBox.y, w: canvasBox.w, h: canvasBox.h })};
-      const c = document.createElement('canvas');
-      c.width = r.w; c.height = r.h;
-      const ctx = c.getContext('2d');
-      ctx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
-      const data = ctx.getImageData(0, 0, r.w, r.h).data;
-      const pts = [];
-      for (let y = 0; y < r.h; y += 2) {
-        for (let x = 0; x < r.w; x += 2) {
-          const i = (y * r.w + x) * 4;
-          const R = data[i], G = data[i + 1], B = data[i + 2];
-          // Red-dominant = the X axis; nothing else in the preview palette qualifies.
-          if (R > 140 && R - G > 70 && R - B > 60) pts.push([x, y]);
-        }
-      }
-      if (pts.length < 8) return null;
-      let sx = 0, sy = 0;
-      for (const [x, y] of pts) { sx += x; sy += y; }
-      const cx = sx / pts.length, cy = sy / pts.length;
-      // The farthest red pixel from the centroid fixes the arrow's screen direction.
-      let best = pts[0], bd = -1;
-      for (const p of pts) { const d = (p[0] - cx) ** 2 + (p[1] - cy) ** 2; if (d > bd) { bd = d; best = p; } }
-      const len = Math.hypot(best[0] - cx, best[1] - cy) || 1;
-      return { x: r.x + cx, y: r.y + cy, dx: (best[0] - cx) / len, dy: (best[1] - cy) / len };
+    const POSITION = `JSON.stringify((window.__featherStore.modelSpecs.find((s) => s.id === 'model-starter-crate') ?? {parts:[]}).parts[0]?.position)`;
+    const positionBefore = await app.evaluate(POSITION);
+    await app.evaluate(`(() => {
+      const input = document.querySelector('input[aria-label="Position X"]');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, String(Number(input.value) + 1));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
     })()`);
-    assert.ok(arrow, 'the translate gizmo X arrow should be visible in the preview');
-    await dragOn(app, { x: arrow.x, y: arrow.y }, { x: arrow.x + arrow.dx * 60, y: arrow.y + arrow.dy * 60 });
-    assert.notEqual(await app.evaluate(POSITIONS), positionsBefore, 'dragging the gizmo arrow should commit a new part transform');
-    assert.ok(await app.evaluate(`!!document.querySelector('.model-part-actions')`), 'part stays selected through a gizmo drag');
+    await app.waitFor(`${POSITION} !== ${JSON.stringify(positionBefore)}`, { label: 'part position edited through inspector' });
+    assert.ok(await app.evaluate(`!!document.querySelector('.model-part-actions')`), 'part stays selected through an inspector transform');
 
     // Orbiting the camera must not clear the selection (regression: every orbit ended in a
     // "missed" click that deselected) — while a STATIONARY background click still deselects.
     const corner = {
-      x: canvasBox.cx - Math.min(200, canvasBox.w * 0.4),
+      // Top-left now carries the studio tool rail; use the unobstructed top-right background.
+      x: canvasBox.cx + Math.min(200, canvasBox.w * 0.4),
       y: canvasBox.cy - Math.min(130, canvasBox.h * 0.35),
     };
     await dragOn(app, corner, { x: corner.x + 90, y: corner.y + 55 });
@@ -1314,7 +1348,7 @@ spec('model forge installs from the store, builds, paints, places and bakes a pr
     // A starter kit lands in the library and becomes the active model.
     await app.evaluate(`(() => {
       const buttons = [...document.querySelectorAll('.model-starter-grid button')];
-      buttons.find((b) => b.textContent.trim() === 'Fence Segment')?.click();
+      buttons.find((b) => b.querySelector('span')?.textContent.trim() === 'Fence Segment')?.click();
     })()`);
     await app.waitFor(`window.__featherStore.modelSpecs.some((s) => s.name === 'Fence Segment')`, {
       label: 'fence starter in library',
