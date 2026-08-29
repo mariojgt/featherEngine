@@ -107,3 +107,79 @@ export const applyPhysicsMaterialPreset = (
     angularDamping: preset.angularDamping ?? physics.angularDamping,
   };
 };
+
+export interface PhysicsQuickPreset {
+  id: string;
+  label: string;
+  hint: string;
+  patch: Partial<PhysicsComponent>;
+}
+
+/** One-click "make this object a <thing>" physics configs for the common cases — so you don't have to
+ *  hand-tune body type, collider, material, damping and axis locks every time. Each applies a complete
+ *  ready-made setup (and enables physics) on the selected object. Shared by the inspector's quick-physics
+ *  buttons and the AI assistant's apply_physics_preset tool so both produce identical setups. */
+export const PHYSICS_QUICK_PRESETS: PhysicsQuickPreset[] = [
+  {
+    id: 'wall-or-floor',
+    label: 'Wall / Floor',
+    hint: 'Immovable solid. Default material.',
+    patch: { enabled: true, bodyType: 'fixed', collider: 'box', materialPreset: 'default', isTrigger: false },
+  },
+  {
+    id: 'scenery-mesh',
+    label: 'Scenery (mesh)',
+    hint: 'Immovable but hugs the model exactly. Use on imported props/terrain props.',
+    patch: { enabled: true, bodyType: 'fixed', collider: 'mesh', materialPreset: 'default', isTrigger: false },
+  },
+  {
+    id: 'pushable-crate',
+    label: 'Pushable crate',
+    hint: 'Dynamic box that slides and can be knocked over, but won\u2019t tip from tiny bumps.',
+    patch: { enabled: true, bodyType: 'dynamic', collider: 'box', materialPreset: 'wood', mass: 6, friction: 0.85, restitution: 0.08, linearDamping: 0.1, angularDamping: 0.4, lockedRotation: [true, true, true] },
+  },
+  {
+    id: 'bouncy-ball',
+    label: 'Bouncy ball',
+    hint: 'Light sphere that rolls and bounces.',
+    patch: { enabled: true, bodyType: 'dynamic', collider: 'sphere', materialPreset: 'rubber', mass: 1, friction: 0.3, restitution: 0.85, linearDamping: 0.05, angularDamping: 0.2 },
+  },
+  {
+    id: 'light-prop',
+    label: 'Light prop',
+    hint: 'Small box that blows around in scene wind and knocks over easily.',
+    patch: { enabled: true, bodyType: 'dynamic', collider: 'box', materialPreset: 'wood', mass: 1, friction: 0.5, restitution: 0.35, windInfluence: 0.8, knockOverThreshold: 2 },
+  },
+  {
+    id: 'ice-floor',
+    label: 'Ice floor',
+    hint: 'Very slippery static floor — objects skate across it.',
+    patch: { enabled: true, bodyType: 'fixed', collider: 'box', materialPreset: 'ice', isTrigger: false },
+  },
+  {
+    id: 'fragile-prop',
+    label: 'Fragile prop',
+    hint: 'Chunks into pieces on strong impact (needs the Fracture setup to be filled in).',
+    patch: { enabled: true, bodyType: 'dynamic', collider: 'box', materialPreset: 'wood', mass: 2, friction: 0.6, restitution: 0.1, knockOverThreshold: 4 },
+  },
+  {
+    id: 'trigger-zone',
+    label: 'Trigger zone',
+    hint: 'Detects overlaps (Trigger Enter/Exit in scripts) but doesn\u2019t block anything.',
+    patch: { enabled: true, bodyType: 'fixed', collider: 'box', materialPreset: 'default', isTrigger: true, gravityScale: 0 },
+  },
+];
+
+/** Apply a quick physics preset by id. Returns the (merged) physics component, or null if the id is unknown. */
+export const applyPhysicsQuickPreset = (
+  physics: PhysicsComponent,
+  presetId: string,
+): { physics: PhysicsComponent; preset: PhysicsQuickPreset } | null => {
+  const preset = PHYSICS_QUICK_PRESETS.find((p) => p.id === presetId);
+  if (!preset) return null;
+  // Material presets carry ready-made friction/bounce/damping; apply first so an explicit override wins.
+  let merged: PhysicsComponent = { ...physics };
+  if (preset.patch.materialPreset) merged = applyPhysicsMaterialPreset(merged, preset.patch.materialPreset);
+  merged = { ...merged, ...preset.patch };
+  return { physics: merged, preset };
+};

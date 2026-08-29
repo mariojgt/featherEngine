@@ -469,6 +469,8 @@ class FeatherScriptPrinter {
         return `apply_force(${this.targetArgument(node)}, vector: ${this.valueInput(node, 'vector', raw(this.axisVector(node)))}, amount: ${this.valueInput(node, 'amount', Number(node.data.amount ?? 8))})`;
       case 'action.applyImpulse':
         return `apply_impulse(${this.targetArgument(node)}, vector: ${this.valueInput(node, 'vector', raw(this.axisVector(node)))}, amount: ${this.valueInput(node, 'amount', Number(node.data.amount ?? 8))})`;
+      case 'action.applyForceAtPoint':
+        return `apply_force_at_point(${this.targetArgument(node)}, vector: ${this.valueInput(node, 'vector', raw(this.axisVector(node)))}, point: ${this.valueInput(node, 'point', node.data.localPoint ?? [0, 0, 0])}, amount: ${this.valueInput(node, 'amount', Number(node.data.amount ?? 8))})`;
       case 'action.applyTorque':
         return `apply_torque(${this.targetArgument(node)}, vector: ${this.valueInput(node, 'vector', raw(this.axisVector(node, 'y')))}, amount: ${this.valueInput(node, 'amount', Number(node.data.amount ?? 4))})`;
       case 'action.setVelocity':
@@ -868,6 +870,9 @@ class FeatherScriptPrinter {
         break;
       case 'query.velocity':
         result = `velocity(${this.targetArgument(node, stack)})`;
+        break;
+      case 'query.getSpeed':
+        result = `speed(${this.targetArgument(node, stack)})`;
         break;
       case 'query.cableTension':
         result = `cable_tension(${this.targetLiteral(node.data.targetObjectId)})`;

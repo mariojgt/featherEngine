@@ -44,6 +44,8 @@ export interface PhysicsFrameRequest {
   impulses: Record<string, Vector3Tuple>;
   /** Angular impulses (torque kicks) requested this frame, keyed by object id. */
   angularImpulses: Record<string, Vector3Tuple>;
+  /** Impulses applied at a LOCAL point on the body (action.applyForceAtPoint), keyed by object id. */
+  impulsesAtPoint: Record<string, { impulse: Vector3Tuple; point: Vector3Tuple }>;
   /** Hard linear-velocity sets requested this frame (dynamic bodies), keyed by object id. */
   setVelocities: Record<string, Vector3Tuple>;
   /** Scaled frame delta in seconds (already multiplied by runtimeTimeScale; <= 0 means "don't advance"). */

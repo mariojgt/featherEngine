@@ -8,7 +8,7 @@
 
 import type { SceneObject } from '../types';
 
-export type ColliderKind = 'box' | 'sphere' | 'capsule' | 'plane' | 'trimesh' | 'convex';
+export type ColliderKind = 'box' | 'sphere' | 'capsule' | 'plane' | 'trimesh' | 'convex' | 'model';
 
 /** Resolve which collider shape an object uses, honoring its configured collider and mesh. */
 export function colliderKindFor(object: SceneObject): ColliderKind {
@@ -20,9 +20,18 @@ export function colliderKindFor(object: SceneObject): ColliderKind {
   // convex = the convex hull (cheaper, works for dynamic bodies).
   if (configured === 'mesh') return 'trimesh';
   if (configured === 'convex') return 'convex';
-  if (configured === 'sphere' || configured === 'capsule' || configured === 'box') return configured;
+  if (configured === 'sphere' || configured === 'capsule') return configured;
   if (object.renderer?.mesh === 'sphere') return 'sphere';
   if (object.renderer?.mesh === 'capsule') return 'capsule';
+  // A Model Forge prop (kit-bashed parts, no renderer/mesh component) is NOT a lone box: its collider
+  // is derived from the model spec's parts (see forgeModelGeometry). The default 'box' collider on such
+  // a prop reads as "auto" — pick the real parts shape. (Explicit mesh/convex/sphere/capsule still win
+  // above; a plain primitive box on a forge prop isn't selectable, mesh-accurate is the point.)
+  if ((configured === undefined || configured === 'box') && object.model?.enabled && object.model.spec?.parts?.length) {
+    return 'model';
+  }
+  // Live-linked library props: the spec lives in the store (resolved at runtime), so check specId too.
+  if ((configured === undefined || configured === 'box') && object.model?.enabled && object.model.specId) return 'model';
   return 'box';
 }
 

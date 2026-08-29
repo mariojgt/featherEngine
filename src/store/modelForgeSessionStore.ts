@@ -43,4 +43,8 @@ export const MODEL_FORGE_SHAPES: Array<{ shape: ModelPartShape; label: string }>
   { shape: 'sphere', label: 'Sphere' },
   { shape: 'cone', label: 'Cone' },
   { shape: 'wedge', label: 'Wedge' },
+  { shape: 'torus', label: 'Torus' },
+  { shape: 'pyramid', label: 'Pyramid' },
+  { shape: 'hexprism', label: 'Hexagon' },
+  { shape: 'capsule', label: 'Capsule' },
 ];

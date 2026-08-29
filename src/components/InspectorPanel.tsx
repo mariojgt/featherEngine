@@ -14,7 +14,7 @@ import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, 
 import { resolveVehicleWheels } from '../runtime/vehicleWheels';
 import { BEHAVIOR_PRESETS } from '../project/behaviors';
 import { particlePresetIds } from '../runtime/particlePresets';
-import { PHYSICS_MATERIAL_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
+import { PHYSICS_MATERIAL_PRESETS, PHYSICS_QUICK_PRESETS, applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
 import { WATER_STYLE_PRESETS } from '../three/presets';
 import { withTerrainDefaults } from '../terrain/terrain';
 import { treeSpecFromArchetype } from '../tree/treeSpec';
@@ -2878,6 +2878,22 @@ function CableSection({
   );
 }
 
+function PhysicsPresetButtons({
+  onChange,
+}: {
+  onChange: (patch: Partial<PhysicsComponent>) => void;
+}) {
+  return (
+    <div className="quick-preset-grid">
+      {PHYSICS_QUICK_PRESETS.map((preset) => (
+        <button key={preset.id} className="quick-preset-button" title={preset.hint} onClick={() => onChange(preset.patch)}>
+          {preset.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function PhysicsSection({
   physics,
   onChange,
@@ -2888,6 +2904,8 @@ function PhysicsSection({
   const selectedPreset = PHYSICS_MATERIAL_PRESETS.find((preset) => preset.id === (physics.materialPreset ?? 'default'));
   return (
     <InspectorSection title="Physics">
+      <p className="field-hint">Quick object: pick a ready-made setup (also turns physics on).</p>
+      <PhysicsPresetButtons onChange={onChange} />
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={physics.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />

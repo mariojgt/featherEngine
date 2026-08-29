@@ -261,6 +261,26 @@ export function createFeatherPluginAPI(
       requireEditableProject();
       return useEditorStore.getState().setModelPartCorners(specId, partId, corners);
     },
+    convertPartToMesh: (specId, partId) => {
+      requireEditableProject();
+      return useEditorStore.getState().convertModelPartToMesh(specId, partId);
+    },
+    setPartMeshVertices: (specId, partId, updates) => {
+      requireEditableProject();
+      return useEditorStore.getState().setModelPartMeshVertices(specId, partId, updates);
+    },
+    extrudePartFaces: (specId, partId, faceIndices, delta) => {
+      requireEditableProject();
+      return useEditorStore.getState().extrudeModelPartFaces(specId, partId, faceIndices, delta);
+    },
+    subdividePartFaces: (specId, partId, faceIndices) => {
+      requireEditableProject();
+      return useEditorStore.getState().subdivideModelPartFaces(specId, partId, faceIndices);
+    },
+    booleanParts: (specId, partId, otherPartId, operation) => {
+      requireEditableProject();
+      return useEditorStore.getState().booleanModelParts(specId, partId, otherPartId, operation);
+    },
     setPalette: (specId, palette) => {
       requireEditableProject();
       return useEditorStore.getState().setModelPalette(specId, palette);

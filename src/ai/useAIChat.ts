@@ -104,7 +104,9 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'add_model_part':
       return `Added ${input.shape} part`;
     case 'update_model_part':
-      return 'Updated model part';
+      return input.collider
+        ? `Set part collider to ${String(input.collider)}`
+        : 'Updated model part';
     case 'remove_model_part':
       return 'Removed model part';
     case 'paint_model_part':
@@ -115,6 +117,14 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.finish ? `Model style: ${input.finish}` : 'Updated model style';
     case 'edit_model_vertices':
       return input.reset && !Array.isArray(input.offsets) ? 'Reset model vertices' : 'Sculpted model vertices';
+    case 'convert_model_part_to_mesh':
+      return 'Converted part to mesh';
+    case 'extrude_model_faces':
+      return `Extruded ${String(Array.isArray(input.faceIndices) ? input.faceIndices.length : 0)} mesh face(s)`;
+    case 'subdivide_model_faces':
+      return `Subdivided ${String(Array.isArray(input.faceIndices) ? input.faceIndices.length : 0)} mesh face(s)`;
+    case 'boolean_model_parts':
+      return `Boolean (${input.operation}) on model parts`;
     case 'place_model':
       return 'Placed model in scene';
     case 'bake_model_asset':
@@ -315,6 +325,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.particleSystemId ? 'Attached particle system' : 'Detached particle system';
     case 'set_physics':
       return input.isTrigger ? 'Configured trigger' : 'Configured physics';
+    case 'apply_physics_preset':
+      return `Applied ${String(input.preset ?? '')} physics`;
     case 'create_water_volume':
       return `Created ${String(input.style ?? 'ocean')} water`;
     case 'update_water_volume':

@@ -148,7 +148,7 @@ export const nodeGroups: Array<{
   {
     title: 'Physics',
     icon: Boxes,
-    nodes: ['Apply Force', 'Apply Impulse', 'Apply Torque', 'Set Physics', 'Set Velocity', 'Get Velocity', 'Set Angular Velocity', 'Get Angular Velocity', 'Set Gravity', 'Overlap Sphere', 'Sphere Cast', 'Set Joint Motor', 'Cut Cable', 'Set Cable Length', 'Get Cable Tension', 'Fracture'],
+    nodes: ['Apply Force', 'Apply Impulse', 'Apply Force at Point', 'Apply Torque', 'Set Physics', 'Set Velocity', 'Get Velocity', 'Get Speed', 'Set Angular Velocity', 'Get Angular Velocity', 'Set Gravity', 'Overlap Sphere', 'Sphere Cast', 'Set Joint Motor', 'Cut Cable', 'Set Cable Length', 'Get Cable Tension', 'Fracture'],
   },
   {
     title: 'Persistence',
@@ -639,9 +639,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     node.data.nodeKind === 'action.rotate' ||
     node.data.nodeKind === 'action.applyForce' ||
     node.data.nodeKind === 'action.applyImpulse' ||
+    node.data.nodeKind === 'action.applyForceAtPoint' ||
     node.data.nodeKind === 'action.applyTorque' ||
     node.data.nodeKind === 'action.setAngularVelocity';
-  const updatesImpulseSpace = node.data.nodeKind === 'action.applyImpulse';
+  const updatesImpulseSpace = node.data.nodeKind === 'action.applyImpulse' || node.data.nodeKind === 'action.applyForceAtPoint';
+  const updatesLocalPoint = node.data.nodeKind === 'action.applyForceAtPoint';
   const updatesSound = node.data.nodeKind === 'action.playSound';
   const updatesCinematic = node.data.nodeKind === 'action.playCinematic';
   const updatesParticleSystem = node.data.nodeKind === 'action.spawnParticleSystem';
@@ -1892,14 +1894,14 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
                   ? 'Degrees / sec'
                   : node.data.nodeKind === 'action.applyForce'
                     ? 'Force'
-                    : node.data.nodeKind === 'action.applyImpulse'
+                    : node.data.nodeKind === 'action.applyImpulse' || node.data.nodeKind === 'action.applyForceAtPoint'
                       ? 'Impulse'
                     : 'Units / sec'}
               </span>
               <input
                 type="number"
                 step="0.1"
-                value={node.data.amount ?? (node.data.nodeKind === 'action.rotate' ? 90 : node.data.nodeKind === 'action.applyForce' || node.data.nodeKind === 'action.applyImpulse' ? 8 : -3.6)}
+                value={node.data.amount ?? (node.data.nodeKind === 'action.rotate' ? 90 : node.data.nodeKind === 'action.applyForce' || node.data.nodeKind === 'action.applyImpulse' || node.data.nodeKind === 'action.applyForceAtPoint' ? 8 : -3.6)}
                 onChange={(event) => updateGraphNodeData(node.id, { amount: Number(event.target.value) })}
               />
             </label>
@@ -1917,6 +1919,28 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
               <option value="local">Target local axes</option>
             </select>
             <small className="node-hint">Local +Z follows the target's forward direction, useful for car nitro, dashes, and knockback from an actor's facing.</small>
+          </label>
+        )}
+
+        {updatesLocalPoint && (
+          <label className="node-field">
+            <span>Local Point</span>
+            <div className="vec-inline">
+              {([0, 1, 2] as const).map((axis) => (
+                <input
+                  key={axis}
+                  type="number"
+                  step="0.1"
+                  value={Number((node.data.localPoint ?? [0, 0, 0])[axis] ?? 0)}
+                  onChange={(event) => {
+                    const next = [...(node.data.localPoint ?? [0, 0, 0])] as Vector3Tuple;
+                    next[axis] = Number(event.target.value);
+                    updateGraphNodeData(node.id, { localPoint: next });
+                  }}
+                />
+              ))}
+            </div>
+            <small className="node-hint">Where on the body (in its local axes) the impulse lands. Off-center = push + spin; [0,0,0] is a pure shove. A wired Vector3 overrides this.</small>
           </label>
         )}
 

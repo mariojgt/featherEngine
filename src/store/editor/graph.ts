@@ -128,6 +128,8 @@ export const nodeDescriptions: Record<string, string> = {
   'Get Move Input': 'Outputs a world-space move direction (Vector3) from WASD / arrow keys.',
   'Get Drive Input': 'Outputs [throttle, steer, handbrake] (Vector3) from the vehicle keys (W/S throttle, A/D steer, Space handbrake).',
   'Get Vehicle Speed': 'Outputs the owning Vehicle\'s current speed (units/sec) — for speedometers, gear logic, or speed-gated effects.',
+  'Apply Force at Point': 'Applies an impulse at a LOCAL point on the target body — an off-center push that also spins it (car flips, catapults, thrusters).',
+  'Get Speed': 'Outputs the target\'s current linear speed (units/sec) — the magnitude of its Get Velocity vector.',
   Move: 'Moves the owner along the ground by a direction vector at a speed, turning it to face travel.',
   Drive: 'Drives the owning Vehicle from a [throttle, steer, handbrake] vector — the Vehicle controller handles physics, suspension + terrain.',
   Jump: 'Makes the owning character jump (needs a Character Controller for height/gravity).',
@@ -224,9 +226,11 @@ export const nodeKindByLabel: Record<string, GraphNodeKind> = {
   Rotate: 'action.rotate',
   'Apply Force': 'action.applyForce',
   'Apply Impulse': 'action.applyImpulse',
+  'Apply Force at Point': 'action.applyForceAtPoint',
   'Set Physics': 'action.setPhysics',
   'Set Velocity': 'action.setVelocity',
   'Get Velocity': 'query.velocity',
+  'Get Speed': 'query.getSpeed',
   'Set Angular Velocity': 'action.setAngularVelocity',
   'Get Angular Velocity': 'query.angularVelocity',
   'Set Gravity': 'action.setGravity',
@@ -343,10 +347,12 @@ export const categoryByKind = (nodeKind: GraphNodeKind): GraphNodeCategory => {
   if (
     nodeKind === 'action.applyForce' ||
     nodeKind === 'action.applyImpulse' ||
+    nodeKind === 'action.applyForceAtPoint' ||
     nodeKind === 'action.applyTorque' ||
     nodeKind === 'action.setPhysics' ||
     nodeKind === 'action.setVelocity' ||
     nodeKind === 'query.velocity' ||
+    nodeKind === 'query.getSpeed' ||
     nodeKind === 'action.setAngularVelocity' ||
     nodeKind === 'query.angularVelocity' ||
     nodeKind === 'action.setGravity' ||
@@ -800,6 +806,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         description:
           'Gives a target an INSTANT velocity kick (a one-shot impulse) — jumps, explosions, knockback, launches. Wire a Vector3 into Force (or set an axis + amount). Space=world uses global axes; Space=local rotates the vector by the target actor so Local +Z follows a car/actor forward. Unlike Apply Force, this is immediate. On a DYNAMIC body it adds to its momentum; on a CHARACTER it becomes a one-shot launch velocity. Target defaults to self.',
       };
+    case 'action.applyForceAtPoint':
+      return {
+        label: `Apply Force at Point${data.space === 'local' ? ' · Local' : ''}`,
+        description:
+          'Pushes a DYNAMIC body at a LOCAL point on it — an off-center hit that BOTH shoves it AND spins it (the lever arm turns the push into torque). Car flips, catapults, off-center thrusters, hinged lever pushes. Wire a Vector3 into Force (or set axis + amount), and a Vector3 into Local Point (e.g. [0, 1, 0] to hit above the center of mass) or set the Point field. Space=world applies the force in global axes; Space=local rotates the force by the target. Target defaults to self.',
+      };
     case 'action.setVelocity':
       return {
         label: 'Set Velocity',
@@ -829,6 +841,12 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
         label: 'Get Velocity',
         description:
           "Outputs an actor's current velocity [x,y,z] (units/sec) — its speed and direction of travel. Works for dynamic physics bodies, characters, and vehicles. Wire into Make/➗ math for speed-based logic, or into a speedometer. Target defaults to self.",
+      };
+    case 'query.getSpeed':
+      return {
+        label: 'Get Speed',
+        description:
+          "Outputs an actor's current LINEAR speed (units/sec) — the magnitude of its Get Velocity vector, ignoring direction. Great for speedometers, 'is it moving?' gates, air-speed for gliders, or Compare checks against a max speed. Works for dynamic physics bodies, characters, and vehicles. Target defaults to self.",
       };
     case 'action.setAngularVelocity':
       return {
@@ -1177,6 +1195,13 @@ export const normalizeNodeData = (data: Partial<NodeForgeNodeData>): NodeForgeNo
   if (nodeKind === 'action.applyTorque') {
     if (typeof normalized.amount !== 'number') normalized.amount = 4;
     if (!normalized.axis) normalized.axis = 'y';
+  }
+
+  if (nodeKind === 'action.applyForceAtPoint') {
+    if (typeof normalized.amount !== 'number') normalized.amount = 8;
+    if (!normalized.axis) normalized.axis = 'z';
+    if (!normalized.space) normalized.space = 'world';
+    if (!Array.isArray(normalized.localPoint)) normalized.localPoint = [0, 0, 0]; // center of mass = pure shove
   }
 
   if (nodeKind === 'action.setPhysics') {

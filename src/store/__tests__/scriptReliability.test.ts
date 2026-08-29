@@ -59,6 +59,7 @@ describe('script reliability', () => {
       ['query.overlapSphere', 'boolean'],
       ['query.sphereCast', 'boolean'],
       ['query.cableTension', 'number'],
+      ['query.getSpeed', 'number'],
     ] as const;
 
     for (const [kind, output] of expected) {
@@ -68,6 +69,16 @@ describe('script reliability', () => {
       expect(data.hasOutput).toBe(true);
       expect(outputTypeForHandle(kind, 'value-out')).toBe(output);
     }
+  });
+
+  it('types the Apply Force at Point pins like the rest of the impulse actions', () => {
+    expect(inputTypeForHandle('action.applyForceAtPoint', 'vector')).toBe('vector3');
+    expect(inputTypeForHandle('action.applyForceAtPoint', 'point')).toBe('vector3');
+    expect(inputTypeForHandle('action.applyForceAtPoint', 'target')).toBe('any');
+    expect(inputTypeForHandle('action.applyForceAtPoint', 'amount')).toBe('number');
+    expect(isGraphConnectionValid('value.number', 'action.applyForceAtPoint', 'value-out', 'vector')).toBe(false);
+    expect(isGraphConnectionValid('value.vector3', 'action.applyForceAtPoint', 'value-out', 'point')).toBe(true);
+    expect(isGraphConnectionValid('value.vector3', 'query.getSpeed', 'value-out', 'target')).toBe(true);
   });
 
   it('uses the real boolean and open-ended input types instead of defaulting every pin to number', () => {

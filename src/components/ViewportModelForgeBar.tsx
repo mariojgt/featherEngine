@@ -1,4 +1,4 @@
-import { Box, Cone, Copy, Cylinder, Globe, Hammer, Paintbrush, Pyramid, RotateCcw, Trash2 } from 'lucide-react';
+import { Box, Boxes, Cone, Copy, Cylinder, Donut, Globe, Hammer, Hexagon, Paintbrush, Pill, Pyramid, RotateCcw, Tent, Trash2 } from 'lucide-react';
 import type { ModelPartShape, SceneObject } from '../types';
 import { openModelForgeStudio } from '../extensions/openModelForge';
 import { DEFAULT_MODEL_STYLE } from '../model/modelSpec';
@@ -11,6 +11,11 @@ const SHAPE_ICON: Record<ModelPartShape, typeof Box> = {
   sphere: Globe,
   cone: Cone,
   wedge: Pyramid,
+  torus: Donut,
+  pyramid: Tent,
+  hexprism: Hexagon,
+  capsule: Pill,
+  mesh: Boxes,
 };
 
 function addPartBeside(specId: string, shape: ModelPartShape, besideId: string) {

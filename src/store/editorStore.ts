@@ -124,6 +124,13 @@ import { wrapDayCycleTime } from '../three/dayCycle';
 import { DEFAULT_TREE_IDS, defaultTreeLibrary, normalizeTreeSpec, treeRng, treeSpecFromArchetype } from '../tree/treeSpec';
 import { getStylizedPreset, stylizedTreeSpec } from '../tree/stylizedPresets';
 import { defaultModelLibrary, makeModelPart, modelSpecFromStarter, normalizeModelSpec } from '../model/modelSpec';
+import {
+  applyBooleanModelParts,
+  applyConvertModelPartToMesh,
+  applyExtrudeModelPartFaces,
+  applySetModelPartMeshVertices,
+  applySubdivideModelPartFaces,
+} from './editor/treeActions';
 import type { ModelPart, ModelPartShape, ModelSpec } from '../types';
 
 /** How a grove picks its tree asset: an explicit library spec, a stylized preset, or an archetype. */
@@ -1068,6 +1075,16 @@ export interface EditorState {
   paintModelPart: (specId: string, partId: string, colorSlot: number, faceGroup?: number) => boolean;
   /** Replace a box part's vertex-edit corner offsets (unit space, keys 0-7). null clears the deformation. */
   setModelPartCorners: (specId: string, partId: string, corners: Record<number, Vector3Tuple> | null) => boolean;
+  /** Bake a part's exact rendered geometry into a Mesh part (shape 'mesh'): pierced/extruded right now is editable where the cage isn't. */
+  convertModelPartToMesh: (specId: string, partId: string) => boolean;
+  /** Move specific mesh vertices to new positions in unit space (keys the vertex index). */
+  setModelPartMeshVertices: (specId: string, partId: string, updates: Array<[number, Vector3Tuple]>) => boolean;
+  /** Extrude triangle faces of a Mesh part along their normals. Returns false if the part isn't a mesh. */
+  extrudeModelPartFaces: (specId: string, partId: string, faceIndices: number[], delta?: number) => boolean;
+  /** Midpoint-subdivide triangle faces of a Mesh part. Returns false if the part isn't a mesh. */
+  subdivideModelPartFaces: (specId: string, partId: string, faceIndices: number[]) => boolean;
+  /** CSG boolean of two parts; the result lands in the first part (converted to a mesh). Returns the new part; null on failure. */
+  booleanModelParts: (specId: string, partId: string, otherPartId: string, operation: 'union' | 'difference' | 'intersect') => boolean;
   /** Replace a model asset's flat-color palette (1-16 hex colors). */
   setModelPalette: (specId: string, palette: string[]) => boolean;
   /** Place a prototype model object linked to a library asset (terrain-snapped). Returns the object id; null = unknown spec. */
@@ -1745,6 +1762,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   duplicateModelPart: (specId, partId) => applyDuplicateModelPart(set, get, specId, partId),
   paintModelPart: (specId, partId, colorSlot, faceGroup) => applyPaintModelPart(set, get, specId, partId, colorSlot, faceGroup),
   setModelPartCorners: (specId, partId, corners) => applySetModelPartCorners(set, get, specId, partId, corners),
+  convertModelPartToMesh: (specId, partId) => applyConvertModelPartToMesh(set, get, specId, partId),
+  setModelPartMeshVertices: (specId, partId, updates) => applySetModelPartMeshVertices(set, get, specId, partId, updates),
+  extrudeModelPartFaces: (specId, partId, faceIndices, delta) => applyExtrudeModelPartFaces(set, get, specId, partId, faceIndices, delta),
+  subdivideModelPartFaces: (specId, partId, faceIndices) => applySubdivideModelPartFaces(set, get, specId, partId, faceIndices),
+  booleanModelParts: (specId, partId, otherPartId, operation) => applyBooleanModelParts(set, get, specId, partId, otherPartId, operation),
   setModelPalette: (specId, palette) => applySetModelPalette(set, get, specId, palette),
   createModelFromSpec: (specId, options = {}) => applyCreateModelFromSpec(set, get, specId, options),
   attachModelSpec: (objectId, specId) => applyAttachModelSpec(set, get, objectId, specId),

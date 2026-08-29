@@ -170,6 +170,16 @@ export interface FeatherPluginAPI {
     paintPart(specId: string, partId: string, colorSlot: number, faceGroup?: number): boolean;
     /** Vertex editing: replace a box part's corner offsets (unit space, corner index bit0=+X, bit1=+Y, bit2=+Z). null clears. */
     setPartCorners(specId: string, partId: string, corners: Record<number, Vector3Tuple> | null): boolean;
+    /** Bake a part's exact rendered geometry into a Mesh part (shape 'mesh'). Any shape converts. */
+    convertPartToMesh(specId: string, partId: string): boolean;
+    /** Move specific mesh vertices to new unit-space positions (keys are vertex indices). */
+    setPartMeshVertices(specId: string, partId: string, updates: Array<[number, Vector3Tuple]>): boolean;
+    /** Extrude selected triangle faces of a Mesh part along their normals. */
+    extrudePartFaces(specId: string, partId: string, faceIndices: number[], delta?: number): boolean;
+    /** Midpoint-subdivide selected triangle faces of a Mesh part. */
+    subdividePartFaces(specId: string, partId: string, faceIndices: number[]): boolean;
+    /** CSG boolean of two parts; the result lands in the first part (converted to a mesh). */
+    booleanParts(specId: string, partId: string, otherPartId: string, operation: 'union' | 'difference' | 'intersect'): boolean;
     /** Replace the asset's flat-color palette (1-16 hex colors). */
     setPalette(specId: string, palette: string[]): boolean;
     /** Place a linked, terrain-snapped instance in the scene. Returns the object id. */

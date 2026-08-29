@@ -1193,7 +1193,8 @@ button {
 .export-button,
 .full-button,
 .segmented button,
-.node-palette button {
+.node-palette button,
+.quick-preset-button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(29, 34, 48, 0.78);
@@ -1225,10 +1226,26 @@ button {
 .export-button:hover,
 .full-button:hover,
 .segmented button:hover,
-.node-palette button:hover {
+.node-palette button:hover,
+.quick-preset-button:hover {
   transform: translateY(-1px);
   border-color: var(--border-strong);
   background: rgba(36, 43, 61, 0.92);
+  color: var(--text);
+}
+
+.quick-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.quick-preset-button {
+  padding: 6px 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
   color: var(--text);
 }
 

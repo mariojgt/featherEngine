@@ -793,6 +793,13 @@ class FeatherGraphBuilder {
         this.attachValueOrLiteral(node, 'amount', rawArg('amount', 2) ?? call.named.get('amount'), 'number', 'amount');
         return node;
       }
+      case 'apply_force_at_point': {
+        const node = this.addNode('action.applyForceAtPoint', { targetObjectId: this.targetLiteral(rawArg('target', 0)) }, 1);
+        this.attachWiredValue(node, 'vector', rawArg('vector', 1), 'vector3');
+        this.attachValueOrLiteral(node, 'point', rawArg('point', 2) ?? call.named.get('point'), 'vector3', 'localPoint');
+        this.attachValueOrLiteral(node, 'amount', rawArg('amount', 3) ?? call.named.get('amount'), 'number', 'amount');
+        return node;
+      }
       case 'set_var': {
         const node = this.addNode('variable.setObject', { objectKey: stringArg('key', 1, 'value') }, 1);
         this.applyTargetArg(node, rawArg('target', 0));
@@ -1361,6 +1368,8 @@ class FeatherGraphBuilder {
         }
         case 'velocity':
           return ref(this.targetedValueNode('query.velocity', arg('target', 0), depth));
+        case 'speed':
+          return ref(this.targetedValueNode('query.getSpeed', arg('target', 0), depth));
         case 'cable_tension':
           return ref(this.addNode('query.cableTension', { targetObjectId: this.targetLiteral(arg('target', 0)) }, depth));
         case 'find_actor': {

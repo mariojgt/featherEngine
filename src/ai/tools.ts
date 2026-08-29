@@ -53,7 +53,7 @@ import { createSplineStudioTemplate } from '../project/splineStudioTemplate';
 import { createStoryboardCinematic, polishCinematicLook, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, findRenderPreset, lightingPresetIds, materialPresetIds, materialPresetPatch, renderPresetIds } from '../three/presets';
-import { applyPhysicsMaterialPreset, physicsMaterialPresetIds } from '../runtime/physicsMaterials';
+import { applyPhysicsMaterialPreset, applyPhysicsQuickPreset, physicsMaterialPresetIds, PHYSICS_QUICK_PRESETS } from '../runtime/physicsMaterials';
 import { cinematicTransformsAt } from '../store/editor/cinematics';
 
 const store = () => useEditorStore.getState();
@@ -551,10 +551,12 @@ const NODE_LABELS = [
   'Get Rotation',
   'Get Scale',
   'Apply Impulse',
+  'Apply Force at Point',
   'Apply Torque',
   'Set Physics',
   'Set Velocity',
   'Get Velocity',
+  'Get Speed',
   'Set Angular Velocity',
   'Get Angular Velocity',
   'Set Gravity',
@@ -718,10 +720,12 @@ const NODE_CATEGORY: Record<(typeof NODE_LABELS)[number], GraphNodeCategory> = {
   'Get Rotation': 'Runtime',
   'Get Scale': 'Runtime',
   'Apply Impulse': 'Physics',
+  'Apply Force at Point': 'Physics',
   'Apply Torque': 'Physics',
   'Set Physics': 'Physics',
   'Set Velocity': 'Physics',
   'Get Velocity': 'Physics',
+  'Get Speed': 'Physics',
   'Set Angular Velocity': 'Physics',
   'Get Angular Velocity': 'Physics',
   'Set Gravity': 'Physics',
@@ -1665,9 +1669,9 @@ const rawEngineTools = {
 
   create_model_spec: tool({
     description:
-      'Add a prototype-model asset (Model Forge) from a starter kit: blank, crate, fence, barrel, tile, arch, table, chair, stairs, lamp, rock, or robot. Then shape it with add_model_part/update_model_part, paint it with paint_model_part, and place it with place_model. For a custom prop, start from blank and kit-bash a FEW chunky parts.',
+      'Add a prototype-model asset (Model Forge) from a starter kit: blank, crate, fence, barrel, tile, arch, table, chair, stairs, lamp, rock, robot, ring, nut, or tent. Then shape it with add_model_part/update_model_part, paint it with paint_model_part, and place it with place_model. For a custom prop, start from blank and kit-bash a FEW chunky parts.',
     inputSchema: z.object({
-      starter: z.enum(['blank', 'crate', 'fence', 'barrel', 'tile', 'arch', 'table', 'chair', 'stairs', 'lamp', 'rock', 'robot']).optional().describe('Defaults to blank.'),
+      starter: z.enum(['blank', 'crate', 'fence', 'barrel', 'tile', 'arch', 'table', 'chair', 'stairs', 'lamp', 'rock', 'robot', 'ring', 'nut', 'tent']).optional().describe('Defaults to blank.'),
       name: z.string().optional(),
     }),
     execute: async ({ starter, name }) => {
@@ -1678,10 +1682,10 @@ const rawEngineTools = {
 
   add_model_part: tool({
     description:
-      'Add one primitive part to a model asset. Shapes: box, cylinder, sphere, cone, wedge (a ramp, slope facing +Z). scale IS the part\'s world-unit size (e.g. [1.9, 0.1, 0.07] for a fence rail); colorSlot indexes the asset palette. Model origin sits on the ground, so a 1-unit-tall part centred at y=0.5 rests on it.',
+      'Add one primitive part to a model asset. Shapes: box, cylinder, sphere, cone, wedge (a ramp, slope facing +Z), torus (a ring), pyramid (4-sided cone/tent), hexprism (6-sided column), capsule (a pill), mesh (a custom editable triangle mesh you can later Extrude/Subdivide/Boolean, or convert a shaped part into with convert_model_part_to_mesh). scale IS the part\'s world-unit size (e.g. [1.9, 0.1, 0.07] for a fence rail); colorSlot indexes the asset palette. Model origin sits on the ground, so a 1-unit-tall part centred at y=0.5 rests on it.',
     inputSchema: z.object({
       specId: z.string(),
-      shape: z.enum(['box', 'cylinder', 'sphere', 'cone', 'wedge']),
+      shape: z.enum(['box', 'cylinder', 'sphere', 'cone', 'wedge', 'torus', 'pyramid', 'hexprism', 'capsule', 'mesh']),
       name: z.string().optional(),
       position: vec3.optional(),
       rotationDeg: vec3.optional().describe('Euler rotation in degrees.'),
@@ -1701,21 +1705,24 @@ const rawEngineTools = {
   }),
 
   update_model_part: tool({
-    description: 'Move, resize, rotate, rename, reshape or recolor one part of a model asset. Every placed instance updates live.',
+    description:
+      'Move, resize, rotate, rename, reshape or recolor one part of a model asset. Every placed instance updates live. Also set collider per-part: "auto" (derive a primitive from the shape), "box", "sphere", "capsule", or "none" to make that part non-colliding (great for decorative details). Collider overrides apply when the prop has physics.',
     inputSchema: z.object({
       specId: z.string(),
       partId: z.string(),
       name: z.string().optional(),
-      shape: z.enum(['box', 'cylinder', 'sphere', 'cone', 'wedge']).optional(),
+      shape: z.enum(['box', 'cylinder', 'sphere', 'cone', 'wedge', 'torus', 'pyramid', 'hexprism', 'capsule', 'mesh']).optional(),
+      collider: z.enum(['auto', 'box', 'sphere', 'capsule', 'none']).optional(),
       position: vec3.optional(),
       rotationDeg: vec3.optional(),
       scale: vec3.optional(),
       colorSlot: z.number().optional(),
     }),
-    execute: async ({ specId, partId, name, shape, position, rotationDeg, scale, colorSlot }) => {
+    execute: async ({ specId, partId, name, shape, collider, position, rotationDeg, scale, colorSlot }) => {
       const ok = store().updateModelPart(specId, partId, {
         name,
         shape,
+        collider,
         position: position ? asVec3(position) : undefined,
         rotation: rotationDeg ? (asVec3(rotationDeg).map((v) => (v * Math.PI) / 180) as Vector3Tuple) : undefined,
         scale: scale ? asVec3(scale) : undefined,
@@ -1734,7 +1741,7 @@ const rawEngineTools = {
 
   paint_model_part: tool({
     description:
-      'Paint a model part from the asset palette. Omit faceGroup to paint the whole part (clears per-face paint). Face groups: box 0 right / 1 left / 2 top / 3 bottom / 4 front / 5 back; cylinder 0 side / 1 top / 2 bottom; cone 0 side / 2 bottom; wedge 0 slope / 1 bottom / 2 back / 3 left / 4 right; sphere has one surface.',
+      'Paint a model part from the asset palette. Omit faceGroup to paint the whole part (clears per-face paint). Face groups: box 0 right / 1 left / 2 top / 3 bottom / 4 front / 5 back; cylinder & hexprism 0 side / 1 top / 2 bottom; cone & pyramid 0 side / 2 bottom; wedge 0 slope / 1 bottom / 2 back / 3 left / 4 right; torus & capsule 0 whole surface; sphere has one surface.',
     inputSchema: z.object({
       specId: z.string(),
       partId: z.string(),
@@ -1774,6 +1781,62 @@ const rawEngineTools = {
       return ok
         ? `Sculpted part ${partId}: ${Object.keys(corners).length} corner(s) offset.`
         : `Could not edit part ${partId}.`;
+    },
+  }),
+
+  convert_model_part_to_mesh: tool({
+    description:
+      "Bake ANY model part's exact rendered surface into a real editable MESH part (shape 'mesh'). The result is a true triangle mesh you can vertex-move, extrude, subdivide, and boolean — unlike the 8-point box cage. Corners/deformations become literal geometry. Use this right before sculpting precise holes or merged shapes.",
+    inputSchema: z.object({ specId: z.string(), partId: z.string() }),
+    execute: async ({ specId, partId }) => {
+      const ok = store().convertModelPartToMesh(specId, partId);
+      return ok ? `Converted part ${partId} into an editable mesh.` : `Could not convert part ${partId} to a mesh.`;
+    },
+  }),
+
+  extrude_model_faces: tool({
+    description:
+      "Extrude the selected triangle faces of a MESH part along their own normals by delta (default 0.25 world units). Each chosen face grows a raised cap plus side walls, so the mesh stays closed and manifold — stack calls to build up steps, fins, sockets. Requires a mesh part (see convert_model_part_to_mesh) and the face indices you want to push out.",
+    inputSchema: z.object({
+      specId: z.string(),
+      partId: z.string(),
+      faceIndices: z.array(z.number().min(0)).describe('Triangle face indices to extrude. Select all faces to inflate the whole part.'),
+      delta: z.number().optional().describe('Extrusion distance in world units (default 0.25).'),
+    }),
+    execute: async ({ specId, partId, faceIndices, delta }) => {
+      const ok = store().extrudeModelPartFaces(specId, partId, faceIndices, delta);
+      return ok ? `Extruded ${faceIndices.length} face(s) of part ${partId} by ${delta ?? 0.25}.` : `Extrude needs a mesh part (${partId}).`;
+    },
+  }),
+
+  subdivide_model_faces: tool({
+    description:
+      "Midpoint-subdivide the selected triangle faces of a MESH part — each face becomes four, sharing midpoints across touching faces so the surface stays crack-free. Adds editable vertices (more detail to sculpt). Requires a mesh part (see convert_model_part_to_mesh).",
+    inputSchema: z.object({
+      specId: z.string(),
+      partId: z.string(),
+      faceIndices: z.array(z.number().min(0)).describe('Triangle face indices to subdivide.'),
+    }),
+    execute: async ({ specId, partId, faceIndices }) => {
+      const ok = store().subdivideModelPartFaces(specId, partId, faceIndices);
+      return ok ? `Subdivided ${faceIndices.length} face(s) of part ${partId}.` : `Subdivide needs a mesh part (${partId}).`;
+    },
+  }),
+
+  boolean_model_parts: tool({
+    description:
+      "Combine two parts of a model with a CSG boolean: 'union' merges them into one mesh (result kept on the first part, the other is removed); 'difference' subtracts the second from the first; 'intersect' keeps only the overlap. Both parts are promoted to meshes. Great for window holes (subtract a small box from a bigger one), merged rocks, and carved details.",
+    inputSchema: z.object({
+      specId: z.string(),
+      partId: z.string().describe('First part — the result lands here (and it becomes a mesh).'),
+      otherPartId: z.string().describe('Second part — removed after the operation.'),
+      operation: z.enum(['union', 'difference', 'intersect']),
+    }),
+    execute: async ({ specId, partId, otherPartId, operation }) => {
+      const ok = store().booleanModelParts(specId, partId, otherPartId, operation);
+      return ok
+        ? `${operation} of ${partId} and ${otherPartId} — result kept on ${partId}.`
+        : `Boolean failed — the parts may not overlap, or the result was empty.`;
     },
   }),
 
@@ -2256,6 +2319,27 @@ const rawEngineTools = {
       if (patch.collider !== undefined) update.collider = patch.collider as ColliderType;
       store().updatePhysics(id, update);
       return `Updated physics of ${id}.`;
+    },
+  }),
+
+  apply_physics_preset: tool({
+    description:
+      "Turn the object into a ready-made physics setup in one click (enables physics too). Options: wall-or-floor (immovable solid box), scenery-mesh (immovable, hugs the model exactly — use on imported props), pushable-crate (dynamic box that slides/knocks over but won't tip from bumps), bouncy-ball (light sphere that rolls and bounces), light-prop (small box that blows around in wind, easy to knock over), ice-floor (very slippery fixed floor), fragile-prop (chunks on strong impact — pair with set_fracture), trigger-zone (detects overlaps but blocks nothing). This is the same set as the inspector's quick-physics buttons — use it instead of hand-setting many set_physics fields for these common cases.",
+    inputSchema: z.object({
+      id: z.string(),
+      preset: z.enum(PHYSICS_QUICK_PRESETS.map((p) => p.id) as [string, ...string[]]),
+    }),
+    execute: async ({ id, preset }) => {
+      const object = findObject(id);
+      if (!object) return `No object with id ${id}.`;
+      const physics = object.physics
+        ? object.physics
+        : (store().togglePhysics(id), findObject(id)?.physics);
+      if (!physics) return `Could not enable physics on ${id}.`;
+      const result = applyPhysicsQuickPreset(physics, preset);
+      if (!result) return `Unknown physics preset "${preset}".`;
+      store().updatePhysics(id, result.physics);
+      return `Applied "${result.preset.label}" physics to ${id}.`;
     },
   }),
 

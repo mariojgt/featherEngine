@@ -29,6 +29,8 @@ import {
   sphereRadius,
 } from './colliderShape';
 import { getModelGeometry, meshGeometryVersion } from './meshGeometryCache';
+import { forgeModelGeometryForSpec } from '../model/modelGeometry';
+import type { ModelPart, ModelSpec, ModelStyle } from '../types';
 import {
   buildTerrainChunkTrimesh,
   terrainChunkKeysAroundWorld,
@@ -225,6 +227,22 @@ function collisionGroups(layer: number | undefined, mask: number | undefined): n
 /** Filter groups every character controller moves with — constant, so computed once, not per character per frame. */
 const CHARACTER_FILTER_GROUPS = collisionGroups(0, DEFAULT_COLLISION_MASK);
 
+/**
+ * Model Forge spec resolver, installed by the store layer (tickRuntime) so this headless runtime can
+ * reach the LIVE library (a placed prop links to its library entry by id; editing the library must
+ * rebuild every placed prop's collider). Kept as an injected callback rather than importing the store
+ * to avoid an editorStore → tickRuntime → physicsWorld → editorStore module cycle. When absent, colliders
+ * fall back to the object's inline `model.spec` (present on keep-alive copies).
+ */
+let modelSpecResolver: ((object: SceneObject) => ModelSpec | null) | null = null;
+export function setModelSpecResolver(resolver: ((object: SceneObject) => ModelSpec | null) | null): void {
+  modelSpecResolver = resolver;
+}
+
+function resolveModelSpec(object: SceneObject): ModelSpec | null {
+  return modelSpecResolver?.(object) ?? object.model?.spec ?? null;
+}
+
 /** Cached model vertices (local space) baked to the object's scale, for mesh/convex colliders. */
 function scaledMeshVertices(object: SceneObject) {
   const geo = getModelGeometry(object.renderer?.modelAssetId);
@@ -237,6 +255,25 @@ function scaledMeshVertices(object: SceneObject) {
     out[i + 2] = geo.vertices[i + 2] * sz;
   }
   return { vertices: out, indices: geo.indices };
+}
+
+/**
+ * Cached triangle soup for a Model Forge prop: every part's true silhouette (transformed by its local
+ * position/rotation/scale) welded into one mesh, scaled to the object's world size. Mirror of
+ * `scaledMeshVertices` but for kit-bashed `model` specs (no GLB renderer geometry to read).
+ */
+function forgeModelGeometry(object: SceneObject) {
+  const spec = resolveModelSpec(object);
+  if (!spec || !spec.parts?.length) return null;
+  const mesh = forgeModelGeometryForSpec(spec);
+  const [sx, sy, sz] = halfScale(object);
+  const out = new Float32Array(mesh.vertices.length);
+  for (let i = 0; i < mesh.vertices.length; i += 3) {
+    out[i] = mesh.vertices[i] * sx;
+    out[i + 1] = mesh.vertices[i + 1] * sy;
+    out[i + 2] = mesh.vertices[i + 2] * sz;
+  }
+  return { vertices: out, indices: mesh.indices };
 }
 
 function colliderDescFor(object: SceneObject) {
@@ -260,6 +297,17 @@ function colliderDescFor(object: SceneObject) {
   } else if (kind === 'convex') {
     const mesh = scaledMeshVertices(object);
     desc = (mesh && RAPIER.ColliderDesc.convexHull(mesh.vertices)) || boxDesc();
+  } else if (kind === 'model') {
+    // Model Forge kit-bashed prop. A FIXED body gets its TRUE triangle surface (bowls, ramps, and
+    // receding shapes keep their exact collision); a DYNAMIC body can't use a trimesh in Rapier so it
+    // gets the convex hull of all parts (scenery where a crate lands on, say, a table's top).
+    const mesh = forgeModelGeometry(object);
+    const isDynamic = (object.physics?.bodyType ?? 'dynamic') === 'dynamic';
+    desc = mesh
+      ? isDynamic
+        ? (RAPIER.ColliderDesc.convexHull(mesh.vertices) ?? boxDesc())
+        : RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices)
+      : boxDesc();
   } else {
     desc = boxDesc();
   }
@@ -280,6 +328,22 @@ function colliderDescFor(object: SceneObject) {
   return desc;
 }
 
+/** Apply the shared material/sensor/layer/event setup every collider desc needs. */
+function applyColliderCommon(desc: RAPIER.ColliderDesc, object: SceneObject, massShare: number) {
+  const physics = object.physics;
+  desc.setFriction(physics?.friction ?? 0.5);
+  desc.setRestitution(physics?.restitution ?? 0.05);
+  desc.setMass(Math.max(massShare, 0.001));
+  desc.setSensor(Boolean(physics?.isTrigger));
+  const groups = collisionGroups(physics?.collisionLayer, physics?.collisionMask);
+  desc.setCollisionGroups(groups);
+  desc.setSolverGroups(groups);
+  desc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+  // Generate contact/intersection events for EVERY body-type pairing (fixed sensor vs kinematic player, etc).
+  desc.setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL);
+  return desc;
+}
+
 /** Descs for an object's COMPOUND extra colliders — same material/sensor/layer setup as the main shape. */
 function extraColliderDescs(object: SceneObject) {
   const physics = object.physics;
@@ -287,7 +351,6 @@ function extraColliderDescs(object: SceneObject) {
   if (!extras.length) return [];
   // Split the authored mass across all shapes so a compound body weighs what the field says.
   const massShare = Math.max((physics?.mass ?? 1) / (extras.length + 1), 0.001);
-  const groups = collisionGroups(physics?.collisionLayer, physics?.collisionMask);
   return extras.map((extra) => {
     const [a, b, c] = extra.size;
     const desc =
@@ -297,16 +360,113 @@ function extraColliderDescs(object: SceneObject) {
           ? RAPIER.ColliderDesc.capsule(Math.max(Math.abs(b) || 0.5, 0.01), Math.max(Math.abs(a) || 0.25, 0.01))
           : RAPIER.ColliderDesc.cuboid(Math.max(Math.abs(a) || 0.25, 0.01), Math.max(Math.abs(b) || 0.25, 0.01), Math.max(Math.abs(c) || 0.25, 0.01));
     desc.setTranslation(extra.offset[0], extra.offset[1], extra.offset[2]);
-    desc.setFriction(physics?.friction ?? 0.5);
-    desc.setRestitution(physics?.restitution ?? 0.05);
-    desc.setMass(massShare);
-    desc.setSensor(Boolean(physics?.isTrigger));
-    desc.setCollisionGroups(groups);
-    desc.setSolverGroups(groups);
-    desc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-    desc.setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL);
-    return desc;
+    return applyColliderCommon(desc, object, massShare);
   });
+}
+
+const abs = (value: number): number => Math.abs(value);
+
+/**
+ * One collider desc per model part for a Model Forge prop, honoring each part's `collider` override:
+ * - 'none' skips the part, so it never blocks nor triggers.
+ * - 'box' / 'sphere' / 'capsule' force that primitive at the part's local transform.
+ * - 'auto' (the default) derives a sensible primitive from the shape: box → cuboid, sphere → ball,
+ *   cylinder → capsule, cone → ball, wedge → cuboid; a box edited with corner vertices becomes its convex
+ *   hull so tapered pillars and roof peaks keep their true silhouette.
+ *
+ * When NO part carries an override this returns an empty list — the caller keeps the single-part exact
+ * trimesh/convex behavior (see colliderDescFor) so untouched props stay cheapest.
+ */
+function forgeColliderDescs(object: SceneObject) {
+  const spec = resolveModelSpec(object);
+  if (!spec || !spec.parts?.length) return [];
+  const overridden = spec.parts.some((part) => part.collider && part.collider !== 'auto');
+  if (!overridden) return [];
+  const physics = object.physics;
+  const included = spec.parts.filter((part) => part.collider !== 'none');
+  const massShare = Math.max((physics?.mass ?? 1) / Math.max(included.length, 1), 0.001);
+  const [sx, sy, sz] = halfScale(object);
+  const scaled = spec.style ? spec.style : undefined;
+  const descs: RAPIER.ColliderDesc[] = [];
+  for (const part of included) {
+    const desired = part.collider ?? 'auto';
+    const px = part.position[0] * sx;
+    const py = part.position[1] * sy;
+    const pz = part.position[2] * sz;
+    let desc: RAPIER.ColliderDesc;
+    const dx = abs(part.scale[0]) * sx;
+    const dy = abs(part.scale[1]) * sy;
+    const dz = abs(part.scale[2]) * sz;
+    if (part.shape === 'box' && Object.keys(part.corners ?? {}).length && desired === 'auto') {
+      // Corner-edited box: bake its real hull (the trimesh geometry minus other parts) as a convex hull.
+      const hull = singlePartConvexHull(part, scaled, sx, sy, sz);
+      desc = hull || RAPIER.ColliderDesc.cuboid(Math.max(dx / 2, 0.01), Math.max(dy / 2, 0.01), Math.max(dz / 2, 0.01));
+      desc.setTranslation(px, py, pz);
+    } else if (desired === 'sphere' || (desired === 'auto' && (part.shape === 'sphere' || part.shape === 'torus'))) {
+      desc = RAPIER.ColliderDesc.ball(Math.max(Math.max(dx, dy, dz) / 2, 0.01));
+      desc.setTranslation(px, py, pz);
+    } else if (desired === 'capsule' || (desired === 'auto' && (part.shape === 'cylinder' || part.shape === 'capsule'))) {
+      // Capsule along the part's Y axis (upright cylinder feel).
+      const radius = Math.max(Math.max(dx, dz) / 2, 0.01);
+      const halfHeight = Math.max(dy / 2 - radius, 0.01);
+      desc = RAPIER.ColliderDesc.capsule(halfHeight, radius);
+      desc.setTranslation(px, py, pz);
+    } else if (part.shape === 'mesh') {
+      // Exact per-part surface: trimesh for fixed bodies, convex hull for dynamic (Rapier limitation).
+      const isDynamic = (object.physics?.bodyType ?? 'dynamic') === 'dynamic';
+      const meshDesc = singlePartMeshCollider(part, isDynamic, sx, sy, sz);
+      if (meshDesc) {
+        desc = meshDesc;
+      } else {
+        desc = RAPIER.ColliderDesc.cuboid(Math.max(dx / 2, 0.01), Math.max(dy / 2, 0.01), Math.max(dz / 2, 0.01));
+        desc.setTranslation(px, py, pz);
+      }
+    } else if (
+      desired === 'box' ||
+      (desired === 'auto' && (part.shape === 'box' || part.shape === 'wedge' || part.shape === 'pyramid' || part.shape === 'hexprism'))
+    ) {
+      desc = RAPIER.ColliderDesc.cuboid(Math.max(dx / 2, 0.01), Math.max(dy / 2, 0.01), Math.max(dz / 2, 0.01));
+      desc.setTranslation(px, py, pz);
+    } else {
+      // auto cone, or any unhandled combo → a ball matching the widest dimension is a safe, stable shape.
+      desc = RAPIER.ColliderDesc.ball(Math.max(Math.max(dx, dy, dz) / 2, 0.01));
+      desc.setTranslation(px, py, pz);
+    }
+    desc.setRotation(quatFromEuler(part.rotation));
+    descs.push(applyColliderCommon(desc, object, massShare));
+  }
+  return descs;
+}
+
+/** Convex hull of ONE part (its render triangles) scaled to the object's size. The bake already folds the
+ *  part's local position/rotation/scale in, so the hull returns in the body's local frame. Returns null
+ *  when the part has no geometry worth hulling. */
+function singlePartConvexHull(part: ModelPart, style: ModelStyle | undefined, sx: number, sy: number, sz: number): RAPIER.ColliderDesc | null {
+  const single = forgeModelGeometryForSpec({ id: '', name: '', palette: [], parts: [part], style });
+  const scaled = new Float32Array(single.vertices.length);
+  for (let i = 0; i < single.vertices.length; i += 3) {
+    scaled[i] = single.vertices[i] * sx;
+    scaled[i + 1] = single.vertices[i + 1] * sy;
+    scaled[i + 2] = single.vertices[i + 2] * sz;
+  }
+  return RAPIER.ColliderDesc.convexHull(scaled) ?? null;
+}
+
+/** Exact collider for a Mesh part: trimesh (fixed) or convex hull (dynamic), scaled to the object size.
+ *  Uses the shared forgeModelGeometryGeometry path so unit-space mesh renders match. Returns null when
+ *  there's nothing to hull. */
+function singlePartMeshCollider(part: ModelPart, dynamic: boolean, sx: number, sy: number, sz: number): RAPIER.ColliderDesc | null {
+  const geo = forgeModelGeometryForSpec({ id: '', name: '', palette: [], parts: [part] });
+  const scaled = new Float32Array(geo.vertices.length);
+  for (let i = 0; i < geo.vertices.length; i += 3) {
+    scaled[i] = geo.vertices[i] * sx;
+    scaled[i + 1] = geo.vertices[i + 1] * sy;
+    scaled[i + 2] = geo.vertices[i + 2] * sz;
+  }
+  if (scaled.length < 9) return null;
+  return dynamic
+    ? RAPIER.ColliderDesc.convexHull(scaled) ?? null
+    : RAPIER.ColliderDesc.trimesh(scaled, geo.indices);
 }
 
 /** A car running the real Rapier raycast-vehicle sim (vs the arcade tire model in editorStore). */
@@ -329,18 +489,30 @@ function bodyDescFor(object: SceneObject) {
 // finishing its load), so cache entries remember their mesh token and revalidate just that on a hit.
 const bodySignatureCache = new WeakMap<SceneObject, { sig: string; meshToken: string }>();
 
-const meshTokenFor = (object: SceneObject, needsGeometry: boolean): string =>
-  needsGeometry
-    ? `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`
-    : '';
+const meshTokenFor = (object: SceneObject, needsGeometry: boolean): string => {
+  if (!needsGeometry) return '';
+  // For a Model Forge prop the collider is baked from its spec's part geometry, so the token folds the
+  // current spec's shape so any library edit (which keeps the same object reference) rebuilds colliders.
+  if (colliderKindFor(object) === 'model') {
+    const spec = resolveModelSpec(object);
+    if (!spec || !spec.parts?.length) return 'model:empty';
+    const parts = spec.parts
+      .map((p) =>
+        `${p.shape}:${p.position.join(',')}:${p.rotation.join(',')}:${p.scale.join(',')}${p.corners ? ':' + Object.entries(p.corners).map(([k, v]) => `${k}${v.join(',')}`).join('|') : ''}`,
+      )
+      .join(';');
+    return `model:${spec.id || 'inline'}:${parts}`;
+  }
+  return `${object.renderer?.modelAssetId ?? ''}:${getModelGeometry(object.renderer?.modelAssetId) ? 'y' : 'n'}`;
+};
 
 /** Anything that would require rebuilding the body/collider rather than just nudging it. */
 function bodySignature(object: SceneObject): string {
   const kind = colliderKindFor(object);
-  // Mesh/convex colliders depend on loaded model geometry — fold the source model and
-  // whether its geometry is available yet into the signature so the box-fallback collider
-  // gets rebuilt into the real mesh the moment the model finishes loading.
-  const meshToken = meshTokenFor(object, kind === 'trimesh' || kind === 'convex');
+  // Mesh/convex/model colliders depend on loaded geometry (GLB asset or forge spec) — fold the source
+  // and whether it's ready into the signature so a box-fallback collider is rebuilt into the real shape
+  // the moment the geometry is available, and so a forge library edit rebuilds every placed prop.
+  const meshToken = meshTokenFor(object, kind === 'trimesh' || kind === 'convex' || kind === 'model');
   const cached = bodySignatureCache.get(object);
   if (cached && cached.meshToken === meshToken) return cached.sig;
   const p = object.physics;
@@ -491,6 +663,17 @@ const emptyStayListeners: ReadonlySet<string> = new Set<string>();
 
 /** Earth gravity — what the world runs at until a scene authors `environment.gravity`. */
 const DEFAULT_GRAVITY: Vector3Tuple = [0, -9.81, 0];
+/** TRUE fixed-timestep for the simulation: every world.step advances exactly this much time (1/60s). */
+const FIXED_STEP = 1 / 60;
+/** Longest allowed backlog to drain in one frame (remaining lag is dropped to avoid a spiral of death). */
+const MAX_STEPS = 6;
+/**
+ * Terminal velocity cap (units/s) applied to dynamic bodies after each step. Far above normal gameplay
+ * speeds (a speeding car ≈ 40 u/s, projectiles ≈ 60–120 u/s), it only reins in out-of-control situation
+ * where a body falls endlessly and its speed explodes — which breaks f32 coordinate precision and defeats
+ * CCD (tunneling). This bounds runaway / fallen-through-the-world bodies without touching normal motion.
+ */
+const MAX_DYNAMIC_SPEED = 250;
 
 export interface PhysicsContactEvent {
   objectId: string;
@@ -561,6 +744,7 @@ function jointSignature(object: SceneObject, body1Present: boolean, body2Present
     j?.limitMin,
     j?.limitMax,
     j?.motorTargetVelocity,
+    j?.motorTargetPosition,
     j?.motorMaxForce,
     j?.stiffness,
     j?.damping,
@@ -738,9 +922,14 @@ class PhysicsRuntime {
     if (lockedRotation) {
       body.setEnabledRotations(!lockedRotation[0], !lockedRotation[1], !lockedRotation[2], false);
     }
-    const collider = this.world.createCollider(colliderDescFor(object), body);
+    // Model Forge props with per-part collision overrides become a compound of part colliders (primary =
+    // first part; the remainder attach as extras); otherwise the single exact trimesh/convex built in
+    // colliderDescFor governs.
+    const modelColliders = forgeColliderDescs(object);
+    const primaryDesc = modelColliders.length ? modelColliders[0] : colliderDescFor(object);
+    const collider = this.world.createCollider(primaryDesc, body);
     const extraHandles: number[] = [];
-    for (const extraDesc of extraColliderDescs(object)) {
+    for (const extraDesc of [...extraColliderDescs(object), ...modelColliders.slice(1)]) {
       const extra = this.world.createCollider(extraDesc, body);
       extraHandles.push(extra.handle);
       this.handleToId.set(extra.handle, object.id);
@@ -1420,6 +1609,9 @@ class PhysicsRuntime {
     setVelocities: Record<string, Vector3Tuple> = {},
     setAngularVelocities: Record<string, Vector3Tuple> = {},
     angularImpulses: Record<string, Vector3Tuple> = {},
+    /** Impulses applied at a LOCAL point on the body (action.applyForceAtPoint): an off-center kick that
+     *  shoves AND spins. `point` is in the body's local axes — recomputed to the world point per frame. */
+    impulsesAtPoint: Record<string, { impulse: Vector3Tuple; point: Vector3Tuple }> = {},
     wind: Vector3Tuple = [0, 0, 0],
     windTurbulence = 0,
     /** Scene gravity (units/s²). Defaults to Earth; per-body `gravityScale` still multiplies it. */
@@ -1463,6 +1655,15 @@ class PhysicsRuntime {
     // Per-frame gust factor for wind (shared by every wind-affected body this step).
     const hasWind = wind[0] !== 0 || wind[1] !== 0 || wind[2] !== 0;
     const gust = 1 + (Math.random() - 0.5) * 2 * Math.min(Math.max(windTurbulence, 0), 1);
+    // How many fixed 1/60s steps the world will advance this frame (banked from `dt`). Computed up-front
+    // so wind/water inputs are scaled by the SIM time that will actually elapse, keeping them consistent
+    // (frame-rate independent) instead of coupling them to the display cadence (see the step loop below).
+    this.simAccumulator += dt;
+    let nSteps = Math.floor(this.simAccumulator / FIXED_STEP);
+    if (nSteps > MAX_STEPS) {
+      this.simAccumulator -= (nSteps - MAX_STEPS) * FIXED_STEP;
+      nSteps = MAX_STEPS;
+    }
     // NOTE: the world is stepped on a TRUE fixed timestep below — `dt` is banked into this.simAccumulator
     // and drained in whole 1/60s chunks, so every world.step advances exactly 1/60s regardless of the
     // display cadence. The leftover drives render interpolation. This is what keeps a fast body (a speeding
@@ -1550,6 +1751,7 @@ class PhysicsRuntime {
         const torque = angularImpulses[object.id];
         const sv = setVelocities[object.id];
         const sav = setAngularVelocities[object.id];
+        const iap = impulsesAtPoint[object.id];
         const windInfluence = object.physics.windInfluence ?? 0;
         const windActive = hasWind && windInfluence > 0;
         // Nothing is driving this body this frame — no scripted move/rotate, no impulse/torque/velocity,
@@ -1557,7 +1759,7 @@ class PhysicsRuntime {
         // none of them it would just read body.linvel() and discard it. Skipping saves that WASM call +
         // its Vector allocation for every idle dynamic body, every frame — the bulk of a settled scene.
         // Rapier owns the body's motion (gravity, momentum, contacts) regardless.
-        if (!movedX && !movedY && !movedZ && !movedRotation && !impulse && !torque && !sv && !sav && !windActive) {
+        if (!movedX && !movedY && !movedZ && !movedRotation && !impulse && !torque && !sv && !sav && !iap && !windActive) {
           continue;
         }
         // Per-axis: an axis a script touched becomes velocity-controlled this frame;
@@ -1575,13 +1777,27 @@ class PhysicsRuntime {
         }
         if (movedRotation) body.setRotation(quatFromEuler(curRot), true);
         if (impulse) body.applyImpulse({ x: impulse[0], y: impulse[1], z: impulse[2] }, true);
+        // Apply Force at Point: an off-center impulse — the lever arm (world offset from the body origin)
+        // turns the push into both linear momentum AND spin. The local offset is rotated by the body's
+        // CURRENT orientation so it tracks where on a spinning/flipping body the hit actually lands.
+        if (iap) {
+          const t = body.translation();
+          const q = body.rotation();
+          reuseQuat.set(q.x, q.y, q.z, q.w);
+          reuseVec.set(iap.point[0], iap.point[1], iap.point[2]).applyQuaternion(reuseQuat);
+          body.applyImpulseAtPoint({ x: iap.impulse[0], y: iap.impulse[1], z: iap.impulse[2] }, { x: t.x + reuseVec.x, y: t.y + reuseVec.y, z: t.z + reuseVec.z }, true);
+        }
         // Global wind: a continuous FORCE on bodies that opt in via windInfluence (0 = ignore). Wind is a
         // roughly constant push (like pressure on a sail), so we apply force×dt WITHOUT a mass term — Rapier
         // then divides by mass, giving acceleration = force/mass. That makes LIGHT props blow around while
         // HEAVY ones barely budge (mass-based, as expected). windInfluence is the per-object "sail" factor;
         // the shared per-frame `gust` adds turbulence. This is what drifts/tumbles loose blocks, debris, etc.
         if (windActive) {
-          const k = windInfluence * gust * dt;
+          // Scale by the ACTUAL sim time this frame (nSteps×FIXED_STEP), not the display dt: on a 0-step
+          // frame (display faster than the 60Hz sim) dt-based wind would push the body with no step to
+          // advance it, causing judder; on a backlog frame (nSteps>1) dt would under-push it for the time
+          // actually simulated. Per-sim-step scaling keeps wind consistent at any refresh rate.
+          const k = windInfluence * gust * nSteps * FIXED_STEP;
           body.applyImpulse({ x: wind[0] * k, y: wind[1] * k, z: wind[2] * k }, true);
         }
         // Apply Torque node: an angular impulse (kicks the body's spin). Used for physics-driven steering /
@@ -1909,14 +2125,8 @@ class PhysicsRuntime {
     // suspension see a constant step — the variable step was what made a car at speed jitter/"snap". The
     // leftover (< FIXED_STEP) is carried to next frame and drives the render-interpolation alpha below.
     // A long hitch is capped at MAX_STEPS chunks (rest of the backlog dropped) to avoid a spiral of death.
-    const FIXED_STEP = 1 / 60;
-    const MAX_STEPS = 6;
-    this.simAccumulator += dt;
-    let nSteps = Math.floor(this.simAccumulator / FIXED_STEP);
-    if (nSteps > MAX_STEPS) {
-      this.simAccumulator -= (nSteps - MAX_STEPS) * FIXED_STEP; // drop the excess backlog
-      nSteps = MAX_STEPS;
-    }
+    // nSteps was already banked at the top of frame() (so wind/water could scale by it); only the local
+    // module constants and the per-step accumulator drain remain here.
     const h = FIXED_STEP;
     this.world.timestep = FIXED_STEP;
     for (let step = 0; step < nSteps; step++) {
@@ -2072,7 +2282,18 @@ class PhysicsRuntime {
           continue;
         }
         const lv = entry.body.linvel();
-        velocities.set(id, [lv.x, lv.y, lv.z]);
+        // Terminal-velocity clamp: bound out-of-control falling so runaway bodies can't explode speed (and,
+        // with it, f32 coordinate jitter + CCD tunneling). Scale the existing velocity toward the cap
+        // direction-preserving — only ever slows, never redirects, and only past MAX_DYNAMIC_SPEED.
+        const speedSq = lv.x * lv.x + lv.y * lv.y + lv.z * lv.z;
+        if (speedSq > MAX_DYNAMIC_SPEED * MAX_DYNAMIC_SPEED) {
+          const scale = MAX_DYNAMIC_SPEED / Math.sqrt(speedSq);
+          const clamped = { x: lv.x * scale, y: lv.y * scale, z: lv.z * scale };
+          entry.body.setLinvel(clamped, true);
+          velocities.set(id, [clamped.x, clamped.y, clamped.z]);
+        } else {
+          velocities.set(id, [lv.x, lv.y, lv.z]);
+        }
         const av = entry.body.angvel();
         angularVelocities.set(id, [av.x, av.y, av.z]);
       } else if (object?.physics?.bodyType === 'fixed' && !movedFixedBodies.has(id)) {

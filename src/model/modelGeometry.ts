@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three-stdlib';
-import type { ModelPart, ModelPartShape, ModelSpec, ModelStyle } from '../types';
+import { DEFAULT_MESH } from './modelMesh';
+import type { ModelPart, ModelPartMesh, ModelPartShape, ModelSpec, ModelStyle } from '../types';
 
 /**
  * Geometry + material layer for prototype models.
@@ -54,6 +55,27 @@ function buildWedgeGeometry(): THREE.BufferGeometry {
 
 const unitGeometries = new Map<ModelPartShape, THREE.BufferGeometry>();
 
+const meshGeometryCache = new Map<string, THREE.BufferGeometry>();
+
+/**
+ * The exact geometry for a Mesh part: unit-space vertices + triangle indices, indexed and with
+ * smooth vertex normals. Cached per content, never disposed (shared like the unit geometries).
+ */
+export function buildModelPartMeshGeometry(mesh: ModelPartMesh): THREE.BufferGeometry {
+  const key = `${mesh.vertices.length}|${mesh.indices.length}|${mesh.vertices.flat().join(',')}|${mesh.indices.join(',')}`;
+  let geometry = meshGeometryCache.get(key);
+  if (!geometry) {
+    geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.vertices.flat(), 3));
+    geometry.setIndex([...mesh.indices]);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    meshGeometryCache.set(key, geometry);
+  }
+  return geometry;
+}
+
 /** Shared unit geometry for a shape. Never dispose these — every model part in the app uses them. */
 export function getModelPartGeometry(shape: ModelPartShape): THREE.BufferGeometry {
   let geometry = unitGeometries.get(shape);
@@ -63,6 +85,10 @@ export function getModelPartGeometry(shape: ModelPartShape): THREE.BufferGeometr
       case 'sphere': geometry = new THREE.SphereGeometry(0.5, 24, 16); break;
       case 'cone': geometry = new THREE.ConeGeometry(0.5, 1, 20); break;
       case 'wedge': geometry = buildWedgeGeometry(); break;
+      case 'torus': geometry = new THREE.TorusGeometry(0.35, 0.15, 12, 28); break;
+      case 'pyramid': geometry = new THREE.ConeGeometry(0.5, 1, 4); break;
+      case 'hexprism': geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 6); break;
+      case 'capsule': geometry = new THREE.CapsuleGeometry(0.25, 0.5, 8, 16); break;
       default: geometry = new THREE.BoxGeometry(1, 1, 1);
     }
     unitGeometries.set(shape, geometry);
@@ -167,6 +193,7 @@ function deformBoxByCorners(base: THREE.BufferGeometry, corners: Record<number, 
 
 /** The geometry a part actually renders with under a style. Always pairs with mesh scale = part.scale. */
 export function getPartRenderGeometry(part: ModelPart, style?: ModelStyle): THREE.BufferGeometry {
+  if (part.shape === 'mesh') return buildModelPartMeshGeometry(part.mesh ?? DEFAULT_MESH);
   if (part.shape !== 'box') return getModelPartGeometry(part.shape);
   const beveled = style?.finish === 'smooth' && style.bevel > 0.0025;
   const base = beveled ? getRoundedUnitBox(part.scale, style.bevel) : getModelPartGeometry('box');
@@ -293,4 +320,65 @@ export function buildModelGroup(spec: ModelSpec): THREE.Group {
 export function modelSpecBounds(spec: ModelSpec): THREE.Box3 {
   const group = buildModelGroup(spec);
   return new THREE.Box3().setFromObject(group);
+}
+
+/**
+ * Bake the ENTIRE model (every part, transformed by its local position/rotation/scale) into a single
+ * merged triangle soup, returned in the MODEL's local space (i.e. the object's local frame before the
+ * object's transform). This is the geometry a physics collider should hug: each part's true silhouette
+ * — boxes, cylinders, cones, wedges and trilinearly-deformed "cornered" boxes — exactly as it renders,
+ * instead of one loose bounding box around the whole prop. A hammer's head+handle, a barrel's curved
+ * sides, a ramp's slope: all preserved.
+ *
+ * Input geometry is the shared unit shape (or the per-part deformed box), so it's transformed the same
+ * way `buildModelGroup` transforms a part (translate → rotate → scale). Indices are offset so the soup
+ * is a single valid mesh. Callers scale the result by the object's transform for world space, and may
+ * skip the part's color — only positions matter here.
+ */
+export type ForgeMeshGeometry = { vertices: Float32Array; indices: Uint32Array };
+
+export function forgeModelGeometryForSpec(spec: ModelSpec): ForgeMeshGeometry {
+  const partArrays: Pick<ForgeMeshGeometry, 'vertices' | 'indices'>[] = [];
+  let vertexCount = 0;
+  for (const part of spec.parts) {
+    const geometry = getPartRenderGeometry(part, spec.style).clone();
+    geometry.rotateX(part.rotation[0]);
+    geometry.rotateY(part.rotation[1]);
+    geometry.rotateZ(part.rotation[2]);
+    geometry.scale(Math.abs(part.scale[0]), Math.abs(part.scale[1]), Math.abs(part.scale[2]));
+    geometry.translate(part.position[0], part.position[1], part.position[2]);
+    const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const vertices = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i += 1) {
+      vertices[i * 3] = pos.getX(i);
+      vertices[i * 3 + 1] = pos.getY(i);
+      vertices[i * 3 + 2] = pos.getZ(i);
+    }
+    const index = geometry.getIndex();
+    let indices: Uint32Array;
+    if (index) {
+      indices = new Uint32Array(index.count);
+      for (let i = 0; i < index.count; i += 1) indices[i] = index.getX(i) + vertexCount;
+    } else {
+      // Non-indexed (wedge is built non-indexed): triangles are sequential vertices.
+      indices = new Uint32Array(pos.count);
+      for (let i = 0; i < pos.count; i += 1) indices[i] = i + vertexCount;
+    }
+    partArrays.push({ vertices, indices });
+    vertexCount += pos.count;
+    geometry.dispose();
+  }
+  const totalVerts = partArrays.reduce((sum, part) => sum + part.vertices.length, 0);
+  const totalIndices = partArrays.reduce((sum, part) => sum + part.indices.length, 0);
+  const vertices = new Float32Array(totalVerts);
+  const indices = new Uint32Array(totalIndices);
+  let vCursor = 0;
+  let iCursor = 0;
+  for (const part of partArrays) {
+    vertices.set(part.vertices, vCursor);
+    vCursor += part.vertices.length;
+    indices.set(part.indices, iCursor);
+    iCursor += part.indices.length;
+  }
+  return { vertices, indices };
 }

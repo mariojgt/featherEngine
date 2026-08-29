@@ -10,9 +10,23 @@ import type { Vector3Tuple } from './common';
  * GLB model asset through the ordinary import pipeline.
  */
 
-/** Primitive vocabulary. Deliberately small: kit-bashing five solids covers fences, crates, tiles,
- *  arches and most greybox props; anything finer belongs in Blender and comes back as a GLB. */
-export type ModelPartShape = 'box' | 'cylinder' | 'sphere' | 'cone' | 'wedge';
+/** Primitive vocabulary. Nine solids cover blockouts and decorative kit-bashing: five classics plus a
+ *  torus (rings), pyramid (tents/roofs), hexagonal prism (nuts/columns) and capsule (pills/bottles).
+ *  'mesh' is the editable-topology part: convert any primitive to a mesh to extrude faces, subdivide,
+ *  or run booleans. Anything finer belongs in Blender and comes back as a GLB. */
+export type ModelPartShape = 'box' | 'cylinder' | 'sphere' | 'cone' | 'wedge' | 'torus' | 'pyramid' | 'hexprism' | 'capsule' | 'mesh';
+
+/**
+ * Per-part collision override for a kit-bashed prop. 'auto' (or leaving it unset) derives the part's
+ * collider from its shape: box → box, cylinder → capsule, sphere → sphere, cone → ball, wedge → box.
+ * 'box'/'sphere'/'capsule' force that primitive collider (e.g. a sphere part can be a tight ball, a
+ * thin plank a long box). 'none' removes the part from collision entirely (a purely visual knob, a
+ * non-solid railing). When NO part carries an override, the whole prop keeps the Phase-1 exact treatment:
+ * a trimesh on fixed bodies / one convex hull on dynamic bodies. When any part DOES, every part becomes
+ * a compound primitive collider (auto parts derive a primitive too) so one per-part setting stays easy
+ * to reason about.
+ */
+export type ModelPartCollider = 'auto' | 'box' | 'sphere' | 'capsule' | 'none';
 
 export interface ModelPart {
   id: string;
@@ -26,6 +40,8 @@ export interface ModelPart {
   scale: Vector3Tuple;
   /** Palette slot painting the whole part. */
   colorSlot: number;
+  /** Per-part collision override. Undefined = 'auto' (derive from shape). */
+  collider?: ModelPartCollider;
   /**
    * Per-face paint: geometry material-group index → palette slot (a box has 6 groups, a cylinder
    * side/top/bottom, …). Absent faces fall back to `colorSlot`.
@@ -38,6 +54,23 @@ export interface ModelPart {
    * roof peak, a tapered pillar or a leaning rock while staying a tiny serialized spec.
    */
   corners?: Record<number, Vector3Tuple>;
+  /**
+   * Full editable-mesh payload (shape 'mesh'). Explicit unit-space vertices + triangles; `scale`
+   * multiplies at render just like primitive parts. Convert any part to a mesh to pierce a hole,
+   * extrude a tab, or run boolean unions/subtractions — the model stays live-linked and linkable,
+   * physics trimeshes it exactly, and GLB baking just works.
+   */
+  mesh?: ModelPartMesh;
+}
+
+/**
+ * A hand-edited mesh part. Vertices are stored in unit space (a cube is the eight ±0.5 corners) and
+ * scaled by the part's `scale`, so a mesh part behaves exactly like a primitive with most vertices
+ * controllable. `indices` is a flat triangle list (length divisible by 3).
+ */
+export interface ModelPartMesh {
+  vertices: Vector3Tuple[];
+  indices: number[];
 }
 
 /**

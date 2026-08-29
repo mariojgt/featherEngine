@@ -16,6 +16,9 @@ import { chopTree } from '../../runtime/treeChop';
 import { normalizeTreeSpec, treeRng, treeSpecFromArchetype } from '../../tree/treeSpec';
 import { getStylizedPreset, stylizedTreeSpec } from '../../tree/stylizedPresets';
 import { makeModelPart, modelSpecFromStarter, normalizeModelSpec } from '../../model/modelSpec';
+import { cloneMesh, extrudeMeshFaces, subdivideMeshFaces, type MeshBooleanOp } from '../../model/modelMesh';
+import { booleanMeshParts, dedupeGeometryToMesh } from '../../model/modelMeshCsg';
+import { getPartRenderGeometry } from '../../model/modelGeometry';
 import { defaultTransform } from './defaults';
 import { makeId, stripUndefined } from './ids';
 import { mapActiveSceneObjects, selectActiveObjects } from './storeHelpers';
@@ -403,6 +406,131 @@ export const applySetModelPartCorners = (
   else delete next.corners;
   get().updateModelSpec(specId, { parts: spec.parts.map((part) => (part.id === partId ? next : part)) });
   return true;
+};
+
+const findSpecAndPart = (get: GetState, specId: string, partId: string): { spec: ModelSpec; target: ModelPart; index: number } | null => {
+  const spec = get().modelSpecs.find((entry) => entry.id === specId);
+  if (!spec) return null;
+  const index = spec.parts.findIndex((part) => part.id === partId);
+  if (index < 0) return null;
+  return { spec, target: spec.parts[index], index };
+};
+
+const withUpdatedParts = (get: GetState, specId: string, partId: string, toParts: (parts: ModelPart[]) => ModelPart[]) => {
+  const found = findSpecAndPart(get, specId, partId);
+  if (!found || found.index < 0) return false;
+  get().updateModelSpec(specId, {
+    parts: toParts(found.spec.parts.map((part) => ({ ...part }))),
+  });
+  return true;
+};
+
+/** Bake a part's exact rendered geometry into a Mesh part. Box corner deformations and all shapes convert. */
+export const applyConvertModelPartToMesh = (set: SetState, get: GetState, specId: string, partId: string): boolean => {
+  const found = findSpecAndPart(get, specId, partId);
+  if (!found || found.index < 0) return false;
+  const target = found.target;
+  const baked = dedupeGeometryToMesh(getPartRenderGeometry(target));
+  return withUpdatedParts(get, specId, partId, (parts) => {
+    const part = parts[found.index];
+    parts[found.index] = {
+      ...part,
+      shape: 'mesh',
+      mesh: baked,
+    };
+    delete parts[found.index].corners;
+    return parts;
+  });
+};
+
+/** Move specific mesh vertices (unit space). Keys are vertex indices; only mesh parts accept mutations. */
+export const applySetModelPartMeshVertices = (
+  set: SetState,
+  get: GetState,
+  specId: string,
+  partId: string,
+  updates: Array<[number, Vector3Tuple]>,
+): boolean => {
+  const found = findSpecAndPart(get, specId, partId);
+  if (!found || found.index < 0 || found.target.shape !== 'mesh' || !found.target.mesh) return false;
+  return withUpdatedParts(get, specId, partId, (parts) => {
+    const part = parts[found.index];
+    const vertices = part.mesh!.vertices.map((vertex) => [...vertex] as Vector3Tuple);
+    for (const [index, position] of updates) {
+      if (Number.isInteger(index) && index >= 0 && index < vertices.length) vertices[index] = position;
+    }
+    parts[found.index] = { ...part, mesh: { ...part.mesh!, vertices } };
+    return parts;
+  });
+};
+
+/** Extrude selected triangle faces of a Mesh part along their normals. */
+export const applyExtrudeModelPartFaces = (
+  set: SetState,
+  get: GetState,
+  specId: string,
+  partId: string,
+  faceIndices: number[],
+  delta = 0.25,
+): boolean => {
+  const found = findSpecAndPart(get, specId, partId);
+  if (!found || found.index < 0 || found.target.shape !== 'mesh' || !found.target.mesh) return false;
+  return withUpdatedParts(get, specId, partId, (parts) => {
+    const part = parts[found.index];
+    parts[found.index] = { ...part, mesh: extrudeMeshFaces(part.mesh!, faceIndices, delta) };
+    return parts;
+  });
+};
+
+/** Midpoint-subdivide selected triangle faces of a Mesh part. */
+export const applySubdivideModelPartFaces = (
+  set: SetState,
+  get: GetState,
+  specId: string,
+  partId: string,
+  faceIndices: number[],
+): boolean => {
+  const found = findSpecAndPart(get, specId, partId);
+  if (!found || found.index < 0 || found.target.shape !== 'mesh' || !found.target.mesh) return false;
+  return withUpdatedParts(get, specId, partId, (parts) => {
+    const part = parts[found.index];
+    parts[found.index] = { ...part, mesh: subdivideMeshFaces(part.mesh!, faceIndices) };
+    return parts;
+  });
+};
+
+/**
+ * CSG boolean of two parts; the result lands in the first part (converted to a meshed 'mesh' part), and
+ * the other part is removed. The result is expressed in the first part's local frame via its transform.
+ */
+export const applyBooleanModelParts = (
+  set: SetState,
+  get: GetState,
+  specId: string,
+  partId: string,
+  otherPartId: string,
+  operation: 'union' | 'difference' | 'intersect',
+): boolean => {
+  if (operation !== 'union' && operation !== 'difference' && operation !== 'intersect') return false;
+  const a = findSpecAndPart(get, specId, partId);
+  const b = findSpecAndPart(get, specId, otherPartId);
+  if (!a || !b || a.index < 0 || b.index < 0 || a.index === b.index) return false;
+  const { target: aTarget } = a;
+  const { target: bTarget } = b;
+  const aMesh = aTarget.shape === 'mesh' ? (aTarget.mesh ?? null) : dedupeGeometryToMesh(getPartRenderGeometry(aTarget));
+  const bMesh = bTarget.shape === 'mesh' ? (bTarget.mesh ?? null) : dedupeGeometryToMesh(getPartRenderGeometry(bTarget));
+  if (!aMesh || !bMesh) return false;
+  const op: MeshBooleanOp = operation === 'difference' ? 'difference' : operation === 'intersect' ? 'intersect' : 'union';
+  const result = booleanMeshParts(aMesh, aTarget, bMesh, bTarget, op);
+  if (!result || result.indices.length < 3) return false;
+  return withUpdatedParts(get, specId, partId, (parts) => {
+    const part = parts[a.index];
+    parts[a.index] = { ...part, shape: 'mesh', mesh: result };
+    delete parts[a.index].corners;
+    if (b.index > a.index) parts.splice(b.index, 1);
+    else parts.splice(b.index, 1);
+    return parts;
+  });
 };
 
 export const applySetModelPalette = (set: SetState, get: GetState, specId: string, palette: string[]): boolean => {

@@ -5,10 +5,10 @@ import { ContactShadows, Grid, OrbitControls, TransformControls } from '@react-t
 import type { TransformControls as TransformControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
 import {
-  Box, CircleDot, Cone, Copy, Cylinder, Eye, Focus, Globe, Grid3X3, Hammer, Minus, Move3d, PackagePlus,
-  Paintbrush, Plus, Pyramid, RotateCcw, Square, Trash2,
+  Box, Boxes, CircleDot, Cone, Copy, Cylinder, Donut, Eye, Focus, Globe, Grid3X3, Hammer, Hexagon, Minus, Move3d,
+  PackagePlus, Paintbrush, Pill, Plus, Pyramid, RotateCcw, Square, Tent, Trash2,
 } from 'lucide-react';
-import type { ModelPart, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
+import type { ModelPart, ModelPartCollider, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
 import {
   BOX_CORNER_LABELS,
   BOX_EDGE_CORNERS,
@@ -21,6 +21,7 @@ import {
   type BoxComponentMode,
 } from '../model/modelSpec';
 import { buildModelGroup, faceGroupForFaceIndex, getPartRenderEdges, getPartRenderGeometry } from '../model/modelGeometry';
+import { meshEdgePairs, meshFaceCount, meshFaceVertices, DEFAULT_MESH } from '../model/modelMesh';
 import { ModelPartMesh } from '../three/ModelMesh';
 import { RangeField } from '../components/InspectorPanel';
 import { useEditorStore } from '../store/editorStore';
@@ -46,6 +47,11 @@ const SHAPE_ICONS: Record<ModelPartShape, typeof Box> = {
   sphere: Globe,
   cone: Cone,
   wedge: Pyramid,
+  torus: Donut,
+  pyramid: Tent,
+  hexprism: Hexagon,
+  capsule: Pill,
+  mesh: Boxes,
 };
 
 const RAD2DEG = 180 / Math.PI;
@@ -248,6 +254,164 @@ function ComponentHandles({
   );
 }
 
+/**
+ * Edit mode for MESH parts — a parallel of ComponentHandles that walks the part's actual triangle
+ * data instead of the eight-corner box cage. Vertex mode moves real vertices; edge/face modes pick
+ * them for grouped transforms but Vertices are the only thing committed (undo-friendly, no new
+ * topology from the gizmo). The part matrix maps unit-space vertices to/from the preview.
+ */
+function MeshEditHandles({
+  part,
+  mode,
+  gizmoMode,
+  snap,
+  roundTo,
+  selectedComponents,
+  onSelectComponent,
+  onCommitVertices,
+  gizmoActive,
+  onGizmoStart,
+  onGizmoEnd,
+}: {
+  part: ModelPart;
+  mode: BoxComponentMode;
+  gizmoMode: ForgeGizmoMode;
+  snap: boolean;
+  roundTo: (value: number, decimals?: number) => number;
+  selectedComponents: number[];
+  onSelectComponent: (index: number, additive: boolean) => void;
+  onCommitVertices: (updates: Array<[number, Vector3Tuple]>) => void;
+  gizmoActive: { current: boolean };
+  onGizmoStart: (commit: () => void) => void;
+  onGizmoEnd: () => void;
+}) {
+  const controlsRef = useRef<TransformControlsImpl | null>(null);
+  const mesh = part.mesh ?? DEFAULT_MESH;
+  const { inverse, worldVertices, handles } = useMemo(() => {
+    const matrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(...part.position),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(...part.rotation)),
+      new THREE.Vector3(...part.scale),
+    );
+    const world = mesh.vertices.map((vertex) => new THREE.Vector3(...vertex).applyMatrix4(matrix));
+    let indices: number[] = [];
+    if (mode === 'vertex') {
+      indices = mesh.vertices.map((_, index) => index);
+    } else if (mode === 'edge') {
+      indices = meshEdgePairs(mesh).map((_, index) => index);
+    } else {
+      indices = Array.from({ length: Math.floor(mesh.indices.length / 3) }, (_, index) => index);
+    }
+    return { inverse: matrix.clone().invert(), worldVertices: world, handles: indices };
+  }, [part, mesh, mode]);
+
+  const handleCenter = (index: number): THREE.Vector3 => {
+    if (mode === 'vertex') return worldVertices[index];
+    if (mode === 'edge') {
+      const [a, b] = meshEdgePairs(mesh)[index];
+      return worldVertices[a].clone().add(worldVertices[b]).multiplyScalar(0.5);
+    }
+    const [a, b, c] = meshFaceVertices(mesh, index);
+    return worldVertices[a].clone().add(worldVertices[b]).add(worldVertices[c]).multiplyScalar(1 / 3);
+  };
+
+  const commit = () => {
+    const target = (controlsRef.current as unknown as { object?: THREE.Object3D } | null)?.object;
+    if (!target || !selectedComponents.length) return;
+    const componentMatrix = new THREE.Matrix4().compose(target.position, target.quaternion, target.scale);
+    const updates: Array<[number, Vector3Tuple]> = [];
+    const verts = mode === 'vertex'
+      ? selectedComponents
+      : mode === 'edge'
+        ? selectedComponents.flatMap((index) => meshEdgePairs(mesh)[index] ?? [])
+        : selectedComponents.flatMap((index) => meshFaceVertices(mesh, index));
+    const uniqueVerts = [...new Set(verts)];
+    uniqueVerts.forEach((index) => {
+      // Translate the world-space vertex by the gizmo's displacement, then map back to unit space.
+      const translation = new THREE.Vector3(componentMatrix.elements[12], componentMatrix.elements[13], componentMatrix.elements[14]);
+      const unit = worldVertices[index].clone().add(translation).applyMatrix4(inverse);
+      const rounded: Vector3Tuple = [roundTo(unit.x, 4), roundTo(unit.y, 4), roundTo(unit.z, 4)];
+      updates.push([index, rounded]);
+    });
+    if (updates.length) onCommitVertices(updates);
+  };
+
+  return (
+    <>
+      <lineSegments raycast={ignoreOutlineRaycast}>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            args={[new Float32Array(meshEdgePairs(mesh).flatMap(([a, b]) => [worldVertices[a].x, worldVertices[a].y, worldVertices[a].z, worldVertices[b].x, worldVertices[b].y, worldVertices[b].z])), 3]}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color={OUTLINE_ACCENT} transparent opacity={0.5} toneMapped={false} />
+      </lineSegments>
+      {handles.map((index) => {
+        const center = handleCenter(index);
+        const selected = selectedComponents.includes(index);
+        const label = mode === 'vertex'
+          ? `Vertex ${index}`
+          : mode === 'edge'
+            ? `Edge ${index + 1}`
+            : `Face ${index + 1}`;
+        return (
+          <mesh
+            key={`${mode}-${index}`}
+            position={[center.x, center.y, center.z]}
+            scale={selected ? 1.28 : 1}
+            name={label}
+            onPointerDown={(event) => {
+              if (event.nativeEvent.button !== 0) return;
+              event.stopPropagation();
+              onSelectComponent(index, event.nativeEvent.shiftKey);
+            }}
+            onPointerOver={(event) => {
+              event.stopPropagation();
+              document.body.style.cursor = 'pointer';
+            }}
+            onPointerOut={() => {
+              document.body.style.cursor = '';
+            }}
+          >
+            {mode === 'vertex' ? (
+              <sphereGeometry args={[0.05, 14, 12]} />
+            ) : mode === 'edge' ? (
+              <boxGeometry args={[0.1, 0.1, 0.1]} />
+            ) : (
+              <octahedronGeometry args={[0.07, 0]} />
+            )}
+            <meshBasicMaterial color={selected ? OUTLINE_ACCENT : '#ffffff'} transparent opacity={selected ? 1 : 0.88} toneMapped={false} />
+          </mesh>
+        );
+      })}
+      {selectedComponents.length > 0 && (
+        <TransformControls
+          key={`mesh-${mode}-${selectedComponents.join('-')}`}
+          ref={controlsRef}
+          mode={gizmoMode}
+          size={0.72}
+          translationSnap={snap ? 0.05 : null}
+          rotationSnap={snap ? Math.PI / 12 : null}
+          scaleSnap={snap ? 0.1 : null}
+          position={[0, 0, 0]}
+          onMouseDown={() => {
+            onGizmoStart(commit);
+          }}
+          onMouseUp={() => {
+            onGizmoEnd();
+          }}
+        >
+          <mesh>
+            <sphereGeometry args={[0.04, 12, 10]} />
+            <meshBasicMaterial color={OUTLINE_ACCENT} transparent opacity={0.3} toneMapped={false} />
+          </mesh>
+        </TransformControls>
+      )}
+    </>
+  );
+}
+
 /** Reset the studio camera to a comfortable framing of the current prop. */
 function FitCamera({
   framing,
@@ -298,6 +462,7 @@ interface ForgePreviewProps {
   onPaintFace: (partId: string, faceGroup: number) => void;
   onCommitPart: (partId: string, patch: Pick<ModelPart, 'position' | 'rotation' | 'scale'>) => void;
   onCommitCorners: (partId: string, corners: Record<number, Vector3Tuple> | null) => void;
+  onCommitMeshVertices: (partId: string, updates: Array<[number, Vector3Tuple]>) => void;
 }
 
 function ForgePreview({
@@ -318,6 +483,7 @@ function ForgePreview({
   onPaintFace,
   onCommitPart,
   onCommitCorners,
+  onCommitMeshVertices,
 }: ForgePreviewProps) {
   const controlsRef = useRef<TransformControlsImpl | null>(null);
   const activeGizmoCommit = useRef<(() => void) | null>(null);
@@ -505,9 +671,26 @@ function ForgePreview({
       })()}
       {mode === 'mesh' && (() => {
         const selected = spec.parts.find((part) => part.id === selectedPartId);
-        if (!selected || selected.shape !== 'box') return null;
+        if (!selected || (selected.shape !== 'box' && selected.shape !== 'mesh')) return null;
+        if (selected.shape === 'box') {
+          return (
+            <ComponentHandles
+              part={selected}
+              mode={componentMode}
+              gizmoMode={gizmoMode}
+              snap={snap}
+              roundTo={round}
+              selectedComponents={selectedComponents}
+              onSelectComponent={onSelectComponent}
+              onCommit={(corners) => onCommitCorners(selected.id, corners)}
+              gizmoActive={gizmoActive}
+              onGizmoStart={beginGizmo}
+              onGizmoEnd={finishGizmo}
+            />
+          );
+        }
         return (
-          <ComponentHandles
+          <MeshEditHandles
             part={selected}
             mode={componentMode}
             gizmoMode={gizmoMode}
@@ -515,7 +698,7 @@ function ForgePreview({
             roundTo={round}
             selectedComponents={selectedComponents}
             onSelectComponent={onSelectComponent}
-            onCommit={(corners) => onCommitCorners(selected.id, corners)}
+            onCommitVertices={(updates) => onCommitMeshVertices(selected.id, updates)}
             gizmoActive={gizmoActive}
             onGizmoStart={beginGizmo}
             onGizmoEnd={finishGizmo}
@@ -763,17 +946,75 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
     });
   };
 
-  const selectAllComponents = () =>
+  const selectAllComponents = () => {
+    if (!selectedPart) return;
+    if (selectedPart.shape === 'mesh') {
+      if (componentMode === 'vertex') setSelectedComponents(selectedPart.mesh!.vertices.map((_, index) => index));
+      else if (componentMode === 'edge') setSelectedComponents(meshEdgePairs(selectedPart.mesh!).map((_, index) => index));
+      else setSelectedComponents(Array.from({ length: Math.floor((selectedPart.mesh?.indices.length ?? 0) / 3) }, (_, index) => index));
+      return;
+    }
     setSelectedComponents(Array.from({ length: boxComponentCount(componentMode) }, (_, index) => index));
+  };
 
   const resetSelectedComponents = () => {
-    if (!selectedPart || selectedPart.shape !== 'box' || !selectedComponents.length) return;
+    if (!selectedPart || !selectedComponents.length) return;
+    if (selectedPart.shape === 'mesh') {
+      // Mesh vertices can't be cheaply "reset" to a parametric shape — this button maps to the
+      // canonical cube only when the mesh still has 8 vertices (i.e. an untouched default box).
+      const count = selectedPart.mesh?.vertices.length ?? 0;
+      const canReset = count === DEFAULT_MESH.vertices.length;
+      attempt('Reset mesh', () => {
+        if (!canReset) return 'This mesh has been edited — its vertices aren\'t parametric, so there is nothing to reset to. Use Extrude/Subdivide to shape it.';
+        api.models.setPartMeshVertices(spec.id, selectedPart.id, DEFAULT_MESH.vertices.map((vertex, index) => [index, [...vertex] as Vector3Tuple]));
+        setSelectedComponents([]);
+        return `Reset "${selectedPart.name}" back to a pristine cube.`;
+      });
+      return;
+    }
+    if (selectedPart.shape !== 'box') return;
     const selectedCorners = new Set(selectedComponents.flatMap((index) => boxComponentCorners(componentMode, index)));
     attempt('Reset control points', () => {
       const next = { ...selectedPart.corners };
       selectedCorners.forEach((index) => delete next[index]);
       api.models.setPartCorners(spec.id, selectedPart.id, Object.keys(next).length ? next : null);
       return `Reset ${selectedCorners.size} control point${selectedCorners.size === 1 ? '' : 's'} on "${selectedPart.name}".`;
+    });
+  };
+
+  const applySelectedFaceAction = (action: 'extrude' | 'subdivide') => {
+    if (!selectedPart || selectedPart.shape !== 'mesh' || componentMode !== 'face' || !selectedComponents.length) return;
+    const faceIndices = [...selectedComponents];
+    attempt(action === 'extrude' ? 'Extrude faces' : 'Subdivide faces', () => {
+      if (action === 'extrude') {
+        const ok = api.models.extrudePartFaces(spec.id, selectedPart.id, faceIndices, 0.25);
+        if (!ok) return 'Extrude needs a mesh part with the selected faces.';
+        return `Extruded ${faceIndices.length} face${faceIndices.length === 1 ? '' : 's'} outward — the mesh stays closed.`;
+      }
+      const ok = api.models.subdividePartFaces(spec.id, selectedPart.id, faceIndices);
+      if (!ok) return 'Subdivide needs a mesh part with the selected faces.';
+      return `Subdivided ${faceIndices.length} face${faceIndices.length === 1 ? '' : 's'} — midpoints are shared so nothing cracks.`;
+    });
+    setSelectedComponents([]);
+  };
+
+  const convertSelectedToMesh = () => {
+    if (!selectedPart) return;
+    attempt('Convert to mesh', () => {
+      if (!api.models.convertPartToMesh(spec.id, selectedPart.id)) return 'Could not convert this part to a mesh.';
+      return `Baked "${selectedPart.name}" into a real editable mesh — its exact surface is now draggable and booleans/extrudes apply.`;
+    });
+  };
+
+  const booleanWithOpposite = (operation: 'union' | 'difference' | 'intersect') => {
+    if (!selectedPart || spec.parts.length < 2) return;
+    const other = spec.parts.find((part) => part.id !== selectedPart.id);
+    if (!other) return;
+    attempt('Boolean parts', () => {
+      const ok = api.models.booleanParts(spec.id, selectedPart.id, other.id, operation);
+      if (!ok) return 'Boolean failed — the parts may not overlap, or the result was empty.';
+      setMode('build');
+      return `${operation.charAt(0).toUpperCase() + operation.slice(1)} of "${selectedPart.name}" and "${other.name}" — result kept on "${selectedPart.name}".`;
     });
   };
 
@@ -1004,6 +1245,10 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 api.models.setPartCorners(spec.id, partId, corners);
                 return corners ? 'Control cage committed — linked scene copies updated.' : 'Control cage reset.';
               })}
+              onCommitMeshVertices={(partId, updates) => attempt('Move mesh vertices', () => {
+                api.models.setPartMeshVertices(spec.id, partId, updates);
+                return `Moved ${updates.length} vertex${updates.length === 1 ? '' : 'es'} — the part now carves its own hull.`;
+              })}
             />
           </div>
           <div className="tree-preview-meta">
@@ -1018,13 +1263,13 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 role="option"
                 aria-selected={part.id === selectedPartId}
                 className={part.id === selectedPartId ? 'active' : undefined}
-                onClick={() => {
-                  setSelectedPartId(part.id);
-                  setSelectedComponents([]);
-                  if (mode === 'mesh' && part.shape !== 'box') {
-                    setStatus('Edit mode uses the eight-point control cage on box parts. Pick a box or reshape this part.');
-                  }
-                }}
+                  onClick={() => {
+                    setSelectedPartId(part.id);
+                    setSelectedComponents([]);
+                    if (mode === 'mesh' && part.shape !== 'box' && part.shape !== 'mesh') {
+                      setStatus('Edit mode shapes boxes (control cage) or mesh parts (real vertices). Pick one, or change this part\'s shape.');
+                    }
+                  }}
               >
                 <span
                   className="model-part-chip-swatch"
@@ -1046,14 +1291,20 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 <Paintbrush size={12} aria-hidden /> Paint
               </button>
             </div>
-            {mode === 'mesh' && selectedPart?.shape === 'box' && (
-              <div className="model-toolbar-seg" role="toolbar" aria-label="Control cage selection">
+            {mode === 'mesh' && (selectedPart?.shape === 'box' || selectedPart?.shape === 'mesh') && (
+              <div className="model-toolbar-seg" role="toolbar" aria-label="Mesh selection">
                 <button aria-pressed={componentMode === 'vertex'} className={componentMode === 'vertex' ? 'active' : ''} onClick={() => setComponentMode('vertex')} title="Vertex select (1)">Vertex</button>
                 <button aria-pressed={componentMode === 'edge'} className={componentMode === 'edge' ? 'active' : ''} onClick={() => setComponentMode('edge')} title="Edge select (2)">Edge</button>
                 <button aria-pressed={componentMode === 'face'} className={componentMode === 'face' ? 'active' : ''} onClick={() => setComponentMode('face')} title="Face select (3)">Face</button>
                 <button onClick={selectAllComponents} title="Select all components (A)">All</button>
                 <button disabled={!selectedComponents.length} onClick={() => setSelectedComponents([])}>Clear</button>
                 <button disabled={!selectedComponents.length} onClick={resetSelectedComponents} title="Restore the selected control points">Reset</button>
+              </div>
+            )}
+            {mode === 'mesh' && selectedPart?.shape === 'mesh' && (
+              <div className="model-toolbar-seg" role="toolbar" aria-label="Mesh edit actions">
+                <button disabled={!selectedComponents.length} onClick={() => applySelectedFaceAction('extrude')} title="Extrude the selected faces along their normals">Extrude</button>
+                <button disabled={!selectedComponents.length} onClick={() => applySelectedFaceAction('subdivide')} title="Midpoint-subdivide the selected faces">Subdivide</button>
               </div>
             )}
             {mode !== 'paint' && (
@@ -1073,7 +1324,9 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
               : mode === 'mesh'
                 ? selectedPart?.shape === 'box'
                   ? `Select ${componentPlural}, Shift-click for more, then transform with W/E/R. The fixed eight-point cage keeps the model lightweight.`
-                  : 'Edit mode works on box parts. Select a box part or change this part\'s shape in the inspector.'
+                  : selectedPart?.shape === 'mesh'
+                    ? `Select ${componentPlural} (real mesh data), W/E/R to move vertices. Extrude/Subdivide act on the selected faces.`
+                    : 'Edit mode shapes box parts (control cage) or mesh parts (real vertices). Select one, or change this part\'s shape in the inspector.'
                 : 'Select a part and transform it with W/E/R. Add primitives from the + rail or inspector. F fits the view.'}
           </p>
           <div className="model-forge-shortcuts" aria-label="Keyboard shortcuts">
@@ -1196,6 +1449,22 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                       ))}
                     </select>
                   </label>
+                  <label className="node-field">
+                    <span>Collider</span>
+                    <select
+                      value={selectedPart.collider ?? 'auto'}
+                      onChange={(event) => attempt('Set part collider', () => {
+                        api.models.updatePart(spec.id, selectedPart.id, { collider: event.target.value as ModelPartCollider });
+                        return status;
+                      })}
+                    >
+                      {(['auto', 'box', 'sphere', 'capsule', 'none'] as ModelPartCollider[]).map((collider) => (
+                        <option key={collider} value={collider}>
+                          {collider === 'auto' ? 'auto (match shape)' : collider === 'none' ? 'none (no collision)' : collider}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <VecField
                     label="Position"
                     value={selectedPart.position}
@@ -1257,8 +1526,51 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                       )}
                     </div>
                   )}
+                  {selectedPart.shape === 'mesh' && selectedPart.mesh && (
+                    <div className="model-cage-summary">
+                      <h4 className="inspector-subhead">Mesh geometry</h4>
+                      <p className="field-hint">
+                        {selectedPart.mesh.vertices.length} vertices · {meshEdgePairs(selectedPart.mesh).length} edges · {meshFaceCount(selectedPart.mesh)} faces. Real surface — W/E/R the vertices or Extrude/Subdivide faces.
+                      </p>
+                      <div className="model-toolbar-seg" role="toolbar" aria-label="Open mesh editing">
+                        {(['vertex', 'edge', 'face'] as BoxComponentMode[]).map((kind) => (
+                          <button
+                            key={kind}
+                            className={mode === 'mesh' && componentMode === kind ? 'active' : ''}
+                            onClick={() => {
+                              setMode('mesh');
+                              setComponentMode(kind);
+                            }}
+                          >
+                            {kind.charAt(0).toUpperCase() + kind.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {selectedPart.shape !== 'mesh' && (
+                    <button
+                      className="full-button"
+                      onClick={convertSelectedToMesh}
+                      title="Bake this part's exact surface into an editable mesh (then drag, extrude, or boolean it)"
+                    >
+                      <Boxes size={13} aria-hidden /> Convert to Mesh
+                    </button>
+                  )}
+                  {spec.parts.length >= 2 && (
+                    <div className="model-toolbar-seg" role="toolbar" aria-label="Boolean with the other part">
+                      {(['union', 'difference', 'intersect'] as const).map((operation) => (
+                        <button
+                          key={operation}
+                          onClick={() => booleanWithOpposite(operation)}
+                          title={`${operation} with the other part — result stays on this part`}
+                        >
+                          {operation === 'union' ? 'Union' : operation === 'difference' ? 'Subtract' : 'Intersect'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <label className="node-field">
-                    <span>Color</span>
                     <PaletteStrip
                       palette={spec.palette}
                       activeSlot={selectedPart.colorSlot}

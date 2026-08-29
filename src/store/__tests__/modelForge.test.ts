@@ -4,11 +4,14 @@ import {
   BOX_EDGE_CORNERS,
   BOX_FACE_CORNERS,
   MODEL_FACE_GROUPS,
+  MODEL_PART_SHAPES,
   MODEL_STARTERS,
   QUICK_MODEL_STARTER_IDS,
   boxComponentCorners,
   boxComponentCount,
 } from '../../model/modelSpec';
+import { getModelPartGeometry } from '../../model/modelGeometry';
+import { cloneMesh, DEFAULT_MESH, extrudeMeshFaces, meshFaceCount, normalizeMesh, subdivideMeshFaces } from '../../model/modelMesh';
 import { clearHistory, initHistory, redo, undo } from '../history';
 
 /**
@@ -31,7 +34,7 @@ describe('Model Forge store actions', () => {
 
   it('ships a broader, valid starter gallery and a complete box control cage', () => {
     const ids = MODEL_STARTERS.map((starter) => starter.id);
-    expect(ids).toEqual(expect.arrayContaining(['table', 'chair', 'stairs', 'lamp', 'rock', 'robot']));
+    expect(ids).toEqual(expect.arrayContaining(['table', 'chair', 'stairs', 'lamp', 'rock', 'robot', 'ring', 'nut', 'tent']));
     expect(new Set(ids).size).toBe(ids.length);
     expect(MODEL_STARTERS.every((starter) => starter.build().length > 0)).toBe(true);
     expect(QUICK_MODEL_STARTER_IDS.every((id) => ids.includes(id))).toBe(true);
@@ -43,6 +46,15 @@ describe('Model Forge store actions', () => {
     expect(BOX_FACE_CORNERS).toHaveLength(6);
     expect(boxComponentCorners('face', 0)).toEqual([1, 3, 5, 7]);
     expect(new Set(BOX_EDGE_CORNERS.flat())).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]));
+  });
+
+  it('every shipped shape has a geometry and a paintable face-group map', () => {
+    for (const shape of MODEL_PART_SHAPES) {
+      const geometry = getModelPartGeometry(shape);
+      expect(geometry.attributes.position.count).toBeGreaterThan(0);
+      expect(MODEL_FACE_GROUPS[shape]).toBeDefined();
+      expect(Object.keys(MODEL_FACE_GROUPS[shape]).length).toBeGreaterThan(0);
+    }
   });
 
   it('createModelSpec from a starter lands a normalized library asset', () => {
@@ -190,5 +202,101 @@ describe('Model Forge store actions', () => {
     expect(useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].position).toEqual([0, 0.62, 0]);
     redo();
     expect(useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].position).toEqual([3, 2, 1]);
+  });
+
+  it('convertModelPartToMesh bakes any shape into a mesh part and sheds corners', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
+
+    useEditorStore.getState().setModelPartCorners(specId, partId, { 7: [0.2, 0, 0] });
+    expect(part().corners).toBeDefined();
+    expect(useEditorStore.getState().convertModelPartToMesh(specId, partId)).toBe(true);
+    expect(part().shape).toBe('mesh');
+    expect(part().mesh).toBeDefined();
+    expect(part().corners).toBeUndefined();
+    // A converted box bakes to a closed watertight surface.
+    expect(meshFaceCount(part().mesh!)).toBe(12);
+    expect(part().mesh!.indices.length % 3).toBe(0);
+
+    // Unknown ids refuse.
+    expect(useEditorStore.getState().convertModelPartToMesh(specId, 'missing')).toBe(false);
+  });
+
+  it('setModelPartMeshVertices moves real mesh vertices in unit space', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
+    useEditorStore.getState().convertModelPartToMesh(specId, partId);
+
+    expect(useEditorStore.getState().setModelPartMeshVertices(specId, partId, [[0, [0.6, -0.5, -0.5]]])).toBe(true);
+    expect(part().mesh!.vertices[0]).toEqual([0.6, -0.5, -0.5]);
+    // Out-of-range indices are ignored, never crash.
+    expect(useEditorStore.getState().setModelPartMeshVertices(specId, partId, [[999, [0, 0, 0]]])).toBe(true);
+    expect(part().mesh!.vertices).toHaveLength(8);
+    // Non-mesh parts reject the edit.
+    useEditorStore.getState().addModelPart(specId, 'box');
+    const otherId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[1].id;
+    expect(useEditorStore.getState().setModelPartMeshVertices(specId, otherId, [[0, [0, 0, 0]]])).toBe(false);
+  });
+
+  it('extrudeModelPartFaces grows +3 verts / +7 tris and subdivide shares midpoints', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
+    useEditorStore.getState().convertModelPartToMesh(specId, partId);
+
+    expect(useEditorStore.getState().extrudeModelPartFaces(specId, partId, [0], 0.25)).toBe(true);
+    expect(part().mesh!.vertices).toHaveLength(8 + 3);
+    expect(meshFaceCount(part().mesh!)).toBe(12 + 7);
+
+    const baseline = part().mesh!.vertices.length;
+    expect(useEditorStore.getState().subdivideModelPartFaces(specId, partId, [0])).toBe(true);
+    expect(part().mesh!.vertices.length).toBeGreaterThan(baseline);
+    expect(meshFaceCount(part().mesh!)).toBeGreaterThan(12 + 7);
+
+    // Non-mesh parts reject face edits.
+    useEditorStore.getState().addModelPart(specId, 'box');
+    const boxId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[1].id;
+    expect(useEditorStore.getState().extrudeModelPartFaces(specId, boxId, [0])).toBe(false);
+    expect(useEditorStore.getState().subdivideModelPartFaces(specId, boxId, [0])).toBe(false);
+  });
+
+  it('booleanModelParts unions parts, keeps the result on part A, and removes B', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const store = useEditorStore.getState();
+    // A centered cube + a second box offset to overlap it.
+    const aId = store.addModelPart(specId, 'box', { position: [0, 0, 0], scale: [1, 1, 1] })!;
+    const bId = store.addModelPart(specId, 'box', { position: [0.5, 0, 0], scale: [1, 1, 1] })!;
+    const part = (id: string) => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts.find((entry) => entry.id === id)!;
+
+    expect(useEditorStore.getState().booleanModelParts(specId, aId, bId, 'union')).toBe(true);
+    const spec = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!;
+    // The blank starter's own box part is untouched; A + B collapsed into A.
+    expect(spec().parts).toHaveLength(2);
+    const result = spec().parts.find((entry) => entry.id === aId)!;
+    expect(result.shape).toBe('mesh');
+    expect(result.mesh).toBeDefined();
+    expect(meshFaceCount(result.mesh!)).toBeGreaterThan(0);
+    // The other part is gone.
+    expect(spec().parts.some((entry) => entry.id === bId)).toBe(false);
+  });
+
+  it('mesh edits participate in undo and redo', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
+    clearHistory();
+    useEditorStore.getState().convertModelPartToMesh(specId, partId);
+    expect(part().shape).toBe('mesh');
+    expect(useEditorStore.getState().undoDepth).toBe(1);
+
+    // Undo restores the parametric box (shape and corners-back), proving mesh conversion is history-tracked.
+    undo();
+    expect(part().shape).toBe('box');
+    expect(part().mesh).toBeUndefined();
+    redo();
+    expect(part().shape).toBe('mesh');
+    expect(part().mesh).toBeDefined();
   });
 });

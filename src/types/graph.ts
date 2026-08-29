@@ -102,10 +102,12 @@ export type GraphNodeKind =
   | 'action.rotate'
   | 'action.applyForce'
   | 'action.applyImpulse'
+  | 'action.applyForceAtPoint'
   | 'action.applyTorque'
   | 'action.setPhysics'
   | 'action.setVelocity'
   | 'query.velocity'
+  | 'query.getSpeed'
   | 'action.setAngularVelocity'
   | 'query.angularVelocity'
   | 'action.setGravity'
@@ -231,9 +233,11 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   functionName?: string;
   keyCode?: string;
   axis?: 'x' | 'y' | 'z';
-  /** action.applyImpulse: whether axis/vector values are interpreted in world axes or the target actor's local axes. */
+  /** action.applyImpulse / applyForceAtPoint: whether axis/vector values are interpreted in world axes or the target actor's local axes. */
   space?: 'world' | 'local';
   amount?: number;
+  /** action.applyForceAtPoint: the LOCAL point on the target where the impulse is applied, relative to the body origin. */
+  localPoint?: Vector3Tuple;
   /** action.setPhysics: enables/disables/configures the target object's runtime physics body. */
   physicsEnabled?: boolean;
   physicsBodyType?: RigidBodyType;

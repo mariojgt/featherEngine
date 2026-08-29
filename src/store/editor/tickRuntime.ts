@@ -40,7 +40,7 @@ import { findNavPath } from '../../runtime/navGrid';
 import { sendParticleCommand } from '../../runtime/particleBus';
 import { recordRuntimeSection } from '../../runtime/perfStats';
 import { applyPhysicsMaterialPreset } from '../../runtime/physicsMaterials';
-import { PhysicsContactEvent, VehicleWheelState, getActivePhysics, startPhysics } from '../../runtime/physicsWorld';
+import { PhysicsContactEvent, VehicleWheelState, getActivePhysics, setModelSpecResolver, startPhysics } from '../../runtime/physicsWorld';
 import { getRagdollRoot, isRagdoll, setRagdoll } from '../../runtime/ragdollState';
 import { beginReplay, captureReplayFrame, endReplay, resetReplayBuffer, resetReplayRecorder, sampleActiveReplay } from '../../runtime/replayRecorder';
 import { addSkidMark } from '../../runtime/skidMarks';
@@ -80,6 +80,15 @@ export const applyRuntimeTick = (
   get: StoreApi<EditorState>['getState'],
 ): Partial<EditorState> | EditorState => {
       if (!state.isPlaying) return state;
+      // ---- Model Forge collider source ----------------------------------------------------------
+      // PhysicsWorld builds forge-prop colliders from the LIVE library spec (placed props link to their
+      // library entry by id), so edits to a model rebuild every placed prop's collider. Cheap set-once-
+      // per-frame; keeps the headless world decoupled from the store (no import cycle).
+      setModelSpecResolver((object) => {
+        const specId = object.model?.specId;
+        if (!specId) return object.model?.spec ?? null;
+        return get().modelSpecs.find((entry) => entry.id === specId) ?? object.model?.spec ?? null;
+      });
       // ---- Instant replay playback --------------------------------------------------------------
       // While a replay clip is active, freeze the sim entirely (no scripts, no physics) and drive the
       // meshes purely from the recorded ring buffer: publish the live store transforms as a base, then
@@ -325,6 +334,9 @@ export const applyRuntimeTick = (
       }
       // Impulses requested by action.applyForce/applyImpulse this frame, applied to bodies post-step.
       const physicsImpulses: Record<string, Vector3Tuple> = {};
+      // Point impulses requested by action.applyForceAtPoint this frame — a (local) point + impulse pair
+      // applied in physics.frame via applyImpulseAtPoint, so an off-center hit shoves AND spins the body.
+      const physicsImpulsesAtPoint: Record<string, { impulse: Vector3Tuple; point: Vector3Tuple }> = {};
       // Angular impulses (torque kicks) requested by action.applyTorque — applied in physics.frame for
       // physics-driven steering / tip-over forces on a dynamic body.
       const physicsAngularImpulses: Record<string, Vector3Tuple> = {};
@@ -1325,6 +1337,13 @@ export const applyRuntimeTick = (
               return (v ? [v[0], v[1], v[2]] : [0, 0, 0]) as Vector3Tuple;
             }
 
+            // Get Speed: an actor's current LINEAR speed (units/sec) — magnitude of its velocity vector.
+            case 'query.getSpeed': {
+              const tid = objectVarTarget(node);
+              const v = nextVelocities[tid];
+              return v ? Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) : 0;
+            }
+
             case 'query.angularVelocity': {
               const tid = objectVarTarget(node);
               const v = nextAngularVelocities[tid];
@@ -2161,6 +2180,28 @@ export const applyRuntimeTick = (
               } else if (impTarget?.physics?.enabled && impTarget.physics.bodyType === 'dynamic') {
                 const accrued = physicsImpulses[impTargetId] ?? [0, 0, 0];
                 physicsImpulses[impTargetId] = [accrued[0] + impulse[0], accrued[1] + impulse[1], accrued[2] + impulse[2]];
+              }
+            }
+
+            // Apply Force at Point: an INSTANT impulse landing at a LOCAL point on a DYNAMIC body — the
+            // off-center lever arm shoves it AND spins it (car flips, catapults, off-center thrusters).
+            if (node.data.nodeKind === 'action.applyForceAtPoint') {
+              const impVector = valueInput(node, 'vector');
+              const amount = toNumber(valueInput(node, 'amount', Number(node.data.amount ?? 8)));
+              const imp = Array.isArray(impVector)
+                ? (impVector as Vector3Tuple)
+                : ([0, 0, 0].map((value, index) => (index === axisIndex(node.data.axis) ? amount : value)) as Vector3Tuple);
+              const impTargetId = resolveTarget(node.data.targetObjectId) || object.id;
+              const impTarget = activeObjectById.get(impTargetId);
+              if (impTarget?.physics?.enabled && impTarget.physics.bodyType === 'dynamic') {
+                const impulse = node.data.space === 'local' ? rotateLocalVector(imp, impTarget.transform.rotation) : imp;
+                const point = valueInput(node, 'point') ?? node.data.localPoint ?? [0, 0, 0];
+                const current = physicsImpulsesAtPoint[impTargetId];
+                const accrued = current?.impulse ?? [0, 0, 0];
+                physicsImpulsesAtPoint[impTargetId] = {
+                  impulse: [accrued[0] + impulse[0], accrued[1] + impulse[1], accrued[2] + impulse[2]],
+                  point: Array.isArray(point) ? (point as Vector3Tuple) : [0, 0, 0],
+                };
               }
             }
 
@@ -4695,6 +4736,7 @@ export const applyRuntimeTick = (
               (shouldSimulatePhysicsObject(o) ||
                 physicsImpulses[o.id] !== undefined ||
                 physicsAngularImpulses[o.id] !== undefined ||
+                physicsImpulsesAtPoint[o.id] !== undefined ||
                 setVelocities[o.id] !== undefined),
           )
           // Reflect a runtime winch (Set Cable Length) into the physics rope's max distance: hand physics
@@ -4714,6 +4756,7 @@ export const applyRuntimeTick = (
           setVelocities,
           setAngularVelocities,
           physicsAngularImpulses,
+          physicsImpulsesAtPoint,
           sceneWind,
           sceneEnv?.windTurbulence ?? 0,
           sceneEnv?.gravity ?? EARTH_GRAVITY,

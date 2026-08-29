@@ -105,4 +105,9 @@ export default defineConfig({
     port: 17420,
     strictPort: true,
   },
+  // Collapse the duplicate `three` module copies in tests. three-bvh-csg / three-mesh-bvh resolve
+  // three through their own interop, and with two copies the CSG brushes end up in separate three
+  // worlds and fail to build bounds trees ("Cannot read properties of undefined (reading 'array')").
+  // `test` is vitest's config field; vite's own UserConfig doesn't type it, hence the cast.
+  ...({ test: { resolve: { dedupe: ['three', 'three-mesh-bvh'] } } } as object),
 });

@@ -1,5 +1,6 @@
 import { makeId } from '../store/editor/ids';
-import type { ModelPart, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
+import { DEFAULT_MESH, cloneMesh, normalizeMesh } from './modelMesh';
+import type { ModelPart, ModelPartMesh, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
 
 /**
  * Model Forge data layer: the default palette, per-shape face-group metadata, spec normalization,
@@ -21,7 +22,7 @@ export const DEFAULT_MODEL_PALETTE: readonly string[] = [
   '#3b3f46', // 9 charcoal
 ];
 
-export const MODEL_PART_SHAPES: readonly ModelPartShape[] = ['box', 'cylinder', 'sphere', 'cone', 'wedge'];
+export const MODEL_PART_SHAPES: readonly ModelPartShape[] = ['box', 'cylinder', 'sphere', 'cone', 'wedge', 'torus', 'pyramid', 'hexprism', 'capsule', 'mesh'];
 
 /** The Spline-soft default: rounded corners, smooth shading, satin sheen. */
 export const DEFAULT_MODEL_STYLE: ModelStyle = { finish: 'smooth', bevel: 0.02, roughness: 0.55 };
@@ -53,6 +54,11 @@ export const MODEL_FACE_GROUPS: Record<ModelPartShape, Record<number, string>> =
   cone: { 0: 'Side', 2: 'Bottom' },
   sphere: { 0: 'Surface' },
   wedge: { 0: 'Slope', 1: 'Bottom', 2: 'Back', 3: 'Left', 4: 'Right' },
+  torus: { 0: 'Ring' },
+  pyramid: { 0: 'Sides', 2: 'Bottom' },
+  hexprism: { 0: 'Sides', 1: 'Top', 2: 'Bottom' },
+  capsule: { 0: 'Body' },
+  mesh: { 0: 'Face' },
 };
 
 /** Human names for the 8 box corners, by index (bit0=+X, bit1=+Y, bit2=+Z). */
@@ -94,6 +100,8 @@ const vec = (value: unknown, fallback: Vector3Tuple): Vector3Tuple => {
 };
 
 export function makeModelPart(shape: ModelPartShape, init: Partial<Omit<ModelPart, 'id' | 'shape'>> = {}): ModelPart {
+  const mesh: ModelPartMesh | undefined =
+    shape === 'mesh' ? normalizeMesh(init.mesh) ?? cloneMesh(DEFAULT_MESH) : undefined;
   return {
     id: makeId('part'),
     name: init.name ?? shape.charAt(0).toUpperCase() + shape.slice(1),
@@ -102,8 +110,10 @@ export function makeModelPart(shape: ModelPartShape, init: Partial<Omit<ModelPar
     rotation: vec(init.rotation, [0, 0, 0]),
     scale: vec(init.scale, [1, 1, 1]),
     colorSlot: init.colorSlot ?? 1,
+    ...(init.collider ? { collider: init.collider } : {}),
     ...(init.faceColors ? { faceColors: { ...init.faceColors } } : {}),
     ...(init.corners ? { corners: { ...init.corners } } : {}),
+    ...(mesh ? { mesh } : {}),
   };
 }
 
@@ -145,6 +155,11 @@ export function normalizeModelSpec(spec: ModelSpec): ModelSpec {
             ]),
         )
       : undefined;
+    const collider = part?.collider === 'box' || part?.collider === 'sphere' || part?.collider === 'capsule' || part?.collider === 'none'
+      ? part.collider
+      : undefined;
+    // Mesh payloads only mean something on mesh parts; reshaping away sheds them (like corners).
+    const mesh = shape === 'mesh' ? normalizeMesh(part?.mesh) ?? cloneMesh(DEFAULT_MESH) : undefined;
     return {
       id: part?.id || makeId('part'),
       name: part?.name?.trim() || `Part ${index + 1}`,
@@ -153,8 +168,10 @@ export function normalizeModelSpec(spec: ModelSpec): ModelSpec {
       rotation: vec(part?.rotation, [0, 0, 0]),
       scale: vec(part?.scale, [1, 1, 1]),
       colorSlot: clampSlot(part?.colorSlot, palette.length),
+      ...(collider ? { collider } : {}),
       ...(faceColors && Object.keys(faceColors).length ? { faceColors } : {}),
       ...(corners && Object.keys(corners).length ? { corners } : {}),
+      ...(mesh ? { mesh } : {}),
     };
   });
   return { id: spec.id, name: spec.name?.trim() || 'Model', palette, parts, style: normalizeModelStyle(spec.style) };
@@ -317,6 +334,24 @@ export const MODEL_STARTERS: readonly ModelStarter[] = [
       P('sphere', 'Eye Left', [-0.13, 2.08, 0.27], [0.09, 0.09, 0.06], 6),
       P('sphere', 'Eye Right', [0.13, 2.08, 0.27], [0.09, 0.09, 0.06], 6),
     ],
+  },
+  {
+    id: 'ring',
+    name: 'Ring / Hoop',
+    tagline: 'A torus hoop lying flat — wheels, gaskets, and portal rims.',
+    build: () => [P('torus', 'Ring', [0, 0.15, 0], [1, 1, 1], 2)],
+  },
+  {
+    id: 'nut',
+    name: 'Hex Nut',
+    tagline: 'A hexagonal bolt head or column cap.',
+    build: () => [P('hexprism', 'Nut', [0, 0.25, 0], [1, 0.5, 1], 5)],
+  },
+  {
+    id: 'tent',
+    name: 'Tent',
+    tagline: 'A faceted pyramid — a marquee, tipi, or roof spike.',
+    build: () => [P('pyramid', 'Tent', [0, 0.5, 0], [1.4, 1, 1.4], 7)],
   },
 ];
 

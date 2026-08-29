@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { selectActiveObjects, useEditorStore } from '../editorStore';
 import { getActivePhysics, initRapier } from '../../runtime/physicsWorld';
+import { defaultPhysics } from '../editor/defaults';
 import type { GraphNodeCategory, Vector3Tuple } from '../../types';
 
 /**
@@ -336,6 +337,67 @@ describe('angular velocity', () => {
   });
 });
 
+describe('apply force at point and speed', () => {
+  it('an off-center point impulse spins a body, while a center impulse does not', async () => {
+    const store = useEditorStore.getState();
+    // Both boxes hang free on locked translation so they can only rotate — a pure center impulse
+    // shoves but never tumbles, so any spin is unambiguous proof the point offset made it to Rapier.
+    const makeKicker = (name: string, label: string, data: Record<string, unknown>, x: number) => {
+      const cube = store.createObjectWithProps('cube', {
+        name,
+        position: [x, 2, 0],
+        physics: {
+          enabled: true,
+          bodyType: 'dynamic',
+          collider: 'box',
+          mass: 1,
+          lockedTranslation: [true, true, true],
+          lockedRotation: [false, false, false],
+        },
+      });
+      const { add, ex } = scriptOn(cube, name);
+      ex(add('Start', 'Events'), add(label, 'Physics', data));
+      return cube;
+    };
+    // (0,1,0) impulse applied at local point [1,0,0]: lever arm r×F = [1,0,0]×[0,1,0] = +Z torque.
+    const spinner = makeKicker('Spinner', 'Apply Force at Point', { axis: 'y', amount: 2, localPoint: [1, 0, 0] }, 0);
+    // Same (0,1,0) impulse but AT the center of mass — zero torque, no spin.
+    const pusher = makeKicker('Pusher', 'Apply Impulse', { axis: 'y', amount: 2 }, 4);
+
+    await startPlay();
+    tick(10);
+
+    expect(rotationOf(spinner)[2]).toBeGreaterThan(0.2);
+    expect(Math.abs(rotationOf(pusher)[2])).toBeLessThan(0.01);
+  });
+
+  it('Get Speed returns the linear speed magnitude from the physics solver', async () => {
+    const store = useEditorStore.getState();
+    const ball = store.createObjectWithProps('sphere', {
+      name: 'Speedster',
+      position: [0, 10, 0], // high enough that the short test never bounces off the floor
+      physics: { enabled: true, bodyType: 'dynamic', collider: 'sphere', mass: 1 },
+    });
+    const speedVar = store.createVariable('Speed', 'number', false);
+    const { add, ex, vl } = scriptOn(ball, 'Speedster');
+    const onStart = add('Start', 'Events');
+    const kick = add('Apply Impulse', 'Physics', { axis: 'x', amount: 8 });
+    const read = add('Update', 'Events');
+    const getSpeed = add('Get Speed', 'Physics');
+    const write = add('Set Variable', 'Variables', { variableId: speedVar });
+    ex(onStart, kick);
+    ex(read, write);
+    vl(getSpeed, write, 'value');
+
+    await startPlay();
+    tick(5);
+
+    // v = impulse / mass = 8 (the solver wrote the velocity, Get Speed reads it back).
+    expect(varValue(speedVar)).toBeGreaterThan(7.5);
+    expect(varValue(speedVar)).toBeLessThan(8.5);
+  });
+});
+
 describe('physics lab template', () => {
   it('builds and survives a Play session', async () => {
     const { createPhysicsLabTemplate } = await import('../../project/physicsLabTemplate');
@@ -353,3 +415,186 @@ describe('physics lab template', () => {
     expect(varValue(spinVar!.id)).toBeGreaterThan(2.0);
   });
 });
+
+describe('one-click physics quick presets', () => {
+  it('applies a known preset and enables physics', async () => {
+    const { applyPhysicsQuickPreset } = await import('../../runtime/physicsMaterials');
+    const result = applyPhysicsQuickPreset(defaultPhysics(), 'pushable-crate');
+    expect(result).toBeTruthy();
+    expect(result!.physics.enabled).toBe(true);
+    expect(result!.physics.bodyType).toBe('dynamic');
+    expect(result!.physics.materialPreset).toBe('wood');
+    // Wood preset carries friction/bounce, and the preset overrides them after the material applies.
+    expect(result!.physics.restitution).toBe(0.08);
+    // Crates are axis-locked so they don't tip over from bumps.
+    expect(result!.physics.lockedRotation).toEqual([true, true, true]);
+  });
+
+  it('returns null for an unknown preset id', async () => {
+    const { applyPhysicsQuickPreset } = await import('../../runtime/physicsMaterials');
+    expect(applyPhysicsQuickPreset(defaultPhysics(), 'nope')).toBeNull();
+  });
+});
+
+describe('Model Forge mesh-accurate colliders', () => {
+  it('resolves a forge prop to the model collider kind (not a plain box)', async () => {
+    const { colliderKindFor } = await import('../../runtime/colliderShape');
+    const store = useEditorStore.getState();
+    const specId = store.createModelSpec('blank', 'Shelf') as string;
+    const shelfId = store.createModelFromSpec(specId, { name: 'Shelf' });
+    expect(shelfId).toBeTruthy();
+    store.togglePhysics(shelfId!);
+    store.updatePhysics(shelfId!, { bodyType: 'fixed', collider: 'box' });
+    const object = objectById(shelfId!);
+    expect(object?.model?.enabled).toBe(true);
+    expect(colliderKindFor(object!)).toBe('model');
+    // And an explicit primitive choice still wins over model resolution.
+    store.updatePhysics(shelfId!, { collider: 'sphere' });
+    expect(colliderKindFor(objectById(shelfId!)!)).toBe('sphere');
+  });
+
+  it('lets a falling body rest on a forge prop\'s real part surface (off-origin trimesh)', async () => {
+    const store = useEditorStore.getState();
+    // A horizontal plank suspended OFF the origin: its top surface sits at y = 1 + 0.25 = 1.25 in the
+    // model's local space (part position [0,1,0], part half-height 0.25). A plain box-fallback collider
+    // would sit at the object's AUTHORED transform (y≈0), so a crate would land around y=0.75. With the
+    // true trimesh the crate must rest on the plank at ≈ y = 1.25 + 0.25 = 1.5.
+    const specId = store.createModelSpec('blank', 'Shelf') as string;
+    expect(specId).toBeTruthy();
+    for (const part of useEditorStore.getState().modelSpecs.find((s) => s.id === specId)!.parts) {
+      store.removeModelPart(specId, part.id);
+    }
+    const plankPartId = store.addModelPart(specId, 'box', { position: [0, 1, 0], scale: [2, 0.5, 1] });
+    expect(plankPartId).toBeTruthy();
+
+    const shelfId = store.createModelFromSpec(specId, { name: 'Shelf', position: [0, 0, 0] }) as string;
+    store.togglePhysics(shelfId);
+    store.updatePhysics(shelfId, { bodyType: 'fixed' }); // default collider => 'model' kind
+
+    const crateId = store.createObjectWithProps('cube', {
+      name: 'Crate',
+      position: [0, 3, 0],
+      physics: { enabled: true, bodyType: 'dynamic', collider: 'box', mass: 1, friction: 0.8 },
+    });
+    store.updateTransform(crateId, 'scale', [0.5, 0.5, 0.5]);
+
+    await startPlay();
+    tick(240); // long enough for the crate to fully settle
+
+    const [, shelfY] = positionOf(shelfId);
+    expect(Math.abs(shelfY)).toBeLessThan(0.01); // fixed body keeps its authored pose
+    const [, crateY] = positionOf(crateId);
+    // Resting on the plank top (1.5), not the origin box (0.75). Generous band around 1.5.
+    expect(crateY).toBeGreaterThan(1.3);
+    expect(crateY).toBeLessThan(1.7);
+  });
+
+  it('per-part "none" collider lets a body fall through that part onto the real surface', async () => {
+    const store = useEditorStore.getState();
+    // A solid plank (top surface at y = 1 + 0.2 = 1.2) with a tall decorative SPIRE directly above it —
+    // marked collider:'none', so a crate must pass through the spire and land on the plank, not hang on
+    // the spire's tip.
+    const specId = store.createModelSpec('blank', 'Cantilever') as string;
+    for (const part of useEditorStore.getState().modelSpecs.find((s) => s.id === specId)!.parts) {
+      store.removeModelPart(specId, part.id);
+    }
+    store.addModelPart(specId, 'box', { position: [0, 1, 0], scale: [2, 0.4, 1] });
+    const spireId = store.addModelPart(specId, 'cylinder', {
+      position: [0, 2.4, 0],
+      scale: [0.4, 1.6, 0.4],
+      collider: 'none',
+    });
+    expect(spireId).toBeTruthy();
+    // The override round-trips through the store (normalization keeps it).
+    expect(useEditorStore.getState().modelSpecs.find((s) => s.id === specId)!.parts.find((p) => p.id === spireId)!.collider).toBe('none');
+
+    const propId = store.createModelFromSpec(specId, { name: 'Cantilever', position: [0, 0, 0] }) as string;
+    store.togglePhysics(propId);
+    store.updatePhysics(propId, { bodyType: 'fixed' });
+
+    const crateId = store.createObjectWithProps('cube', {
+      name: 'Crate',
+      position: [0, 5, 0],
+      physics: { enabled: true, bodyType: 'dynamic', collider: 'box', mass: 1, friction: 0.8 },
+    });
+    store.updateTransform(crateId, 'scale', [0.5, 0.5, 0.5]);
+
+    await startPlay();
+    tick(240);
+
+    const [, crateY] = positionOf(crateId);
+    // Resting on the PLANK (y ≈ 1.2 + 0.25 = 1.45), not stuck on the spire (whose top would be ≈ 4).
+    expect(crateY).toBeGreaterThan(1.2);
+    expect(crateY).toBeLessThan(1.7);
+  });
+
+  it('new shapes: hexprism auto-collides as a block and a torus "none" stays pass-through', async () => {
+    const store = useEditorStore.getState();
+    // A fixed hex prism base (auto → cuboid; top surface at y=0.5) with a decorative torus ring above it
+    // marked collider:'none'. A crate must fall through the ring and rest on the prism.
+    const specId = store.createModelSpec('blank', 'Spool') as string;
+    for (const part of useEditorStore.getState().modelSpecs.find((s) => s.id === specId)!.parts) {
+      store.removeModelPart(specId, part.id);
+    }
+    store.addModelPart(specId, 'hexprism', { position: [0, 0.25, 0], scale: [1, 0.5, 1] });
+    const ringId = store.addModelPart(specId, 'torus', { position: [0, 1.05, 0], scale: [1, 1, 1], collider: 'none' });
+    expect(ringId).toBeTruthy();
+
+    const propId = store.createModelFromSpec(specId, { name: 'Spool', position: [0, 0, 0] }) as string;
+    store.togglePhysics(propId);
+    store.updatePhysics(propId, { bodyType: 'fixed' });
+
+    const crateId = store.createObjectWithProps('cube', {
+      name: 'Crate',
+      position: [0, 5, 0],
+      physics: { enabled: true, bodyType: 'dynamic', collider: 'box', mass: 1, friction: 0.8 },
+    });
+    store.updateTransform(crateId, 'scale', [0.5, 0.5, 0.5]);
+
+    await startPlay();
+    tick(240);
+
+    const [, crateY] = positionOf(crateId);
+    // Resting on the PRISM (y ≈ 0.5 + 0.25 = 0.75). If the torus were solid, it'd be ≈ 1.55.
+    expect(crateY).toBeGreaterThan(0.6);
+    expect(crateY).toBeLessThan(0.9);
+  });
+
+  it('a converted mesh part collides from its real baked surface', async () => {
+    const store = useEditorStore.getState();
+    // A plank converted to a mesh part (its actual triangular surface) suspended at y=1. A crate must
+    // rest on the mesh part's top surface ~ y=1.25, not on the object origin (which the model trimesh
+    // path would ignore, and a dumb origin box would place at 0.75).
+    const specId = store.createModelSpec('blank', 'MeshShelf') as string;
+    for (const part of useEditorStore.getState().modelSpecs.find((s) => s.id === specId)!.parts) {
+      store.removeModelPart(specId, part.id);
+    }
+    const plankId = store.addModelPart(specId, 'box', { position: [0, 1, 0], scale: [2, 0.5, 1] });
+    expect(plankId).toBeTruthy();
+    expect(store.convertModelPartToMesh(specId, plankId!)).toBe(true);
+    const part = useEditorStore.getState().modelSpecs.find((s) => s.id === specId)!.parts.find((p) => p.id === plankId)!;
+    expect(part.shape).toBe('mesh');
+    expect(part.collider ?? 'auto').toBe('auto'); // auto → the mesh tri/conv hull branch
+
+    const propId = store.createModelFromSpec(specId, { name: 'MeshShelf', position: [0, 0, 0] }) as string;
+    store.togglePhysics(propId);
+    store.updatePhysics(propId, { bodyType: 'fixed' });
+
+    const crateId = store.createObjectWithProps('cube', {
+      name: 'Crate',
+      position: [0, 4, 0],
+      physics: { enabled: true, bodyType: 'dynamic', collider: 'box', mass: 1, friction: 0.8 },
+    });
+    store.updateTransform(crateId, 'scale', [0.5, 0.5, 0.5]);
+
+    await startPlay();
+    tick(240);
+
+    const [, crateY] = positionOf(crateId);
+    // Resting on the MESH plank top (1 + 0.25 + crate half height ~ 1.5).
+    expect(crateY).toBeGreaterThan(1.3);
+    expect(crateY).toBeLessThan(1.7);
+    store.deleteObject(propId);
+  });
+});
+

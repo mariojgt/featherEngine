@@ -176,6 +176,7 @@ const kindIcon: Partial<Record<GraphNodeKind, typeof Zap>> = {
   'action.rotate': RotateCw,
   'action.applyForce': Wind,
   'action.applyImpulse': Zap,
+  'action.applyForceAtPoint': Crosshair,
   'action.applyTorque': RotateCw,
   'action.setPhysics': Box,
   'action.setVelocity': Gauge,
@@ -413,6 +414,13 @@ export const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: 
         { id: 'vector', label: 'Force' },
         { id: 'amount', label: 'Amount' },
       ];
+    case 'action.applyForceAtPoint':
+      return [
+        { id: 'target', label: 'Target' },
+        { id: 'vector', label: 'Force' },
+        { id: 'amount', label: 'Amount' },
+        { id: 'point', label: 'Local Point' },
+      ];
     case 'action.setPhysics':
       return [
         { id: 'target', label: 'Target' },
@@ -425,6 +433,8 @@ export const valueInputsFor = (kind: GraphNodeKind): Array<{ id: string; label: 
     case 'action.setVelocity':
       return [{ id: 'vector', label: 'Velocity' }];
     case 'query.velocity':
+      return [{ id: 'target', label: 'Target' }];
+    case 'query.getSpeed':
       return [{ id: 'target', label: 'Target' }];
     case 'action.setAngularVelocity':
       return [
