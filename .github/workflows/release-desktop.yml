@@ -1,0 +1,65 @@
+# Build and publish Windows and macOS desktop installers on a new version tag.
+#
+# Trigger: push a tag matching v* (e.g. `git tag v0.1.1 && git push origin v0.1.1`).
+#
+# Tauri cannot cross-compile, so a matrix builds each OS on its own runner.
+# tauri-action runs the build (frontend via beforeBuildCommand, then cargo),
+# creates a GitHub Release for the tag and attaches the installers:
+#   - Windows: NSIS installer (.exe) + MSI
+#   - macOS:   .dmg (+ .app) for both Apple Silicon and Intel
+name: Release Desktop Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+            rust_targets: ""
+          - platform: macos-latest # Apple Silicon (M1+). Runner itself is arm64.
+            args: "--target aarch64-apple-darwin"
+            rust_targets: "aarch64-apple-darwin"
+          - platform: macos-latest # Intel Macs (x64 runtime on the arm64 runner).
+            args: "--target x86_64-apple-darwin"
+            rust_targets: "x86_64-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "Feather Engine v__VERSION__"
+          releaseBody: "See the assets to download this version and install."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
