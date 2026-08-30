@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
   ArrowUp,
@@ -14,6 +13,7 @@ import {
 import { useAIChat } from '../ai/useAIChat';
 import { PROVIDERS, type ProviderId } from '../ai/providers';
 import { useAISettings } from '../store/aiSettingsStore';
+import { focusWorkspacePanel } from './workspacePanels';
 
 const SUGGESTIONS = [
   {
@@ -113,8 +113,7 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function AIChatWidget() {
-  const [open, setOpen] = useState(false);
+export function AgentPanel() {
   const [showSettings, setShowSettings] = useState(false);
   const [draft, setDraft] = useState('');
   const { messages, status, error, sendMessage, clearMessages, stop } = useAIChat();
@@ -123,10 +122,6 @@ export function AIChatWidget() {
   const provider = useAISettings((state) => state.provider);
   const activeModel = useAISettings((state) => state.models[state.provider]);
   const providerLabel = PROVIDERS[provider].label;
-
-  useEffect(() => {
-    if (!hasKey && open) setShowSettings(true);
-  }, [hasKey, open]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });
@@ -141,12 +136,15 @@ export function AIChatWidget() {
   useEffect(() => {
     const onAsk = (event: Event) => {
       const prompt = (event as CustomEvent<{ prompt?: string }>).detail?.prompt?.trim();
-      setOpen(true);
+      focusWorkspacePanel('agent');
       if (!prompt) return;
       // With no API key we cannot send. Park the text in the draft so the user's typing survives the
       // detour through settings rather than being silently swallowed.
       if (askRef.current.hasKey) askRef.current.send(prompt);
-      else setDraft(prompt);
+      else {
+        setDraft(prompt);
+        setShowSettings(true);
+      }
     };
     window.addEventListener('nf:ask-ai', onAsk);
     return () => window.removeEventListener('nf:ask-ai', onAsk);
@@ -159,153 +157,121 @@ export function AIChatWidget() {
   };
 
   return (
-    <>
-      <AnimatePresence>
-        {!open && (
-          <motion.button
-            key="ai-launcher"
-            className="ai-launcher"
-            title="Open AI assistant"
-            onClick={() => setOpen(true)}
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
+    <section className="panel ai-widget ai-widget--embedded agent-panel" aria-label="Feather Agent">
+      <header className="ai-widget-header">
+        <div className="ai-widget-title">
+          <span className="ai-avatar">
+            <Bot size={14} aria-hidden />
+          </span>
+          <span className="ai-title-copy">
+            <strong>Feather Agent</strong>
+            <span>{providerLabel} · {activeModel}</span>
+          </span>
+        </div>
+        <span className={`ai-status-pill ${status === 'streaming' ? 'active' : ''}`}>
+          {status === 'streaming' ? 'Working' : 'Ready'}
+        </span>
+        <div className="ai-widget-actions">
+          <button
+            className="icon-button compact"
+            title="Agent settings"
+            onClick={() => setShowSettings((value) => !value)}
           >
-            <Sparkles size={18} aria-hidden />
-            <span>Ask AI</span>
-          </motion.button>
-        )}
-      </AnimatePresence>
+            <Settings2 size={14} aria-hidden />
+          </button>
+          <button
+            className="icon-button compact"
+            title="Clear conversation"
+            onClick={clearMessages}
+            disabled={messages.length === 0}
+          >
+            <Trash2 size={14} aria-hidden />
+          </button>
+        </div>
+      </header>
 
-      <AnimatePresence>
-        {open && (
-          <motion.section
-            key="ai-widget"
-            className="ai-widget"
-            initial={{ opacity: 0, y: 24, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 24, scale: 0.96 }}
-            transition={{ type: 'spring', stiffness: 320, damping: 30 }}
-          >
-            <header className="ai-widget-header">
-              <div className="ai-widget-title">
-                <span className="ai-avatar">
-                  <Bot size={14} aria-hidden />
-                </span>
-                <span className="ai-title-copy">
-                  <strong>Feather Assistant</strong>
-                  <span>{providerLabel} · {activeModel}</span>
-                </span>
-              </div>
-              <span className={`ai-status-pill ${status === 'streaming' ? 'active' : ''}`}>
-                {status === 'streaming' ? 'Working' : 'Engine aware'}
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+
+      <div className="ai-log" ref={logRef}>
+        {messages.length === 0 && !showSettings && (
+          <div className="ai-empty">
+            <div className="ai-empty-card">
+              <span className="ai-empty-icon">
+                <Sparkles size={20} aria-hidden />
               </span>
-              <div className="ai-widget-actions">
-                <button
-                  className="icon-button compact"
-                  title="Settings"
-                  onClick={() => setShowSettings((value) => !value)}
-                >
-                  <Settings2 size={14} aria-hidden />
+              <h3>Build with an agent</h3>
+              <p>Describe a playable scene, ask for a polish pass, or inspect your logic.</p>
+            </div>
+            <div className="ai-suggestions">
+              {SUGGESTIONS.map((suggestion) => (
+                <button key={suggestion.label} onClick={() => void sendMessage(suggestion.prompt)} disabled={!hasKey}>
+                  <span className="ai-suggestion-icon">
+                    <Sparkles size={14} aria-hidden />
+                  </span>
+                  <span className="ai-suggestion-copy">
+                    <strong>{suggestion.label}</strong>
+                    <span>{suggestion.meta}</span>
+                  </span>
                 </button>
-                <button
-                  className="icon-button compact"
-                  title="Clear conversation"
-                  onClick={clearMessages}
-                  disabled={messages.length === 0}
-                >
-                  <Trash2 size={14} aria-hidden />
-                </button>
-                <button className="icon-button compact" title="Close" onClick={() => setOpen(false)}>
-                  <X size={14} aria-hidden />
-                </button>
-              </div>
-            </header>
-
-            {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-
-            <div className="ai-log" ref={logRef}>
-              {messages.length === 0 && !showSettings && (
-                <div className="ai-empty">
-                  <div className="ai-empty-card">
-                    <span className="ai-empty-icon">
-                      <Sparkles size={20} aria-hidden />
-                    </span>
-                    <h3>Build, polish, debug</h3>
-                    <p>Ask for a playable system, a sharper HUD, or a focused logic fix.</p>
-                  </div>
-                  <div className="ai-suggestions">
-                    {SUGGESTIONS.map((suggestion) => (
-                      <button key={suggestion.label} onClick={() => void sendMessage(suggestion.prompt)} disabled={!hasKey}>
-                        <span className="ai-suggestion-icon">
-                          <Sparkles size={14} aria-hidden />
-                        </span>
-                        <span className="ai-suggestion-copy">
-                          <strong>{suggestion.label}</strong>
-                          <span>{suggestion.meta}</span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {messages.map((message) => (
-                <div key={message.id} className={`ai-message ${message.role}`}>
-                  {message.actions.length > 0 && (
-                    <div className="ai-actions">
-                      {message.actions.map((action) => (
-                        <span key={action.id} className="ai-action-chip">
-                          {action.label}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {message.content && <div className="ai-bubble">{message.content}</div>}
-                  {message.role === 'assistant' && !message.content && status === 'streaming' && (
-                    <div className="ai-bubble ai-thinking">Thinking…</div>
-                  )}
-                </div>
               ))}
             </div>
+          </div>
+        )}
 
-            {error && (
-              <div className="ai-error">
-                <AlertTriangle size={14} aria-hidden /> {error}
+        {messages.map((message) => (
+          <div key={message.id} className={`ai-message ${message.role}`}>
+            {message.actions.length > 0 && (
+              <div className="ai-actions" aria-label="Agent progress">
+                {message.actions.map((action) => (
+                  <span key={action.id} className="ai-action-chip">
+                    {action.label}
+                  </span>
+                ))}
               </div>
             )}
+            {message.content && <div className="ai-bubble">{message.content}</div>}
+            {message.role === 'assistant' && !message.content && status === 'streaming' && (
+              <div className="ai-bubble ai-thinking">Thinking…</div>
+            )}
+          </div>
+        ))}
+      </div>
 
-            <div className="ai-composer">
-              <textarea
-                value={draft}
-                placeholder={hasKey ? 'Ask the engine to build something…' : 'Add an API key in settings first'}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    submit();
-                  }
-                }}
-                rows={1}
-              />
-              {status === 'streaming' ? (
-                <button className="ai-send stop" title="Stop" onClick={stop}>
-                  <Square size={14} aria-hidden />
-                </button>
-              ) : (
-                <button
-                  className="ai-send"
-                  title="Send"
-                  onClick={submit}
-                  disabled={!draft.trim() || !hasKey}
-                >
-                  <ArrowUp size={16} aria-hidden />
-                </button>
-              )}
-            </div>
-          </motion.section>
+      {error && (
+        <div className="ai-error">
+          <AlertTriangle size={14} aria-hidden /> {error}
+        </div>
+      )}
+
+      <div className="ai-composer">
+        <textarea
+          value={draft}
+          placeholder={hasKey ? 'Describe what you want to build…' : 'Your prompt is safe — add an API key to send it'}
+          aria-label="Message Feather Agent"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          rows={2}
+        />
+        {status === 'streaming' ? (
+          <button className="ai-send stop" title="Stop" onClick={stop}>
+            <Square size={14} aria-hidden />
+          </button>
+        ) : (
+          <button className="ai-send" title="Send" onClick={submit} disabled={!draft.trim() || !hasKey}>
+            <ArrowUp size={16} aria-hidden />
+          </button>
         )}
-      </AnimatePresence>
-    </>
+      </div>
+    </section>
   );
+}
+
+/** Compatibility export for extensions that imported the old component name. */
+export function AIChatWidget() {
+  return <AgentPanel />;
 }

@@ -6,11 +6,16 @@ import type { AttachmentComponent, LightComponent, ReflectionProbeComponent, Scr
 import type { VehicleComponent } from './vehicle';
 import type { TreeComponent } from './tree';
 import type { ModelComponent } from './model';
+import type { SimpleInteraction } from '../creator/simpleInteractions';
 
 export interface SceneObject {
   id: string;
   name: string;
   kind: SceneObjectKind;
+  /** Optional Creator Mode role badge. Gameplay still comes from the object's normal components/blueprint. */
+  creatorRoleId?: string;
+  /** Beginner-authored rules; runtime execution comes exclusively from the attached compiled Blueprint. */
+  creatorInteractions?: SimpleInteraction[];
   parentId?: string;
   transform: TransformComponent;
   renderer?: MeshRendererComponent;
@@ -245,4 +250,3 @@ export interface ParticleSystemDefinition extends ParticleConfig {
   folderId?: string;
   createdAt: number;
 }
-

@@ -40,6 +40,9 @@ import type {
 import { buildSceneSnapshot, type SceneSnapshotDetail } from './systemPrompt';
 import { graphToFeatherScript } from '../scripting/featherScript';
 import { BEHAVIOR_PRESETS } from '../project/behaviors';
+import { CREATOR_ROLE_IDS, findCreatorRole } from '../creator/roles';
+import type { SimpleInteractionAction } from '../creator/simpleInteractions';
+import { CREATOR_GAMEPLAY_KIT_IDS, findCreatorGameplayKit } from '../creator/gameplayKits';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createMeadowTemplate } from '../project/meadowTemplate';
 import { createCubeRealmTemplate } from '../project/cubeRealmTemplate';
@@ -1137,6 +1140,94 @@ const rawEngineTools = {
         physics: physics ? { ...physics, enabled: physics.enabled ?? true } : undefined,
       });
       return `Created ${kind} "${findObject(id)?.name}" with id ${id}${parentId ? ` (nested under ${parentId})` : ''}.`;
+    },
+  }),
+
+  create_gameplay_object: tool({
+    description:
+      'Create a playable game-concept object in ONE call through Feather Creator Actions. Roles: player, collectible, door, enemy, hazard, destructible, moving-platform. The result is a normal scene object using the built-in controller and/or an editable Blueprint, never hidden AI state. Prefer this over manually composing colliders, variables, and behaviors.',
+    inputSchema: z.object({
+      role: z.enum(CREATOR_ROLE_IDS),
+      name: z.string().optional(),
+      position: vec3.optional(),
+      color: z.string().optional().describe('Optional hex color.'),
+      parentId: z.string().optional(),
+    }),
+    execute: async ({ role, name, position, color, parentId }) => {
+      if (parentId && !findObject(parentId)) return `No object with id ${parentId} to parent under.`;
+      const result = store().createRoleObject(role, {
+        name,
+        position: position ? asVec3(position) : undefined,
+        color,
+        parentId,
+      });
+      if (!result.ok) return `Could not create ${role}: ${result.error ?? 'unknown error'}.`;
+      const label = findCreatorRole(role)?.name ?? role;
+      return `Created playable ${label} "${findObject(result.objectId!)?.name}" with objectId ${result.objectId}${result.blueprintId ? ` and editable blueprintId ${result.blueprintId}` : ' using the built-in character runtime'}.`;
+    },
+  }),
+
+  make_object_role: tool({
+    description:
+      'Make an existing object playable in ONE call through the same Creator Action used by Inspector > Make It. Applies a Player, Collectible, Door, Enemy, Hazard, Destructible, or Moving Platform role using normal Feather components and editable logic.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      role: z.enum(CREATOR_ROLE_IDS),
+    }),
+    execute: async ({ objectId, role }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      const result = store().makeObjectRole(objectId, role);
+      if (!result.ok) return `Could not make ${objectId} a ${role}: ${result.error ?? 'unknown error'}.`;
+      const label = findCreatorRole(role)?.name ?? role;
+      return `${findObject(objectId)?.name ?? objectId} is now a playable ${label}${result.blueprintId ? ` (editable blueprintId ${result.blueprintId})` : ' using Feather\'s built-in character controller'}.`;
+    },
+  }),
+
+  add_simple_interaction: tool({
+    description:
+      'Add a beginner WHEN/DO rule to an object. Feather compiles it into that object\'s normal editable Blueprint and forks shared role logic when needed. Triggers: interact, collision, trigger-enter, trigger-exit, start, timer. Actions: move, rotate, scale, destroy, damage, score, play-animation, play-sound, spawn, event.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      trigger: z.enum(['interact', 'collision', 'trigger-enter', 'trigger-exit', 'start', 'timer']),
+      action: z.enum(['move', 'rotate', 'scale', 'destroy', 'damage', 'score', 'play-animation', 'play-sound', 'spawn', 'event']),
+      seconds: z.number().min(0.05).optional().describe('Timer interval when trigger is timer.'),
+      vector: vec3.optional().describe('Target XYZ for move/rotate/scale.'),
+      value: z.number().optional().describe('Damage or score amount.'),
+      duration: z.number().min(0.01).optional().describe('Transform animation duration.'),
+      reference: z.string().optional().describe('Sound asset id, animation id, or event name.'),
+      spawnKind: z.enum(['empty', 'cube', 'sphere', 'capsule', 'plane']).optional(),
+      thenDestroy: z.boolean().optional(),
+    }),
+    execute: async ({ objectId, trigger, action, seconds, vector, value, duration, reference, spawnKind, thenDestroy }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      let authoredAction: SimpleInteractionAction;
+      if (action === 'move' || action === 'rotate' || action === 'scale') authoredAction = { type: action, vector: vector ? asVec3(vector) : undefined };
+      else if (action === 'damage' || action === 'score') authoredAction = { type: action, value };
+      else if (action === 'play-sound') authoredAction = { type: action, assetId: reference };
+      else if (action === 'play-animation') authoredAction = { type: action, animationId: reference };
+      else if (action === 'event') authoredAction = { type: action, eventName: reference };
+      else if (action === 'spawn') authoredAction = { type: action, spawnKind };
+      else authoredAction = { type: action };
+
+      const result = store().addSimpleInteraction(objectId, {
+        trigger: { type: trigger, ...(trigger === 'timer' ? { seconds } : {}) },
+        action: authoredAction,
+        duration,
+        ...(thenDestroy && action !== 'destroy' ? { then: [{ type: 'destroy' as const }] } : {}),
+      });
+      if (!result.ok) return `Could not add interaction: ${result.error ?? 'unknown error'}${result.diagnostics?.[0] ? ` (${result.diagnostics[0]})` : ''}.`;
+      return `Added editable ${trigger} -> ${action} logic to ${findObject(objectId)?.name ?? objectId} (blueprintId ${result.blueprintId}).`;
+    },
+  }),
+
+  create_gameplay_kit: tool({
+    description:
+      'Add a complete playable starter in one call through Creator Actions. Kits: third-person-starter, collectible-game, combat-starter, platformer-starter, interaction-starter. Everything created is a normal Feather object, UI document, variable, component, or editable Blueprint.',
+    inputSchema: z.object({ kit: z.enum(CREATOR_GAMEPLAY_KIT_IDS) }),
+    execute: async ({ kit }) => {
+      const result = store().createCreatorGameplayKit(kit);
+      if (!result.ok) return `Could not add gameplay kit ${kit}: ${result.error ?? 'unknown error'}.`;
+      return `Added ${findCreatorGameplayKit(kit)?.name ?? kit}: ${result.objectIds.length} new scene objects${result.uiDocumentId ? ` and HUD ${result.uiDocumentId}` : ''}. Press Play to test it.`;
     },
   }),
 

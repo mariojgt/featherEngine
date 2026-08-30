@@ -10,6 +10,7 @@ import type { SceneObject, SceneObjectKind } from '../types';
 import { useCollaborationStore, type CollaborationParticipant } from '../store/collaborationStore';
 import { collaboratorsOnObject } from '../collaboration/presence';
 import { CollaboratorAvatars } from './CollaboratorAvatars';
+import { findCreatorRole } from '../creator/roles';
 
 const objectIcon: Record<SceneObjectKind, typeof Box> = {
   empty: Square,
@@ -69,6 +70,7 @@ function HierarchyRow({
   const openObjectScript = useEditorStore((state) => state.openObjectScript);
   const setObjectParent = useEditorStore((state) => state.setObjectParent);
   const Icon = object.reflectionProbe?.enabled ? Aperture : objectIcon[object.kind];
+  const creatorRole = object.creatorRoleId ? findCreatorRole(object.creatorRoleId) : undefined;
   const hasChildren = childCount > 0;
   const isInstance = Boolean(object.prefabSourceId);
   // Highlight the whole multi-selection when it's active, otherwise just the single selected object.
@@ -122,7 +124,7 @@ function HierarchyRow({
           setObjectParent(draggedId, object.id);
         }
       }}
-      title={`${object.name}${hasChildren ? ` · ${childCount} child${childCount > 1 ? 'ren' : ''}` : ''}${isInstance ? ' · prefab instance' : ''} — F2 to rename, double-click to edit its script, right-click for options`}
+      title={`${object.name}${creatorRole ? ` · ${creatorRole.name}` : ''}${hasChildren ? ` · ${childCount} child${childCount > 1 ? 'ren' : ''}` : ''}${isInstance ? ' · prefab instance' : ''} — F2 to rename, double-click to edit its script, right-click for options`}
     >
       {hasChildren ? (
         <span
@@ -139,7 +141,12 @@ function HierarchyRow({
       ) : (
         <span className="hierarchy-twisty placeholder" aria-hidden />
       )}
-      {isInstance ? <Boxes size={14} className="hierarchy-instance-glyph" aria-hidden /> : <Icon size={14} aria-hidden />}
+      {isInstance && <Boxes size={14} className="hierarchy-instance-glyph" aria-hidden />}
+      {creatorRole ? (
+        <span className="hierarchy-role-icon" title={creatorRole.name} aria-hidden>{creatorRole.icon}</span>
+      ) : !isInstance ? (
+        <Icon size={14} aria-hidden />
+      ) : null}
       {renaming ? (
         <input
           ref={renameRef}
@@ -173,6 +180,7 @@ function HierarchyRow({
           {object.name}
         </span>
       )}
+      {creatorRole && <small className="hierarchy-role-badge">{creatorRole.name}</small>}
       {hasChildren && collapsed && <small className="hierarchy-count">{childCount}</small>}
       <CollaboratorAvatars participants={collaborators} compact label={`is editing ${object.name}`} />
     </button>

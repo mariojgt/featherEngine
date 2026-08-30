@@ -22,6 +22,10 @@ import { MODEL_STARTERS, QUICK_MODEL_STARTER_IDS } from '../model/modelSpec';
 import { ensureModelForgeEnabled, openModelForgeStudio } from '../extensions/openModelForge';
 import { useModelForgeSession } from '../store/modelForgeSessionStore';
 import { customizedModelIds, isInstanceable } from '../three/modelInstancing';
+import { MakeItPanel } from '../creator/components/MakeItPanel';
+import { CreatorGameplaySection } from '../creator/components/GameplaySection';
+import { CreatorAppearanceSection } from '../creator/components/AppearanceSection';
+import { CreatorInteractionsSection } from '../creator/components/InteractionsSection';
 
 const axes = ['X', 'Y', 'Z'] as const;
 
@@ -3358,6 +3362,12 @@ export function InspectorPanel() {
             <span className="kind-label">{object.kind}</span>
           </section>
 
+          <MakeItPanel object={object} />
+
+          <CreatorGameplaySection object={object} />
+
+          <CreatorAppearanceSection object={object} />
+
           <InspectorSection title="Transform">
             <div className="transform-reset-all">
               <button
@@ -3394,6 +3404,11 @@ export function InspectorPanel() {
               />
             ))}
           </InspectorSection>
+
+          <CreatorInteractionsSection object={object} />
+
+          <InspectorSection title="Advanced" defaultOpen={false}>
+            <div className="creator-advanced-body">
 
           {object.kind === 'light' && (
             <LightSection light={object.light} onChange={(patch) => setObjectLight(object.id, patch)} />
@@ -3591,6 +3606,8 @@ export function InspectorPanel() {
                 </div>
               </div>
             )}
+          </InspectorSection>
+            </div>
           </InspectorSection>
         </div>
       )}

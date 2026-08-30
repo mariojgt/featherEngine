@@ -27,7 +27,13 @@ import { CinematicCamera } from '../three/CinematicCamera';
 import { CinematicPathGizmo } from '../three/CinematicPathGizmo';
 import { EditorCamera, editorCameraPose, editorNav, type ViewPreset } from '../three/EditorCamera';
 import { ViewCube } from './ViewCube';
-import { maximizeViewportLayout, restoreWorkspaceLayout, isViewportLayoutMaximized } from './workspacePanels';
+import {
+  isViewportLayoutMaximized,
+  maximizeViewportLayout,
+  onWorkspacePanelMaximizedChange,
+  restoreWorkspaceLayout,
+} from './workspacePanels';
+import { useCreatorEditorModeStore } from '../creator/editorModeStore';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial, useResolvedMaterialSlots, hasPhysicalLayers } from '../three/resolveMaterial';
 import { useToonMaterial } from '../three/toonMaterial';
@@ -1563,13 +1569,8 @@ function QuickStartOverlay() {
     store().selectObject(id);
   };
   const addPlayer = () => {
-    const id = store().createObjectWithProps('capsule', {
-      name: 'Player',
-      position: [0, 1.1, 0],
-      color: '#22e0ff',
-    });
-    store().toggleCharacterController(id); // seeds the third-person controller (WASD + follow camera)
-    store().selectObject(id);
+    const result = store().createRoleObject('player', { position: [0, 1.1, 0], color: '#22e0ff' });
+    if (result.objectId) store().selectObject(result.objectId);
   };
   return (
     <div className="quickstart-overlay">
@@ -1587,7 +1588,7 @@ function QuickStartOverlay() {
             ＋ Ground + playable character
           </button>
         </div>
-        <small>Tip: the AI chat (bottom right) can build whole scenes — try “make a small race track”.</small>
+        <small>Tip: open the Agent tab to build whole scenes — try “make a small race track”.</small>
       </div>
     </div>
   );
@@ -1639,7 +1640,7 @@ export function ViewportPanel() {
   // Bumped to command the editor camera to a standard orientation (ViewCube / numpad presets).
   const [viewCommand, setViewCommand] = useState<{ view: ViewPreset; nonce: number }>({ view: 'persp', nonce: 0 });
   const [previewCamera, setPreviewCamera] = useState(false);
-  const [viewportMaximized, setViewportMaximized] = useState(false);
+  const [viewportMaximized, setViewportMaximized] = useState(() => isViewportLayoutMaximized());
   // True when Play auto-maximized the dock — Stop should restore only in that case.
   const autoMaximizedOnPlay = useRef(false);
   // Adaptive resolution for the editor viewport. Without a cap the Canvas renders at native
@@ -1649,6 +1650,7 @@ export function ViewportPanel() {
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const setPlaying = useEditorStore((state) => state.setPlaying);
+  const setCreatorAuthoringMode = useCreatorEditorModeStore((state) => state.setAuthoringMode);
   const hasSelection = useEditorStore((state) => Boolean(state.selectedObjectId));
   const dropSelectionToSurface = useCallback(() => {
     sceneApiRef.current?.dropToSurface(effectiveSelection(useEditorStore.getState()));
@@ -1665,13 +1667,19 @@ export function ViewportPanel() {
     return () => window.removeEventListener('nf:focus-selection', onFocus);
   }, []);
 
+  // Keep the button honest when another surface (Creator modes, Scripting focus mode,
+  // command palette) changes Dockview's native maximized group.
+  useEffect(
+    () => onWorkspacePanelMaximizedChange('viewport', setViewportMaximized),
+    [],
+  );
+
   const toggleMaximize = useCallback(() => {
     if (viewportMaximized || isViewportLayoutMaximized()) {
       restoreWorkspaceLayout();
-      setViewportMaximized(false);
       autoMaximizedOnPlay.current = false;
-    } else if (maximizeViewportLayout()) {
-      setViewportMaximized(true);
+    } else {
+      maximizeViewportLayout();
     }
   }, [viewportMaximized]);
 
@@ -1680,7 +1688,6 @@ export function ViewportPanel() {
     if (isPlaying) {
       if (!viewportMaximized && !isViewportLayoutMaximized()) {
         if (maximizeViewportLayout()) {
-          setViewportMaximized(true);
           autoMaximizedOnPlay.current = true;
         }
       }
@@ -1688,7 +1695,6 @@ export function ViewportPanel() {
     }
     if (autoMaximizedOnPlay.current) {
       restoreWorkspaceLayout();
-      setViewportMaximized(false);
       autoMaximizedOnPlay.current = false;
     }
   }, [isPlaying]);
@@ -2300,12 +2306,14 @@ export function ViewportPanel() {
             </select>
           )}
           <button
+            className="ground-selection-button"
             disabled={!hasSelection}
             title="Drop selection to surface below (End)"
             aria-label="Drop selection to surface"
             onClick={dropSelectionToSurface}
           >
             <ArrowDownToLine size={14} aria-hidden />
+            <span>Ground</span>
           </button>
         </div>
         {/* Quality moved to the Inspector's scene view (Quality section) — the dock is for tools
@@ -2324,7 +2332,12 @@ export function ViewportPanel() {
           <button
             className={isPlaying ? 'viewport-play active' : 'viewport-play'}
             title={isPlaying ? 'Stop preview — back to Edit Mode' : 'Play preview'}
-            onClick={() => setPlaying(!isPlaying)}
+            onClick={() => {
+              // Starting or stopping from the canvas follows the same Creator-mode
+              // contract as the main toolbar: a preview always returns to BUILD.
+              setCreatorAuthoringMode('build');
+              setPlaying(!isPlaying);
+            }}
           >
             {isPlaying ? <Square size={14} aria-hidden /> : <Play size={14} aria-hidden />}
             <span>{isPlaying ? 'Stop' : 'Play'}</span>

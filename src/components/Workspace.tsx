@@ -26,6 +26,7 @@ import { TreeBuilderPanel } from './TreeBuilderPanel';
 import { AssetStorePanel } from './AssetStorePanel';
 import { SceneSettingsPanel } from './SceneSettingsPanel';
 import { CinematicPanel } from './CinematicPanel';
+import { AgentPanel } from './AIChatWidget';
 import { ensureWorkspacePanel, focusWorkspacePanel, getWorkspaceApi, registerPanelDefs, setWorkspaceApi } from './workspacePanels';
 import { onPanelClosed } from '../sync/storeSync';
 import { POPPABLE_PANELS, openPanelWindow } from '../sync/popoutWindow';
@@ -57,7 +58,8 @@ type PanelDef = {
 };
 const PANEL_DEFS: Record<string, PanelDef> = {
   viewport: { component: 'viewport', title: 'Viewport' },
-  // Left sidebar trio — all tabs of one group, so opening one never splits the sidebar.
+  // Left creator sidebar — Agent is a first-class surface beside Objects and Assets.
+  agent: { component: 'agent', title: 'Agent', ref: 'hierarchy', direction: 'within' },
   hierarchy: { component: 'hierarchy', title: 'Objects', ref: 'viewport', direction: 'left' },
   project: { component: 'project', title: 'Assets', ref: 'hierarchy', direction: 'within' },
   store: { component: 'store', title: 'Store', ref: 'hierarchy', direction: 'within' },
@@ -90,7 +92,7 @@ const PANEL_DEFS: Record<string, PanelDef> = {
 /** Panels the View menu offers, in menu order. Excludes `viewport` (never closable) and `scene`
  *  (folded into the Inspector's no-selection state). */
 export const WORKSPACE_PANELS: Array<{ id: string; title: string }> = [
-  'hierarchy', 'project', 'store', 'inspector',
+  'agent', 'hierarchy', 'project', 'store', 'inspector',
   'materials', 'terrain', 'trees', 'particles', 'animator', 'ui',
   'scripting', 'cinematic',
 ].map((id) => ({ id, title: PANEL_DEFS[id].title }));
@@ -113,6 +115,7 @@ const profiled = (id: string, node: ReactNode) => (
 
 // Each Dockview panel just renders the existing panel component (they read stores directly).
 const builtInComponents = {
+  agent: () => profiled('agent', <AgentPanel />),
   hierarchy: () => profiled('hierarchy', <HierarchyPanel />),
   viewport: () => profiled('viewport', <ViewportPanel />),
   inspector: () => profiled('inspector', <InspectorPanel />),
@@ -209,8 +212,9 @@ function buildDefaultLayout(api: DockviewApi) {
 function buildShell(api: DockviewApi) {
   api.clear();
   api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
-  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Objects', position: { referencePanel: 'viewport', direction: 'left' } });
-  api.addPanel({ id: 'project', component: 'project', title: 'Assets', position: { referencePanel: 'hierarchy', direction: 'within' } });
+  api.addPanel({ id: 'agent', component: 'agent', title: 'Agent', renderer: 'always', inactive: true, position: { referencePanel: 'viewport', direction: 'left' } });
+  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Objects', position: { referencePanel: 'agent', direction: 'within' } });
+  api.addPanel({ id: 'project', component: 'project', title: 'Assets', position: { referencePanel: 'agent', direction: 'within' } });
   api.addPanel({ id: 'store', component: 'store', title: 'Store', position: { referencePanel: 'hierarchy', direction: 'within' } });
   api.getPanel('hierarchy')?.api.setActive();
   api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
@@ -222,6 +226,23 @@ function buildShell(api: DockviewApi) {
   const inspectorWidth = Math.min(INSPECTOR_WIDTH, Math.max(250, Math.round(availableWidth * 0.21)));
   api.getPanel('hierarchy')?.api.setSize({ width: hierarchyWidth });
   api.getPanel('inspector')?.api.setSize({ width: inspectorWidth });
+}
+
+/** Add Agent to a pre-Creator saved layout without rebuilding the user's dock. */
+function ensureAgentPanel(api: DockviewApi): boolean {
+  if (api.getPanel('agent')) return false;
+  const referencePanel = api.getPanel('hierarchy') ? 'hierarchy' : api.getPanel('viewport') ? 'viewport' : undefined;
+  api.addPanel({
+    id: 'agent',
+    component: 'agent',
+    title: 'Agent',
+    renderer: 'always',
+    inactive: true,
+    position: referencePanel
+      ? { referencePanel, direction: referencePanel === 'hierarchy' ? 'within' : 'left' }
+      : undefined,
+  });
+  return true;
 }
 
 /** Modeling-first: the bare shell, with the material editor tabbed behind the Inspector. */
@@ -333,6 +354,11 @@ export function Workspace() {
       }
     }
     if (!restored) buildDefaultLayout(event.api);
+    else if (ensureAgentPanel(event.api)) {
+      // Persist the one-time additive migration now; native panel focus/maximize
+      // remains transient and does not rebuild this layout.
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ version: LAYOUT_VERSION, layout: event.api.toJSON() }));
+    }
 
     event.api.onDidLayoutChange(() => {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({ version: LAYOUT_VERSION, layout: event.api.toJSON() }));

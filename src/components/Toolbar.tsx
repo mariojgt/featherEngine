@@ -9,7 +9,6 @@ import {
   Circle,
   CloudUpload,
   Command,
-  FolderOpen,
   Gamepad2,
   LampDesk,
   Layers,
@@ -39,13 +38,16 @@ import { applyCustomLayout, applyWorkspaceLayout, openBuiltInPanel, resetWorkspa
 import { PreferencesModal } from './PreferencesModal';
 import { BuildReportDialog } from './BuildReportDialog';
 import type { SceneObjectKind, TreeArchetype } from '../types';
-import { focusWorkspacePanel, openWorkspacePanel } from './workspacePanels';
+import { focusWorkspacePanel, openWorkspacePanel, restoreWorkspaceLayout } from './workspacePanels';
 import { askPackageDetails } from '../store/packageDetailsStore';
 import { useExtensionSnapshot } from '../extensions/react';
 import { useCollaborationStore } from '../store/collaborationStore';
 import { CollaborationDialog } from './CollaborationDialog';
 import { SteamPublishDialog } from './SteamPublishDialog';
 import { isDesktop as runningInDesktopShell } from '../platform';
+import { resolveCreatorEditorMode, useCreatorEditorModeStore } from '../creator/editorModeStore';
+import { CREATOR_ROLES } from '../creator/roles';
+import { CREATOR_GAMEPLAY_KITS } from '../creator/gameplayKits';
 
 /** Parametric trees aren't a SceneObjectKind (they're a component), so they get their own Add entries. */
 const treeTools: Array<{ archetype: TreeArchetype; label: string }> = [
@@ -58,14 +60,20 @@ const treeTools: Array<{ archetype: TreeArchetype; label: string }> = [
   { archetype: 'snag', label: 'Dead Tree' },
 ];
 
-const creationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
-  { kind: 'empty', label: 'Empty', icon: Square },
+const worldCreationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
+  { kind: 'terrain', label: 'Terrain', icon: Mountain },
+  { kind: 'light', label: 'Light', icon: LampDesk },
+];
+
+const objectCreationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
   { kind: 'cube', label: 'Cube', icon: Box },
   { kind: 'sphere', label: 'Sphere', icon: Circle },
   { kind: 'plane', label: 'Plane', icon: Square },
-  { kind: 'terrain', label: 'Terrain', icon: Mountain },
-  { kind: 'light', label: 'Light', icon: LampDesk },
   { kind: 'camera', label: 'Camera', icon: Camera },
+];
+
+const advancedCreationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
+  { kind: 'empty', label: 'Empty', icon: Square },
 ];
 
 function FileMenu() {
@@ -117,6 +125,8 @@ function AddMenu() {
   const createTree = useEditorStore((state) => state.createTree);
   const createReflectionProbe = useEditorStore((state) => state.createReflectionProbe);
   const createInstancedGrid = useEditorStore((state) => state.createInstancedGrid);
+  const createRoleObject = useEditorStore((state) => state.createRoleObject);
+  const createCreatorGameplayKit = useEditorStore((state) => state.createCreatorGameplayKit);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
 
   useEffect(() => {
@@ -135,7 +145,57 @@ function AddMenu() {
       </button>
       {open && (
         <div className="file-menu-popover add-popover">
-          {creationTools.map(({ kind, label, icon: Icon }) => (
+          <div className="file-menu-section creator-add-section">Gameplay</div>
+          {CREATOR_ROLES.map((role) => (
+            <button
+              key={role.id}
+              className="creator-add-role"
+              onClick={() => {
+                setOpen(false);
+                const result = createRoleObject(role.id);
+                if (!result.ok) {
+                  useProjectStore.setState({ toast: { kind: 'error', message: `Could not add ${role.name}.` } });
+                  return;
+                }
+                focusWorkspacePanel('inspector');
+              }}
+              title={role.description}
+            >
+              <span className="creator-add-role-icon" aria-hidden>{role.icon}</span>
+              <span className="creator-add-role-copy">
+                <strong>{role.name}</strong>
+                <small>{role.description}</small>
+              </span>
+            </button>
+          ))}
+
+          <details className="creator-add-kits">
+            <summary>+ Add Gameplay Kit</summary>
+            <div>
+              {CREATOR_GAMEPLAY_KITS.map((kit) => (
+                <button
+                  key={kit.id}
+                  title={kit.description}
+                  onClick={() => {
+                    setOpen(false);
+                    const result = createCreatorGameplayKit(kit.id);
+                    useProjectStore.setState({
+                      toast: result.ok
+                        ? { kind: 'success', message: `${kit.name} added.` }
+                        : { kind: 'error', message: `Could not add ${kit.name}.` },
+                    });
+                    focusWorkspacePanel('viewport');
+                  }}
+                >
+                  <span aria-hidden>{kit.icon}</span>
+                  <span><strong>{kit.name}</strong><small>{kit.description}</small></span>
+                </button>
+              ))}
+            </div>
+          </details>
+
+          <div className="file-menu-section creator-add-section">World</div>
+          {worldCreationTools.map(({ kind, label, icon: Icon }) => (
             <button
               key={kind}
               onClick={() => {
@@ -147,7 +207,47 @@ function AddMenu() {
               <span>{label}</span>
             </button>
           ))}
-          <div className="file-menu-section">Rendering</div>
+          {treeTools.map(({ archetype, label }) => (
+            <button
+              key={archetype}
+              onClick={() => {
+                setOpen(false);
+                createTree(archetype);
+                focusWorkspacePanel('inspector');
+              }}
+            >
+              <TreePine size={14} aria-hidden />
+              <span>{label}</span>
+            </button>
+          ))}
+
+          <div className="file-menu-section creator-add-section">Object</div>
+          {objectCreationTools.map(({ kind, label, icon: Icon }) => (
+            <button
+              key={kind}
+              onClick={() => {
+                setOpen(false);
+                createObject(kind);
+              }}
+            >
+              <Icon size={14} aria-hidden />
+              <span>{label}</span>
+            </button>
+          ))}
+
+          <div className="file-menu-section creator-add-section">Advanced</div>
+          {advancedCreationTools.map(({ kind, label, icon: Icon }) => (
+            <button
+              key={kind}
+              onClick={() => {
+                setOpen(false);
+                createObject(kind);
+              }}
+            >
+              <Icon size={14} aria-hidden />
+              <span>{label}</span>
+            </button>
+          ))}
           <button
             onClick={() => {
               setOpen(false);
@@ -176,22 +276,6 @@ function AddMenu() {
             <Layers size={14} aria-hidden />
             <span>GPU-Instanced Model Grid</span>
           </button>
-          <div className="file-menu-section">Trees</div>
-          {treeTools.map(({ archetype, label }) => (
-            <button
-              key={archetype}
-              onClick={() => {
-                setOpen(false);
-                createTree(archetype);
-                // The Inspector shares a dock group with Scene and Scene is the default active tab, so
-                // without this the new tree's controls are created behind a tab you never thought to click.
-                focusWorkspacePanel('inspector');
-              }}
-            >
-              <TreePine size={14} aria-hidden />
-              <span>{label}</span>
-            </button>
-          ))}
         </div>
       )}
     </div>
@@ -506,6 +590,9 @@ export function Toolbar() {
   const setPlaying = useEditorStore((state) => state.setPlaying);
   const setPlayPaused = useEditorStore((state) => state.setPlayPaused);
   const stepPlayFrame = useEditorStore((state) => state.stepPlayFrame);
+  const authoringMode = useCreatorEditorModeStore((state) => state.authoringMode);
+  const setAuthoringMode = useCreatorEditorModeStore((state) => state.setAuthoringMode);
+  const editorMode = resolveCreatorEditorMode(isPlaying, authoringMode);
   const isDirty = useEditorStore((state) => state.isDirty);
   const projectName = useProjectStore((state) => state.projectName);
   const save = useProjectStore((state) => state.save);
@@ -519,7 +606,42 @@ export function Toolbar() {
     && collaborationRole !== 'host'
     && collaborationStatus !== 'idle';
 
-  // ⌘S / Ctrl+S to save; F6 pause / F7 step during Play.
+  const activateBuild = () => {
+    setAuthoringMode('build');
+    if (useEditorStore.getState().isPlaying) setPlaying(false);
+    restoreWorkspaceLayout();
+    focusWorkspacePanel('viewport');
+  };
+
+  const activatePlay = () => {
+    if (useEditorStore.getState().isPlaying) {
+      activateBuild();
+      return;
+    }
+    // PLAY is runtime state, not another Creator store value. Reset the
+    // authoring destination first so every exit from preview returns to BUILD.
+    setAuthoringMode('build');
+    restoreWorkspaceLayout();
+    focusWorkspacePanel('viewport');
+    setPlaying(true);
+  };
+
+  const activateLogic = () => {
+    if (useEditorStore.getState().isPlaying) setPlaying(false);
+    restoreWorkspaceLayout();
+    setAuthoringMode('logic');
+    // This reuses the live panel when present and only docks it on first use.
+    // No Dockview layout rebuild means the graph/code editor keeps local state.
+    focusWorkspacePanel('scripting');
+  };
+
+  // Runtime entry can also come from the viewport, command palette, or Film
+  // Mode. Keep the post-preview authoring destination consistent in every case.
+  useEffect(() => {
+    if (isPlaying) setAuthoringMode('build');
+  }, [isPlaying, setAuthoringMode]);
+
+  // ⌘S / Ctrl+S to save; Escape returns Play → Build; F6/F7 pause/step.
   useEffect(() => {
     const isTyping = (target: EventTarget | null) => {
       const el = target as HTMLElement | null;
@@ -532,6 +654,17 @@ export function Toolbar() {
         return;
       }
       if (isTyping(event.target)) return;
+      if (event.key === 'Escape') {
+        if (event.defaultPrevented) return;
+        const state = useEditorStore.getState();
+        if (!state.isPlaying) return;
+        event.preventDefault();
+        useCreatorEditorModeStore.getState().setAuthoringMode('build');
+        state.setPlaying(false);
+        restoreWorkspaceLayout();
+        focusWorkspacePanel('viewport');
+        return;
+      }
       if (event.key === 'F6') {
         event.preventDefault();
         const state = useEditorStore.getState();
@@ -549,7 +682,7 @@ export function Toolbar() {
   }, [save]);
 
   return (
-    <header className="toolbar">
+    <header className={`toolbar creator-toolbar creator-mode--${editorMode}`}>
       <div className="brand">
         <Gamepad2 size={18} aria-hidden />
         <div>
@@ -558,26 +691,28 @@ export function Toolbar() {
         </div>
       </div>
 
-      <FileMenu />
-      <ViewMenu onOpenPrefs={() => setPrefsOpen(true)} />
-      <AddMenu />
-      <button
-        className="cmdk-launch"
-        title="Command palette — run any command (⌘K)"
-        onClick={() => window.dispatchEvent(new CustomEvent('nf:open-command-palette'))}
-      >
-        <Command size={14} aria-hidden />
-        <span>K</span>
-      </button>
-      <SceneSwitcher />
+      <div className="creator-toolbar-authoring">
+        <FileMenu />
+        <ViewMenu onOpenPrefs={() => setPrefsOpen(true)} />
+        <AddMenu />
+        <button
+          className="cmdk-launch"
+          title="Command palette — run any command (⌘K)"
+          onClick={() => window.dispatchEvent(new CustomEvent('nf:open-command-palette'))}
+        >
+          <Command size={14} aria-hidden />
+          <span>K</span>
+        </button>
+        <SceneSwitcher />
 
-      <div className="tool-group" aria-label="History">
-        <button className="icon-button" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
-          <Undo2 size={16} aria-hidden />
-        </button>
-        <button className="icon-button" title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
-          <Redo2 size={16} aria-hidden />
-        </button>
+        <div className="tool-group" aria-label="History">
+          <button className="icon-button" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
+            <Undo2 size={16} aria-hidden />
+          </button>
+          <button className="icon-button" title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
+            <Redo2 size={16} aria-hidden />
+          </button>
+        </div>
       </div>
 
       {/* Duplicate / Create Prefab / Delete used to live here. They are all on the object's
@@ -585,7 +720,59 @@ export function Toolbar() {
           three permanent top-bar buttons for them was duplicate surface, and two of them didn't
           even grey out when nothing was selected. */}
 
-      <div className="toolbar-spacer" />
+      <div className="toolbar-spacer toolbar-spacer--before-modes" />
+
+      <div className="creator-mode-switch" role="group" aria-label="Editor mode">
+        <button
+          type="button"
+          className={editorMode === 'build' ? 'active' : undefined}
+          data-creator-mode="build"
+          aria-pressed={editorMode === 'build'}
+          onClick={activateBuild}
+        >
+          Build
+        </button>
+        <button
+          type="button"
+          className={editorMode === 'play' ? 'run-button active play' : 'run-button play'}
+          data-creator-mode="play"
+          aria-pressed={editorMode === 'play'}
+          title={guestProjectLock ? 'Only the collaboration host can run the shared simulation' : editingPrefab ? 'Close the prefab editor to play' : isPlaying ? 'Stop preview and return to Build' : 'Play preview'}
+          disabled={!isPlaying && (editingPrefab || guestProjectLock)}
+          onClick={activatePlay}
+          data-testid="toolbar-play-button"
+        >
+          {isPlaying ? <Square size={12} aria-hidden /> : <Play size={12} aria-hidden />}
+          <span>Play</span>
+        </button>
+        <button
+          type="button"
+          className={editorMode === 'logic' ? 'active' : undefined}
+          data-creator-mode="logic"
+          aria-pressed={editorMode === 'logic'}
+          onClick={activateLogic}
+        >
+          Logic
+        </button>
+      </div>
+
+      {isPlaying && (
+        <div className="creator-play-tools" aria-label="Play controls">
+          <button
+            className={isPlayPaused ? 'icon-button active' : 'icon-button'}
+            title="Pause preview (F6)"
+            aria-label={isPlayPaused ? 'Resume preview' : 'Pause preview'}
+            onClick={() => setPlayPaused(!isPlayPaused)}
+          >
+            <Pause size={15} aria-hidden />
+          </button>
+          <button className="icon-button" title="Step one frame (F7)" aria-label="Step one frame" onClick={() => stepPlayFrame()}>
+            <SkipForward size={15} aria-hidden />
+          </button>
+        </div>
+      )}
+
+      <div className="toolbar-spacer toolbar-spacer--after-modes" />
 
       <BuildProgressOverlay />
       <BuildReportDialog />
@@ -605,32 +792,6 @@ export function Toolbar() {
       <CollaborationToolbarButton open={collaborationOpen} onClick={() => setCollaborationOpen(true)} />
 
       <div className="tool-group" aria-label="Runtime controls">
-        <button
-          className={isPlaying ? 'run-button active' : 'run-button'}
-          title={guestProjectLock ? 'Only the collaboration host can run the shared simulation' : editingPrefab ? 'Close the prefab editor to play' : isPlaying ? 'Stop preview' : 'Play preview'}
-          disabled={editingPrefab || guestProjectLock}
-          onClick={() => setPlaying(!isPlaying)}
-          data-testid="toolbar-play-button"
-        >
-          {isPlaying ? <Square size={16} aria-hidden /> : <Play size={16} aria-hidden />}
-          <span>{isPlaying ? 'Stop' : 'Play'}</span>
-        </button>
-        {/* Pause and frame-step are only meaningful mid-preview — permanently greyed-out buttons
-            are two more things to read past every time you look at the toolbar. */}
-        {isPlaying && (
-          <>
-            <button
-              className={isPlayPaused ? 'icon-button active' : 'icon-button'}
-              title="Pause preview (F6)"
-              onClick={() => setPlayPaused(!isPlayPaused)}
-            >
-              <Pause size={16} aria-hidden />
-            </button>
-            <button className="icon-button" title="Step one frame (F7)" onClick={() => stepPlayFrame()}>
-              <SkipForward size={16} aria-hidden />
-            </button>
-          </>
-        )}
         <RuntimeErrorBadge />
         <ProblemsButton />
         <button

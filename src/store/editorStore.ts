@@ -306,6 +306,14 @@ export {
 import { applySetPlaying } from './editor/playState';
 import { applyLoadProject } from './editor/loadProject';
 import {
+  applyCreateRoleObject,
+  applyMakeObjectRole,
+} from './editor/creatorActions';
+import type { CreateRoleObjectOptions, CreatorRoleActionResult } from '../creator/roles';
+import { applyAddSimpleInteraction, type SimpleInteractionActionResult } from './editor/simpleInteractionActions';
+import type { SimpleInteractionDraft } from '../creator/simpleInteractions';
+import { applyCreateCreatorGameplayKit, type CreatorGameplayKitResult } from './editor/gameplayKitActions';
+import {
   applyAddSkeletonSocket,
   applyAttachBehaviorPreset,
   applyCreateCollectibleCounter,
@@ -987,6 +995,14 @@ export interface EditorState {
   setCameraRigTarget: (id?: string) => void;
   createObject: (kind: SceneObjectKind) => void;
   createObjectWithProps: (kind: SceneObjectKind, options?: CreateObjectOptions) => string;
+  /** Make an existing object a beginner-facing game role using normal physics, variables, and blueprint data. */
+  makeObjectRole: (objectId: string, roleId: string) => CreatorRoleActionResult;
+  /** Create a normal scene object and compose a Creator role onto it. */
+  createRoleObject: (roleId: string, options?: CreateRoleObjectOptions) => CreatorRoleActionResult;
+  /** Compile a beginner interaction into an object-specific, normal editable Blueprint. */
+  addSimpleInteraction: (objectId: string, interaction: SimpleInteractionDraft) => SimpleInteractionActionResult;
+  /** Add a playable multi-object starter by composing normal Creator/store actions. */
+  createCreatorGameplayKit: (kitId: string) => CreatorGameplayKitResult;
   /** Dev/perf utility: batch-spawn N falling dynamic cubes (one set()) to stress the runtime + renderer. */
   spawnStressTest: (count: number) => void;
   deleteObject: (id: string) => void;
@@ -1713,6 +1729,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setCameraRigTarget: (id) => applySetCameraRigTarget(set, id),
   createObject: (kind) => applyCreateObject(set, kind),
   createObjectWithProps: (kind, options = {}) => applyCreateObjectWithProps(set, kind, options),
+  makeObjectRole: (objectId, roleId) => applyMakeObjectRole(set, get, objectId, roleId),
+  createRoleObject: (roleId, options = {}) => applyCreateRoleObject(set, get, roleId, options),
+  addSimpleInteraction: (objectId, interaction) => applyAddSimpleInteraction(set, get, objectId, interaction),
+  createCreatorGameplayKit: (kitId) => applyCreateCreatorGameplayKit(get, kitId),
   spawnStressTest: (count) => applySpawnStressTest(set, count),
   deleteObject: (id) => applyDeleteObject(set, id),
   deleteSelectedObject: () => applyDeleteSelectedObject(set),

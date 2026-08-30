@@ -49,9 +49,6 @@ export function ensureWorkspacePanel(id: string): boolean {
   return true;
 }
 
-/** Layout captured before a maximize — kept separate from localStorage so Play fullscreen never overwrites the user's dock. */
-let layoutBeforeMaximize: unknown | null = null;
-
 export function setWorkspaceApi(api: DockviewApi | null) {
   apiSingleton = api;
 }
@@ -124,37 +121,31 @@ export function closeWorkspacePanel(id: string): void {
   apiSingleton?.getPanel(id)?.api.close();
 }
 
-/** Collapse the dock to just the viewport (immersive Play / modeling). */
+/**
+ * Give the viewport its native Dockview focus mode.
+ *
+ * This intentionally uses the group maximize API instead of clearing/recreating
+ * the dock. Existing panels therefore stay mounted, retain their local state, and
+ * the user's underlying split sizes remain untouched.
+ */
 export function maximizeViewportLayout(): boolean {
-  const api = apiSingleton;
-  if (!api) return false;
-  if (!layoutBeforeMaximize) layoutBeforeMaximize = api.toJSON();
-  api.clear();
-  api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
-  return true;
+  if (!ensureWorkspacePanel('viewport')) return false;
+  const panel = apiSingleton?.getPanel('viewport');
+  if (!panel) return false;
+  panel.api.setActive();
+  panel.api.maximize();
+  return panel.api.isMaximized();
 }
 
-/** Restore the layout captured by maximizeViewportLayout. */
+/** Exit native focus mode without rebuilding the dock or replacing any panels. */
 export function restoreWorkspaceLayout(): boolean {
   const api = apiSingleton;
   if (!api) return false;
-  const snapshot = layoutBeforeMaximize;
-  layoutBeforeMaximize = null;
-  if (snapshot) {
-    try {
-      api.fromJSON(snapshot as Parameters<DockviewApi['fromJSON']>[0]);
-      return true;
-    } catch {
-      // fall through — at least keep a viewport
-    }
-  }
-  if (!api.getPanel('viewport')) {
-    api.clear();
-    api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
-  }
+  if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
+  ensureWorkspacePanel('viewport');
   return true;
 }
 
 export function isViewportLayoutMaximized(): boolean {
-  return layoutBeforeMaximize !== null;
+  return isWorkspacePanelMaximized('viewport');
 }

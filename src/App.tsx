@@ -1,6 +1,5 @@
 import { Profiler, useEffect, type ReactNode } from 'react';
 import { profileRender, resetReactProfile } from './runtime/reactProfile';
-import { AIChatWidget } from './components/AIChatWidget';
 import { Launcher } from './components/Launcher';
 import { useProjectStore } from './store/projectStore';
 import { Toolbar } from './components/Toolbar';
@@ -256,7 +255,6 @@ export default function App() {
       <StatusBar />
       {profiled('console', <RuntimeConsole />)}
       {profiled('varwatch', <VariableWatch />)}
-      {profiled('ai-chat', <AIChatWidget />)}
       <PrefabThumbnailHost />
       <ModelThumbnailHost />
       <PerfOverlay />
