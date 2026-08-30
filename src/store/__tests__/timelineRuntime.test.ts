@@ -31,6 +31,14 @@ const edge = (id: string, source: string, target: string, sourceHandle = 'exec-o
   targetHandle: 'exec-in',
 });
 
+const valueEdge = (id: string, source: string, target: string, targetHandle: string): Edge => ({
+  id,
+  source,
+  target,
+  sourceHandle: 'value-out',
+  targetHandle,
+});
+
 function loadTimelineScene(objects: SceneObject[], timelineData: Partial<NodeForgeNode['data']>, outputs = false) {
   const project = blankProject('Timeline runtime test');
   const nodes: NodeForgeNode[] = [
@@ -153,6 +161,73 @@ describe('curve-driven runtime Timeline', () => {
 
     useEditorStore.getState().tickRuntime(0.5);
     expect(useEditorStore.getState().runtimeLog.filter((line) => line.endsWith(': timeline finished'))).toHaveLength(1);
+  });
+
+  it('captures a cross-object Set Rotation as the start of a following Timeline', () => {
+    const project = blankProject('Cross-object Timeline handoff test');
+    const controller: SceneObject = {
+      id: 'controller',
+      name: 'Controller',
+      kind: 'empty',
+      transform: transform(),
+      script: { blueprintId: BP_ID, graphId: GRAPH_ID, enabled: true },
+    };
+    const limb: SceneObject = {
+      id: 'limb',
+      name: 'Limb',
+      kind: 'cube',
+      parentId: controller.id,
+      transform: transform(),
+    };
+    const nodes: NodeForgeNode[] = [
+      node('start', 'Start'),
+      node('start-pose', 'Set Rotation', { targetObjectId: limb.id }),
+      node('start-pose-value', 'Vector3', { vectorValue: [-30, 0, 0] }),
+      node('swing', 'Timeline', {
+        targetObjectId: limb.id,
+        tweenProperty: 'rotation',
+        vectorValue: [30, 0, 0],
+        numberValue: 1,
+        tweenCurve: timelineCurvePreset('linear'),
+        tweenSpace: 'local',
+        tweenValueMode: 'absolute',
+      }),
+    ];
+    const graph: ProjectGraph = {
+      id: GRAPH_ID,
+      name: 'Cross-object Timeline handoff graph',
+      nodes,
+      edges: [
+        edge('start-set', 'start', 'start-pose'),
+        edge('set-swing', 'start-pose', 'swing'),
+        valueEdge('pose-value', 'start-pose-value', 'start-pose', 'rotation'),
+      ],
+    };
+    project.graphs = [graph];
+    project.blueprints = [{
+      id: BP_ID,
+      name: 'Cross-object Timeline handoff',
+      description: '',
+      graphId: GRAPH_ID,
+      color: '#5bd1ff',
+      variables: [],
+      createdAt: 1,
+    }];
+    project.scenes[0].objects = [controller, limb];
+    useEditorStore.getState().loadProject(project);
+    useEditorStore.getState().setPlaying(true);
+    useEditorStore.getState().tickRuntime(0);
+
+    let liveLimb = useEditorStore.getState().activeScene()!.objects.find((item) => item.id === limb.id)!;
+    let session = Object.values(useEditorStore.getState().runtimeTweens)[0];
+    expect(session.from[0]).toBeCloseTo(-Math.PI / 6, 5);
+    expect(liveLimb.transform.rotation[0]).toBeCloseTo(-Math.PI / 6, 5);
+
+    useEditorStore.getState().tickRuntime(0.5);
+    liveLimb = useEditorStore.getState().activeScene()!.objects.find((item) => item.id === limb.id)!;
+    session = Object.values(useEditorStore.getState().runtimeTweens)[0];
+    expect(session.time).toBeCloseTo(0.5, 5);
+    expect(liveLimb.transform.rotation[0]).toBeCloseTo(0, 5);
   });
 
   it('converts an absolute world-space track through a rotated parent', () => {

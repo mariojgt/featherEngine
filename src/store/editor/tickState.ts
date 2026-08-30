@@ -24,6 +24,13 @@ export const reportedScriptErrors = new Set<string>();
 export const resetReportedScriptErrors = () => reportedScriptErrors.clear();
 
 /**
+ * Objects whose Blueprint Start event has run during this Play session. Unlike the legacy single
+ * `runtimeStarted` flag, this lets prefabs spawned after frame one receive their own Start event.
+ */
+export const startedScriptObjectIds = new Set<string>();
+export const resetStartedScriptObjects = () => startedScriptObjectIds.clear();
+
+/**
  * Per-Play-session map of blueprint NODE id → the error message it last threw, so the node editor can
  * paint an error badge on the exact node that failed (not just a console line). Populated by the per-node
  * try/catch in tickRuntime's executeFrom. A versioned snapshot keeps the object identity STABLE across

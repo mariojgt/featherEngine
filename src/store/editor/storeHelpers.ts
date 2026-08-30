@@ -59,17 +59,12 @@ export const collectSubtree = (objects: SceneObject[], rootId: string): SceneObj
   return objects.filter((object) => ids.has(object.id));
 };
 
-/**
- * Deep-clone a self-contained object tree with fresh ids, remapping every INTERNAL reference
- * (parentId + the cross-object id fields attachment/viewModel hold) from old → new. References that
- * point outside the tree are left untouched. Returns the cloned objects and the new root id.
- */
-export const cloneObjectTree = (
+/** Clone a self-contained object tree through a caller-supplied old → new id map. */
+export const cloneObjectTreeWithIdMap = (
   tree: SceneObject[],
   rootId: string,
-): { objects: SceneObject[]; rootId: string } => {
-  const idMap = new Map<string, string>();
-  tree.forEach((object) => idMap.set(object.id, makeId('obj')));
+  idMap: ReadonlyMap<string, string>,
+): { objects: SceneObject[]; rootId: string; idMap: ReadonlyMap<string, string> } => {
   const remap = (id: string | undefined) => (id && idMap.has(id) ? idMap.get(id)! : id);
   const objects = tree.map((object) => {
     const clone = structuredClone(object) as SceneObject;
@@ -112,9 +107,54 @@ export const cloneObjectTree = (
         loosePartIds: remapAll(v.loosePartIds),
       };
     }
+    // Object-reference variables are ordinary strings at the type level (for example a collectible's
+    // sibling VFX anchor). Exact internal ids still need to follow a cloned tree; normal strings and
+    // references outside the tree deliberately pass through untouched.
+    if (clone.variables) {
+      clone.variables = Object.fromEntries(
+        Object.entries(clone.variables).map(([key, value]) => [
+          key,
+          typeof value === 'string' ? remap(value) ?? value : value,
+        ]),
+      );
+    }
     return clone;
   });
-  return { objects, rootId: idMap.get(rootId)! };
+  return { objects, rootId: idMap.get(rootId)!, idMap };
+};
+
+/**
+ * Deep-clone a self-contained object tree with fresh ids, remapping every INTERNAL reference
+ * (parentId + cross-object component/variable fields) from old → new. References that point outside
+ * the tree are left untouched. The returned idMap is useful when a caller must rewrite related graph
+ * references or stamp prefab provenance onto every clone.
+ */
+export const cloneObjectTree = (
+  tree: SceneObject[],
+  rootId: string,
+): { objects: SceneObject[]; rootId: string; idMap: ReadonlyMap<string, string> } => {
+  const idMap = new Map<string, string>();
+  tree.forEach((object) => idMap.set(object.id, makeId('obj')));
+  return cloneObjectTreeWithIdMap(tree, rootId, idMap);
+};
+
+/**
+ * Stamp one live prefab instance. Every node records both its source prefab and the definition-object
+ * id it came from, which is what live propagation and instance-local Blueprint targeting rely on.
+ */
+export const instantiatePrefabTree = (
+  prefab: Prefab,
+): { objects: SceneObject[]; rootId: string; idMap: ReadonlyMap<string, string> } => {
+  const cloned = cloneObjectTree(prefab.objects, prefab.rootId);
+  const prefabObjectByLiveId = new Map<string, string>();
+  for (const [prefabObjectId, liveObjectId] of cloned.idMap) {
+    prefabObjectByLiveId.set(liveObjectId, prefabObjectId);
+  }
+  for (const object of cloned.objects) {
+    object.prefabSourceId = prefab.id;
+    object.prefabObjectId = prefabObjectByLiveId.get(object.id);
+  }
+  return cloned;
 };
 
 export const deleteWithChildren = (objects: SceneObject[], id: string) => {

@@ -1024,9 +1024,9 @@ export interface EditorState {
   /** Re-parent `id` under `parentId` (or detach to scene root when undefined). Cycle-safe. */
   setObjectParent: (id: string, parentId?: string) => void;
   // --- Prefabs (reusable objects) ---
-  /** Capture an object + all its descendants as a reusable prefab in the browser. Returns the prefab id. */
+  /** Capture an object subtree and turn the authored hierarchy into its first linked instance. */
   createPrefabFromObject: (objectId: string, name?: string, folderId?: string) => string | undefined;
-  /** Stamp an independent copy of a prefab into the active scene (fresh ids). Returns the new root object id. */
+  /** Place a fresh, live-linked prefab instance in the active scene. Returns its new root object id. */
   instantiatePrefab: (prefabId: string, options?: { position?: Vector3Tuple; parentId?: string }) => string | undefined;
   /** Open a prefab in the editor: swaps the active scene to a transient edit scene built from it. */
   openPrefabEditor: (prefabId: string) => void;
@@ -1034,7 +1034,7 @@ export interface EditorState {
   closePrefabEditor: (save?: boolean) => void;
   renamePrefab: (id: string, name: string) => void;
   deletePrefab: (id: string) => void;
-  /** Push a prefab-instance's current edits back into its source prefab (affects FUTURE instances only).
+  /** Push a prefab-instance's current edits into its source and propagate them to other linked instances.
    * `objectId` must be an instance root (carries prefabSourceId). Returns the updated prefab id. */
   applyInstanceToPrefab: (objectId: string) => string | undefined;
   /** Discard a prefab-instance's local edits and replace its subtree with a fresh copy of the prefab,

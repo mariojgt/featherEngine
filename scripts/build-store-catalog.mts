@@ -1151,6 +1151,7 @@ const TEMPLATE_THUMBNAILS = {
   'template-cinematic': ['#8C7BFF', '#241C52', '\u{1F3AC}'],
   'template-meadows': ['#63C46A', '#1E4B2C', '\u{1F33F}'],
   'template-cube-realm': ['#3DD6C0', '#0E4A45', '\u{1F9CA}'],
+  'template-platformer': ['#FF7196', '#236784', '\u{2600}\u{FE0F}'],
   'template-physics-lab': ['#7A8CFF', '#232C5C', '\u{1F9EA}'],
   'template-timeline-mechanics': ['#40DFFF', '#10283A', '\u{23F1}'],
   'template-spline-studio': ['#9B7BFF', '#241A38', '\u{2728}'],

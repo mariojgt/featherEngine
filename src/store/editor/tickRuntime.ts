@@ -23,7 +23,7 @@ import {
   indexTableRowsByKey,
   indexVariablesById,
   indexVariablesByName,
-  cloneObjectTree,
+  instantiatePrefabTree,
   deleteWithChildren,
   effectLife,
   streamedOutIds,
@@ -64,7 +64,7 @@ import { ProjectileSetup, axisIndex, clearSaveSlot, compareValues, graphValueToS
 import { SURFACE_DUST, checkpointIndexForName, crashDebrisObject, headingFromEuler, keepArray, keepRecord, literalValueForType, nextWaterImpactId, rotateLocalVector, tagTokens, waterSurfaceHeight } from './runtimeHelpers';
 import { buildContactIndex, contactMatches, contactOthers, contactTouches, firstContactEvent, firstContactOther, toIdSet, toLowerCaseSet } from './runtimeIndexes';
 import { blueprintId, graphId } from './starterProject';
-import { aiFeelerExclude, blueprintVarTypeCache, detachedParts, fillObjectIdMap, impactAudioCooldown, nodeErrorsSnapshot, pendingPartKicks, pendingPartRestores, prevTransformEntryPool, recordNodeError, reportedScriptErrors, tickMappedById, tickPrevTransforms, tickRemainingById, tickResolvedById, tickVehicleById } from './tickState';
+import { aiFeelerExclude, blueprintVarTypeCache, detachedParts, fillObjectIdMap, impactAudioCooldown, nodeErrorsSnapshot, pendingPartKicks, pendingPartRestores, prevTransformEntryPool, recordNodeError, reportedScriptErrors, resetStartedScriptObjects, startedScriptObjectIds, tickMappedById, tickPrevTransforms, tickRemainingById, tickResolvedById, tickVehicleById } from './tickState';
 import { inputTypeForHandle } from './wireTypes';
 
 /** One Call Function activation: the evaluated A/B/C arguments + the value a Return node set. */
@@ -177,6 +177,31 @@ export const applyRuntimeTick = (
       beginPerceptionFrame(); // advance the AI perception clock (throttled line-of-sight cache)
       const activeObjects = selectActiveObjects(state);
       const activeObjectById = indexSceneObjectsById(activeObjects);
+      // Blueprint object references authored inside a prefab point at DEFINITION ids. Resolve those ids
+      // through the owning placed instance, scoped by instance root so two Pips animate their own limbs
+      // instead of whichever copy happens to appear first in the scene.
+      const prefabInstanceRootByObjectId = new Map<string, string>();
+      const prefabObjectToLiveByRoot = new Map<string, Map<string, string>>();
+      for (const candidate of activeObjects) {
+        if (!candidate.prefabSourceId || !candidate.prefabObjectId) continue;
+        let root = candidate;
+        const visited = new Set<string>([candidate.id]);
+        while (root.parentId) {
+          const parent = activeObjectById.get(root.parentId);
+          if (!parent || parent.prefabSourceId !== candidate.prefabSourceId || visited.has(parent.id)) break;
+          visited.add(parent.id);
+          root = parent;
+        }
+        prefabInstanceRootByObjectId.set(candidate.id, root.id);
+        const local = prefabObjectToLiveByRoot.get(root.id) ?? new Map<string, string>();
+        local.set(candidate.prefabObjectId, candidate.id);
+        prefabObjectToLiveByRoot.set(root.id, local);
+      }
+      const resolvePrefabObjectReference = (ownerId: string, rawId: string | undefined): string | undefined => {
+        if (!rawId || activeObjectById.has(rawId)) return rawId;
+        const rootId = prefabInstanceRootByObjectId.get(ownerId);
+        return (rootId ? prefabObjectToLiveByRoot.get(rootId)?.get(rawId) : undefined) ?? rawId;
+      };
       // These index Maps are WeakMap-cached on their source array identity, so during
       // Play (when the arrays don't change) the same Map is reused every frame instead
       // of being rebuilt — see indexers defined near the top of this module.
@@ -866,7 +891,7 @@ export const applyRuntimeTick = (
       const eventRootFires = (node: NodeForgeNode, objectId: string): boolean => {
         switch (node.data.nodeKind) {
           case 'event.start':
-            return !state.runtimeStarted;
+            return !startedScriptObjectIds.has(objectId);
           case 'event.update':
             return Number(node.data.numberValue ?? 0) > 0 ? firedTimers.has(`${objectId}:${node.id}`) : true;
           case 'event.keyDown':
@@ -882,17 +907,17 @@ export const applyRuntimeTick = (
             return firedEvents.has(name) || (incomingActorEvents[objectId]?.includes(name) ?? false);
           }
           case 'event.collisionEnter':
-            return contactMatches(priorCollisionIndex, objectId, node.data.otherObjectId);
+            return contactMatches(priorCollisionIndex, objectId, resolvePrefabObjectReference(objectId, node.data.otherObjectId));
           case 'event.collisionExit':
-            return contactMatches(priorCollisionExitIndex, objectId, node.data.otherObjectId);
+            return contactMatches(priorCollisionExitIndex, objectId, resolvePrefabObjectReference(objectId, node.data.otherObjectId));
           case 'event.triggerEnter':
-            return contactMatches(priorTriggerIndex, objectId, node.data.otherObjectId);
+            return contactMatches(priorTriggerIndex, objectId, resolvePrefabObjectReference(objectId, node.data.otherObjectId));
           case 'event.triggerExit':
-            return contactMatches(priorTriggerExitIndex, objectId, node.data.otherObjectId);
+            return contactMatches(priorTriggerExitIndex, objectId, resolvePrefabObjectReference(objectId, node.data.otherObjectId));
           case 'event.collisionStay':
-            return contactMatches(priorCollisionStayIndex, objectId, node.data.otherObjectId);
+            return contactMatches(priorCollisionStayIndex, objectId, resolvePrefabObjectReference(objectId, node.data.otherObjectId));
           case 'event.triggerStay':
-            return contactMatches(priorTriggerStayIndex, objectId, node.data.otherObjectId);
+            return contactMatches(priorTriggerStayIndex, objectId, resolvePrefabObjectReference(objectId, node.data.otherObjectId));
           case 'event.interact':
             return interactedThisFrame.has(objectId);
           case 'event.receiveDamage':
@@ -1126,7 +1151,10 @@ export const applyRuntimeTick = (
             }
 
             case 'query.grounded': {
-              return position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
+              // Physics knows about authored platforms, moving bodies and terrain. The old height-only
+              // fallback made a character with a deliberately low gap floor (for example Cloudstep's
+              // groundLevel=-20) report "airborne" while standing on every real island.
+              return runtimeGroundedSet.has(object.id) || position[1] <= (object.character?.groundLevel ?? 0) + 0.05;
             }
 
             case 'query.getTimeOfDay': {
@@ -1406,7 +1434,7 @@ export const applyRuntimeTick = (
 
             case 'animator.getParam': {
               // Read the live animator parameter (previous frame) — from self, or another object's animator.
-              const targetId = node.data.targetObjectId || object.id;
+              const targetId = resolveTarget(node.data.targetObjectId) || object.id;
               const targetObj = targetId === object.id ? object : activeObjectById.get(targetId);
               const controller = targetObj?.animator?.controllerId ? controllerById.get(targetObj.animator.controllerId) : undefined;
               const controllerRuntime = controller ? getAnimatorControllerRuntime(controller) : undefined;
@@ -1417,7 +1445,7 @@ export const applyRuntimeTick = (
             }
 
             case 'animator.getState': {
-              const targetId = node.data.targetObjectId || object.id;
+              const targetId = resolveTarget(node.data.targetObjectId) || object.id;
               const targetObj = targetId === object.id ? object : activeObjectById.get(targetId);
               const controller = targetObj?.animator?.controllerId ? controllerById.get(targetObj.animator.controllerId) : undefined;
               const controllerRuntime = controller ? getAnimatorControllerRuntime(controller) : undefined;
@@ -1452,7 +1480,7 @@ export const applyRuntimeTick = (
             // Cast's value-out ("As <Blueprint>"): the validated actor id, or undefined if it isn't that blueprint.
             case 'logic.cast': {
               const wired = valueInput(node, 'object');
-              const targetId = (typeof wired === 'string' && wired) || resolveTarget(node.data.targetObjectId) || object.id;
+              const targetId = (typeof wired === 'string' && resolveTarget(wired)) || resolveTarget(node.data.targetObjectId) || object.id;
               const targetObj = activeObjectById.get(targetId);
               return targetObj && (!node.data.castBlueprintId || targetObj.script?.blueprintId === node.data.castBlueprintId)
                 ? targetId
@@ -1828,14 +1856,14 @@ export const applyRuntimeTick = (
             if (raw === '$self') return object.id;
             if (raw === '$player') return playerId;
             if (raw === '$cast') return castTargetId;
-            return raw;
+            return resolvePrefabObjectReference(object.id, raw);
           };
 
           // The object a Get/Set Object Var acts on: a wired "target" reference (a Cast's "As" pin) wins, then
           // the targetObjectId sentinel/id, then self.
           const objectVarTarget = (node: NodeForgeNode): string => {
             const wired = valueInput(node, 'target');
-            return (typeof wired === 'string' && wired ? wired : resolveTarget(node.data.targetObjectId)) || object.id;
+            return (typeof wired === 'string' && wired ? resolveTarget(wired) : resolveTarget(node.data.targetObjectId)) || object.id;
           };
 
           type RuntimeTimelineSession = (typeof nextTweens)[string];
@@ -1886,19 +1914,24 @@ export const applyRuntimeTick = (
               property === 'rotation'
                 ? [toVector[0] * degreesToRadians, toVector[1] * degreesToRadians, toVector[2] * degreesToRadians]
                 : toVector;
+            const pendingTargetTransform = nextTransforms[targetId];
             const targetLocal =
               targetId === object.id
                 ? { position, rotation, scale }
-                : targetObject!.transform;
-            // Include self mutations made earlier in this exec chain when capturing a world-space start.
+                : {
+                    position: pendingTargetTransform?.position ?? targetObject!.transform.position,
+                    rotation: pendingTargetTransform?.rotation ?? targetObject!.transform.rotation,
+                    scale: pendingTargetTransform?.scale ?? targetObject!.transform.scale,
+                  };
+            // Include mutations made earlier in this exec chain when capturing either a local- or
+            // world-space start. Cross-object Set Transform writes are queued until the end of the
+            // object pass, so reading activeObjectById alone would capture the stale authored pose.
             const sourceTransform =
               space === 'world'
                 ? worldTransformOf(
-                    targetId === object.id
-                      ? activeObjects.map((candidate) =>
-                          candidate.id === targetId ? { ...candidate, transform: targetLocal } : candidate,
-                        )
-                      : activeObjects,
+                    activeObjects.map((candidate) =>
+                      candidate.id === targetId ? { ...candidate, transform: targetLocal } : candidate,
+                    ),
                     targetId,
                   )
                 : targetLocal;
@@ -1940,7 +1973,7 @@ export const applyRuntimeTick = (
             // sentinel. On success, record it as "$cast" AND expose it from this node's value-out (the "As" pin).
             if (node.data.nodeKind === 'logic.cast') {
               const wired = valueInput(node, 'object');
-              const targetId = (typeof wired === 'string' && wired) || resolveTarget(node.data.targetObjectId) || object.id;
+              const targetId = (typeof wired === 'string' && resolveTarget(wired)) || resolveTarget(node.data.targetObjectId) || object.id;
               const targetObj = activeObjectById.get(targetId);
               const ok = Boolean(targetObj) && (!node.data.castBlueprintId || targetObj!.script?.blueprintId === node.data.castBlueprintId);
               if (ok) castTargetId = targetId;
@@ -1980,7 +2013,10 @@ export const applyRuntimeTick = (
             // it again while playing is ignored; reaching it after a stop/completion captures a fresh session.
             if (node.data.nodeKind === 'action.tweenProperty') {
               const existing = nextTweens[timelineSessionKey(node)];
-              if (!existing?.playing) armTimeline(node);
+              if (!existing?.playing) {
+                const session = armTimeline(node);
+                if (session) queueTimelinePose(session);
+              }
               return true;
             }
 
@@ -2479,7 +2515,7 @@ export const applyRuntimeTick = (
 
             if (node.data.nodeKind === 'action.burstParticles') {
               // Spit a one-shot burst from the target's authored emitter (e.g. an explosion on hit).
-              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const target = objectVarTarget(node);
               const count = Math.max(1, Math.round(toNumber(valueInput(node, 'count', Number(node.data.numberValue ?? 16)))));
               sendParticleCommand(target, { type: 'burst', count });
             }
@@ -2561,7 +2597,7 @@ export const applyRuntimeTick = (
 
             if (node.data.nodeKind === 'action.setParticlesEmitting') {
               // Start/stop a continuous emitter (e.g. ignite a torch, turn on a smoke plume).
-              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const target = objectVarTarget(node);
               const on = toBoolean(valueInput(node, 'on', node.data.booleanValue ?? true));
               sendParticleCommand(target, { type: 'emit', on });
             }
@@ -2599,7 +2635,7 @@ export const applyRuntimeTick = (
                   Array.isArray(loc) && loc.length === 3
                     ? [Number(loc[0]) || 0, Number(loc[1]) || 0, Number(loc[2]) || 0]
                     : ([...position] as Vector3Tuple);
-                const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
+                const { objects: clones, rootId } = instantiatePrefabTree(prefab);
                 for (const clone of clones) {
                   spawned.push(
                     clone.id === rootId
@@ -2623,7 +2659,7 @@ export const applyRuntimeTick = (
             }
 
             if (node.data.nodeKind === 'action.destroyObject') {
-              destroyedIds.add(node.data.targetObjectId || object.id);
+              destroyedIds.add(objectVarTarget(node));
             }
 
             if (node.data.nodeKind === 'action.fractureObject') {
@@ -2841,14 +2877,14 @@ export const applyRuntimeTick = (
 
             if (node.data.nodeKind === 'action.setRagdoll') {
               // Default On; wire/author a boolean into `on` to turn it off.
-              const target = node.data.targetObjectId || object.id;
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
               const on = toBoolean(valueInput(node, 'on', node.data.booleanValue ?? true));
               setRagdoll(target, on);
             }
 
             if (node.data.nodeKind === 'action.setVisible') {
               // Hide/show the owner (or Target) — e.g. holster the inactive weapon.
-              const target = node.data.targetObjectId || object.id;
+              const target = resolveTarget(node.data.targetObjectId) || object.id;
               const visible = toBoolean(valueInput(node, 'visible', node.data.visible ?? true));
               if (visible) nextHidden.delete(target);
               else nextHidden.add(target);
@@ -2964,8 +3000,9 @@ export const applyRuntimeTick = (
               }
               const speed = toNumber(valueInput(node, 'speed', node.data.projectileSpeed ?? 20));
               const damage = toNumber(valueInput(node, 'damage', node.data.projectileDamage ?? 25));
-              const template = node.data.projectileTemplateId
-                ? activeObjectById.get(node.data.projectileTemplateId)
+              const templateId = resolveTarget(node.data.projectileTemplateId);
+              const template = templateId
+                ? activeObjectById.get(templateId)
                 : undefined;
               const setup: ProjectileSetup = {
                 size: node.data.projectileSize,
@@ -3161,6 +3198,8 @@ export const applyRuntimeTick = (
               }
             }
           }
+
+          startedScriptObjectIds.add(object.id);
 
           return changed
             ? {
@@ -4018,6 +4057,10 @@ export const applyRuntimeTick = (
         ]);
       }
 
+      // Rapier initializes asynchronously on the first Play of a browser session. Keep character roots at
+      // their authored pose during that short window: applying gravity before any colliders exist lets a
+      // floorless/gap-based course fall through its spawn platform before the world can resolve contact.
+      const characterPhysics = getActivePhysics();
       const movedObjects = mappedObjects.map((object) => {
         // A deactivated object skips the character/vehicle movement passes entirely.
         if (nextDisabled.has(object.id)) return object;
@@ -4118,6 +4161,10 @@ export const applyRuntimeTick = (
           return { ...object, transform: { ...object.transform, position: p, rotation: r } };
         }
         if (!object.character?.enabled) return object;
+        if (!characterPhysics?.hasCharacter(object.id)) {
+          nextVelocities[object.id] = [0, 0, 0];
+          return object;
+        }
         // Ragdolling: physics owns the bones; the controller must not drive motion (it goes limp).
         // Track the limp body's pelvis so the follow camera stays on it instead of a frozen point.
         if (isRagdoll(object.id)) {
@@ -4128,7 +4175,7 @@ export const applyRuntimeTick = (
         const cc = resolveCharacter(object.character);
         // Scripted: a blueprint (Move/Jump nodes) drives horizontal motion + jump — Unreal Event-Graph
         // style. Auto (no blueprint): the built-in WASD/Space drives it. Vertical physics runs either way.
-        const scripted = Boolean(object.script?.enabled);
+        const scripted = Boolean(object.script?.enabled && !cc.autoInputWithScript);
         const position = [...object.transform.position] as Vector3Tuple;
         const rotation = [...object.transform.rotation] as Vector3Tuple;
         // The walkable floor under this character: the flat groundLevel OR the terrain surface beneath it,
@@ -5908,7 +5955,7 @@ export const applyRuntimeTick = (
               if (action.prefabId) {
                 const prefab = prefabById.get(action.prefabId);
                 if (prefab) {
-                  const { objects: clones, rootId } = cloneObjectTree(prefab.objects, prefab.rootId);
+                  const { objects: clones, rootId } = instantiatePrefabTree(prefab);
                   const root = clones.find((object) => object.id === rootId);
                   if (root && action.position) root.transform.position = action.position;
                   allObjects = [...allObjects, ...clones];
@@ -6213,6 +6260,7 @@ export const applyRuntimeTick = (
           clearTransformBuffer();
           resetReplayRecorder(freshObjects); // rebuild the replay slot table for the new scene's objects
           clearPerception();
+          resetStartedScriptObjects();
           publishTransforms(freshObjects);
           const autoplay = targetScene.cinematics?.find((cinematic) => cinematic.autoplay);
           return {

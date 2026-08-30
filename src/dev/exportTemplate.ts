@@ -26,6 +26,7 @@ type TemplateKey =
   | 'cinematic'
   | 'meadows'
   | 'cube-realm'
+  | 'platformer'
   | 'physics-lab'
   | 'timeline-mechanics'
   | 'spline-studio';
@@ -111,6 +112,14 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     description: 'An action slice with a combo system, day cycle and a shrine to find.',
     tags: ['template', 'world', 'action'],
     build: async () => (await import('../project/cubeRealmTemplate')).createCubeRealmTemplate(),
+  },
+  platformer: {
+    slug: 'template-platformer',
+    title: 'Cloudstep Garden',
+    description:
+      'A bright primitive-built 3D platformer with a reusable live-linked Pip character prefab, expressive cartoon motion and VFX, moving clouds, Sun Seeds, three-heart checkpoint recovery and a polished responsive HUD.',
+    tags: ['template', 'world', 'platformer', 'arcade', 'primitives', 'prefab', 'character'],
+    build: async () => (await import('../project/platformerTemplate')).createPlatformerTemplate(),
   },
 };
 

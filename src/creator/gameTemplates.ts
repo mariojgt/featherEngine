@@ -44,9 +44,9 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
   {
     id: 'platformer',
     label: 'Platformer',
-    description: 'A playable character, moving platforms, collectibles and score HUD.',
+    description: 'A stylized sky course with an animated cartoon hero, moving clouds, collectibles and a polished HUD.',
     icon: '🏃',
-    gameplayKitId: 'platformer-starter',
+    templateSlug: 'template-platformer',
   },
   {
     id: 'blank',

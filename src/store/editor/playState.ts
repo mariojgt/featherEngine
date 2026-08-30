@@ -6,7 +6,7 @@ import {
   resetStreamingCache,
   selectActiveObjects,
 } from './storeHelpers';
-import { clearImpactAudioCooldown, clearNodeErrors, detachedParts, pendingPartKicks, pendingPartRestores, prevTransformEntryPool, resetReportedScriptErrors } from './tickState';
+import { clearImpactAudioCooldown, clearNodeErrors, detachedParts, pendingPartKicks, pendingPartRestores, prevTransformEntryPool, resetReportedScriptErrors, resetStartedScriptObjects } from './tickState';
 import { initialCinematicCamera, initialCinematicFade } from './cinematics';
 import { makeRuntimeVariableMap, makeRuntimeVelocityMap, seedBlueprintInstanceVars } from './objectFactory';
 import { scanBlueprintGraphProblems } from './graphDiagnostics';
@@ -33,6 +33,7 @@ export const applySetPlaying = (
       if (isPlaying && state.editingPrefabId) return state;
       // Fresh run = fresh error reporting: a script fixed since the last run should report again.
       resetReportedScriptErrors();
+      resetStartedScriptObjects();
       clearImpactAudioCooldown();
       clearNodeErrors();
       if (isPlaying) {

@@ -46,9 +46,9 @@ export const PREFAB_EDIT_SCENE_ID = '__prefab_edit__';
 /**
  * A reusable object template ("prefab"): a captured object subtree — a root plus all its
  * descendants — with every component (transform, renderer, physics, script, animator, children…)
- * baked in. Instantiating one stamps an independent copy into a scene; it is a one-time stamp, not
- * a live link, so later edits to the prefab don't touch already-placed instances. Lives in the
- * project browser alongside blueprints/materials and is editable in its own viewport.
+ * baked in. The captured hierarchy becomes the first linked instance, and every later instance keeps
+ * a definition-object link so prefab edits propagate while intentional per-instance overrides survive.
+ * Lives in the project browser alongside blueprints/materials and is editable in its own viewport.
  */
 export interface Prefab {
   id: string;

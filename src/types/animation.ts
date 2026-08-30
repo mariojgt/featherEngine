@@ -264,6 +264,12 @@ export interface AnimatorController {
  */
 export interface CharacterControllerComponent {
   enabled: boolean;
+  /**
+   * Keep the built-in movement/key bindings active when this character also owns a Blueprint.
+   * Useful for cosmetic-only graphs (jump puffs, landing squash, camera juice) that should not replace
+   * the controller's normal input path. Defaults to false for backwards compatibility.
+   */
+  autoInputWithScript?: boolean;
   /** Ground move speed (units/sec). */
   moveSpeed: number;
   /** Speed multiplier while the sprint key (Shift) is held. */
@@ -474,4 +480,3 @@ export interface CharacterControllerComponent {
   /** Move relative to where the camera faces (third-person feel) vs. fixed world axes. */
   cameraRelativeMovement: boolean;
 }
-

@@ -8,13 +8,13 @@ describe('Creator quick starts', () => {
     expect(findCreatorQuickStart('top-down-action')?.templateSlug).toBe('template-cube-realm');
   });
 
-  it('maps Platformer to the Creator kit while keeping Blank explicit', () => {
+  it('maps Platformer to its full starter world while keeping Blank explicit', () => {
     const platformer = findCreatorQuickStart('platformer');
     const blank = findCreatorQuickStart('blank');
 
     expect(platformer?.comingSoon).toBeUndefined();
-    expect(platformer?.gameplayKitId).toBe('platformer-starter');
-    expect(platformer?.templateSlug).toBeUndefined();
+    expect(platformer?.gameplayKitId).toBeUndefined();
+    expect(platformer?.templateSlug).toBe('template-platformer');
     expect(blank?.comingSoon).toBeUndefined();
     expect(blank?.templateSlug).toBeUndefined();
     expect(new Set(CREATOR_QUICK_STARTS.map((entry) => entry.id)).size).toBe(CREATOR_QUICK_STARTS.length);

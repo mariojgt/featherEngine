@@ -53,6 +53,7 @@ import { createPhysicsLabTemplate } from '../project/physicsLabTemplate';
 import { createTimelineShowcaseTemplate } from '../project/timelineShowcaseTemplate';
 import { createSimRacingTemplate } from '../project/simRacingTemplate';
 import { createSplineStudioTemplate } from '../project/splineStudioTemplate';
+import { createPlatformerTemplate } from '../project/platformerTemplate';
 import { createStoryboardCinematic, polishCinematicLook, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, findRenderPreset, lightingPresetIds, materialPresetIds, materialPresetPatch, renderPresetIds } from '../three/presets';
@@ -3196,6 +3197,16 @@ const rawEngineTools = {
     },
   }),
 
+  create_platformer_template: tool({
+    description:
+      'Build the asset-free "Cloudstep Garden" 3D platformer starter. It uses only editable primitives: Pip is an articulated cartoon hero with idle/run/jump/fall/hurt/defeat poses on a tuned third-person controller; the floating sky course has moving clouds, ten Sun Seed collectibles, a bounce flower, bop-able garden critters, three-heart checkpoint recovery, a smiling-sun goal, bright toon materials and a responsive bound HUD. Use for Mario-like platformer requests while keeping the character and visual identity original. Returns the player controller objectId.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createPlatformerTemplate();
+      return `Created Cloudstep Garden — animated Pip player objectId ${id}. Press Play: WASD move, Space jump, Shift dash and LMB bop. Collect ten Sun Seeds, dodge or bop the Grumble Buds, touch the Sky Garden checkpoint and reach Sunny at the crown; every joint, body part, pose Blueprint, island, material and HUD card remains editable.`;
+    },
+  }),
+
   create_driving_template: tool({
     description:
       'Build a PHYSICS-FIRST apocalyptic driving sandbox showcasing real Rapier forces, an editable Film Mode car intro, atmospheric trigger cinematics, and visible visual-scripting logic. ONE survivor car (dynamic convex-hull body, mass 9) on a flat ashen wasteland under a dusk ember sky + thick haze fog + bloom — wrecks, broken pillars, burning oil drums, knockable barrels. WASD drives via the auto vehicle pass (tire grip/slip, stable wheel anchors, fading tire marks, wheels/audio/lights/camera/suspension); on top, FOUR cooperating chains in the Survivor Controller blueprint: (1) Update → Drive (base motion), (2) SHIFT → action.applyImpulse Local +Z 60 (real Rapier nitro in car-forward space), (3) H → playSound + action.applyTorque Y 8 (donut spin demo via the Apply Torque node), (4) Collision Enter → cameraShake + action.applyImpulse +Y 9 (mass-scaled recoil hop). The Game Start blueprint plays the editable Survivor Car Intro cinematic (letterbox/grade/fade + low orbit into gameplay handoff). THREE cinematic trigger zones (CRASH SITE / RADIATION ZONE / FINAL BEACON) — each a glowing trigger pad + a tall accent beacon — fire a per-zone blueprint that uses action.setEnvironment to crossfade sky/fog/sun into the zone palette, applies a vertical Rapier impulse to $trigger (the toucher) for a shockwave hop, shows a styled banner, ticks Objective, dwells via logic.delay, then restores the env keys from BASE_ENV. HUD: bottom speedometer + WEIGHT chip, top-left objective checklist (ternary on Objective), top-right waypoint chip. Returns the car objectId.',
@@ -3827,7 +3838,7 @@ const rawEngineTools = {
 
   create_prefab: tool({
     description:
-      'Capture an object tree as a reusable prefab. Returns prefabId; instantiate_prefab stamps copies later.',
+      'Capture an object tree as a reusable prefab and convert the authored hierarchy into its first linked instance. Returns prefabId; instantiate_prefab places more linked copies.',
     inputSchema: z.object({ objectId: z.string(), name: z.string().optional(), folderId: z.string().optional() }),
     execute: async ({ objectId, name, folderId }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
@@ -4036,7 +4047,7 @@ const rawEngineTools = {
 
   instantiate_prefab: tool({
     description:
-      'Stamp an independent copy of a prefab into the active scene (fresh ids). Returns the new root objectId. Instances are one-time stamps — editing the prefab later does not change them. Optionally place it at a position or nest it under a parent.',
+      'Place a live-linked copy of a prefab into the active scene (fresh ids). Returns the new root objectId. Later prefab edits propagate to untouched fields while per-instance overrides survive. Optionally place it at a position or nest it under a parent.',
     inputSchema: z.object({ prefabId: z.string(), position: vec3.optional(), parentId: z.string().optional() }),
     execute: async ({ prefabId, position, parentId }) => {
       if (!findPrefab(prefabId)) return `No prefab with id ${prefabId}.`;
@@ -4063,7 +4074,7 @@ const rawEngineTools = {
 
   close_prefab: tool({
     description:
-      'Close the prefab editor. save:true (default) writes your edits back into the prefab (and all future instances); save:false discards them. Returns to the scene you were in before.',
+      'Close the prefab editor. save:true (default) writes edits into the prefab and propagates them to every linked placed instance while preserving overrides; save:false discards them. Returns to the prior scene.',
     inputSchema: z.object({ save: z.boolean().optional() }),
     execute: async ({ save }) => {
       if (!store().editingPrefabId) return `Not currently editing a prefab.`;
@@ -4094,7 +4105,7 @@ const rawEngineTools = {
 
   apply_instance_to_prefab: tool({
     description:
-      "Push a prefab-INSTANCE's current edits back into its source prefab so FUTURE instances inherit them. Pass the instance's root objectId (one whose snapshot prefabSourceId is set). Other already-placed instances are NOT changed (stamps are independent). Returns the updated prefabId.",
+      "Push a prefab INSTANCE's current edits into its source and propagate them to every other linked instance while preserving their overrides. Pass the instance ROOT objectId, never a tagged child. Returns the updated prefabId.",
     inputSchema: z.object({ objectId: z.string() }),
     execute: async ({ objectId }) => {
       const object = findObject(objectId);

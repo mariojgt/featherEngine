@@ -498,6 +498,38 @@
       }
     },
     {
+      "id": "pkg-feather-template-platformer",
+      "slug": "template-platformer",
+      "title": "Cloudstep Garden",
+      "description": "A bright primitive-built 3D platformer with a reusable live-linked Pip character prefab, expressive cartoon motion and VFX, moving clouds, Sun Seeds, three-heart checkpoint recovery and a polished responsive HUD.",
+      "author": "Feather",
+      "version": "1.0.0",
+      "kind": "project",
+      "tags": [
+        "template",
+        "world",
+        "platformer",
+        "arcade",
+        "primitives",
+        "prefab",
+        "character"
+      ],
+      "license": "CC0-1.0",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjRkY3MTk2Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMjM2Nzg0Ii8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPuKYgO+4jzwvdGV4dD48L3N2Zz4=",
+      "sizeBytes": 93733,
+      "downloadUrl": "packages/projects/template-platformer.nfpack",
+      "engineVersion": "0.8.0",
+      "contents": {
+        "prefabs": 1,
+        "materials": 9,
+        "blueprints": 15,
+        "assets": 0,
+        "scenes": 1,
+        "uiDocuments": 1
+      }
+    },
+    {
       "id": "pkg-feather-template-sim-racing",
       "slug": "template-sim-racing",
       "title": "Sim Racing",

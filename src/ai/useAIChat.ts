@@ -247,6 +247,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built Timeline Mechanics showcase';
     case 'create_spline_studio_template':
       return 'Built Spline Studio showcase';
+    case 'create_platformer_template':
+      return 'Built Cloudstep Garden platformer';
     case 'create_cinematic':
       return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'inspect_cinematic':

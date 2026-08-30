@@ -26,6 +26,73 @@ export const prefabWouldCycle = (prefabs: Prefab[], candidateId: string, hostId:
 export const PREFAB_STRUCT_KEYS = new Set(['id', 'parentId', 'prefabSourceId', 'prefabObjectId']);
 export const prefabFieldEqual = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+interface MergedField {
+  present: boolean;
+  value?: unknown;
+}
+
+/**
+ * Leaf-aware three-way merge. Components such as transform and renderer are records, so overriding
+ * one leaf (for example renderer.color) must not block unrelated prefab edits (materialId/shadows).
+ * Arrays remain atomic because their ordering is meaningful throughout the engine.
+ */
+const mergePrefabField = (
+  oldHas: boolean,
+  oldValue: unknown,
+  instanceHas: boolean,
+  instanceValue: unknown,
+  nextHas: boolean,
+  nextValue: unknown,
+): MergedField => {
+  // A field removed locally remains removed, even if the prefab later changes that field.
+  if (!instanceHas) {
+    if (oldHas) return { present: false };
+    return nextHas ? { present: true, value: structuredClone(nextValue) } : { present: false };
+  }
+
+  // The instance added a field that the old prefab did not own: keep that local addition.
+  if (!oldHas) return { present: true, value: structuredClone(instanceValue) };
+
+  // The prefab removed a field. Remove it only when the instance had not overridden it.
+  if (!nextHas) {
+    return prefabFieldEqual(instanceValue, oldValue)
+      ? { present: false }
+      : { present: true, value: structuredClone(instanceValue) };
+  }
+
+  if (isPlainRecord(oldValue) && isPlainRecord(instanceValue) && isPlainRecord(nextValue)) {
+    const merged: Record<string, unknown> = {};
+    const keys = new Set([...Object.keys(oldValue), ...Object.keys(instanceValue), ...Object.keys(nextValue)]);
+    for (const key of keys) {
+      const field = mergePrefabField(
+        hasOwn(oldValue, key),
+        oldValue[key],
+        hasOwn(instanceValue, key),
+        instanceValue[key],
+        hasOwn(nextValue, key),
+        nextValue[key],
+      );
+      if (field.present) merged[key] = field.value;
+    }
+    return { present: true, value: merged };
+  }
+
+  return prefabFieldEqual(instanceValue, oldValue)
+    ? { present: true, value: structuredClone(nextValue) }
+    : { present: true, value: structuredClone(instanceValue) };
+};
+
+/** True only for the top object of one placed instance, never for one of its tagged children. */
+export const isPrefabInstanceRoot = (objects: SceneObject[], object: SceneObject | undefined): object is SceneObject => {
+  if (!object?.prefabSourceId) return false;
+  const parent = object.parentId ? objects.find((candidate) => candidate.id === object.parentId) : undefined;
+  return !parent || parent.prefabSourceId !== object.prefabSourceId;
+};
+
 /**
  * Propagate a prefab edit into every placed instance with a Unity-style **3-way merge** that PRESERVES
  * per-instance overrides. For each instance object (matched to its prefab object by `prefabObjectId`):
@@ -94,15 +161,26 @@ export const mergePrefabInstances = (
       const existing = instByPid.get(np.id);
       const oldp = oldById.get(np.id);
       const isRoot = np.id === newPrefab.rootId;
-      const merged = structuredClone(np) as unknown as Record<string, unknown>;
+      const merged: Record<string, unknown> = {};
       if (existing) {
         const ex = existing as unknown as Record<string, unknown>;
         const oldRec = oldp as unknown as Record<string, unknown> | undefined;
         const keys = new Set([...Object.keys(np), ...Object.keys(existing)]);
         for (const key of keys) {
           if (PREFAB_STRUCT_KEYS.has(key)) continue;
-          // Override = the instance value differs from what the prefab used to have → keep the instance's.
-          if (!prefabFieldEqual(ex[key], oldRec?.[key])) merged[key] = ex[key];
+          const field = mergePrefabField(
+            Boolean(oldRec && hasOwn(oldRec, key)),
+            oldRec?.[key],
+            hasOwn(ex, key),
+            ex[key],
+            hasOwn(np, key),
+            (np as unknown as Record<string, unknown>)[key],
+          );
+          if (field.present) merged[key] = field.value;
+        }
+      } else {
+        for (const [key, value] of Object.entries(np)) {
+          if (!PREFAB_STRUCT_KEYS.has(key)) merged[key] = structuredClone(value);
         }
       }
       merged.id = id;
@@ -113,6 +191,14 @@ export const mergePrefabInstances = (
         : np.parentId
           ? pidToId.get(np.parentId) // internal node → its prefab-parent's surviving instance id
           : undefined;
+      // Position is placement, not prefab content. Keep each instance where its creator put it while
+      // still allowing untouched root rotation/scale leaves to receive prefab edits.
+      if (isRoot && existing && isPlainRecord(merged.transform)) {
+        merged.transform = {
+          ...merged.transform,
+          position: structuredClone(existing.transform.position),
+        };
+      }
       out.push(merged as unknown as SceneObject);
     }
     out.push(...localAdds); // user additions keep their ids/parents (which still resolve)

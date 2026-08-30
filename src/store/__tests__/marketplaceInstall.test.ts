@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readPackageFile } from '../../project/packageArchive';
-import type { SceneObject } from '../../types';
+import type { SceneObject, UIElement } from '../../types';
 import { useEditorStore } from '../editorStore';
 import { useProjectStore } from '../projectStore';
 import { useMarketplaceStore } from '../marketplaceStore';
@@ -16,6 +16,8 @@ import { useMarketplaceStore } from '../marketplaceStore';
  */
 
 const PUBLIC_STORE = join(process.cwd(), 'public', 'store');
+
+const flattenUI = (root: UIElement): UIElement[] => [root, ...root.children.flatMap(flattenUI)];
 
 /**
  * Serve `public/store/**` off disk, routed by URL path, so no network is involved. Exposes both
@@ -174,6 +176,52 @@ describe('bundled asset store — catalog to installed content', () => {
         .filter((node) => node.data.nodeKind === 'action.timelineControl')
         .every((node) => node.data.timelineRefId === definition!.data.timelineId),
     ).toBe(true);
+  });
+
+  it('installs Cloudstep Garden as a complete playable primitive platformer', async () => {
+    await useMarketplaceStore.getState().load();
+    const template = useMarketplaceStore
+      .getState()
+      .packages.find((entry) => entry.slug === 'template-platformer');
+    expect(template).toBeDefined();
+    expect(template).toMatchObject({
+      title: 'Cloudstep Garden',
+      kind: 'project',
+      contents: { scenes: 1, prefabs: 1, materials: 9, blueprints: 15, assets: 0, uiDocuments: 1 },
+    });
+
+    await useMarketplaceStore.getState().install(template!);
+
+    const editor = useEditorStore.getState();
+    const objects = editor.activeScene()!.objects;
+    expect(editor.activeScene()?.name).toBe('Cloudstep Garden');
+    expect(objects.filter((object) => object.creatorRoleId === 'player')).toHaveLength(1);
+    expect(objects.filter((object) => object.creatorRoleId === 'collectible')).toHaveLength(10);
+    expect(objects.filter((object) => object.creatorRoleId === 'moving-platform')).toHaveLength(1);
+    expect(objects.filter((object) => object.creatorRoleId === 'enemy')).toHaveLength(2);
+    expect(objects.some((object) => !['empty', 'cube', 'sphere', 'capsule', 'camera', 'light'].includes(object.kind))).toBe(false);
+
+    const player = objects.find((object) => object.creatorRoleId === 'player')!;
+    const pipPrefab = editor.prefabs.find((prefab) => prefab.name === 'Pip — Playable Character');
+    expect(pipPrefab).toBeDefined();
+    expect(player).toMatchObject({
+      prefabSourceId: pipPrefab!.id,
+      prefabObjectId: pipPrefab!.rootId,
+    });
+    expect(player.character).toMatchObject({
+      enabled: true,
+      autoInputWithScript: true,
+      coyoteTime: 0.16,
+      jumpBufferTime: 0.18,
+    });
+    expect(objects.filter((object) => object.particles)).toHaveLength(22);
+    const hud = editor.uiDocuments.find((document) => document.name === 'Cloudstep HUD');
+    expect(hud).toBeDefined();
+    expect(flattenUI(hud!.root).some((element) => element.bindings.some((binding) => binding.expression === 'LevelComplete'))).toBe(true);
+    expect(flattenUI(hud!.root).some((element) => element.bindings.some((binding) => binding.expression === 'FallOut'))).toBe(true);
+    expect(editor.variables.map((variable) => variable.name)).toEqual(
+      expect.arrayContaining(['Score', 'Checkpoint', 'LevelComplete', 'PipHearts', 'FallOut', 'PipBoost']),
+    );
   });
 
   it('keeps every material reference inside an installed prefab resolvable', async () => {

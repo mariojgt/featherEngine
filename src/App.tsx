@@ -28,11 +28,15 @@ import { initFeatherExternalSync } from './store/featherExternalStore';
 import { createMeadowTemplate } from './project/meadowTemplate';
 import { createTimelineShowcaseTemplate } from './project/timelineShowcaseTemplate';
 import { createSplineStudioTemplate } from './project/splineStudioTemplate';
+import { createPlatformerTemplate } from './project/platformerTemplate';
 
 /** DEV-only headless screenshot QA hooks. No-op in production builds and for any other query.
  *  - `?demo=meadows` auto-builds the Meadows template and enters Play (vegetation look).
  *  - `?demo=timeline` builds the Timeline Mechanics gallery for interaction/rendering QA.
  *  - `?demo=spline` builds the asset-free Spline Studio showcase for render QA.
+ *  - `?demo=platformer` builds Cloudstep Garden and enters Play for course/HUD QA; add `&qa=motion`
+ *    for a short jump/dash capture, `&qa=face` for a front turnaround, `&qa=fall` for Pip's defeat beat,
+ *    or `&qa=clear` for completion.
  *  - `?demo=store` just opens a blank project, so the Asset Store has somewhere to install into.
  *  - `?demo=uikit` installs a UI Kit from the store and opens it in the UI panel — the exact
  *    journey where a CSS-driven kit used to preview as unstyled boxes while its page-level rules
@@ -43,7 +47,7 @@ function useDemoAutoload() {
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     const demo = new URLSearchParams(window.location.search).get('demo');
-    if (demo !== 'meadows' && demo !== 'timeline' && demo !== 'spline' && demo !== 'store' && demo !== 'script' && demo !== 'uikit') return;
+    if (demo !== 'meadows' && demo !== 'timeline' && demo !== 'spline' && demo !== 'platformer' && demo !== 'store' && demo !== 'script' && demo !== 'uikit') return;
     // StrictMode double-invokes effects; for the multi-await demos that means two racing setups
     // (the second sees installingId already set and no-ops, then reads a project the first is
     // still building). Once is once.
@@ -63,7 +67,9 @@ function useDemoAutoload() {
                 ? 'Timeline Mechanics Preview'
                 : demo === 'spline'
                   ? 'Spline Studio Preview'
-                : 'Meadows Preview',
+                  : demo === 'platformer'
+                    ? 'Cloudstep Garden Preview'
+                    : 'Meadows Preview',
       );
       if (!useProjectStore.getState().hasProject) return;
       if (demo === 'store') return;
@@ -113,6 +119,43 @@ function useDemoAutoload() {
       }
       if (demo === 'spline') {
         await createSplineStudioTemplate();
+        return;
+      }
+      if (demo === 'platformer') {
+        await createPlatformerTemplate();
+        const qa = new URLSearchParams(window.location.search).get('qa');
+        setTimeout(() => {
+          const editor = useEditorStore.getState();
+          if (qa === 'face') {
+            const player = editor.activeScene()?.objects.find((object) => object.creatorRoleId === 'player');
+            if (player) editor.updateCharacterController(player.id, { cameraOffset: [0, 3.25, 8.2] });
+          }
+          editor.setPlaying(true);
+          if (qa === 'clear') {
+            setTimeout(() => useEditorStore.getState().setRuntimeVariableByName('LevelComplete', true), 350);
+          } else if (qa === 'motion') {
+            setTimeout(() => {
+              useEditorStore.getState().setRuntimeKey('KeyW', true);
+              useEditorStore.getState().setRuntimeKey('ShiftLeft', true);
+            }, 650);
+            setTimeout(() => useEditorStore.getState().setRuntimeKey('Space', true), 1100);
+            setTimeout(() => useEditorStore.getState().setRuntimeKey('Space', false), 1240);
+            setTimeout(() => {
+              useEditorStore.getState().setRuntimeKey('KeyW', false);
+              useEditorStore.getState().setRuntimeKey('ShiftLeft', false);
+            }, 3600);
+          } else if (qa === 'fall') {
+            setTimeout(() => {
+              const current = useEditorStore.getState();
+              const objects = current.activeScene()?.objects ?? [];
+              const player = objects.find((object) => object.creatorRoleId === 'player');
+              const trigger = objects.find((object) => object.name === 'Cloud Sea Respawn Trigger');
+              if (player && trigger) {
+                useEditorStore.setState({ runtimeTriggers: [{ objectId: trigger.id, otherObjectId: player.id }] });
+              }
+            }, 850);
+          }
+        }, 1200);
         return;
       }
       await createMeadowTemplate();

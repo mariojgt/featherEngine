@@ -11,6 +11,7 @@ import { useCollaborationStore, type CollaborationParticipant } from '../store/c
 import { collaboratorsOnObject } from '../collaboration/presence';
 import { CollaboratorAvatars } from './CollaboratorAvatars';
 import { findCreatorRole } from '../creator/roles';
+import { isPrefabInstanceRoot } from '../store/editor/prefabMerge';
 
 const objectIcon: Record<SceneObjectKind, typeof Box> = {
   empty: Square,
@@ -308,8 +309,11 @@ export function HierarchyPanel() {
       : sel.selectedObjectId === object.id;
     if (!inSelection) selectObject(object.id);
     const isEmptyGroup = object.kind === 'empty' && (childrenByParent.get(object.id) ?? []).length > 0;
-    // Instance roots (carrying a still-existing prefabSourceId) get apply/revert actions.
-    const sourcePrefab = object.prefabSourceId ? prefabs.find((prefab) => prefab.id === object.prefabSourceId) : undefined;
+    // Only an instance root gets Apply/Revert. Running either operation on a tagged limb used to
+    // replace that limb as though it were the entire character and sever the hierarchy's live link.
+    const sourcePrefab = isPrefabInstanceRoot(sceneObjects, object)
+      ? prefabs.find((prefab) => prefab.id === object.prefabSourceId)
+      : undefined;
     const instanceEntries: ContextMenuEntry[] = sourcePrefab
       ? [
           {
@@ -318,7 +322,7 @@ export function HierarchyPanel() {
               const id = applyInstanceToPrefab(object.id);
               useProjectStore.setState({
                 toast: id
-                  ? { kind: 'success', message: `Updated prefab "${sourcePrefab.name}" — future instances use these changes.` }
+                  ? { kind: 'success', message: `Updated prefab "${sourcePrefab.name}" — linked instances received the change.` }
                   : { kind: 'error', message: `Couldn't apply changes to "${sourcePrefab.name}".` },
               });
             },

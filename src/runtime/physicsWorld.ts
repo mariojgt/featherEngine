@@ -1063,6 +1063,11 @@ class PhysicsRuntime {
     }
   }
 
+  /** True after this character's Rapier body, collider and controller have been synced into the world. */
+  hasCharacter(id: string): boolean {
+    return this.charEntries.has(id);
+  }
+
   private createVehicle(object: SceneObject) {
     const v = object.vehicle;
     if (!v) return;

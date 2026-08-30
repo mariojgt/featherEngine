@@ -624,6 +624,14 @@ export function remapPackageForImport(
     if (o.joint?.connectedObjectId) o.joint.connectedObjectId = remap(maps.object, o.joint.connectedObjectId);
     // A cable's far end attaches to another object by id — remap it so an imported cable stays connected.
     if (o.cable?.endObjectId) o.cable.endObjectId = remap(maps.object, o.cable.endObjectId);
+    if (o.variables) {
+      o.variables = Object.fromEntries(
+        Object.entries(o.variables).map(([key, value]) => [
+          key,
+          typeof value === 'string' ? remap(maps.object, value) ?? value : value,
+        ]),
+      );
+    }
     if (o.terrain) {
       for (const layer of o.terrain.materialLayers ?? []) {
         layer.id = newId('layer');
@@ -683,6 +691,27 @@ export function remapPackageForImport(
     for (const child of element.children ?? []) rewriteUIElement(child);
   };
 
+  const rewriteSourceIds = (source: string | undefined): string | undefined => {
+    if (source === undefined) return undefined;
+    let rewritten = source;
+    for (const map of [
+      maps.object,
+      maps.prefab,
+      maps.blueprint,
+      maps.asset,
+      maps.particleSystem,
+      maps.animation,
+      maps.variable,
+      maps.dataAsset,
+      maps.uiDocument,
+      maps.scene,
+      maps.cinematic,
+    ]) {
+      for (const [oldId, nextId] of map) rewritten = rewritten.split(oldId).join(nextId);
+    }
+    return rewritten;
+  };
+
   // 4. Apply across all entity collections. Drop folderId so imports land at the project root.
   for (const scene of c.scenes ?? []) {
     scene.id = remap(maps.scene, scene.id)!;
@@ -718,6 +747,19 @@ export function remapPackageForImport(
     bp.id = remap(maps.blueprint, bp.id)!;
     bp.graphId = remap(maps.graph, bp.graphId)!;
     bp.folderId = intoFolder(bp.folderId);
+    bp.variables = bp.variables?.map((variable) => ({
+      ...variable,
+      defaultValue:
+        typeof variable.defaultValue === 'string'
+          ? remap(maps.object, variable.defaultValue) ?? variable.defaultValue
+          : variable.defaultValue,
+    }));
+    bp.featherSource = rewriteSourceIds(bp.featherSource);
+    bp.featherSourceLastSynced = rewriteSourceIds(bp.featherSourceLastSynced);
+    // A packaged project cannot promise that the publisher's external source path exists locally.
+    bp.featherSourcePath = undefined;
+    bp.featherSourceLastSyncedHash = undefined;
+    bp.featherSourceLastSyncedVisualHash = undefined;
   }
   c.graphs.forEach(rewriteGraph);
   for (const mat of c.materials) {

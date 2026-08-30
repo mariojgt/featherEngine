@@ -23,17 +23,24 @@ export function ShaderPrewarm() {
     if (!isPlaying) return;
     let cancelled = false;
     setWarming(true);
-    // Wait one frame so the warm-up effects below are mounted into the scene graph first.
-    const raf = requestAnimationFrame(() => {
-      Promise.resolve(gl.compileAsync(scene, camera))
-        .catch(() => undefined) // compile failures fall back to lazy compilation — never break Play
-        .finally(() => {
-          if (!cancelled) setWarming(false);
-        });
+    // React may not commit the newly-mounted warm-up effects before the first RAF under a busy/headless
+    // renderer. Give it one RAF to commit and a second to populate Three's material/program records;
+    // compileAsync otherwise polls a material whose currentProgram is still undefined and throws outside
+    // its Promise (so the catch below cannot intercept it).
+    let compileRaf = 0;
+    const mountRaf = requestAnimationFrame(() => {
+      compileRaf = requestAnimationFrame(() => {
+        Promise.resolve(gl.compileAsync(scene, camera))
+          .catch(() => undefined) // compile failures fall back to lazy compilation — never break Play
+          .finally(() => {
+            if (!cancelled) setWarming(false);
+          });
+      });
     });
     return () => {
       cancelled = true;
-      cancelAnimationFrame(raf);
+      cancelAnimationFrame(mountRaf);
+      cancelAnimationFrame(compileRaf);
       setWarming(false);
     };
   }, [isPlaying, quality, gl, scene, camera]);
