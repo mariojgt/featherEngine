@@ -38,6 +38,34 @@ export interface ProductionBuildRequest {
   outDir?: string;
 }
 
+/** Readiness of the local Steamworks ContentBuilder toolchain. */
+export interface SteamToolReport {
+  ready: boolean;
+  steamcmdPath?: string;
+  errors: string[];
+}
+
+/** Non-secret configuration for previewing or uploading one Steam depot build. */
+export interface SteamPublishRequest {
+  sdkPath: string;
+  contentRoot: string;
+  account: string;
+  appId: number;
+  depotId: number;
+  description: string;
+  branch?: string;
+  preview: boolean;
+}
+
+/** Outcome returned by the native Steam publishing runner. */
+export interface SteamPublishResult {
+  status: 'previewed' | 'uploaded' | 'live-beta';
+  appId: number;
+  depotId: number;
+  buildId?: string;
+  branch?: string;
+}
+
 export interface OpenedProject {
   /** Absolute project directory on desktop; a synthetic id on web. */
   dir: string;
@@ -176,6 +204,13 @@ export interface Platform {
    * build right now (and what's missing for the rest). Undefined on web.
    */
   checkExportPlatforms?(): Promise<ExportPlatformsReport>;
+  /** Desktop only: locate and validate SteamCMD inside a Steamworks SDK installation. */
+  checkSteamTools?(sdkPath: string): Promise<SteamToolReport>;
+  /** Desktop only: preview or upload one Steam depot build, streaming native progress output. */
+  publishSteam?(
+    request: SteamPublishRequest,
+    onProgress: (line: string) => void,
+  ): Promise<SteamPublishResult>;
   /** Desktop only: prompt for a folder. Returns the absolute path, or null if cancelled. */
   pickDirectory?(title?: string): Promise<string | null>;
   /**

@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   Circle,
+  CloudUpload,
   Command,
   FolderOpen,
   Gamepad2,
@@ -43,6 +44,8 @@ import { askPackageDetails } from '../store/packageDetailsStore';
 import { useExtensionSnapshot } from '../extensions/react';
 import { useCollaborationStore } from '../store/collaborationStore';
 import { CollaborationDialog } from './CollaborationDialog';
+import { SteamPublishDialog } from './SteamPublishDialog';
+import { isDesktop as runningInDesktopShell } from '../platform';
 
 /** Parametric trees aren't a SceneObjectKind (they're a component), so they get their own Add entries. */
 const treeTools: Array<{ archetype: TreeArchetype; label: string }> = [
@@ -195,7 +198,7 @@ function AddMenu() {
   );
 }
 
-function ExportMenu() {
+function ExportMenu({ onOpenSteam }: { onOpenSteam: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const exportGame = useProjectStore((state) => state.exportGame);
@@ -234,6 +237,20 @@ function ExportMenu() {
             <Rocket size={14} aria-hidden />
             <span>Production — web + native app</span>
           </button>
+          <hr />
+          <button
+            onClick={run(onOpenSteam)}
+            disabled={!runningInDesktopShell}
+            aria-describedby={!runningInDesktopShell ? 'steam-export-desktop-hint' : undefined}
+          >
+            <CloudUpload size={14} aria-hidden />
+            <span>Upload to Steam…{!runningInDesktopShell ? ' (desktop only)' : ''}</span>
+          </button>
+          {!runningInDesktopShell && (
+            <div id="steam-export-desktop-hint" className="export-menu-hint">
+              Open this project in Feather desktop to run SteamCMD locally.
+            </div>
+          )}
           <hr />
           <button
             onClick={run(async () => {
@@ -497,6 +514,7 @@ export function Toolbar() {
   const collaborationRole = useCollaborationStore((state) => state.role);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [collaborationOpen, setCollaborationOpen] = useState(false);
+  const [steamPublishOpen, setSteamPublishOpen] = useState(false);
   const guestProjectLock = collaborationRole !== null
     && collaborationRole !== 'host'
     && collaborationStatus !== 'idle';
@@ -625,11 +643,12 @@ export function Toolbar() {
           <Save size={16} aria-hidden />
           <span>Save</span>
         </button>
-        <ExportMenu />
+        <ExportMenu onOpenSteam={() => setSteamPublishOpen(true)} />
       </div>
 
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
       <CollaborationDialog open={collaborationOpen} onClose={() => setCollaborationOpen(false)} />
+      <SteamPublishDialog open={steamPublishOpen} onClose={() => setSteamPublishOpen(false)} />
     </header>
   );
 }

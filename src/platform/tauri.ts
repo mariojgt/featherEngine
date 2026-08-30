@@ -21,6 +21,8 @@ import type {
   ProjectTextWriteResult,
   StartedCollaborationHost,
   RegisteredCollaborationAsset,
+  SteamPublishResult,
+  SteamToolReport,
 } from './types';
 import { canUseHostOnlyFeatures } from '../collaboration/access';
 
@@ -314,6 +316,21 @@ export const tauriPlatform: Platform = {
   async checkExportPlatforms() {
     const raw = await invoke<string>('check_export_platforms');
     return JSON.parse(raw);
+  },
+
+  async checkSteamTools(sdkPath) {
+    return invoke<SteamToolReport>('check_steam_tools', { sdkPath });
+  },
+
+  async publishSteam(request, onProgress) {
+    const unlisten = await listen<string>('steam-publish-progress', (event) =>
+      onProgress(event.payload),
+    );
+    try {
+      return await invoke<SteamPublishResult>('run_steam_publish', { request });
+    } finally {
+      unlisten();
+    }
   },
 
   async pickDirectory(title) {

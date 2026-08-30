@@ -32,6 +32,12 @@ input pipes, so existing templates and key bindings work on phones with no per-g
 5. Share `<game>-web.zip`, install from the OS-named desktop folder, use the Android package,
    or finish iOS signing in Xcode.
 
+For an existing Steam app, the desktop editor also provides **Export → Upload to Steam…**. It
+previews or uploads one unpacked depot folder with the Steamworks SDK installed locally; it does
+not upload an installer or promote a build to the public branch. See the
+[Steam Publishing guide](STEAM_PUBLISHING.md) for setup, authentication, safeguards, and current
+limitations.
+
 The chosen profile is saved in the project and snapshotted into the artifact. Its application id
 does not change when the project/display name changes, so game save slots and installed upgrades
 keep the same identity.

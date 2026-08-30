@@ -1,4 +1,5 @@
 mod collaboration;
+mod steam_publishing;
 
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -815,6 +816,8 @@ pub fn run() {
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
       run_production_build,
+      steam_publishing::check_steam_tools,
+      steam_publishing::run_steam_publish,
       check_export_platforms,
       reveal_in_explorer,
       read_project_text,

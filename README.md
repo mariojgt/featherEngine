@@ -218,6 +218,11 @@ desktop targets. See the [Production Export guide](docs/PRODUCTION_EXPORT.md) fo
 runtime parity, build profiles, exact target selection, fast/reuse builds, mobile setup, output
 locations, and troubleshooting.
 
+If the game already has a Steamworks app and depot, the desktop editor can run a guarded
+SteamPipe preview/upload from **Export → Upload to Steam…**. It uses your local Steamworks SDK,
+keeps credentials out of the project, and requires an exact unpacked depot folder. See the
+[Steam Publishing guide](docs/STEAM_PUBLISHING.md).
+
 ## Scripting
 
 Every reusable gameplay Blueprint can be authored as a node graph or as FeatherScript. The graph
@@ -329,6 +334,7 @@ verify the workflow end to end. The complete checklist is in
 - [Live Collaboration](docs/COLLABORATION.md) — start/join workflow, authority model, security, and limitations
 - [Plugin SDK](docs/PLUGIN_SDK.md) — commands, dockable panels, safe project APIs, and plugin lifecycle
 - [Production Export](docs/PRODUCTION_EXPORT.md) — web, desktop, Android, and iOS packaging
+- [Steam Publishing](docs/STEAM_PUBLISHING.md) — local SteamPipe preview/upload workflow and safeguards
 - [AI Assistant](docs/AI_ASSISTANT.md) — tool architecture, MCP, and the contributor checklist
 - [Physics Worker](docs/PHYSICS_WORKER.md) — off-main-thread physics design and rollout status
 - [Sample game bundle](examples/sample-game.json) — a small serialized project example

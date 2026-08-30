@@ -338,6 +338,91 @@ spec('production export exposes one profile and all six exact platform targets',
   }
 });
 
+spec('Steam publishing opens a guarded desktop wizard from Export', async () => {
+  const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=timeline' });
+  try {
+    // Render the desktop-only surface in headless Chrome without invoking a native command. The
+    // wizard does not touch Tauri until the user browses for a folder or validates SteamCMD.
+    await app.page.call('Page.addScriptToEvaluateOnNewDocument', {
+      source: `Object.defineProperty(window, '__TAURI_INTERNALS__', {
+        configurable: true,
+        value: {},
+      });`,
+    });
+    await app.evaluate(`history.replaceState(null, '', location.pathname); location.reload()`);
+    await app.waitFor(`document.querySelector('.launcher')`, { label: 'desktop-mode launcher rendered' });
+    await app.evaluate(`(async () => {
+      const { useProjectStore } = await import('/src/store/projectStore.ts');
+      useProjectStore.getState().useDemo();
+    })()`);
+    try {
+      await app.waitFor(`document.querySelector('.toolbar')`, { label: 'desktop-mode editor reloaded' });
+    } catch (error) {
+      const diagnostic = await app.evaluate(`({
+        title: document.title,
+        text: document.body?.textContent?.trim().slice(0, 500),
+        html: document.body?.innerHTML?.slice(0, 500),
+      })`).catch((pageError) => ({ pageError: String(pageError) }));
+      throw new Error(`${error.message}; page=${JSON.stringify(diagnostic)}`);
+    }
+
+    await app.realClick('button[title="Export your game"]');
+    await app.waitFor(`document.querySelector('.export-popover')`, { label: 'Export menu open' });
+    assert.equal(
+      await app.text('.export-popover button:nth-of-type(3)'),
+      'Upload to Steam…',
+      'Steam publishing is placed directly after Production export',
+    );
+    assert.equal(
+      await app.evaluate(`document.querySelector('.export-popover button:nth-of-type(3)').disabled`),
+      false,
+      'the launcher is enabled in the desktop shell',
+    );
+    await app.realClick('.export-popover button:nth-of-type(3)');
+    await app.waitFor(`document.querySelector('[data-testid="steam-publish-dialog"]')`, {
+      label: 'Steam publishing wizard open',
+    });
+
+    const wizard = await app.evaluate(`(() => {
+      const dialog = document.querySelector('[data-testid="steam-publish-dialog"]');
+      const rect = dialog.getBoundingClientRect();
+      return {
+        title: dialog.querySelector('h2')?.textContent.trim(),
+        steps: [...dialog.querySelectorAll('.steam-publish-steps button')]
+          .map((button) => button.textContent.trim().replace(/^[0-9]+/, '')),
+        heading: dialog.querySelector('.steam-publish-panel h3')?.textContent.trim(),
+        fields: [...dialog.querySelectorAll('.steam-publish-field > span')]
+          .map((label) => label.childNodes[0]?.textContent.trim()),
+        continueDisabled: dialog.querySelector('.steam-primary-button')?.disabled,
+        width: rect.width,
+        height: rect.height,
+      };
+    })()`);
+
+    assert.equal(wizard.title, 'Upload to Steam');
+    assert.deepEqual(wizard.steps, ['Local tools', 'Depot build', 'Preflight']);
+    assert.equal(wizard.heading, 'Connect local Steamworks tools');
+    assert.deepEqual(wizard.fields, ['Steamworks SDK / ContentBuilder folder', 'Steam build account']);
+    assert.equal(wizard.continueDisabled, true, 'missing local setup cannot advance');
+    assert.ok(wizard.width >= 600 && wizard.width <= 760, 'wizard keeps a readable desktop width');
+    assert.ok(wizard.height > 400 && wizard.height < 900, 'wizard fits the editor viewport');
+    assert.deepEqual(
+      await app.overlaps('.steam-publish-dialog', '.steam-publish-header, .steam-publish-steps, .steam-publish-body, .steam-publish-footer'),
+      [],
+      'wizard regions do not overlap',
+    );
+    const pixels = await app.pixelStats('.steam-publish-dialog');
+    assert.ok(pixels.meanLuminance > 8 && pixels.meanLuminance < 170, 'wizard is visibly rendered in the dark editor theme');
+
+    await app.realClick('.steam-publish-close');
+    await app.waitFor(`!document.querySelector('[data-testid="steam-publish-dialog"]')`, {
+      label: 'Steam publishing wizard closed',
+    });
+  } finally {
+    await app.dispose();
+  }
+});
+
 spec('the production parity fixture behaves the same in editor Play', async () => {
   const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=script' });
   try {

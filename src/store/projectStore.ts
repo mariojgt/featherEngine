@@ -247,6 +247,8 @@ interface ProjectState {
   toast: { kind: 'success' | 'error'; message: string } | null;
   /** Live progress while a production build runs (desktop). Null when idle. */
   buildProgress: { running: boolean; lines: string[] } | null;
+  /** Most recent successful production artifact root in this project session. */
+  lastProductionOutput: string | null;
   /** A built+verified bundle waiting for the user's go-ahead in the Build Report dialog. */
   pendingExport: { mode: 'game' | 'production'; bundle: GameBundle; report: BundleReport } | null;
   /** Platform-doctor report for the export dialog's platform picker (desktop only). */
@@ -408,6 +410,7 @@ export const useProjectStore = create<ProjectState>()(
             );
             set({
               buildProgress: null,
+              lastProductionOutput: outDir,
               toast: { kind: 'success', message: `Production export finished → ${outDir}` },
             });
           } catch (err) {
@@ -453,6 +456,7 @@ export const useProjectStore = create<ProjectState>()(
         error: null,
         toast: null,
         buildProgress: null,
+        lastProductionOutput: null,
         pendingExport: null,
         exportPlatforms: null,
         exportPlatformsError: null,
@@ -481,7 +485,7 @@ export const useProjectStore = create<ProjectState>()(
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // starting fresh discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set({ error: errorMessage(error) });
@@ -500,7 +504,7 @@ export const useProjectStore = create<ProjectState>()(
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // opening a project discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set({ error: errorMessage(error) });
@@ -519,7 +523,7 @@ export const useProjectStore = create<ProjectState>()(
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // opening a project discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set((state) => ({
@@ -571,7 +575,7 @@ export const useProjectStore = create<ProjectState>()(
             const project = { ...useEditorStore.getState().exportProject(), name };
             const opened = await platform.createProject(name, project);
             if (!opened) return;
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
             addRecent(opened.dir, opened.name);
             useEditorStore.getState().markClean();
             set({ toast: { kind: 'success', message: opened.dir === 'web' ? 'Project downloaded' : 'Project saved' } });
@@ -829,7 +833,7 @@ export const useProjectStore = create<ProjectState>()(
         useDemo: () => {
           if (blockProjectLifecycleDuringCollaboration()) return;
           clearRecovery();
-          set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)' });
+          set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)', lastProductionOutput: null });
         },
 
         restoreRecovery: (snapshot) => {
@@ -840,13 +844,13 @@ export const useProjectStore = create<ProjectState>()(
           // now that it's live) — the user still needs to Save it to disk/download.
           useEditorStore.setState({ isDirty: true });
           clearRecovery();
-          set({ hasProject: true, projectDir: snapshot.dir, projectName: snapshot.name });
+          set({ hasProject: true, projectDir: snapshot.dir, projectName: snapshot.name, lastProductionOutput: null });
         },
 
         closeProject: () => {
           if (blockProjectLifecycleDuringCollaboration()) return;
           clearRecovery();
-          set({ hasProject: false, projectDir: null, projectName: 'Untitled Project' });
+          set({ hasProject: false, projectDir: null, projectName: 'Untitled Project', lastProductionOutput: null });
         },
         clearError: () => set({ error: null }),
       };
