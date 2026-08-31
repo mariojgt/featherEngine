@@ -85,6 +85,9 @@ export default defineConfig({
   // `optimizeDeps.esbuildOptions.supported` into its own defaults — see runOptimizeDeps).
   esbuild: { target: 'es2022' },
   optimizeDeps: {
+    // Local AI is loaded only when selected, so pre-bundle it at server startup instead of letting
+    // the first multi-gigabyte model action discover a stale/missing optimized dependency.
+    include: ['@browser-ai/transformers-js', '@huggingface/transformers'],
     esbuildOptions: {
       target: 'es2022',
       supported: { 'top-level-await': true },

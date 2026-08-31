@@ -1,9 +1,18 @@
 import { useCallback, useRef, useState } from 'react';
 import { type ModelMessage, stepCountIs, streamText } from 'ai';
-import { FAST_MODELS, PROVIDERS, resolveModel } from './providers';
+import { FAST_MODELS, PROVIDERS, isRemoteProvider, resolveModel } from './providers';
 import { useAISettings } from '../store/aiSettingsStore';
+import { useLocalAIStore } from '../store/localAIStore';
 import { COMPACT_ENGINE_GUIDE, buildSnapshotContext } from './systemPrompt';
 import { engineTools } from './tools';
+import { buildLocalEngineGuide } from './local/localPrompt';
+import { chooseLocalEngineTools } from './local/localToolRouter';
+import { getLocalModelDefinition } from './local/localModelCatalog';
+import {
+  buildLocalContinuityContext,
+  buildLocalSnapshotContext,
+  trimLocalUserMessage,
+} from './local/localContext';
 
 export interface ToolAction {
   id: string;
@@ -22,12 +31,14 @@ export type ChatStatus = 'idle' | 'streaming';
 const newId = () => crypto.randomUUID();
 const MAX_CONTEXT_MESSAGES = 6;
 const MAX_HISTORY_CHARS = 1200;
-type EngineToolName = keyof typeof engineTools;
 
 const trimForModelHistory = (content: string) =>
   content.length > MAX_HISTORY_CHARS ? `${content.slice(0, MAX_HISTORY_CHARS)}... [trimmed]` : content;
 
-const chooseActiveTools = (_prompt: string): EngineToolName[] => Object.keys(engineTools) as EngineToolName[];
+const LOCAL_WEBGPU_OVERFLOW = /\/lm_head\/MatMul|Failed to generate kernel's output|1154230160|GPU device (?:was )?lost|out of memory/i;
+
+export const isLocalWebGPUOverflow = (error: unknown): boolean =>
+  LOCAL_WEBGPU_OVERFLOW.test(error instanceof Error ? error.message : String(error));
 
 // --- Smart model routing -------------------------------------------------------------------------
 // Short, read-only questions ("what's in my scene?", "how many enemies are there?") don't need the
@@ -45,6 +56,17 @@ const isSimpleQuery = (text: string): boolean =>
 /** Human-friendly label for a tool call shown as a chip in the chat. */
 function describeToolCall(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
+    case 'search_engine_tools':
+      return `Found actions${input.query ? ` for “${String(input.query).slice(0, 42)}”` : ''}`;
+    case 'run_engine_tool': {
+      const actionName = typeof input.name === 'string' ? input.name : 'engine action';
+      const actionInput = input.input && typeof input.input === 'object'
+        ? input.input as Record<string, unknown>
+        : {};
+      return actionName === 'run_engine_tool'
+        ? 'Ran engine action'
+        : describeToolCall(actionName, actionInput).replace(/_/g, ' ');
+    }
     case 'list_scene':
       return 'Inspected scene';
     case 'inspect_object':
@@ -498,6 +520,13 @@ export function useAIChat() {
   const stop = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    const localState = useLocalAIStore.getState().runtime.state;
+    if (
+      useAISettings.getState().provider === 'local' &&
+      (localState === 'downloading' || localState === 'loading')
+    ) {
+      void import('./local/localModelManager').then(({ cancelLocalModelLoad }) => cancelLocalModelLoad());
+    }
     setStatus('idle');
   }, []);
 
@@ -506,10 +535,12 @@ export function useAIChat() {
     if (!trimmed || status === 'streaming') return;
 
     const settings = useAISettings.getState();
+    const provider = settings.provider;
     const apiKey = settings.activeKey();
-    const providerLabel = PROVIDERS[settings.provider].label;
+    const providerLabel = PROVIDERS[provider].label;
+    const remoteProvider = isRemoteProvider(provider);
 
-    if (!apiKey) {
+    if (remoteProvider && !apiKey) {
       setError(`Add your ${providerLabel} API key in settings to start chatting.`);
       return;
     }
@@ -529,18 +560,46 @@ export function useAIChat() {
     //                   instead of paying full price each step.
     // OpenAI/Gemini ignore the markers and auto-cache the same stable prefix.
     const cachePoint = { anthropic: { cacheControl: { type: 'ephemeral' as const } } };
+    const localSelection = provider === 'local' ? chooseLocalEngineTools(trimmed) : null;
+    const selectedLocalModel =
+      provider === 'local' ? getLocalModelDefinition(settings.activeModel()) : null;
+    const systemGuide = localSelection
+      ? buildLocalEngineGuide(
+          localSelection.groups,
+          selectedLocalModel?.toolFormat,
+          localSelection.suggestedTools,
+          selectedLocalModel?.family,
+        )
+      : COMPACT_ENGINE_GUIDE;
+    const stableProviderOptions = remoteProvider ? { providerOptions: cachePoint } : {};
+    const requestHistory = provider === 'local'
+      ? []
+      : messages.slice(-MAX_CONTEXT_MESSAGES).map((message) => ({
+          role: message.role,
+          content: trimForModelHistory(message.content),
+        }));
+    const localUserContent = provider === 'local' ? trimLocalUserMessage(userMessage.content) : userMessage.content;
+    const localContinuity = provider === 'local' && localUserContent.length <= 320
+      ? buildLocalContinuityContext(messages)
+      : null;
     const history: ModelMessage[] = [
       {
         role: 'system',
-        content: COMPACT_ENGINE_GUIDE,
-        providerOptions: cachePoint,
+        content: systemGuide,
+        ...stableProviderOptions,
       },
-      { role: 'system', content: buildSnapshotContext(), providerOptions: cachePoint },
-      ...messages.slice(-MAX_CONTEXT_MESSAGES).map((message) => ({
-        role: message.role,
-        content: trimForModelHistory(message.content),
-      })),
-      { role: userMessage.role, content: userMessage.content, providerOptions: cachePoint },
+      {
+        role: 'system',
+        content: provider === 'local' ? buildLocalSnapshotContext() : buildSnapshotContext(),
+        ...stableProviderOptions,
+      },
+      ...(localContinuity ? [{ role: 'system' as const, content: localContinuity }] : []),
+      ...requestHistory,
+      {
+        role: userMessage.role,
+        content: localUserContent,
+        ...stableProviderOptions,
+      },
     ];
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
@@ -555,14 +614,22 @@ export function useAIChat() {
     try {
       // Smart routing: short read-only questions go to the provider's fast tier (~1/5th the price).
       const routedModelId =
-        settings.smartRouting && isSimpleQuery(trimmed) ? FAST_MODELS[settings.provider] : settings.activeModel();
-      const model = resolveModel(settings.provider, apiKey, routedModelId);
+        isRemoteProvider(provider) && settings.smartRouting && isSimpleQuery(trimmed)
+          ? FAST_MODELS[provider]
+          : settings.activeModel();
+      const model = await resolveModel(
+        isRemoteProvider(provider)
+          ? { provider, apiKey, modelId: routedModelId }
+          : { provider: 'local', modelId: routedModelId },
+      );
+      const activeTools = (localSelection?.tools ?? engineTools) as typeof engineTools;
       const result = streamText({
         model,
         messages: history,
-        tools: engineTools,
-        stopWhen: stepCountIs(16),
+        tools: activeTools,
+        stopWhen: stepCountIs(provider === 'local' ? 8 : 16),
         abortSignal: controller.signal,
+        ...(selectedLocalModel ? { maxOutputTokens: selectedLocalModel.maxOutputTokens } : {}),
       });
 
       for await (const part of result.fullStream) {
@@ -581,10 +648,29 @@ export function useAIChat() {
     } catch (caught) {
       if (controller.signal.aborted) return;
       const detail = caught instanceof Error ? caught.message : 'Unknown error';
-      setError(detail);
+      const localOverflow = provider === 'local' && isLocalWebGPUOverflow(caught);
+      if (localOverflow) {
+        // ORT/WebGPU may leave the worker's device lost or memory-pressured after a failed giant
+        // allocation. Terminating it makes the next send perform a clean cached reload.
+        try {
+          await import('./local/localModelManager').then(({ unloadLocalModel }) => unloadLocalModel());
+        } catch {
+          // Preserve the original actionable error even if cache/status cleanup also has a problem.
+        }
+      }
+      const visibleError = localOverflow
+        ? 'The local request exceeded this GPU\'s safe prompt memory. Feather reset the model and kept the project unchanged; retry the request.'
+        : detail;
+      setError(visibleError);
       updateAssistant((message) => ({
         ...message,
-        content: message.content || '⚠️ Request failed. Check your API key, model and network, then try again.',
+        content:
+          message.content ||
+          (provider === 'local'
+            ? localOverflow
+              ? '⚠️ The request exceeded safe WebGPU prompt memory. I reset the local model; retry now.'
+              : '⚠️ Local AI failed. Check WebGPU/model status in Agent settings, then try again.'
+            : '⚠️ Request failed. Check your API key, model and network, then try again.'),
       }));
     } finally {
       if (abortRef.current === controller) abortRef.current = null;

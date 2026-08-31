@@ -60,7 +60,7 @@ OpenAI / Claude / Gemini     @browser-ai/transformers-js
 
 The most important rule is:
 
-> **Do not fork the agent logic.** Local models and cloud models should receive the same `engineTools`, system guide, snapshot, chat history, stop signal, and tool-step loop whenever possible.
+> **Do not fork the engine logic.** Local and cloud models execute the same `engineTools` implementations and use the same AI SDK agent loop. Their prompt envelopes may differ because browser GPU buffers are much smaller than cloud context windows.
 
 ---
 
@@ -137,12 +137,16 @@ Suggested model definition:
 export interface LocalModelDefinition {
   id: string;
   label: string;
+  family: 'Qwen' | 'Gemma' | 'Liquid';
   description: string;
   tier: 'fast' | 'balanced' | 'advanced';
   device: 'webgpu';
   dtype?: string;
   approximateDownloadMb?: number;
+  recommendedMemoryGb: number;
+  maxOutputTokens: number;
   toolCalling: boolean;
+  toolFormat: 'native' | 'functiongemma';
   vision?: boolean;
   recommended?: boolean;
   experimental?: boolean;
@@ -151,7 +155,7 @@ export interface LocalModelDefinition {
 
 Start with a deliberately small catalog rather than allowing arbitrary Hugging Face models immediately.
 
-## Recommended V1 models
+## Curated local agent models
 
 ### Fast / default
 
@@ -161,17 +165,25 @@ onnx-community/Qwen3-0.6B-ONNX
 
 Use this as the first default because the local agent depends heavily on tool calling and multi-step command planning.
 
-### Lightweight fallback / testing
+### Balanced choices
 
 ```text
-HuggingFaceTB/SmolLM2-360M-Instruct
+LiquidAI/LFM2.5-1.2B-Instruct-ONNX
+onnx-community/Qwen3-1.7B-ONNX
 ```
 
-Useful for testing the provider pipeline and very lightweight chat, but do not assume it will match Qwen for complex Feather tool use.
+LFM2.5 provides another tool-native family at roughly 765 MB. Qwen3 1.7B is roughly 1.44 GB and trades download/GPU memory for stronger multi-step planning.
 
-### Future balanced tier
+### Experimental choices
 
-Add a larger Qwen/Gemma-class model only after benchmarking it against Feather's real tool suite.
+```text
+onnx-community/functiongemma-270m-it-ONNX
+onnx-community/Qwen3-4B-ONNX
+```
+
+FunctionGemma is a small, specialized tool model rather than a general dialogue model. Its control-token format requires Feather's `localModelAdapter.ts`, and it remains experimental until it completes the engine tool benchmark. Qwen3 4B is approximately 2.85 GB and should be treated as a high-memory preview.
+
+Standard Gemma 3 1B is text-loadable but its current chat template ignores supplied tool definitions. Gemma 3 4B is a multimodal graph that is not supported by the current Transformers.js image-to-text mapping. Do not present either as a full Feather Agent until those boundaries change and real tool-loop tests pass.
 
 Do **not** choose models only by chatbot quality. Benchmark:
 
@@ -368,7 +380,7 @@ The exact instance lifecycle should live in `localModelManager.ts`, not directly
 
 This is the most important functional requirement.
 
-Today `useAIChat.ts` does roughly:
+The cloud path in `useAIChat.ts` does roughly:
 
 ```ts
 streamText({
@@ -380,7 +392,8 @@ streamText({
 });
 ```
 
-Keep this shape for local models.
+Keep the same `streamText()`/tool-step shape for local models, but place the existing tools behind
+the bounded `search_engine_tools` + `run_engine_tool` gateway described below.
 
 The local agent must be able to perform workflows such as:
 
@@ -400,7 +413,9 @@ Local model
   -> answer user
 ```
 
-The model must use the same `engineTools` as cloud AI and MCP.
+The model must ultimately execute the same `engineTools` as cloud AI and MCP. The local gateway
+validates the requested action against its original input schema and dispatches to its original
+`execute` function; it is a prompt-size adapter, not another mutation API.
 
 Do not create local-only mutations such as:
 
@@ -423,11 +438,18 @@ This preserves the "mirror, don't fork" principle already documented in `AI_ASSI
 
 # 9. Phase 7 — Local-friendly prompt and tool routing
 
-Feather's tool surface is large. A tiny local model may perform worse if hundreds of tools and a very large prompt are sent on every generation step.
+Feather's tool surface is large. More importantly, the official Qwen3 ONNX graphs currently
+produce float32 logits for every prefill token across a 151,936-token vocabulary. They do not expose
+`num_logits_to_keep` and do not slice the last hidden token before `lm_head`. A measured 61-tool
+fallback prompt reached 23,824 tokens, including 22,092 tokens from tool definitions alone; its
+logits output would require about 13.49 GiB before other model memory.
+
+`maxOutputTokens` does not limit this first-pass allocation. Feather therefore treats bounded local
+context as a correctness requirement rather than a tuning preference.
 
 This should be treated as a first-class optimization project.
 
-## 9.1 Replace `chooseActiveTools()` all-tools behavior
+## 9.1 Use a constant-size validated engine gateway
 
 `useAIChat.ts` currently has a `chooseActiveTools()` helper but effectively makes the whole `engineTools` set available.
 
@@ -448,7 +470,17 @@ export
 inspection
 ```
 
-Then route a prompt to a smaller tool subset.
+The intent router still scores all grouped actions and puts likely names in the compact local guide.
+Only two schemas are sent to the model:
+
+```text
+search_engine_tools(query, limit<=2)
+run_engine_tool(name, input)
+```
+
+`search_engine_tools` returns bounded, compact input shapes. `run_engine_tool` validates `input`
+with the selected original tool schema and calls that existing tool. An exact engine action name is
+ranked first, so all 223 actions remain discoverable without serializing all 223 schemas.
 
 Example:
 
@@ -458,44 +490,77 @@ Example:
       v
 intent router
       |
-      +-- inspection tools
-      +-- UI tools
-      +-- object-variable tools
+      +-- likely action-name hints
+      +-- search_engine_tools
+      +-- run_engine_tool
 ```
 
-Avoid asking a 0.6B model to choose between the entire engine API when only 10–30 tools are relevant.
+Cloud providers continue to receive the complete `engineTools` object directly.
 
-## 9.2 Keep a safe minimum set
+## 9.2 Enforce the real templated-token budget in the worker
 
-Always expose basic inspection/navigation tools needed for recovery.
+Before ONNX generation, the worker applies the selected model's real chat template and tokenizer to
+the complete local request: system guide, bounded snapshot, user text, tool schemas, and any tool
+transcript. The language-model adapter refuses unsafe first prefills before WebGPU allocates logits.
 
-Example:
+The ceiling is derived from adapter limits:
 
-```ts
-const CORE_TOOLS = [
-  'list_scene',
-  'inspect_object',
-  'list_scenes',
-];
+```text
+usable = min(maxBufferSize, maxStorageBufferBindingSize)
+raw = floor(usable * 0.75 / (151936 * 4))
+budget = largest supported tier <= raw: 256, 512, or 1024 tokens
 ```
+
+The common 1 GiB buffer limit selects 1,024 tokens. Later tool steps may use a bounded 4x transcript
+ceiling because the persistent worker reuses its verified KV prefix and only prefills appended tool
+results. Local tool results are additionally capped at 1,200 characters.
 
 ## 9.3 Local compact prompt
 
 Do not initially send the full long-form engine documentation to local models.
 
-Continue using `COMPACT_ENGINE_GUIDE`, but create optional capability-specific prompt sections based on active tool groups.
+Use the dedicated local guide and `buildLocalSnapshotContext()` rather than the cloud guide/snapshot.
+The snapshot is capped at 1,200 characters and the current user message at 640 characters. A short
+request may include a sanitized previous request/result summary capped at 240 characters; longer
+requests omit that continuity note. The model can recover precise live state through list/inspect
+engine actions.
 
 Target:
 
 ```text
-base Feather rules
-+ compact current scene snapshot
-+ relevant capability guide
-+ relevant tool schemas
-+ recent conversation
+short Feather rules
++ bounded current scene summary
++ likely action-name hints
++ two gateway schemas
++ current user request
 ```
 
-This will probably improve local tool accuracy more than moving immediately from a 0.6B model to a much larger model.
+For the previously failing `Help me improve it` path, the real Qwen tokenizer now measures roughly
+750 first-prefill tokens instead of 23,824.
+
+If a legacy/uncaught `/lm_head/MatMul` allocation still fails, Feather shows a targeted memory error,
+terminates the pressured worker, and performs a clean cached reload on the next send.
+
+Longer-term, a trusted generation-only ONNX export should slice the final hidden state to the last
+token before `lm_head`, or expose a compatible `num_logits_to_keep` input. Upgrading Transformers.js
+alone cannot add that missing graph input to the current official artifacts.
+
+## 9.4 Keep reasoning and control tokens private
+
+Qwen-family local prompts end with the model's supported `/no_think` soft switch. The model adapter
+also filters every generated text part and streaming delta after provider tool-call parsing. Its
+stateful sanitizer removes split or concatenated `<think>`, `<thinking>`, `<analysis>`, channel,
+turn, header, and raw tool-fence blocks without interfering with real AI SDK tool-call events.
+FunctionGemma parsing happens before this sanitizer so its function grammar remains executable.
+
+The chat placeholder says `Working in your project…` for Local mode. Private reasoning, model
+control tags, and malformed raw tool payloads must never be used as user-visible progress chatter.
+
+The local behavior rule is “act, don't interview”: use reasonable defaults, inspect missing ids,
+correct and retry tool errors, and ask one concise question only when a missing choice risks
+destructive replacement, depends on unavailable external data, or leaves multiple materially
+different targets. Structured gateway results use `ok`, `error`, and `retry` fields so small models
+can distinguish a successful edit from a recoverable failure.
 
 ---
 
@@ -990,7 +1055,7 @@ Implement in this order:
 
 1. Install dependencies.
 2. Create `localAIWorker.ts`.
-3. Create one hardcoded Qwen3 local model.
+3. Create a small curated local model catalog with Qwen3 as the recommended default.
 4. Run a plain text `streamText()` call.
 5. Confirm streaming and cancellation.
 
@@ -1030,7 +1095,7 @@ Implement in this order:
 1. Tool categories.
 2. Prompt-based active-tool routing.
 3. Smaller local prompt sections.
-4. Benchmark Qwen against other candidate models.
+4. Benchmark Qwen, LFM2.5, and FunctionGemma against the same engine-action suite.
 5. Tune max steps/max tokens.
 
 **Done when:** local AI can reliably perform representative Feather editing workflows.
@@ -1050,7 +1115,7 @@ Implement in this order:
 
 Ship V1 with:
 
-- one recommended local model;
+- one recommended local model plus clearly labelled curated/experimental alternatives;
 - WebGPU only;
 - one model loaded at a time;
 - Web Worker inference;
