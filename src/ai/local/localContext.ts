@@ -68,6 +68,7 @@ export function buildLocalSnapshotContext(): string {
           kind: selected.kind,
           position: selected.transform.position,
           parentId: selected.parentId ?? null,
+          blueprintId: selected.script?.blueprintId ?? null,
         }
       : null,
     objects: (activeScene?.objects ?? []).slice(0, 4).map((object) => ({
@@ -87,7 +88,7 @@ export function buildLocalSnapshotContext(): string {
     editingPrefabId: state.editingPrefabId ?? null,
   };
 
-  const prefix = 'Live project summary (bounded). Use search_engine_tools, then list/inspect actions for details.\n';
+  const prefix = 'Live project summary (bounded). Engine-action names go through run_engine_tool; use search_engine_tools/list/inspect when details are missing.\n';
   const serialized = JSON.stringify(summary);
   if (prefix.length + serialized.length <= LOCAL_SNAPSHOT_CHAR_BUDGET) return `${prefix}${serialized}`;
 

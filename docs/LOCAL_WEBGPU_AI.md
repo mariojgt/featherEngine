@@ -169,10 +169,20 @@ Use this as the first default because the local agent depends heavily on tool ca
 
 ```text
 LiquidAI/LFM2.5-1.2B-Instruct-ONNX
-onnx-community/Qwen3-1.7B-ONNX
 ```
 
-LFM2.5 provides another tool-native family at roughly 765 MB. Qwen3 1.7B is roughly 1.44 GB and trades download/GPU memory for stronger multi-step planning.
+LFM2.5 provides another tool-native family at roughly 765 MB.
+
+> **Qwen3 1.7B compatibility:** do not offer `onnx-community/Qwen3-1.7B-ONNX` in the
+> browser catalog yet. Its official q4f16 export is one monolithic roughly 1.43 GB ONNX graph and
+> currently aborts while ONNX Runtime Web copies/parses it through WebAssembly. The upstream model
+> discussion reports that none of the present precisions work in browsers, and the Transformers.js
+> tracker likewise records the 1.7B ONNX artifact as not browser-compatible. Persisted 1.7B choices
+> migrate to LFM2.5 1.2B. Re-enable it only after an official split/external-data export passes a
+> real Chromium WebGPU load benchmark.
+>
+> Upstream references: [model discussion](https://huggingface.co/onnx-community/Qwen3-1.7B-ONNX/discussions/2),
+> [Transformers.js issue](https://github.com/huggingface/transformers.js/issues/1361).
 
 ### Experimental choices
 
@@ -314,6 +324,9 @@ interface LocalModelRuntimeState {
   state: LocalModelState;
   progress: number;
   error?: string;
+  errorCode?: 'resource-limit' | 'network' | 'model-data' | 'runtime-changed' | 'runtime-failure';
+  errorRecovery?: 'use-recommended-model' | 'retry' | 'clear-cache' | 'reload';
+  technicalError?: string; // diagnostics only; never render raw WASM/ORT errors
 }
 ```
 
@@ -480,7 +493,16 @@ run_engine_tool(name, input)
 
 `search_engine_tools` returns bounded, compact input shapes. `run_engine_tool` validates `input`
 with the selected original tool schema and calls that existing tool. An exact engine action name is
-ranked first, so all 223 actions remain discoverable without serializing all 223 schemas.
+ranked first, so every engine action remains discoverable without serializing the full schema set.
+
+The prompt must say explicitly that these are the **only callable function names**. Suggested engine
+actions such as `create_object` are values for `run_engine_tool.name`, not callable functions. The
+model adapter also repairs a direct engine-action call into the gateway form, including common
+argument aliases, before AI SDK validation.
+
+Common compound edits have high-level shared engine actions so tiny models can finish within the
+bounded step budget: `create_block_wall` builds a real vertical fixed-physics wall/castle silhouette,
+and `set_object_script` opens/attaches and compiles a complete FeatherScript source in one call.
 
 Example:
 
@@ -561,6 +583,10 @@ correct and retry tool errors, and ask one concise question only when a missing 
 destructive replacement, depends on unavailable external data, or leaves multiple materially
 different targets. Structured gateway results use `ok`, `error`, and `retry` fields so small models
 can distinguish a successful edit from a recoverable failure.
+
+For a clear mutation request, a prose-only first response is not accepted as success. Feather retries
+once with a terse gateway instruction and only renders a successful action chip after an `ok:true`
+tool result. Domain failures such as missing objects and rejected scripts are returned as `ok:false`.
 
 ---
 

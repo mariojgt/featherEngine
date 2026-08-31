@@ -53,19 +53,19 @@ try {
   );
   assert.equal(await app.count('.local-ai-settings input[type="password"]'), 0, 'Local mode never renders an API-key field');
   assert.equal(await app.count('.local-ai-model-card'), 1, 'curated model card rendered');
-  assert.equal(await app.count('[data-testid="local-model-select"] option'), 5, 'all curated local models rendered');
+  assert.equal(await app.count('[data-testid="local-model-select"] option'), 4, 'all curated local models rendered');
   assert.deepEqual(
     await app.evaluate(`[...document.querySelectorAll('[data-testid="local-model-select"] option')].map((option) => option.textContent)`),
     [
       'Qwen3 0.6B — Recommended · 580 MB',
       'LFM2.5 1.2B — balanced · 765 MB',
-      'Qwen3 1.7B — balanced · 1.4 GB',
       'FunctionGemma 270M — Experimental · 450 MB',
       'Qwen3 4B — Experimental · 2.9 GB',
     ],
   );
   assert.ok((await app.text('.ai-title-copy'))?.includes('Local · Qwen3 0.6B · WebGPU'));
   assert.ok((await app.text('.local-ai-settings'))?.includes('never falls back to a cloud provider'));
+  assert.ok((await app.text('.local-ai-settings'))?.includes('Qwen3 1.7B is temporarily unavailable'));
   assert.equal(await app.evaluate(`document.querySelector('.ai-send')?.disabled`), true, 'send stays gated before download consent');
 
   await app.evaluate(`(() => {

@@ -15,6 +15,9 @@ export interface LocalModelDefinition {
   experimental?: boolean;
 }
 
+export const RETIRED_QWEN3_1_7B_MODEL_ID = 'onnx-community/Qwen3-1.7B-ONNX';
+export const BALANCED_LOCAL_MODEL_ID = 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX';
+
 /**
  * Curated rather than free-form: a random Hugging Face text model may not expose a compatible
  * ONNX graph, chat template, quantization, or tool-call format. Add models here only after a real
@@ -37,7 +40,7 @@ export const LOCAL_MODELS: readonly LocalModelDefinition[] = [
     recommended: true,
   },
   {
-    id: 'LiquidAI/LFM2.5-1.2B-Instruct-ONNX',
+    id: BALANCED_LOCAL_MODEL_ID,
     label: 'LFM2.5 1.2B',
     family: 'Liquid',
     description: 'Balanced on-device agent with native tool use and stronger instruction following.',
@@ -47,20 +50,6 @@ export const LOCAL_MODELS: readonly LocalModelDefinition[] = [
     approximateDownloadMb: 765,
     recommendedMemoryGb: 4,
     maxOutputTokens: 1280,
-    toolCalling: true,
-    toolFormat: 'native',
-  },
-  {
-    id: 'onnx-community/Qwen3-1.7B-ONNX',
-    label: 'Qwen3 1.7B',
-    family: 'Qwen',
-    description: 'Higher-quality Qwen agent for multi-step scene and gameplay work.',
-    tier: 'balanced',
-    device: 'webgpu',
-    dtype: 'q4f16',
-    approximateDownloadMb: 1440,
-    recommendedMemoryGb: 5,
-    maxOutputTokens: 1536,
     toolCalling: true,
     toolFormat: 'native',
   },
@@ -98,8 +87,19 @@ export const LOCAL_MODELS: readonly LocalModelDefinition[] = [
 
 export const DEFAULT_LOCAL_MODEL_ID = LOCAL_MODELS[0].id;
 
+/**
+ * Keep persisted settings safe when a model package has to be withdrawn. The official Qwen3 1.7B
+ * q4f16 artifact is one monolithic 1.43 GB ONNX graph and is documented upstream as failing in
+ * browsers while ONNX Runtime copies/parses it through WebAssembly. LFM is the closest proven
+ * balanced replacement; this can be reversed if a compatible external-data export is published.
+ */
+export function normalizeLocalModelId(modelId: string | undefined): string {
+  const migrated = modelId === RETIRED_QWEN3_1_7B_MODEL_ID ? BALANCED_LOCAL_MODEL_ID : modelId;
+  return LOCAL_MODELS.some((candidate) => candidate.id === migrated) && migrated
+    ? migrated
+    : DEFAULT_LOCAL_MODEL_ID;
+}
+
 export function getLocalModelDefinition(modelId: string): LocalModelDefinition {
-  const definition = LOCAL_MODELS.find((candidate) => candidate.id === modelId);
-  if (!definition) throw new Error(`Unsupported local model: ${modelId}`);
-  return definition;
+  return LOCAL_MODELS.find((candidate) => candidate.id === normalizeLocalModelId(modelId))!;
 }

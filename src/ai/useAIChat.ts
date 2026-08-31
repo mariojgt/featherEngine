@@ -6,7 +6,7 @@ import { useLocalAIStore } from '../store/localAIStore';
 import { COMPACT_ENGINE_GUIDE, buildSnapshotContext } from './systemPrompt';
 import { engineTools } from './tools';
 import { buildLocalEngineGuide } from './local/localPrompt';
-import { chooseLocalEngineTools } from './local/localToolRouter';
+import { chooseLocalEngineTools, isLocalActionRequest } from './local/localToolRouter';
 import { getLocalModelDefinition } from './local/localModelCatalog';
 import {
   buildLocalContinuityContext,
@@ -39,6 +39,21 @@ const LOCAL_WEBGPU_OVERFLOW = /\/lm_head\/MatMul|Failed to generate kernel's out
 
 export const isLocalWebGPUOverflow = (error: unknown): boolean =>
   LOCAL_WEBGPU_OVERFLOW.test(error instanceof Error ? error.message : String(error));
+
+const LOCAL_READ_ONLY_ENGINE_ACTION = /^(?:list_|inspect_|get_|browse_)/;
+
+const parseGatewayOutput = (output: unknown): Record<string, unknown> | null => {
+  if (output && typeof output === 'object' && !Array.isArray(output)) return output as Record<string, unknown>;
+  if (typeof output !== 'string') return null;
+  try {
+    const parsed = JSON.parse(output);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+};
 
 // --- Smart model routing -------------------------------------------------------------------------
 // Short, read-only questions ("what's in my scene?", "how many enemies are there?") don't need the
@@ -93,6 +108,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Renamed scene to "${String(input.name ?? '')}"`;
     case 'create_object':
       return `Created ${String(input.kind ?? 'object')}`;
+    case 'create_block_wall':
+      return `Built ${String(input.name ?? 'block wall')}`;
     case 'create_terrain':
       return 'Created terrain';
     case 'update_terrain':
@@ -443,6 +460,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Attached blueprint';
     case 'open_object_script':
       return 'Opened object script';
+    case 'set_object_script':
+      return 'Wrote object script';
     case 'create_ui_document':
       return `Created UI${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'create_ui_template':
@@ -623,27 +642,87 @@ export function useAIChat() {
           : { provider: 'local', modelId: routedModelId },
       );
       const activeTools = (localSelection?.tools ?? engineTools) as typeof engineTools;
-      const result = streamText({
-        model,
-        messages: history,
-        tools: activeTools,
-        stopWhen: stepCountIs(provider === 'local' ? 8 : 16),
-        abortSignal: controller.signal,
-        ...(selectedLocalModel ? { maxOutputTokens: selectedLocalModel.maxOutputTokens } : {}),
-      });
+      const retryAction = provider === 'local' && isLocalActionRequest(trimmed);
+      const attemptCount = retryAction ? 2 : 1;
+      let localChangeApplied = false;
 
-      for await (const part of result.fullStream) {
-        if (part.type === 'text-delta') {
-          updateAssistant((message) => ({ ...message, content: message.content + part.text }));
-        } else if (part.type === 'tool-call') {
-          const action: ToolAction = {
-            id: part.toolCallId,
-            label: describeToolCall(part.toolName, (part.input ?? {}) as Record<string, unknown>),
-          };
-          updateAssistant((message) => ({ ...message, actions: [...message.actions, action] }));
-        } else if (part.type === 'error') {
-          throw part.error;
+      for (let attempt = 0; attempt < attemptCount; attempt += 1) {
+        if (attempt > 0) {
+          updateAssistant((message) => ({ ...message, content: '', actions: [] }));
         }
+        const attemptMessages: ModelMessage[] = attempt === 0
+          ? history
+          : [
+              ...history.slice(0, -1),
+              {
+                role: 'system',
+                content: 'The previous response made no confirmed editor change. Act now: call run_engine_tool with the best suggested engine-action name and valid input. Do not answer with prose until an ok:true change is returned.',
+              },
+              history[history.length - 1],
+            ];
+        const pendingLocalActions = new Map<string, { name: string; input: Record<string, unknown> }>();
+        const result = streamText({
+          model,
+          messages: attemptMessages,
+          tools: activeTools,
+          stopWhen: stepCountIs(provider === 'local' ? 8 : 16),
+          abortSignal: controller.signal,
+          ...(selectedLocalModel
+            ? {
+                maxOutputTokens: selectedLocalModel.maxOutputTokens,
+                temperature: selectedLocalModel.family === 'Liquid' ? 0.1 : 0,
+              }
+            : {}),
+        });
+
+        for await (const part of result.fullStream) {
+          if (part.type === 'text-delta') {
+            updateAssistant((message) => ({ ...message, content: message.content + part.text }));
+          } else if (part.type === 'tool-call') {
+            const input = (part.input ?? {}) as Record<string, unknown>;
+            if (provider === 'local') {
+              const name = part.toolName === 'run_engine_tool' && typeof input.name === 'string'
+                ? input.name
+                : part.toolName;
+              const engineInput = part.toolName === 'run_engine_tool' && input.input && typeof input.input === 'object'
+                ? input.input as Record<string, unknown>
+                : input;
+              pendingLocalActions.set(part.toolCallId, { name, input: engineInput });
+            } else {
+              const action: ToolAction = {
+                id: part.toolCallId,
+                label: describeToolCall(part.toolName, input),
+              };
+              updateAssistant((message) => ({ ...message, actions: [...message.actions, action] }));
+            }
+          } else if (part.type === 'tool-result' && provider === 'local') {
+            const gateway = parseGatewayOutput(part.output);
+            const pending = pendingLocalActions.get(part.toolCallId);
+            const actionName = typeof gateway?.name === 'string' ? gateway.name : pending?.name;
+            if (gateway?.ok === true && actionName && actionName !== 'search_engine_tools') {
+              const action: ToolAction = {
+                id: part.toolCallId,
+                label: describeToolCall(actionName, pending?.input ?? {}),
+              };
+              updateAssistant((message) => message.actions.some((item) => item.id === action.id)
+                ? message
+                : { ...message, actions: [...message.actions, action] });
+              if (!LOCAL_READ_ONLY_ENGINE_ACTION.test(actionName)) localChangeApplied = true;
+            }
+          } else if (part.type === 'error') {
+            throw part.error;
+          }
+        }
+
+        if (!retryAction || localChangeApplied) break;
+      }
+
+      if (retryAction && !localChangeApplied) {
+        updateAssistant((message) => ({
+          ...message,
+          actions: [],
+          content: 'I could not confirm an editor change, so I left the project unchanged. Try naming the target object, or use one shorter edit at a time.',
+        }));
       }
     } catch (caught) {
       if (controller.signal.aborted) return;
@@ -660,7 +739,9 @@ export function useAIChat() {
       }
       const visibleError = localOverflow
         ? 'The local request exceeded this GPU\'s safe prompt memory. Feather reset the model and kept the project unchanged; retry the request.'
-        : detail;
+        : provider === 'local'
+          ? useLocalAIStore.getState().runtime.error ?? 'Local AI could not complete this request. Check the model status in Agent settings, then retry.'
+          : detail;
       setError(visibleError);
       updateAssistant((message) => ({
         ...message,

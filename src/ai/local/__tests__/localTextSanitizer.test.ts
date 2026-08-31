@@ -37,4 +37,15 @@ describe('Local model text sanitizer', () => {
       ),
     ).toBe('Visible');
   });
+
+  it('keeps nested tool blocks hidden until the outer reasoning block closes', () => {
+    expect(
+      sanitizeLocalModelText(
+        '<think>private <tool_call>{"name":"create_object"}</tool_call> still private</think>Visible',
+      ),
+    ).toBe('Visible');
+    expect(
+      sanitizeLocalModelText('<think>private </tool_call> still private</think>Visible'),
+    ).toBe('Visible');
+  });
 });

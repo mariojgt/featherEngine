@@ -5321,6 +5321,85 @@ const rawEngineTools = {
     },
   }),
 
+  create_block_wall: tool({
+    description:
+      'Build a vertical wall from cube blocks in ONE call. Prefer this for walls, castle walls, ramparts, fences, and barricades instead of spawn_grid (which is a floor grid). `origin` is the lower-left point on the ground. Optional battlements and end towers make a castle silhouette. Returns the groupId and every block id.',
+    inputSchema: z.object({
+      name: z.string().optional().describe('Group/name prefix (default "Castle Wall").'),
+      origin: vec3.optional().describe('Lower-left ground point (default [0,0,0]).'),
+      length: z.number().int().min(2).max(30).optional().describe('Blocks across (default 8).'),
+      height: z.number().int().min(1).max(10).optional().describe('Blocks tall (default 4).'),
+      blockSize: vec3.optional().describe('Each block scale [width,height,depth] (default [1.5,1,1]).'),
+      color: z.string().optional().describe('Hex block color (default stone gray).'),
+      battlements: z.boolean().optional().describe('Add alternating blocks along the top (default true).'),
+      towers: z.boolean().optional().describe('Add taller columns at both ends (default true).'),
+    }),
+    execute: async ({ name, origin, length, height, blockSize, color, battlements, towers }) => {
+      const wallName = name?.trim() || 'Castle Wall';
+      const [ox, oy, oz] = origin ? asVec3(origin) : [0, 0, 0];
+      const [blockWidth, blockHeight, blockDepth] = blockSize ? asVec3(blockSize) : [1.5, 1, 1];
+      if (blockWidth <= 0 || blockHeight <= 0 || blockDepth <= 0) {
+        return 'blockSize values must all be greater than zero.';
+      }
+      const columns = length ?? 8;
+      const rows = height ?? 4;
+      const addBattlements = battlements ?? true;
+      const addTowers = towers ?? true;
+      const wallColor = color ?? '#8C8172';
+      const groupId = store().createObjectWithProps('empty', { name: wallName, position: [0, 0, 0] });
+      const ids: string[] = [];
+
+      const addBlock = (label: string, position: Vector3Tuple, scale: Vector3Tuple = [blockWidth, blockHeight, blockDepth]) => {
+        const id = store().createObjectWithProps('cube', {
+          name: `${wallName} ${label}`,
+          position,
+          color: wallColor,
+          parentId: groupId,
+          physics: { enabled: true, bodyType: 'fixed', collider: 'box' },
+        });
+        store().updateTransform(id, 'scale', scale);
+        ids.push(id);
+      };
+
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < columns; column += 1) {
+          addBlock(
+            `Block ${row * columns + column + 1}`,
+            [ox + column * blockWidth, oy + blockHeight / 2 + row * blockHeight, oz],
+          );
+        }
+      }
+
+      if (addBattlements) {
+        for (let column = 0; column < columns; column += 2) {
+          addBlock(
+            `Battlement ${column / 2 + 1}`,
+            [ox + column * blockWidth, oy + blockHeight / 2 + rows * blockHeight, oz],
+          );
+        }
+      }
+
+      if (addTowers) {
+        const towerScale: Vector3Tuple = [blockWidth * 1.25, blockHeight, blockDepth * 1.25];
+        for (const [side, x] of [['Left', ox - blockWidth], ['Right', ox + columns * blockWidth]] as const) {
+          for (let row = 0; row < rows + 2; row += 1) {
+            addBlock(
+              `${side} Tower ${row + 1}`,
+              [x, oy + blockHeight / 2 + row * blockHeight, oz],
+              towerScale,
+            );
+          }
+        }
+      }
+
+      return JSON.stringify({
+        message: `Built ${wallName} with ${ids.length} fixed blocks.`,
+        groupId,
+        blockIds: ids,
+      });
+    },
+  }),
+
   align_objects: tool({
     description:
       'Align objects along one axis so they share a coordinate — e.g. line up props on the floor (axis "y", mode "min") or flush against a wall. mode: min/max/center snap to the group bounds; "first" matches the first id; "value" uses the explicit `value`.',
@@ -5980,6 +6059,26 @@ const rawEngineTools = {
       const blueprintId = store().openObjectScript(objectId);
       if (!blueprintId) return `Could not open a script for object ${objectId}.`;
       return `Opened blueprint ${blueprintId} ("${findBlueprint(blueprintId)?.name}") for object ${objectId}.`;
+    },
+  }),
+
+  set_object_script: tool({
+    description:
+      'Create/open and REPLACE a scene object\'s script in ONE call. Prefer this for requests like "set a script on this cube" so no separate blueprint-id handoff is needed. Source is complete FeatherScript: `blueprint Name`, then handlers such as `on update(dt):`, with four-space-indented actions like `self.rotate(axis: "y", amount: 90)`.',
+    inputSchema: z.object({
+      objectId: z.string(),
+      source: z.string().min(1).describe('Complete FeatherScript source for the object.'),
+    }),
+    execute: async ({ objectId, source }) => {
+      if (!findObject(objectId)) return `No object with id ${objectId}.`;
+      const blueprintId = store().openObjectScript(objectId);
+      if (!blueprintId) return `Could not open a script for object ${objectId}.`;
+      const result = store().applyBlueprintFeatherSource(blueprintId, source);
+      const notes = result.diagnostics
+        .map((diagnostic) => `${diagnostic.severity} L${diagnostic.line}:${diagnostic.column} ${diagnostic.message}`)
+        .join('\n');
+      if (!result.ok) return `Script rejected — fix these and retry:\n${notes}`;
+      return `Applied object script to ${objectId} with blueprintId ${blueprintId}: ${result.graph?.nodes.length ?? 0} nodes, ${result.graph?.edges.length ?? 0} edges.${notes ? `\nNotes:\n${notes}` : ''}`;
     },
   }),
 

@@ -2,7 +2,7 @@ import type { TransformersJSLanguageModel } from '@browser-ai/transformers-js';
 import type { LanguageModel } from 'ai';
 import { useLocalAIStore } from '../../store/localAIStore';
 import type { LocalModelDefinition } from './localModelCatalog';
-import { LocalModelTextSanitizer, sanitizeLocalModelText } from './localTextSanitizer';
+import { sanitizeLocalModelText } from './localTextSanitizer';
 
 const FUNCTION_START = '<start_function_call>';
 const FUNCTION_END = '<end_function_call>';
@@ -86,6 +86,104 @@ export interface ParsedFunctionGemmaCall {
   toolName: string;
   input: Record<string, unknown>;
   text: string;
+}
+
+export interface ParsedLocalToolCall extends ParsedFunctionGemmaCall {}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const parseJsonRecord = (value: unknown): Record<string, unknown> | null => {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const normalizeEngineInput = (toolName: string, input: Record<string, unknown>) => {
+  const aliased = parseJsonRecord(input.arguments)
+    ?? parseJsonRecord(input.parameters)
+    ?? parseJsonRecord(input.args)
+    ?? input;
+  const nested = toolName !== 'run_engine_tool' && parseJsonRecord(aliased.input);
+  const normalized = { ...(nested ?? aliased) };
+  if (toolName === 'create_object' && normalized.kind === 'box') normalized.kind = 'cube';
+  return normalized;
+};
+
+/** Keep every family on Feather's two-function gateway, even if a tiny model calls an action directly. */
+export function normalizeLocalToolCall(toolName: string, input: Record<string, unknown>) {
+  if (toolName === 'search_engine_tools') return { toolName, input };
+  if (toolName === 'run_engine_tool') {
+    const engineName = typeof input.name === 'string' ? input.name : '';
+    const engineInput = parseJsonRecord(input.input)
+      ?? parseJsonRecord(input.arguments)
+      ?? parseJsonRecord(input.parameters)
+      ?? parseJsonRecord(input.args)
+      ?? {};
+    return {
+      toolName,
+      input: {
+        name: engineName,
+        input: normalizeEngineInput(engineName, engineInput),
+      },
+    };
+  }
+  return {
+    toolName: 'run_engine_tool',
+    input: {
+      name: toolName,
+      input: normalizeEngineInput(toolName, input),
+    },
+  };
+}
+
+function parsedJsonToolCall(value: unknown): { toolName: string; input: Record<string, unknown> } | null {
+  const record = parseJsonRecord(value);
+  if (!record) return null;
+  const functionEnvelope = isRecord(record.function) ? record.function : null;
+  const toolName = functionEnvelope?.name ?? record.name ?? record.toolName ?? record.tool;
+  if (typeof toolName !== 'string' || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(toolName)) return null;
+  const rawInput = functionEnvelope?.arguments
+    ?? record.arguments
+    ?? record.parameters
+    ?? record.args
+    ?? record.input
+    ?? {};
+  return { toolName, input: parseJsonRecord(rawInput) ?? {} };
+}
+
+/** Recovery for model-family outputs that look like calls but the provider emitted as plain text. */
+export function parseLocalToolCall(text: string): ParsedLocalToolCall | null {
+  const gemma = parseFunctionGemmaToolCall(text);
+  if (gemma) return gemma;
+
+  const patterns = [
+    /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i,
+    /<\|tool_call_start\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/i,
+    /```(?:tool_call|tool-call|json)\s*([\s\S]*?)```/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const parsed = parsedJsonToolCall(match[1].trim());
+    if (!parsed) continue;
+    return {
+      ...parsed,
+      text: sanitizeLocalModelText(`${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`),
+    };
+  }
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    const parsed = parsedJsonToolCall(trimmed);
+    if (parsed) return { ...parsed, text: '' };
+  }
+  return null;
 }
 
 class FunctionGemmaValueParser {
@@ -231,11 +329,38 @@ type FinishPart = Extract<StreamPart, { type: 'finish' }>;
 function sanitizeGenerateResult<T extends Awaited<ReturnType<TransformersJSLanguageModel['doGenerate']>>>(
   result: T,
 ): T {
+  const rawText = result.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('');
+  const hasNativeToolCall = result.content.some((part) => part.type === 'tool-call');
+  const recovered = hasNativeToolCall ? null : parseLocalToolCall(rawText);
+  if (recovered) {
+    const normalized = normalizeLocalToolCall(recovered.toolName, recovered.input);
+    return {
+      ...result,
+      content: [
+        ...(recovered.text ? [{ type: 'text' as const, text: recovered.text }] : []),
+        {
+          type: 'tool-call' as const,
+          toolCallId: nextToolCallId(),
+          toolName: normalized.toolName,
+          input: JSON.stringify(normalized.input),
+        },
+      ],
+      finishReason: { unified: 'tool-calls' as const, raw: 'tool-calls' },
+    } as T;
+  }
   return {
     ...result,
     content: result.content
       .filter((part) => part.type !== 'reasoning')
-      .map((part) => part.type === 'text' ? { ...part, text: sanitizeLocalModelText(part.text) } : part)
+      .map((part) => {
+        if (part.type === 'text') return { ...part, text: sanitizeLocalModelText(part.text) };
+        if (part.type !== 'tool-call') return part;
+        const normalized = normalizeLocalToolCall(part.toolName, parseJsonRecord(part.input) ?? {});
+        return { ...part, toolName: normalized.toolName, input: JSON.stringify(normalized.input) };
+      })
       .filter((part) => part.type !== 'text' || Boolean(part.text)) as typeof result.content,
   } as T;
 }
@@ -244,33 +369,68 @@ function sanitizeStreamResult(result: StreamResult): StreamResult {
   const stream = new ReadableStream<StreamPart>({
     async start(controller) {
       const reader = result.stream.getReader();
-      let sanitizer = new LocalModelTextSanitizer();
-      let activeTextId = 'text-0';
+      let rawText = '';
+      let finish: FinishPart | undefined;
+      const nativeCalls: Array<{ toolCallId: string; toolName: string; input: string }> = [];
+      const partialCalls = new Map<string, { toolName: string; input: string }>();
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (value.type === 'text-start') {
-            activeTextId = value.id;
-            controller.enqueue(value);
-          } else if (value.type === 'text-delta') {
-            activeTextId = value.id;
-            const delta = sanitizer.push(value.delta);
-            if (delta) controller.enqueue({ ...value, delta });
-          } else if (value.type === 'text-end') {
-            const delta = sanitizer.finish();
-            if (delta) controller.enqueue({ type: 'text-delta', id: activeTextId, delta } as StreamPart);
-            controller.enqueue(value);
-            sanitizer = new LocalModelTextSanitizer();
+          if (value.type === 'text-delta') {
+            rawText += value.delta;
+          } else if (value.type === 'text-start' || value.type === 'text-end') {
+            // Local output is intentionally buffered so reasoning/tool delimiters never flash in chat.
           } else if (value.type === 'reasoning-start' || value.type === 'reasoning-delta' || value.type === 'reasoning-end') {
             // Private local-model reasoning is intentionally never rendered in Feather chat.
+          } else if (value.type === 'tool-input-start') {
+            partialCalls.set(value.id, { toolName: value.toolName, input: '' });
+          } else if (value.type === 'tool-input-delta') {
+            const partial = partialCalls.get(value.id);
+            if (partial) partial.input += value.delta;
+          } else if (value.type === 'tool-input-end') {
+            // A final tool-call normally follows. Keep this as a fallback for providers that omit it.
+          } else if (value.type === 'tool-call') {
+            nativeCalls.push(value);
+            partialCalls.delete(value.toolCallId);
+          } else if (value.type === 'finish') {
+            finish = value;
           } else {
             controller.enqueue(value);
           }
         }
-        const tail = sanitizer.finish();
-        if (tail) controller.enqueue({ type: 'text-delta', id: activeTextId, delta: tail } as StreamPart);
+
+        for (const [toolCallId, partial] of partialCalls) {
+          nativeCalls.push({ toolCallId, toolName: partial.toolName, input: partial.input || '{}' });
+        }
+        const recovered = nativeCalls.length ? null : parseLocalToolCall(rawText);
+        const visibleText = sanitizeLocalModelText(recovered?.text ?? rawText);
+        if (visibleText) {
+          controller.enqueue({ type: 'text-start', id: 'text-0' });
+          controller.enqueue({ type: 'text-delta', id: 'text-0', delta: visibleText });
+          controller.enqueue({ type: 'text-end', id: 'text-0' });
+        }
+
+        const calls = recovered
+          ? [{ toolCallId: nextToolCallId(), toolName: recovered.toolName, input: JSON.stringify(recovered.input) }]
+          : nativeCalls;
+        for (const call of calls) {
+          const normalized = normalizeLocalToolCall(call.toolName, parseJsonRecord(call.input) ?? {});
+          controller.enqueue({
+            type: 'tool-call',
+            toolCallId: call.toolCallId,
+            toolName: normalized.toolName,
+            input: JSON.stringify(normalized.input),
+          });
+        }
+        if (finish) {
+          controller.enqueue(
+            calls.length
+              ? { ...finish, finishReason: { unified: 'tool-calls', raw: 'tool-calls' } }
+              : finish,
+          );
+        }
         controller.close();
       } catch (error) {
         controller.enqueue({ type: 'error', error } as StreamPart);
@@ -332,14 +492,9 @@ export function adaptLocalLanguageModel(
         .join('');
       const parsed = parseFunctionGemmaToolCall(rawText);
 
-      if (!parsed) {
-        return {
-          ...result,
-          content: result.content.map((part) =>
-            part.type === 'text' ? { ...part, text: stripFunctionGemmaControlTokens(part.text) } : part,
-          ),
-        };
-      }
+      if (!parsed) return sanitizeGenerateResult(result);
+
+      const normalized = normalizeLocalToolCall(parsed.toolName, parsed.input);
 
       return {
         ...result,
@@ -348,71 +503,15 @@ export function adaptLocalLanguageModel(
           {
             type: 'tool-call' as const,
             toolCallId: nextToolCallId(),
-            toolName: parsed.toolName,
-            input: JSON.stringify(parsed.input),
+            toolName: normalized.toolName,
+            input: JSON.stringify(normalized.input),
           },
         ],
         finishReason: { unified: 'tool-calls' as const, raw: 'tool-calls' },
       };
     },
     doStream: async (options: Parameters<TransformersJSLanguageModel['doStream']>[0]) => {
-      const result = await guardedModel.doStream(options);
-      const stream = new ReadableStream<StreamPart>({
-        async start(controller) {
-          const reader = result.stream.getReader();
-          let rawText = '';
-          let finish: FinishPart | undefined;
-          let nativeToolCall = false;
-
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (value.type === 'text-delta') {
-                rawText += value.delta;
-              } else if (value.type === 'text-start' || value.type === 'text-end') {
-                // Buffer this small model so its family-specific control tokens never flash in chat.
-              } else if (value.type === 'finish') {
-                finish = value;
-              } else {
-                if (value.type === 'tool-call' || value.type === 'tool-input-start') nativeToolCall = true;
-                controller.enqueue(value);
-              }
-            }
-
-            const parsed = nativeToolCall ? null : parseFunctionGemmaToolCall(rawText);
-            const text = sanitizeLocalModelText(parsed?.text ?? stripFunctionGemmaControlTokens(rawText));
-            if (text) {
-              controller.enqueue({ type: 'text-start', id: 'text-0' });
-              controller.enqueue({ type: 'text-delta', id: 'text-0', delta: text });
-              controller.enqueue({ type: 'text-end', id: 'text-0' });
-            }
-            if (parsed) {
-              controller.enqueue({
-                type: 'tool-call',
-                toolCallId: nextToolCallId(),
-                toolName: parsed.toolName,
-                input: JSON.stringify(parsed.input),
-              });
-            }
-            if (finish) {
-              controller.enqueue(
-                parsed
-                  ? { ...finish, finishReason: { unified: 'tool-calls', raw: 'tool-calls' } }
-                  : finish,
-              );
-            }
-            controller.close();
-          } catch (error) {
-            controller.enqueue({ type: 'error', error });
-            controller.close();
-          } finally {
-            reader.releaseLock();
-          }
-        },
-      });
-
-      return { ...result, stream };
+      return sanitizeStreamResult(await guardedModel.doStream(options));
     },
   };
 

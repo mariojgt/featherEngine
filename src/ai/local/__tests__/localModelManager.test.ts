@@ -125,6 +125,27 @@ describe('Local model manager', () => {
     ]);
     await expect(downloadAndLoadLocalModel(DEFAULT_LOCAL_MODEL_ID)).rejects.toThrow('Model graph failed');
     expect(FakeWorker.instances[0].terminated).toBe(true);
-    expect(useLocalAIStore.getState().runtime).toMatchObject({ state: 'error', error: 'Model graph failed' });
+    expect(useLocalAIStore.getState().runtime).toMatchObject({
+      state: 'error',
+      errorCode: 'runtime-failure',
+      technicalError: 'Model graph failed',
+    });
+    expect(useLocalAIStore.getState().runtime.error).not.toContain('Model graph failed');
+  });
+
+  it('turns opaque WebAssembly aborts into an actionable resource-limit error', async () => {
+    mocks.createSession.mockRejectedValueOnce(new Error('Aborted(). Build with -sASSERTIONS for more info.'));
+    const [{ downloadAndLoadLocalModel }, { useLocalAIStore }] = await Promise.all([
+      import('../localModelManager'),
+      import('../../../store/localAIStore'),
+    ]);
+    await expect(downloadAndLoadLocalModel(DEFAULT_LOCAL_MODEL_ID)).rejects.toThrow('Aborted');
+    expect(useLocalAIStore.getState().runtime).toMatchObject({
+      state: 'error',
+      errorCode: 'resource-limit',
+      errorRecovery: 'use-recommended-model',
+    });
+    expect(useLocalAIStore.getState().runtime.error).toContain('WebGPU memory limits');
+    expect(useLocalAIStore.getState().runtime.error).not.toContain('ASSERTIONS');
   });
 });

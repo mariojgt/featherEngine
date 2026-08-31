@@ -9,7 +9,8 @@ import {
 } from './localCache';
 import { detectLocalAIHardware, getLocalStorageEstimate } from './localHardware';
 import { adaptLocalLanguageModel } from './localModelAdapter';
-import { getLocalModelDefinition } from './localModelCatalog';
+import { getLocalModelDefinition, normalizeLocalModelId } from './localModelCatalog';
+import { classifyLocalModelError } from './localModelError';
 
 interface LocalRuntime {
   modelId: string;
@@ -42,6 +43,7 @@ function terminateRuntime() {
 }
 
 async function createRuntime(modelId: string): Promise<LocalRuntime> {
+  modelId = normalizeLocalModelId(modelId);
   if (runtime?.modelId === modelId) return runtime;
   terminateRuntime();
 
@@ -67,22 +69,24 @@ async function createRuntime(modelId: string): Promise<LocalRuntime> {
     return runtime;
   } catch (error) {
     worker.terminate();
-    const detail = error instanceof Error ? error.message : String(error);
-    if (/dynamically imported module|Outdated Optimize Dep|504 \(Outdated Optimize Dep\)/i.test(detail)) {
-      throw new Error(
-        'Feather\'s Local AI runtime changed while this development session was open. Reload or restart Feather, then retry; the model download did not start.',
-      );
-    }
     throw error;
   }
 }
 
 export async function refreshLocalAIStatus(modelId: string): Promise<void> {
+  modelId = normalizeLocalModelId(modelId);
   const currentOperation = ++operation;
   if (runtime && runtime.modelId !== modelId) terminateRuntime();
   useLocalAIStore.setState((state) => ({
     hardware: { state: 'checking', shaderF16: false },
-    runtime: { ...state.runtime, modelId, error: undefined },
+    runtime: {
+      ...state.runtime,
+      modelId,
+      error: undefined,
+      errorCode: undefined,
+      errorRecovery: undefined,
+      technicalError: undefined,
+    },
   }));
 
   const [hardware, cached, storage, cachedModelIds] = await Promise.all([
@@ -110,11 +114,15 @@ export async function refreshLocalAIStatus(modelId: string): Promise<void> {
               : 'not-installed',
       progress: runtime?.modelId === modelId && state.runtime.state === 'ready' ? 1 : 0,
       error: hardware.state === 'unavailable' ? hardware.reason : undefined,
+      errorCode: undefined,
+      errorRecovery: undefined,
+      technicalError: undefined,
     },
   }));
 }
 
 async function prepareLocalModel(modelId: string, allowDownload: boolean): Promise<LanguageModel> {
+  modelId = normalizeLocalModelId(modelId);
   if (runtime?.modelId === modelId && useLocalAIStore.getState().runtime.state === 'ready') {
     return runtime.languageModel;
   }
@@ -126,13 +134,29 @@ async function prepareLocalModel(modelId: string, allowDownload: boolean): Promi
     if (currentOperation !== operation) throw new DOMException('Local AI load was cancelled.', 'AbortError');
     useLocalAIStore.setState({ hardware });
     if (hardware.state !== 'available') {
-      updateRuntime({ modelId, state: 'unsupported', progress: 0, error: hardware.reason });
+      updateRuntime({
+        modelId,
+        state: 'unsupported',
+        progress: 0,
+        error: hardware.reason,
+        errorCode: undefined,
+        errorRecovery: undefined,
+        technicalError: undefined,
+      });
       throw new Error(hardware.reason ?? 'WebGPU is unavailable.');
     }
 
     const cached = await isLocalModelCached(modelId);
     if (!cached && !allowDownload) {
-      updateRuntime({ modelId, state: 'not-installed', progress: 0, error: undefined });
+      updateRuntime({
+        modelId,
+        state: 'not-installed',
+        progress: 0,
+        error: undefined,
+        errorCode: undefined,
+        errorRecovery: undefined,
+        technicalError: undefined,
+      });
       throw new Error('Download & load the local model in Agent settings before using it.');
     }
 
@@ -141,6 +165,9 @@ async function prepareLocalModel(modelId: string, allowDownload: boolean): Promi
       state: cached ? 'loading' : 'downloading',
       progress: 0,
       error: undefined,
+      errorCode: undefined,
+      errorRecovery: undefined,
+      technicalError: undefined,
     });
 
     const controller = new AbortController();
@@ -158,7 +185,11 @@ async function prepareLocalModel(modelId: string, allowDownload: boolean): Promi
       await Promise.race([
         nextRuntime.model.createSessionWithProgress((progress) => {
           if (currentOperation !== operation) return;
-          updateRuntime({ progress: Math.max(0, Math.min(1, progress)) });
+          const normalizedProgress = Math.max(0, Math.min(1, progress));
+          updateRuntime({
+            progress: normalizedProgress,
+            ...(normalizedProgress >= 1 ? { state: 'loading' as const } : {}),
+          });
         }),
         aborted,
       ]);
@@ -166,19 +197,39 @@ async function prepareLocalModel(modelId: string, allowDownload: boolean): Promi
 
       markLocalModelCached(modelId);
       await updateStorageEstimate();
-      updateRuntime({ modelId, state: 'ready', progress: 1, error: undefined });
+      updateRuntime({
+        modelId,
+        state: 'ready',
+        progress: 1,
+        error: undefined,
+        errorCode: undefined,
+        errorRecovery: undefined,
+        technicalError: undefined,
+      });
       return nextRuntime.languageModel;
     } catch (error) {
       terminateRuntime();
       if (currentOperation === operation) {
         if (error instanceof DOMException && error.name === 'AbortError') {
-          updateRuntime({ modelId, state: cached ? 'installed' : 'not-installed', progress: 0, error: undefined });
+          updateRuntime({
+            modelId,
+            state: cached ? 'installed' : 'not-installed',
+            progress: 0,
+            error: undefined,
+            errorCode: undefined,
+            errorRecovery: undefined,
+            technicalError: undefined,
+          });
         } else {
+          const failure = classifyLocalModelError(error, getLocalModelDefinition(modelId));
           updateRuntime({
             modelId,
             state: 'error',
             progress: 0,
-            error: error instanceof Error ? error.message : 'Local model failed to load.',
+            error: failure.message,
+            errorCode: failure.code,
+            errorRecovery: failure.recovery,
+            technicalError: failure.technicalDetail,
           });
         }
       }
@@ -210,7 +261,14 @@ export async function cancelLocalModelLoad(): Promise<void> {
   terminateRuntime();
   const modelId = useLocalAIStore.getState().runtime.modelId;
   const cached = await isLocalModelCached(modelId);
-  updateRuntime({ state: cached ? 'installed' : 'not-installed', progress: 0, error: undefined });
+  updateRuntime({
+    state: cached ? 'installed' : 'not-installed',
+    progress: 0,
+    error: undefined,
+    errorCode: undefined,
+    errorRecovery: undefined,
+    technicalError: undefined,
+  });
 }
 
 export async function unloadLocalModel(): Promise<void> {
@@ -221,13 +279,27 @@ export async function unloadLocalModel(): Promise<void> {
   terminateRuntime();
   const modelId = useLocalAIStore.getState().runtime.modelId;
   const cached = await isLocalModelCached(modelId);
-  updateRuntime({ state: cached ? 'installed' : 'not-installed', progress: 0, error: undefined });
+  updateRuntime({
+    state: cached ? 'installed' : 'not-installed',
+    progress: 0,
+    error: undefined,
+    errorCode: undefined,
+    errorRecovery: undefined,
+    technicalError: undefined,
+  });
 }
 
 export async function clearAllLocalAIModels(): Promise<void> {
   await unloadLocalModel();
   await clearLocalModelCache();
   useLocalAIStore.setState({ cachedModelIds: [] });
-  updateRuntime({ state: 'not-installed', progress: 0, error: undefined });
+  updateRuntime({
+    state: 'not-installed',
+    progress: 0,
+    error: undefined,
+    errorCode: undefined,
+    errorRecovery: undefined,
+    technicalError: undefined,
+  });
   await updateStorageEstimate();
 }

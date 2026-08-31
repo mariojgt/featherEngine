@@ -27,6 +27,21 @@ const HIDDEN_CLOSE_MARKERS = [
   '<|channel>final<|message|>',
 ] as const;
 
+const HIDDEN_MARKER_PAIRS = new Map<string, string>([
+  ['<think>', '</think>'],
+  ['<thinking>', '</thinking>'],
+  ['<analysis>', '</analysis>'],
+  ['<reasoning>', '</reasoning>'],
+  ['<tool_call>', '</tool_call>'],
+  ['<function_call>', '</function_call>'],
+  ['<start_function_call>', '<end_function_call>'],
+  ['<|tool_call|>', '<|tool_call_end|>'],
+  ['<|tool_call_start|>', '<|tool_call_end|>'],
+  ['<|channel>', '<channel|>'],
+  ['<|channel|>analysis<|message|>', '<|channel|>final<|message|>'],
+  ['<|channel>analysis<|message|>', '<|channel>final<|message|>'],
+]);
+
 const ALL_MARKERS = [...HIDDEN_OPEN_MARKERS, ...HIDDEN_CLOSE_MARKERS];
 const MAX_MARKER_LENGTH = Math.max(...ALL_MARKERS.map((marker) => marker.length), 72);
 
@@ -69,7 +84,7 @@ const possibleMarkerSuffixLength = (value: string): number => {
 /** Removes private reasoning and model-family control markers without flashing split tags. */
 export class LocalModelTextSanitizer {
   private buffer = '';
-  private hidden = false;
+  private hiddenClosers: string[] = [];
   private atVisibleStart = true;
 
   push(chunk: string): string {
@@ -84,19 +99,22 @@ export class LocalModelTextSanitizer {
   private drain(final: boolean): string {
     let output = '';
     while (this.buffer) {
-      const markers = this.hidden ? HIDDEN_CLOSE_MARKERS : ALL_MARKERS;
-      const match = findFirstMarker(this.buffer, markers);
+      const match = findFirstMarker(this.buffer, ALL_MARKERS);
       if (match) {
-        if (!this.hidden) output += this.visible(this.buffer.slice(0, match.index));
+        if (this.hiddenClosers.length === 0) output += this.visible(this.buffer.slice(0, match.index));
         const isOpen = HIDDEN_OPEN_MARKERS.includes(match.marker as typeof HIDDEN_OPEN_MARKERS[number]);
         const isClose = HIDDEN_CLOSE_MARKERS.includes(match.marker as typeof HIDDEN_CLOSE_MARKERS[number]);
-        this.hidden = isOpen ? true : isClose ? false : this.hidden;
+        if (isOpen) {
+          this.hiddenClosers.push(HIDDEN_MARKER_PAIRS.get(match.marker) ?? '');
+        } else if (isClose && this.hiddenClosers.at(-1) === match.marker) {
+          this.hiddenClosers.pop();
+        }
         this.buffer = this.buffer.slice(match.index + match.marker.length);
         continue;
       }
 
       if (final) {
-        if (!this.hidden) output += this.visible(this.buffer);
+        if (this.hiddenClosers.length === 0) output += this.visible(this.buffer);
         this.buffer = '';
         break;
       }
@@ -106,7 +124,7 @@ export class LocalModelTextSanitizer {
       if (safeLength <= 0) break;
       const safe = this.buffer.slice(0, safeLength);
       this.buffer = this.buffer.slice(safeLength);
-      if (!this.hidden) output += this.visible(safe);
+      if (this.hiddenClosers.length === 0) output += this.visible(safe);
     }
     return output;
   }

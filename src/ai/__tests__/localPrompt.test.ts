@@ -10,12 +10,16 @@ describe('Local Feather agent prompt', () => {
       'Qwen',
     );
     expect(guide).toContain("Act, don't interview");
-    expect(guide).toContain('call tools before replying');
-    expect(guide).toContain('Ask one concise question only if');
-    expect(guide).toContain('correct the input, and retry');
-    expect(guide).toContain('never output reasoning/control tags');
+    expect(guide).toContain('MUST change the project with a tool before you reply');
+    expect(guide).toContain('Ask one concise question only when');
+    expect(guide).toContain('exactly TWO callable functions');
+    expect(guide).toContain('NEVER functions; pass one as run_engine_tool.name');
+    expect(guide).toContain('create_block_wall');
+    expect(guide).toContain('set_object_script');
+    expect(guide).toContain('correct it, and retry');
+    expect(guide).toContain('Do not narrate plans or output reasoning/control tags');
     expect(guide).toContain('/no_think');
-    expect(guide.length).toBeLessThan(1800);
+    expect(guide.length).toBeLessThan(2300);
   });
 
   it('retains FunctionGemma function-calling priming without Qwen controls', () => {

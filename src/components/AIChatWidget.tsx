@@ -22,7 +22,12 @@ import {
   type ProviderId,
   type RemoteProviderInfo,
 } from '../ai/providers';
-import { getLocalModelDefinition, LOCAL_MODELS } from '../ai/local/localModelCatalog';
+import {
+  DEFAULT_LOCAL_MODEL_ID,
+  getLocalModelDefinition,
+  LOCAL_MODELS,
+  normalizeLocalModelId,
+} from '../ai/local/localModelCatalog';
 import {
   cancelLocalModelLoad,
   clearAllLocalAIModels,
@@ -122,7 +127,8 @@ function RemoteProviderSettings({ info }: { info: RemoteProviderInfo }) {
 }
 
 function LocalProviderSettings() {
-  const modelId = useAISettings((state) => state.models.local ?? DEFAULT_MODELS.local);
+  const persistedModelId = useAISettings((state) => state.models.local ?? DEFAULT_MODELS.local);
+  const modelId = normalizeLocalModelId(persistedModelId);
   const setModel = useAISettings((state) => state.setModel);
   const hardware = useLocalAIStore((state) => state.hardware);
   const runtime = useLocalAIStore((state) => state.runtime);
@@ -139,7 +145,10 @@ function LocalProviderSettings() {
   const insufficientStorage =
     availableStorage !== undefined && availableStorage < definition.approximateDownloadMb * 1_000_000 * 1.05;
 
-  useEffect(() => setConfirmDownload(false), [modelId]);
+  useEffect(() => {
+    setConfirmDownload(false);
+    if (persistedModelId !== modelId) setModel('local', modelId);
+  }, [modelId, persistedModelId, setModel]);
 
   const startDownload = () => {
     setConfirmDownload(false);
@@ -223,6 +232,10 @@ function LocalProviderSettings() {
               Preview model: use Qwen3 0.6B for the most conservative default while this model completes Feather benchmarks.
             </p>
           )}
+          <p className="local-ai-model-caveat">
+            Qwen3 1.7B is temporarily unavailable because its current official ONNX package crashes
+            in browsers. Existing 1.7B selections use LFM2.5 1.2B until a compatible package exists.
+          </p>
         </div>
 
         {busy && (
@@ -265,6 +278,11 @@ function LocalProviderSettings() {
                 {runtime.state === 'error' ? 'Retry' : 'Download & load'}
               </button>
             )}
+            {runtime.state === 'error' && runtime.errorRecovery === 'use-recommended-model' && modelId !== DEFAULT_LOCAL_MODEL_ID && (
+              <button className="secondary-button" onClick={() => setModel('local', DEFAULT_LOCAL_MODEL_ID)}>
+                Use Qwen3 0.6B
+              </button>
+            )}
             {runtime.state === 'installed' && (
               <button className="primary-button" onClick={startDownload}>
                 <Cpu size={13} aria-hidden /> Load model
@@ -293,7 +311,7 @@ function LocalProviderSettings() {
             {cachedModelIds.length > 0 ? ` · ${cachedModelIds.length} model${cachedModelIds.length === 1 ? '' : 's'} cached` : ''}
           </small>
         </span>
-        <button className="secondary-button" onClick={clearCache} disabled={busy || cachedModelIds.length === 0}>
+        <button className="secondary-button" onClick={clearCache} disabled={busy}>
           Clear local cache
         </button>
       </div>
@@ -342,7 +360,8 @@ export function AgentPanel() {
   const logRef = useRef<HTMLDivElement>(null);
   const provider = useAISettings((state) => state.provider);
   const apiKeys = useAISettings((state) => state.apiKeys);
-  const activeModel = useAISettings((state) => state.models[state.provider] ?? DEFAULT_MODELS[state.provider]);
+  const storedActiveModel = useAISettings((state) => state.models[state.provider] ?? DEFAULT_MODELS[state.provider]);
+  const activeModel = provider === 'local' ? normalizeLocalModelId(storedActiveModel) : storedActiveModel;
   const localRuntime = useLocalAIStore((state) => state.runtime);
   const providerLabel = PROVIDERS[provider].label;
   const canSend =

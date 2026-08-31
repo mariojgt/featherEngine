@@ -61,6 +61,7 @@ export const LOCAL_TOOL_GROUPS: Record<LocalToolGroup, readonly EngineToolName[]
     'create_instanced_grid',
     'group_objects',
     'spawn_grid',
+    'create_block_wall',
     'align_objects',
     'distribute_objects',
     'batch_transform',
@@ -272,6 +273,7 @@ export const LOCAL_TOOL_GROUPS: Record<LocalToolGroup, readonly EngineToolName[]
     'auto_layout',
     'attach_blueprint',
     'open_object_script',
+    'set_object_script',
   ],
 };
 
@@ -285,9 +287,9 @@ const GROUP_INTENTS: Array<[LocalToolGroup, RegExp]> = [
   ['cinematics', /\b(cinematic|film|camera shot|storyboard|timeline|keyframe|take|transition|replay)\b/i],
   ['prefabs', /\b(prefab|instance|reusable object)\b/i],
   ['packages', /\b(package|plugin|asset store|marketplace|import|export|build platform|publish)\b/i],
-  ['ui', /\b(ui|hud|interface|screen|widget|button|label|health bar|score|ammo|css|menu|diegetic)\b/i],
-  ['blueprints', /\b(blueprint|script|logic|node|variable|data asset|behavior|event graph)\b/i],
-  ['scene', /\b(scene|object|cube|sphere|light|lighting|environment|transform|move|rotate|scale|folder|grid|render|screenshot|play mode)\b/i],
+  ['ui', /\b(ui|hud|interface|widget|button|label|health bar|score|ammo|css|menu|diegetic|on[- ]screen)\b/i],
+  ['blueprints', /\b(blueprint|script|logic|node|variable|data asset|behavior|event graph|spin|spinning)\b/i],
+  ['scene', /\b(scene|object|cube|box|sphere|light|lighting|environment|transform|move|rotate|scale|folder|grid|wall|castle|fortress|rampart|fence|render|screenshot|play mode)\b/i],
 ];
 
 const GROUP_DEFAULT_TOOLS: Record<LocalToolGroup, readonly EngineToolName[]> = {
@@ -313,11 +315,50 @@ const TOOL_GROUP = new Map<EngineToolName, LocalToolGroup>(
 );
 
 const SEARCH_STOP_WORDS = new Set([
-  'and', 'are', 'build', 'can', 'create', 'for', 'from', 'help', 'into', 'make', 'please',
-  'set', 'that', 'the', 'this', 'tool', 'use', 'with', 'you', 'your',
+  'add', 'and', 'are', 'build', 'can', 'create', 'for', 'from', 'help', 'into', 'make',
+  'place', 'please', 'put', 'set', 'spawn', 'that', 'the', 'this', 'tool', 'use', 'with',
+  'you', 'your',
 ]);
 
 const normalizeSearchText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+const READ_ONLY_PREFIX = /^\s*(what|which|where|how|list|show|inspect|describe|explain|is|are|does|do|why)\b/i;
+const MUTATION_VERB = /\b(add|apply|attach|build|change|create|delete|duplicate|edit|make|move|open|place|put|remove|rename|replace|rotate|set|spawn|update|write)\b/i;
+
+/** Strict enough to avoid forcing tools for ordinary questions, broad enough for editor imperatives. */
+export function isLocalActionRequest(prompt: string): boolean {
+  return !READ_ONLY_PREFIX.test(prompt) && MUTATION_VERB.test(prompt);
+}
+
+function intentBoosts(query: string): Map<EngineToolName, number> {
+  const boosts = new Map<EngineToolName, number>();
+  const boost = (name: EngineToolName, score: number) => boosts.set(name, Math.max(score, boosts.get(name) ?? 0));
+
+  if (/\b(objects?|things?|items?)\b.*\b(scene|level)\b|\b(scene|level)\b.*\b(objects?|things?|items?)\b/i.test(query)) {
+    boost('list_scene', 8_000);
+    boost('inspect_object', 7_000);
+  }
+  if (
+    /\b(add|create|make|place|put|spawn)\b[^.!?]*\b(cube|box|sphere|ball|capsule|plane|light|camera|object)\b/i.test(query)
+    || /\b(cube|box|sphere|ball|capsule|plane|light|camera|object)\b[^.!?]*\b(add|create|make|place|put|spawn)\b/i.test(query)
+  ) {
+    boost('create_object', 9_000);
+  }
+  if (/\b(castle|fortress|fortification|wall|rampart|fence|barricade)\b/i.test(query)) {
+    boost('create_block_wall', 9_500);
+    boost('spawn_grid', 4_000);
+  }
+  if (/\b(spin|spinning|rotate continuously|rotating prop)\b/i.test(query)) {
+    boost('attach_behavior', 9_500);
+    boost('set_object_script', 6_000);
+  }
+  if (/\b(script|featherscript|code|behavior logic)\b/i.test(query)) {
+    boost('set_object_script', 9_000);
+    boost('open_object_script', 7_000);
+    boost('set_blueprint_script', 6_500);
+  }
+  return boosts;
+}
 
 /** Deterministic lexical index used both for prompt hints and the model's tiny discovery tool. */
 export function rankLocalEngineTools(query: string): EngineToolName[] {
@@ -334,8 +375,10 @@ export function rankLocalEngineTools(query: string): EngineToolName[] {
 
   const defaults = new Map<EngineToolName, number>();
   for (const group of selectedGroups) {
+    if (group === 'core' && isLocalActionRequest(query)) continue;
     GROUP_DEFAULT_TOOLS[group].forEach((name, index) => defaults.set(name, 40 - index));
   }
+  const directBoosts = intentBoosts(query);
 
   return (Object.keys(engineTools) as EngineToolName[])
     .map((name) => {
@@ -344,7 +387,11 @@ export function rankLocalEngineTools(query: string): EngineToolName[] {
       const searchable = `${normalizedName} ${normalizeSearchText(definition.description ?? '')}`;
       const exactIdentifier = new RegExp(`(?:^|[^a-z0-9_])${name}(?:$|[^a-z0-9_])`).test(identifierQuery);
       const exactPhrase = normalizedQuery.includes(normalizedName);
-      let score = exactIdentifier ? 20_000 : exactPhrase ? 10_000 : (defaults.get(name) ?? 0);
+      let score = exactIdentifier
+        ? 20_000
+        : exactPhrase
+          ? 10_000
+          : Math.max(defaults.get(name) ?? 0, directBoosts.get(name) ?? 0);
       for (const token of queryTokens) {
         if (normalizedName.split(' ').includes(token)) score += 120;
         else if (normalizedName.includes(token)) score += 60;
@@ -391,6 +438,34 @@ function compactToolSchema(schema: unknown, depth = 0): unknown {
   return compact;
 }
 
+function essentialToolSchema(schema: unknown, depth = 0): unknown {
+  if (!schema || typeof schema !== 'object') return schema;
+  const value = schema as JsonSchema;
+  const essential: JsonSchema = {};
+  if (typeof value.type === 'string') essential.type = value.type;
+  if (Array.isArray(value.required) && value.required.length) essential.required = value.required;
+  if (Array.isArray(value.enum)) essential.enum = value.enum.slice(0, 24);
+  if (value.items) essential.items = depth < 2 ? essentialToolSchema(value.items, depth + 1) : { type: 'unknown' };
+  if (value.properties && typeof value.properties === 'object') {
+    const required = new Set(Array.isArray(value.required) ? value.required : []);
+    essential.properties = Object.fromEntries(
+      Object.entries(value.properties as JsonSchema).map(([name, property]) => {
+        const propertyValue = property as JsonSchema;
+        if (propertyValue.type === 'object' && (depth >= 1 || !required.has(name))) {
+          return [name, { type: 'object' }];
+        }
+        const field = essentialToolSchema(property, depth + 1) as JsonSchema;
+        return [name, field];
+      }),
+    );
+  }
+  for (const unionKey of ['anyOf', 'oneOf'] as const) {
+    const union = value[unionKey];
+    if (Array.isArray(union)) essential[unionKey] = union.slice(0, 6).map((item) => essentialToolSchema(item, depth + 1));
+  }
+  return essential;
+}
+
 const boundedGatewayJson = (value: unknown, fallback: unknown): string => {
   const serialized = JSON.stringify(value);
   return serialized.length <= LOCAL_TOOL_RESULT_CHARS ? serialized : JSON.stringify(fallback);
@@ -434,11 +509,8 @@ export const LOCAL_ENGINE_GATEWAY_TOOLS = {
             const schema = input as JsonSchema;
             return {
               name,
-              description: description.slice(0, 120),
-              required: schema.required ?? [],
-              fields: schema.properties && typeof schema.properties === 'object'
-                ? Object.keys(schema.properties as JsonSchema)
-                : [],
+              description: description.slice(0, 80),
+              input: essentialToolSchema(schema),
             };
           }),
         },
@@ -487,6 +559,24 @@ export const LOCAL_ENGINE_GATEWAY_TOOLS = {
       try {
         const result = await definition.execute(validation.value as never, options as never);
         const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+        if (/^(?:No |Cannot |Could not |Script rejected|Invalid |Missing |Not in |Unable |blockSize )/i.test(resultText)) {
+          return boundedGatewayJson(
+            {
+              ok: false,
+              name,
+              error: 'engine_rejected',
+              message: resultText,
+              retry: 'inspect_or_adjust_then_run',
+            },
+            {
+              ok: false,
+              name,
+              error: 'engine_rejected',
+              message: resultText.slice(0, 900),
+              retry: 'inspect_or_adjust_then_run',
+            },
+          );
+        }
         return boundedGatewayJson(
           { ok: true, name, result },
           {
@@ -524,7 +614,7 @@ export function chooseLocalEngineTools(prompt: string): LocalToolSelection {
 
   // Ambiguous edit requests still need the common object and logic controls. Read-only questions
   // can stay on the tiny core inspection surface.
-  if (selected.size === 1 && !/^\s*(what|which|where|how many|list|show|inspect|describe|explain|is|are)\b/i.test(prompt)) {
+  if (selected.size === 1 && !READ_ONLY_PREFIX.test(prompt)) {
     selected.add('scene');
     selected.add('blueprints');
   }

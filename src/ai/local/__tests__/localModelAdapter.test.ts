@@ -4,6 +4,8 @@ import {
   adaptLocalLanguageModel,
   LocalPromptBudgetError,
   parseFunctionGemmaToolCall,
+  parseLocalToolCall,
+  normalizeLocalToolCall,
   stripFunctionGemmaControlTokens,
 } from '../localModelAdapter';
 import { getLocalModelDefinition } from '../localModelCatalog';
@@ -90,14 +92,39 @@ describe('FunctionGemma tool adapter', () => {
     expect(parts).toContainEqual({
       type: 'tool-call',
       toolCallId: expect.stringMatching(/^local-tool-/),
-      toolName: 'create_object',
-      input: JSON.stringify({ name: 'Gemma Cube', kind: 'box' }),
+      toolName: 'run_engine_tool',
+      input: JSON.stringify({
+        name: 'create_object',
+        input: { name: 'Gemma Cube', kind: 'cube' },
+      }),
     });
     expect(parts.at(-1)).toMatchObject({
       type: 'finish',
       finishReason: { unified: 'tool-calls', raw: 'tool-calls' },
     });
     expect(parts.some((part) => part.type === 'text-delta')).toBe(false);
+  });
+
+  it('recovers common JSON envelopes and argument aliases, then keeps them on the gateway', () => {
+    const qwen = parseLocalToolCall(
+      '<tool_call>{"type":"function","function":{"name":"create_object","arguments":"{\\"kind\\":\\"box\\",\\"name\\":\\"Recovered\\"}"}}</tool_call>',
+    );
+    expect(qwen).toMatchObject({
+      toolName: 'create_object',
+      input: { kind: 'box', name: 'Recovered' },
+    });
+    expect(normalizeLocalToolCall(qwen!.toolName, qwen!.input)).toEqual({
+      toolName: 'run_engine_tool',
+      input: { name: 'create_object', input: { kind: 'cube', name: 'Recovered' } },
+    });
+
+    const fenced = parseLocalToolCall(
+      '```json\n{"name":"run_engine_tool","args":{"name":"create_object","input":{"kind":"cube"}}}\n```',
+    );
+    expect(normalizeLocalToolCall(fenced!.toolName, fenced!.input)).toEqual({
+      toolName: 'run_engine_tool',
+      input: { name: 'create_object', input: { kind: 'cube' } },
+    });
   });
 });
 
@@ -180,6 +207,60 @@ describe('Local prompt preflight', () => {
 });
 
 describe('Native local-model stream cleanup', () => {
+  it('rewrites direct native engine calls through run_engine_tool', async () => {
+    const baseModel = {
+      specificationVersion: 'v3',
+      provider: 'transformers-js',
+      modelId: 'onnx-community/Qwen3-0.6B-ONNX',
+      supportedUrls: {},
+      doGenerate: vi.fn(),
+      doStream: vi.fn(async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({
+              type: 'tool-call',
+              toolCallId: 'direct-1',
+              toolName: 'create_object',
+              input: JSON.stringify({ kind: 'box', name: 'Native Cube' }),
+            });
+            controller.enqueue({
+              type: 'finish',
+              finishReason: { unified: 'tool-calls', raw: 'tool-calls' },
+              usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } },
+            });
+            controller.close();
+          },
+        }),
+      })),
+    } as unknown as TransformersJSLanguageModel;
+    const adapted = adaptLocalLanguageModel(
+      baseModel,
+      getLocalModelDefinition('onnx-community/Qwen3-0.6B-ONNX'),
+    ) as unknown as {
+      doStream(options: object): Promise<{ stream: ReadableStream<Record<string, unknown>> }>;
+    };
+
+    const { stream } = await adapted.doStream({});
+    const parts: Record<string, unknown>[] = [];
+    const reader = stream.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+
+    expect(parts).toContainEqual({
+      type: 'tool-call',
+      toolCallId: 'direct-1',
+      toolName: 'run_engine_tool',
+      input: JSON.stringify({
+        name: 'create_object',
+        input: { kind: 'cube', name: 'Native Cube' },
+      }),
+    });
+  });
+
   it('never forwards streamed Qwen reasoning/control tokens to the AI SDK chat loop', async () => {
     const baseModel = {
       specificationVersion: 'v3',

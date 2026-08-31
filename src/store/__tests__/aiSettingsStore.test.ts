@@ -44,15 +44,18 @@ describe('AI settings persistence', () => {
     expect(persisted.state).not.toHaveProperty('progress');
   });
 
-  it('preserves a selected model from the curated Local AI catalog', async () => {
+  it('migrates the retired Qwen3 1.7B browser artifact to the balanced Local model', async () => {
     const modelId = 'onnx-community/Qwen3-1.7B-ONNX';
     localStorage.setItem('nodeforge.ai', JSON.stringify({
       version: 1,
       state: { provider: 'local', models: { local: modelId } },
     }));
 
-    const { useAISettings } = await import('../aiSettingsStore');
-    expect(useAISettings.getState().models.local).toBe(modelId);
+    const [{ useAISettings }, { BALANCED_LOCAL_MODEL_ID }] = await Promise.all([
+      import('../aiSettingsStore'),
+      import('../../ai/local/localModelCatalog'),
+    ]);
+    expect(useAISettings.getState().models.local).toBe(BALANCED_LOCAL_MODEL_ID);
   });
 
   it('falls back safely when a removed or arbitrary local model id was persisted', async () => {

@@ -2,10 +2,10 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   DEFAULT_MODELS,
-  PROVIDERS,
   type ProviderId,
   type RemoteProviderId,
 } from '../ai/providers';
+import { normalizeLocalModelId } from '../ai/local/localModelCatalog';
 
 export interface AISettingsState {
   provider: ProviderId;
@@ -42,13 +42,22 @@ export const useAISettings = create<AISettingsState>()(
       smartRouting: true,
       setProvider: (provider) => set({ provider }),
       setApiKey: (provider, key) => set((state) => ({ apiKeys: { ...state.apiKeys, [provider]: key } })),
-      setModel: (provider, model) => set((state) => ({ models: { ...state.models, [provider]: model } })),
+      setModel: (provider, model) => set((state) => ({
+        models: {
+          ...state.models,
+          [provider]: provider === 'local' ? normalizeLocalModelId(model) : model,
+        },
+      })),
       setSmartRouting: (smartRouting) => set({ smartRouting }),
       activeKey: () => {
         const provider = get().provider;
         return provider === 'local' ? '' : get().apiKeys[provider] ?? '';
       },
-      activeModel: () => get().models[get().provider] ?? DEFAULT_MODELS[get().provider],
+      activeModel: () => {
+        const provider = get().provider;
+        const model = get().models[provider] ?? DEFAULT_MODELS[provider];
+        return provider === 'local' ? normalizeLocalModelId(model) : model;
+      },
     }),
     {
       name: 'nodeforge.ai',
@@ -65,7 +74,7 @@ export const useAISettings = create<AISettingsState>()(
       merge: (persisted, current) => {
         const saved = (persisted ?? {}) as Partial<PersistedAISettings>;
         const models = { ...current.models, ...(saved.models ?? {}) };
-        if (!PROVIDERS.local.models.includes(models.local)) models.local = DEFAULT_MODELS.local;
+        models.local = normalizeLocalModelId(models.local);
         return {
           ...current,
           ...saved,

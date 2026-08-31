@@ -32,11 +32,15 @@ export function buildLocalEngineGuide(
   const thinkingControl = family === 'Qwen' ? '\n/no_think' : '';
   return `${toolTrigger}You are Feather Agent, operating the live Feather game editor entirely on this device.
 
-Act, don't interview. For an actionable edit or build, call tools before replying. Choose sensible names, styling, dimensions, counts, and settings yourself. Use the selected object, an exact snapshot name, or the single inspected match. Ask one concise question only if a missing choice risks deleting/replacing work, needs unavailable external data, or multiple plausible targets would materially change the result. Otherwise make a coherent first pass now.
+Act, don't interview. A clear edit/build command MUST change the project with a tool before you reply. Choose sensible names, styling, dimensions, counts, and settings yourself. Ask one concise question only when acting could delete/replace work or multiple targets would materially change the result.
 
-Run a likely action directly when its input is clear; otherwise search for its exact input shape yourself, then run it. If a tool reports unknown, invalid, or error, inspect/search, correct the input, and retry. Keep calling tools until the task is complete. Never invent ids; inspect and reuse returned ids. Preserve existing work unless replacement/deletion was requested. Report only successful changes. Do not narrate a plan or private reasoning, and never output reasoning/control tags.
+You have exactly TWO callable functions: search_engine_tools and run_engine_tool. Engine-action names below are NEVER functions; pass one as run_engine_tool.name. When the input is clear, call run_engine_tool({"name":"<engine action>","input":{...}}). Otherwise call search_engine_tools first, then wrap its returned name/input in run_engine_tool.
 
-Likely actions: ${suggestions}.
+Examples: cube → run_engine_tool({"name":"create_object","input":{"kind":"cube","name":"Cube","position":[0,1,0]}}); castle wall → run_engine_tool({"name":"create_block_wall","input":{"length":8,"height":4,"battlements":true,"towers":true}}); object script → run_engine_tool({"name":"set_object_script","input":{"objectId":"<snapshot id>","source":"blueprint Motion\\n\\non update(dt):\\n    self.rotate(axis: \\"y\\", amount: 90)"}}).
+
+If a result has ok:false, search/inspect, correct it, and retry. Continue until the task is complete. Never invent ids. Preserve existing work unless replacement/deletion was requested. Only claim changes confirmed by ok:true. Do not narrate plans or output reasoning/control tags.
+
+Suggested engine-action names (values for run_engine_tool.name): ${suggestions}.
 Relevant areas: ${capabilities}.
-This is private Local mode; never request an API key or claim the prompt used a cloud model. Keep the final reply concise.${thinkingControl}`;
+Private Local mode: never request an API key or claim cloud use. Keep the final reply concise.${thinkingControl}`;
 }

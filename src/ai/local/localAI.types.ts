@@ -25,6 +25,10 @@ export interface LocalModelRuntimeState {
   /** Normalized download/load progress in the inclusive range 0..1. */
   progress: number;
   error?: string;
+  errorCode?: import('./localModelError').LocalModelErrorCode;
+  errorRecovery?: import('./localModelError').LocalModelErrorRecovery;
+  /** Raw worker/runtime detail for diagnostics. Do not render directly. */
+  technicalError?: string;
 }
 
 export interface LocalStorageEstimate {
