@@ -136,6 +136,38 @@ targets from one project, use the bundled GitHub Actions workflow
 
 The hosted web build runs in modern browsers; the native artifacts are standalone applications.
 
+### Tag-Triggered Desktop Releases
+
+When the goal is releasing a version of the **editor itself** (not a player game bundle),
+[.github/workflows/release-desktop.yml](../.github/workflows/release-desktop.yml) builds the
+Tauri desktop app for Windows and macOS and attaches the installers to a GitHub Release
+every time a version tag is pushed:
+
+```bash
+git tag v0.1.0        # must match src-tauri/tauri.conf.json version
+git push origin v0.1.0
+```
+
+1. GitHub Actions runs a 3-job matrix, each on its own runner (Tauri cannot cross-compile):
+   - `windows-latest` → NSIS installer (`*.exe`) + MSI (`*.msi`)
+   - `macos-latest` → `.app` + `.dmg` for **Apple Silicon**
+   - `macos-latest` → `.app` + `.dmg` for **Intel** (x86_64 cross-target)
+2. `tauri-action` runs `npm run build` (via `beforeBuildCommand`), then `cargo` builds the
+   Rust shell and bundles the installers.
+3. The action creates a **draft** GitHub Release named after the tag with all installers
+   attached; review and publish it from the Releases page.
+
+Notes:
+
+- Releases are unsigned unless code-signing secrets are configured in the repo
+  (`APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID` / `APPLE_PASSWORD` for macOS,
+  plus any Windows signing keys). Unsigned macOS builds ship as ad-hoc signed and can be
+  blocklisted by Gatekeeper.
+- A new tag push requires the push account to have the GitHub `workflow` scope (used when
+  the workflow file itself was first added/updated): `gh auth refresh -s workflow`.
+- Draft releases let you smoke-test installers before making them public; mark it as a
+  prerelease (or publish) once verified.
+
 ## Mobile Builds
 
 Both mobile targets wrap the same player build in the Tauri 2 mobile shell. Generated native
