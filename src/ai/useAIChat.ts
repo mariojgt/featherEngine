@@ -4,7 +4,7 @@ import { FAST_MODELS, PROVIDERS, isRemoteProvider, resolveModel } from './provid
 import { useAISettings } from '../store/aiSettingsStore';
 import { useLocalAIStore } from '../store/localAIStore';
 import { COMPACT_ENGINE_GUIDE, buildSnapshotContext } from './systemPrompt';
-import { engineTools } from './tools';
+import { engineTools, getActiveEngineTools } from './tools';
 import { buildLocalEngineGuide } from './local/localPrompt';
 import { chooseLocalEngineTools, isLocalActionRequest } from './local/localToolRouter';
 import { getLocalModelDefinition } from './local/localModelCatalog';
@@ -173,6 +173,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Listed plugins';
     case 'set_plugin_enabled':
       return input.enabled ? 'Installed plugin' : 'Removed plugin';
+    case 'imageTo3d.image-to-model':
+      return `Built model from image${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'set_grass_look':
       return `Grass look: ${input.preset}`;
     case 'add_terrain_layer':
@@ -642,7 +644,7 @@ export function useAIChat() {
           ? { provider, apiKey, modelId: routedModelId }
           : { provider: 'local', modelId: routedModelId },
       );
-      const activeTools = (localSelection?.tools ?? engineTools) as typeof engineTools;
+      const activeTools = (localSelection?.tools ?? getActiveEngineTools()) as typeof engineTools;
       const retryAction = provider === 'local' && isLocalActionRequest(trimmed);
       const attemptCount = retryAction ? 2 : 1;
       let localChangeApplied = false;

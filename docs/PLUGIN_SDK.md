@@ -29,6 +29,7 @@ runtime. The current API version is `0.2.0`.
 | --- | --- |
 | Register searchable commands | `api.commands.register(...)` |
 | Register and open dockable editor panels | `api.panels.register(...)`, `api.panels.open(...)` |
+| Register AI-assistant tools (available in chat + MCP) | `api.tools.register(...)` |
 | Read a detached project snapshot | `api.project.read()` |
 | Group synchronous project edits | `api.project.transaction(...)` |
 | List, create, rename, remove, select, and transform scene objects | `api.objects.*` |
@@ -83,6 +84,37 @@ Add the definition to `bundledPlugins` in
 [`src/extensions/bundledPlugins.ts`](../src/extensions/bundledPlugins.ts), then rebuild Feather. The
 included `Scene Tools SDK Example` plugin is a complete working reference: it contributes two
 commands, a panel, and project mutations.
+
+## AI-assistant tools
+
+A plugin can hand the in-editor assistant (and external agents over MCP) a tool without any engine
+wiring: `api.tools.register(...)` merges it into `getActiveEngineTools()`, the same tool surface the
+chat uses.
+
+```ts
+api.tools.register({
+  id: 'build-from-image',            // bare tool-name; the engine namespaces it `pluginId.build-from-image`
+  title: 'Build model from image',   // optional short chip label
+  description:
+    'Rebuild an object from a reference image as a model asset. Takes a name, a hex palette (1-16), and a kit-bash of primitive parts (shape, position/rotation/scale, color slot).',
+  inputSchema: z.object({
+    name: z.string(),
+    palette: z.array(z.string()),
+    parts: z.array(z.object({ shape: z.string(), scale: z.array(z.number()).length(3).optional() })),
+  }),
+  execute: async (input) => {
+    // Run against the live editor (useEditorStore), build/bake, return a short string.
+    return 'Built "Vase" and baked it to vase.glb in the Assets panel.';
+  },
+});
+```
+
+- `inputSchema` is a zod schema (same shape the built-in tools in `src/ai/tools.ts` use).
+- `execute` returns a string (or small stringifiable object) — the model reads it to decide its next step.
+- When the plugin is enabled, the tool appears to the assistant and to external agents with zero
+  engine changes; disabling the plugin removes it.
+- The on-device local AI (WebGPU) does not surface plugin tools — they assume a remote, vision-capable
+  model. Enable the tool's verdict from `list_plugins` description so the model knows when it's live.
 
 ## Safe project edits
 

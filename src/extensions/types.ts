@@ -93,6 +93,14 @@ export interface FeatherPluginAPI {
     register(definition: FeatherCommandDefinition): FeatherDispose;
   };
 
+  /**
+   * Register AI-assistant tools. When enabled, these merge into the same tool surface the in-editor
+   * chat and the MCP relay expose — the assistant instantly becomes aware of them.
+   */
+  readonly tools: {
+    register(definition: FeatherPluginTool): FeatherDispose;
+  };
+
   readonly panels: {
     register(definition: FeatherPanelDefinition): FeatherDispose;
     /**
@@ -197,6 +205,25 @@ export interface FeatherPluginAPI {
     warn(message: string, ...details: unknown[]): void;
     error(message: string, ...details: unknown[]): void;
   };
+}
+
+/**
+ * A tool a plugin makes available to the AI assistant (and to external agents via MCP). Registered
+ * tools are merged into the same `engineTools` surface the in-editor chat and the MCP relay use, so a
+ * plugin that ships one gets "the AI assistant is aware of it" for free.
+ *
+ * `inputSchema` is a zod schema (same shape as the engine's built-in tools in src/ai/tools.ts).
+ * `execute` runs in the browser against the live editor; return a human-readable string (or stringify
+ * a small object). The engine wraps it in the AI SDK `tool()` contract at registration time.
+ */
+export interface FeatherPluginTool {
+  /** Plugin-tool id — the engine namespaces it `pluginId.toolId` before exposing it to the AI. */
+  id: string;
+  /** Short verb-phrase the assistant sees as the tool name in chat chips. */
+  title?: string;
+  description: string;
+  inputSchema: unknown;
+  execute: (input: Record<string, unknown>) => unknown | Promise<unknown>;
 }
 
 export interface FeatherPluginDefinition {

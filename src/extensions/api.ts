@@ -309,6 +309,16 @@ export function createFeatherPluginAPI(
       return track(registry.registerCommand(pluginId, definition));
     },
   });
+  const tools: FeatherPluginAPI['tools'] = Object.freeze({
+    register: (definition) => {
+      // Plugin tools use a bare "tool-name" id; the engine namespaces it with the plugin id so the
+      // AI/MCP layer sees a globally unique `pluginId.tool-name`.
+      if (!definition.id.trim() || /\s/.test(definition.id) || definition.id.includes('.')) {
+        throw new Error(`Tool id "${definition.id}" must be a bare tool-name with no spaces or dots.`);
+      }
+      return track(registry.registerTool(pluginId, definition));
+    },
+  });
   const panels: FeatherPluginAPI['panels'] = Object.freeze({
     register: (definition) => {
       requireOwnedId(pluginId, definition.id, 'Panel');
@@ -371,6 +381,7 @@ export function createFeatherPluginAPI(
     pluginId,
     commands,
     panels,
+    tools,
     events,
     project,
     objects: Object.freeze(objects),

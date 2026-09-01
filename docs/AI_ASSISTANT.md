@@ -91,6 +91,22 @@ Film Mode is edited by both the UI and the assistant, so timeline features must 
 - Teach `COMPACT_ENGINE_GUIDE` the expected workflow: Cameras & Cuts is a shot list, shots are hard cuts by default, `blend > 0` means a smooth transition, and FOV is camera zoom.
 - Include compact shot state in `buildSceneSnapshot()` (`cameraShots`) so the assistant can retime, rename, zoom, and blend existing shots by id.
 
+## Special case: plugin-provided AI tools
+
+Plugins register assistant tools through the extension SDK (`api.tools.register`), which the engine
+merges into `getActiveEngineTools()` — the same surface the in-app chat and MCP use. Adding a plugin
+tool is the plugin's job (see [`src/extensions/types.ts`](../src/extensions/types.ts)
+`FeatherPluginTool`); the engine-side checklist for a *new plugin tool* is lighter:
+
+- Enable the plugin (`set_plugin_enabled`) and confirm the tool appears via
+  `getActiveEngineTools()` (built-ins stay in `engineTools`; plugin tools are keyed
+  `pluginId.toolId`).
+- Add a chip label in `describeToolCall()` (`useAIChat.ts`) for the qualified tool id.
+- Mention the plugin's capability in `COMPACT_ENGINE_GUIDE` and the notable-plugin list in
+  `ENGINE_GUIDE` (`systemPrompt.ts`) so the model knows to reach for it.
+- The local (on-device) router intentionally does NOT surface plugin tools — they need a remote
+  vision-capable model.
+
 ## Principles
 
 - **Mirror, don't fork.** Tools should call the *same* store actions the UI calls, so the AI and

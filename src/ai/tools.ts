@@ -1,5 +1,7 @@
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
+import { extensionRegistry } from '../extensions/host';
+import type { RegisteredFeatherTool } from '../extensions/registry';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { type UITemplateKind, type UIThemeKind } from '../store/editor/ui';
 import { inputTypeForHandle, outputTypeForHandle, valueTypesCompatible } from '../store/editor/wireTypes';
@@ -3995,7 +3997,7 @@ const rawEngineTools = {
 
   list_plugins: tool({
     description:
-      'List the editor plugins compiled into this build and whether each is installed (active). Plugins add editor panels and commands — e.g. Arbor Forge (stylized trees). Model Forge is on by default for new users. Install/remove with set_plugin_enabled, or via their Asset Store card.',
+      'List the editor plugins compiled into this build and whether each is installed (active). Plugins add editor panels, commands and AI-assistant tools — e.g. Arbor Forge (stylized trees) and Image to 3D (rebuild a reference image as a model asset via the imageTo3d.image-to-model tool). Model Forge is on by default for new users. Install/remove with set_plugin_enabled, or via their Asset Store card.',
     inputSchema: z.object({}),
     execute: async () => {
       const enabled = new Set(usePluginStore.getState().enabledIds);
@@ -6202,3 +6204,34 @@ export const engineTools = Object.fromEntries(
 ) as typeof rawEngineTools;
 
 export type EngineTools = typeof engineTools;
+
+// --- Plugin-provided AI tools --------------------------------------------------------------------
+// Plugins can register assistant tools (src/extensions/types.ts `FeatherPluginTool`). Those merge into
+// the SAME tool surface the in-app chat and the MCP relay use, keyed by a global `pluginId.toolId`.
+// `engineTools` above stays the static built-in set (tests rely on it); consumers that should also see
+// plugin tools call `getActiveEngineTools()` instead.
+
+const isZodSchema = (value: unknown): value is z.ZodType =>
+  !!value && typeof (value as z.ZodType).safeParse === 'function';
+
+/** Wrap a plugin tool's plain execute/schema into the AI SDK's `tool()` shape. */
+function toAiTool(def: RegisteredFeatherTool): Tool {
+  const inputSchema = isZodSchema(def.inputSchema) ? def.inputSchema : z.object({}).passthrough();
+  return tool({
+    description: def.description,
+    inputSchema,
+    execute: async (input) => truncateToolResult(await def.execute((input ?? {}) as Record<string, unknown>)),
+  });
+}
+
+/** Live tool surface: built-ins plus every tool of currently-enabled plugins. */
+export function getActiveEngineTools(): EngineTools {
+  const pluginTools = extensionRegistry
+    .getSnapshot()
+    .tools.reduce<Record<string, unknown>>((acc, toolDef) => {
+      acc[toolDef.qualifiedId] = toAiTool(toolDef);
+      return acc;
+    }, {});
+  return { ...engineTools, ...pluginTools } as EngineTools;
+}
+

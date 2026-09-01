@@ -2,6 +2,7 @@ import type {
   FeatherCommandDefinition,
   FeatherPanelDefinition,
   FeatherPluginDefinition,
+  FeatherPluginTool,
 } from './types';
 
 export interface RegisteredFeatherCommand extends FeatherCommandDefinition {
@@ -10,6 +11,12 @@ export interface RegisteredFeatherCommand extends FeatherCommandDefinition {
 
 export interface RegisteredFeatherPanel extends FeatherPanelDefinition {
   pluginId: string;
+}
+
+export interface RegisteredFeatherTool extends FeatherPluginTool {
+  pluginId: string;
+  /** Namespaced id (`pluginId.toolId`) that the AI assistant / MCP sees. */
+  qualifiedId: string;
 }
 
 export interface RegisteredFeatherPlugin {
@@ -22,6 +29,7 @@ export interface ExtensionRegistrySnapshot {
   version: number;
   commands: readonly RegisteredFeatherCommand[];
   panels: readonly RegisteredFeatherPanel[];
+  tools: readonly RegisteredFeatherTool[];
   plugins: readonly RegisteredFeatherPlugin[];
 }
 
@@ -31,6 +39,7 @@ const EMPTY_SNAPSHOT: ExtensionRegistrySnapshot = Object.freeze({
   version: 0,
   commands: Object.freeze([]),
   panels: Object.freeze([]),
+  tools: Object.freeze([]),
   plugins: Object.freeze([]),
 });
 
@@ -38,6 +47,7 @@ const EMPTY_SNAPSHOT: ExtensionRegistrySnapshot = Object.freeze({
 export class ExtensionRegistry {
   private readonly commands = new Map<string, RegisteredFeatherCommand>();
   private readonly panels = new Map<string, RegisteredFeatherPanel>();
+  private readonly tools = new Map<string, RegisteredFeatherTool>();
   private readonly plugins = new Map<string, PluginRecord>();
   private readonly listeners = new Set<() => void>();
   private snapshot: ExtensionRegistrySnapshot = EMPTY_SNAPSHOT;
@@ -55,6 +65,14 @@ export class ExtensionRegistry {
 
   getPanel(id: string): RegisteredFeatherPanel | undefined {
     return this.panels.get(id);
+  }
+
+  getTool(id: string): RegisteredFeatherTool | undefined {
+    return this.tools.get(id);
+  }
+
+  hasTool(id: string): boolean {
+    return this.tools.has(id);
   }
 
   hasPlugin(id: string): boolean {
@@ -85,6 +103,25 @@ export class ExtensionRegistry {
     this.panels.set(definition.id, record);
     this.publish();
     return this.makeDisposer(this.panels, definition.id, record);
+  }
+
+  registerTool(pluginId: string, definition: FeatherPluginTool): () => void {
+    if (!definition.id.trim() || definition.id.includes('.') || /\s/.test(definition.id)) {
+      throw new Error('Extension tool ids must be a non-empty bare tool-name with no spaces or dots (the engine namespaces it with the plugin id).');
+    }
+    if (!definition.description?.trim() || typeof definition.execute !== 'function') {
+      throw new Error('Extension tools require a non-empty description and an execute function.');
+    }
+    const qualifiedId = `${pluginId}.${definition.id}`;
+    if (this.tools.has(qualifiedId)) throw new Error(`Extension tool id already registered: ${qualifiedId}`);
+    const record: RegisteredFeatherTool = Object.freeze({
+      ...definition,
+      pluginId,
+      qualifiedId,
+    });
+    this.tools.set(qualifiedId, record);
+    this.publish();
+    return this.makeDisposer(this.tools, qualifiedId, record);
   }
 
   registerPlugin(definition: FeatherPluginDefinition, deactivate: () => void): void {
@@ -130,6 +167,7 @@ export class ExtensionRegistry {
       version: this.snapshot.version + 1,
       commands: Object.freeze([...this.commands.values()]),
       panels: Object.freeze([...this.panels.values()]),
+      tools: Object.freeze([...this.tools.values()]),
       plugins: Object.freeze(
         [...this.plugins.values()].map(({ deactivate: _deactivate, ...plugin }) => Object.freeze(plugin)),
       ),

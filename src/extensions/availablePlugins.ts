@@ -1,5 +1,6 @@
 import type { FeatherPluginDefinition } from './types';
 import { arborForgePlugin } from './arborForge';
+import { imageTo3dPlugin } from './imageTo3d';
 import { modelForgePlugin } from './modelForge';
 import { pixelArtTreesPlugin } from './pixelArtTrees';
 
@@ -15,6 +16,7 @@ import { pixelArtTreesPlugin } from './pixelArtTrees';
  */
 export const AVAILABLE_PLUGINS: readonly FeatherPluginDefinition[] = [
   arborForgePlugin,
+  imageTo3dPlugin,
   modelForgePlugin,
   pixelArtTreesPlugin,
 ];
