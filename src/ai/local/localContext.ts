@@ -88,17 +88,23 @@ export function buildLocalSnapshotContext(): string {
     editingPrefabId: state.editingPrefabId ?? null,
   };
 
-  const prefix = 'Live project summary (bounded). Engine-action names go through run_engine_tool; use search_engine_tools/list/inspect when details are missing.\n';
+  // Prominent, unambiguous pointer for the most common "this / the selected object" requests. Small
+  // local models otherwise guess wrong ids for anonymous pronouns like "delete this".
+  const mutateTarget = selected ? `DELETE/RENAME/MOVE/etc the selected object by its id: "${selected.id}" (name "${selected.name}", kind ${selected.kind}). When the user says "this", "it", or "the selected/current selection", use this id. If no object is selected, list_scene/inspect to find the target first.` : 'No object is currently selected. To act on an object, first call list_scene or inspect_object to learn its id, then use it.';
+
+  const prefix = `Live project summary (bounded). Engine-action names go through run_engine_tool; use search_engine_tools/list/inspect when details are missing.\nSelection: ${mutateTarget}\n`;
   const serialized = JSON.stringify(summary);
   if (prefix.length + serialized.length <= LOCAL_SNAPSHOT_CHAR_BUDGET) return `${prefix}${serialized}`;
 
   // Long user-assigned names can still inflate the compact structure. Preserve identifiers and
   // counts, then trim at a hard character boundary as a final safety net.
+  const bareSelection = selected ? `"${selected.id}" (${selected.name}, ${selected.kind})` : 'none';
+  const fallbackPrefix = `Live project summary (bounded). Engine-action names go through run_engine_tool; use search_engine_tools/list/inspect when details are missing.\nSelection target: ${bareSelection}\n`;
   const fallback = JSON.stringify({
     activeScene: summary.activeScene,
     selected: summary.selected,
     counts: summary.counts,
     isPlaying: summary.isPlaying,
   });
-  return `${prefix}${fallback}`.slice(0, LOCAL_SNAPSHOT_CHAR_BUDGET);
+  return `${fallbackPrefix}${fallback}`.slice(0, LOCAL_SNAPSHOT_CHAR_BUDGET);
 }

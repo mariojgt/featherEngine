@@ -8,6 +8,7 @@ import { engineTools } from './tools';
 import { buildLocalEngineGuide } from './local/localPrompt';
 import { chooseLocalEngineTools, isLocalActionRequest } from './local/localToolRouter';
 import { getLocalModelDefinition } from './local/localModelCatalog';
+import { LocalPromptBudgetError } from './local/localModelAdapter';
 import {
   buildLocalContinuityContext,
   buildLocalSnapshotContext,
@@ -40,7 +41,7 @@ const LOCAL_WEBGPU_OVERFLOW = /\/lm_head\/MatMul|Failed to generate kernel's out
 export const isLocalWebGPUOverflow = (error: unknown): boolean =>
   LOCAL_WEBGPU_OVERFLOW.test(error instanceof Error ? error.message : String(error));
 
-const LOCAL_READ_ONLY_ENGINE_ACTION = /^(?:list_|inspect_|get_|browse_)/;
+const LOCAL_READ_ONLY_ENGINE_ACTION = /^(?:list_|inspect_|get_|browse_|select_|search_)/;
 
 const parseGatewayOutput = (output: unknown): Record<string, unknown> | null => {
   if (output && typeof output === 'object' && !Array.isArray(output)) return output as Record<string, unknown>;
@@ -728,6 +729,7 @@ export function useAIChat() {
       if (controller.signal.aborted) return;
       const detail = caught instanceof Error ? caught.message : 'Unknown error';
       const localOverflow = provider === 'local' && isLocalWebGPUOverflow(caught);
+      const localBudgetExceeded = provider === 'local' && caught instanceof LocalPromptBudgetError;
       if (localOverflow) {
         // ORT/WebGPU may leave the worker's device lost or memory-pressured after a failed giant
         // allocation. Terminating it makes the next send perform a clean cached reload.
@@ -737,20 +739,27 @@ export function useAIChat() {
           // Preserve the original actionable error even if cache/status cleanup also has a problem.
         }
       }
-      const visibleError = localOverflow
-        ? 'The local request exceeded this GPU\'s safe prompt memory. Feather reset the model and kept the project unchanged; retry the request.'
-        : provider === 'local'
-          ? useLocalAIStore.getState().runtime.error ?? 'Local AI could not complete this request. Check the model status in Agent settings, then retry.'
-          : detail;
+      const localClear = localBudgetExceeded
+        ? 'The request grew too large for this GPU\'s safe prompt memory before it ran. Make it shorter (or split it into a couple of steps) and retry — nothing was changed.'
+        : null;
+      const visibleError = localClear
+        ? localClear
+        : localOverflow
+          ? 'The local request exceeded this GPU\'s safe prompt memory. Feather reset the model and kept the project unchanged; retry the request.'
+          : provider === 'local'
+            ? useLocalAIStore.getState().runtime.error ?? 'Local AI could not complete this request. Check the model status in Agent settings, then retry.'
+            : detail;
       setError(visibleError);
       updateAssistant((message) => ({
         ...message,
         content:
           message.content ||
           (provider === 'local'
-            ? localOverflow
-              ? '⚠️ The request exceeded safe WebGPU prompt memory. I reset the local model; retry now.'
-              : '⚠️ Local AI failed. Check WebGPU/model status in Agent settings, then try again.'
+            ? localClear
+              ? '⚠️ This request was too large for the on-device model and was stopped before it ran. Shorten it or split it into steps and retry.'
+              : localOverflow
+                ? '⚠️ The request exceeded safe WebGPU prompt memory. I reset the local model; retry now.'
+                : '⚠️ Local AI failed. Check WebGPU/model status in Agent settings, then try again.'
             : '⚠️ Request failed. Check your API key, model and network, then try again.'),
       }));
     } finally {

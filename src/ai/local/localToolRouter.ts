@@ -323,11 +323,16 @@ const SEARCH_STOP_WORDS = new Set([
 const normalizeSearchText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 const READ_ONLY_PREFIX = /^\s*(what|which|where|how|list|show|inspect|describe|explain|is|are|does|do|why)\b/i;
-const MUTATION_VERB = /\b(add|apply|attach|build|change|create|delete|duplicate|edit|make|move|open|place|put|remove|rename|replace|rotate|set|spawn|update|write)\b/i;
+const MUTATION_VERB =
+  /\b(add|apply|attach|build|change|create|delete|duplicate|edit|get rid of|kill|lose|make|move|open|place|put|remove|rename|replace|rotate|set|shift|spawn|translate|update|write)\b/i;
+// "get rid of" -> the bare verb "rid" follows an opening pronoun that isn't read-only. Rewrite the
+// two-word imperative as a single match so it counts as a real mutation request.
+const GET_RID_OF = /\bget\s+rid\s+of\b/i;
 
 /** Strict enough to avoid forcing tools for ordinary questions, broad enough for editor imperatives. */
 export function isLocalActionRequest(prompt: string): boolean {
-  return !READ_ONLY_PREFIX.test(prompt) && MUTATION_VERB.test(prompt);
+  if (READ_ONLY_PREFIX.test(prompt)) return false;
+  return GET_RID_OF.test(prompt) || MUTATION_VERB.test(prompt);
 }
 
 function intentBoosts(query: string): Map<EngineToolName, number> {
@@ -337,6 +342,48 @@ function intentBoosts(query: string): Map<EngineToolName, number> {
   if (/\b(objects?|things?|items?)\b.*\b(scene|level)\b|\b(scene|level)\b.*\b(objects?|things?|items?)\b/i.test(query)) {
     boost('list_scene', 8_000);
     boost('inspect_object', 7_000);
+  }
+
+  // "this / the selection / the selected <thing> / it" reference the object the user has selected.
+  // Destructive + transform edits on that target are the most common local requests, and small
+  // models miss them without a strong hint. Push the object-mutation surface hard.
+  const referencesSelection =
+    /\b(this|the selected|selected|my selection|current selection|the one (?:i|you) (?:selected|picked)|it)\b/i.test(query)
+    || /\b(selected|selected object|my selection|current selection)\b/i.test(query)
+    || (/\bthis\b/i.test(query) && /\b(delete|remove|rename|move|duplicate|copy|select|scale|rotate|inspect|script|color|paint|make)\b/i.test(query));
+
+  const deleteIntent = /\b(delete|remove|get rid of|kill|los|discard|drop|clear|take out)\b/i.test(query);
+  const renameIntent = /\b(rename|name|call it|renamed)\b/i.test(query);
+  const transformIntent = /\b(move|translate|shift|rotate (?!continuously)|scale|resize|stretch|position|relocate|bring|drag|slide|shrink|grow|push|pull)\b/i.test(query);
+  const duplicateIntent = /\b(duplicate|copy|clone|mirror|dupe)\b/i.test(query);
+  const concreteTarget = /\b(cube|box|sphere|ball|capsule|plane|light|camera|object|mesh|tree|rock|floor|wall|character|pickup|prop|block|terrain)\b/i.test(query);
+
+  if (referencesSelection && (deleteIntent || renameIntent || transformIntent || duplicateIntent)) {
+    boost('select_object', 12_000);
+    boost('inspect_object', 8_000);
+  }
+
+  if (deleteIntent) {
+    // Generic "delete X from (my) scene" targets a scene object, not cinematic/prefab packages.
+    boost('delete_object', 11_000);
+    if (referencesSelection || concreteTarget) {
+      boost('delete_object', 16_000);
+    }
+    if (referencesSelection) {
+      boost('inspect_object', 9_000);
+    }
+  }
+  if (renameIntent) {
+    boost('rename_object', 15_000);
+    if (referencesSelection) boost('rename_object', 19_000);
+  }
+  if (transformIntent) {
+    boost('update_transform', 10_000);
+    if (referencesSelection) boost('update_transform', 14_000);
+  }
+  if (duplicateIntent) {
+    boost('duplicate_object', 15_000);
+    if (referencesSelection) boost('duplicate_object', 18_000);
   }
   if (
     /\b(add|create|make|place|put|spawn)\b[^.!?]*\b(cube|box|sphere|ball|capsule|plane|light|camera|object)\b/i.test(query)
@@ -353,9 +400,10 @@ function intentBoosts(query: string): Map<EngineToolName, number> {
     boost('set_object_script', 6_000);
   }
   if (/\b(script|featherscript|code|behavior logic)\b/i.test(query)) {
-    boost('set_object_script', 9_000);
-    boost('open_object_script', 7_000);
-    boost('set_blueprint_script', 6_500);
+    boost('set_object_script', 15_000);
+    boost('open_object_script', 10_000);
+    boost('set_blueprint_script', 12_000);
+    boost('get_blueprint_script', 10_000);
   }
   return boosts;
 }
