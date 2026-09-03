@@ -70,6 +70,7 @@ export const defaultLight = (): LightComponent => ({
   intensity: 8,
   distance: 12,
   angle: Math.PI / 6,
+  penumbra: 0.45,
   castShadow: false,
 });
 

@@ -36,6 +36,12 @@ export interface LightComponent {
   distance: number;
   /** spot cone half-angle in radians (ignored for point/directional). */
   angle: number;
+  /**
+   * Spot cone edge softness, 0..1 (ignored for point/directional). 0 is a hard-edged cone; higher
+   * values feather the falloff toward the rim. Optional so projects saved before it was exposed keep
+   * the 0.45 the renderer previously hardcoded.
+   */
+  penumbra?: number;
   castShadow: boolean;
 }
 

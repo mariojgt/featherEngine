@@ -407,7 +407,7 @@ function Primitive({
           intensity={l.intensity}
           distance={l.distance}
           angle={l.angle}
-          penumbra={0.45}
+          penumbra={l.penumbra ?? 0.45}
           decay={2}
           castShadow={l.castShadow}
           shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'spot')}

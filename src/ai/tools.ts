@@ -4925,9 +4925,10 @@ const rawEngineTools = {
       intensity: z.number().optional().describe('Brightness. Point/spot ~4–20; directional ~1–3.'),
       distance: z.number().optional().describe('point/spot falloff range in world units (0 = no limit).'),
       angleDegrees: z.number().optional().describe('spot cone half-angle in degrees.'),
+      penumbra: z.number().min(0).max(1).optional().describe('spot cone edge softness, 0 (hard) to 1 (very soft).'),
       castShadow: z.boolean().optional(),
     }),
-    execute: async ({ objectId, type, color, intensity, distance, angleDegrees, castShadow }) => {
+    execute: async ({ objectId, type, color, intensity, distance, angleDegrees, penumbra, castShadow }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
       store().setObjectLight(objectId, {
         type,
@@ -4935,6 +4936,7 @@ const rawEngineTools = {
         intensity,
         distance,
         ...(angleDegrees !== undefined ? { angle: (angleDegrees * Math.PI) / 180 } : {}),
+        penumbra,
         castShadow,
       });
       return `Configured light on ${objectId}${type ? ` (${type})` : ''}.`;

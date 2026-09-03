@@ -1783,6 +1783,13 @@ function LightSection({ light, onChange }: { light: LightComponent | undefined; 
           <input type="number" step={1} value={Math.round((l.angle * 180) / Math.PI)} onChange={(e) => onChange({ angle: (Number(e.target.value) * Math.PI) / 180 })} />
         </label>
       )}
+      {l.type === 'spot' && (
+        <RangeField
+          label="Penumbra"
+          value={l.penumbra ?? 0.45}
+          onChange={(value) => onChange({ penumbra: value })}
+        />
+      )}
       <label className="field-row">
         <span>Cast Shadow</span>
         <input type="checkbox" checked={l.castShadow} onChange={(e) => onChange({ castShadow: e.target.checked })} />
