@@ -213,7 +213,12 @@ export function SkinnedModel({
       action.reset();
       action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
       action.clampWhenFinished = !loop;
-      action.timeScale = speed;
+      // Playback speed lives on the MIXER, never here: three multiplies mixer.timeScale into the
+      // delta and then multiplies the action's timeScale in again, so setting both to `speed` ran
+      // the clip at speed² (a state authored at 2x played 4x). The mixer is also what the distance
+      // LOD above drives, so it has to stay the single authority. Per-action timeScale is reset to
+      // neutral because actions are pooled and reused across states.
+      action.timeScale = 1;
       // Blend clips: play at a weight driven each frame by useFrame; single clip: crossfade in.
       if (blending) action.play();
       else action.fadeIn(fade).play();
