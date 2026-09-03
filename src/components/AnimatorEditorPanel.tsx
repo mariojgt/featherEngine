@@ -17,6 +17,7 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import { LayoutGrid, Plus, Trash2, Workflow } from 'lucide-react';
+import { AnimatorDebugView } from './AnimatorDebugView';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type {
   AnimatorCondition,
@@ -528,6 +529,7 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
           <LayoutGrid size={14} aria-hidden /> Auto Arrange
         </button>
         <ParametersEditor controller={controller} />
+        <AnimatorDebugView controller={controller} />
       </aside>
 
       <div className="flow-shell">

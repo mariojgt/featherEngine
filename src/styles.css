@@ -16348,3 +16348,118 @@ body.is-scrubbing * {
     gap: 5px;
   }
 }
+
+/* ---- Animator debug readout (AnimatorDebugView) ---------------------------- */
+/* Live view of the active state, parameter values and blend weights, shown in the
+   Animator panel's left rail. Uses the same tokens as the surrounding cards. */
+.animator-debug {
+  gap: 5px;
+}
+
+.animator-debug-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.animator-debug-head strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.animator-debug-live {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.animator-debug-live.on {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.animator-debug-state {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.animator-debug-label {
+  margin-top: 4px;
+  color: var(--muted) !important;
+  font-size: var(--text-2xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.animator-debug-kv {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.animator-debug-kv > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tabular figures so rapidly changing numbers do not jitter the column width. */
+.animator-debug-num {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.animator-debug-num.live {
+  color: var(--accent);
+}
+
+.animator-debug-clip {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.animator-debug-clip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-2xs);
+}
+
+.animator-debug-clip-head > span:first-child {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animator-debug-bar {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(8, 10, 15, 0.5);
+}
+
+.animator-debug-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 90ms linear;
+}
