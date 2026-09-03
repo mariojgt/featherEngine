@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { SceneObject, TreePixelArtSpec, TreeSpec } from '../types';
@@ -272,6 +272,19 @@ export function TreeMesh({ object }: { object: SceneObject }) {
     [paintedMaterialKey],
   );
 
+  // generateTree builds fresh geometry per spec/seed and makeTreeMaterial a fresh material per
+  // instance, both imperatively, so nothing else frees them. Editing a tree in the inspector rebuilds
+  // them on every change and abandoned the previous set each time.
+  useEffect(() => {
+    if (!generated) return;
+    return () => {
+      generated.bark.dispose();
+      generated.foliage?.dispose();
+    };
+  }, [generated]);
+  useEffect(() => () => barkMaterial.dispose(), [barkMaterial]);
+  useEffect(() => () => foliageMaterial.dispose(), [foliageMaterial]);
+
   useFrame((state, delta) => {
     const u = uniforms.current;
     updateTreeUniforms(u, delta, windVec, env, state.camera, spec);
@@ -336,6 +349,19 @@ export function ScatteredTrees({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [paintedMaterialKey],
   );
+  // One geometry pair per seed variant, rebuilt whenever the spec or variant count changes.
+  useEffect(
+    () => () => {
+      for (const variant of variants) {
+        variant.bark.dispose();
+        variant.foliage?.dispose();
+      }
+    },
+    [variants],
+  );
+  useEffect(() => () => barkMaterial.dispose(), [barkMaterial]);
+  useEffect(() => () => foliageMaterial.dispose(), [foliageMaterial]);
+
   const env = useEditorStore(selectActiveSceneEnvironment);
   const windVec = env?.wind ?? [0, 0, 0];
 
