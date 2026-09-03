@@ -1,6 +1,6 @@
 import { useGLTF, useAnimations } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
@@ -217,7 +217,11 @@ export function SkinnedModel({
     }
   };
 
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: this is what starts the actions, and until one has been applied the
+  // skinned mesh renders in its bind pose — the T-pose flash. A passive effect is flushed after paint,
+  // so r3f's render loop can get a frame in first; layout effects run synchronously with the commit,
+  // before any rAF callback, which closes that window on mount and on every state change.
+  useLayoutEffect(() => {
     // While ragdolling, the physics owns the bones — keep the mixer quiet.
     if (ragdoll) {
       mixer.stopAllAction();
