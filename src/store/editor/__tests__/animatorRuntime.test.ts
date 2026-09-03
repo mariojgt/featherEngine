@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { animatorStateClipDuration, buildAnimatorControllerRuntime } from '../animatorRuntime';
+import { animatorStateClipDuration, buildAnimatorControllerRuntime, localMoveVector } from '../animatorRuntime';
 import type { AnimatorController, AnimatorState } from '../../../types';
 
 const DURATIONS: Record<string, number> = { idle: 4, walk: 1, run: 0.7, dodgeL: 0.9, dodgeR: 1.1 };
@@ -95,5 +95,78 @@ describe('buildAnimatorControllerRuntime', () => {
     const runtime = buildAnimatorControllerRuntime(controller);
     expect(runtime.transitionCandidatesByState.get('a')?.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(runtime.transitionCandidatesByState.get('b')?.map((t) => t.id)).toEqual(['t2']);
+  });
+});
+
+describe('localMoveVector', () => {
+  const JOG = 4; // reference (character move) speed
+
+  it('is zero when the object has not meaningfully moved', () => {
+    expect(localMoveVector(0, 0, 0, 0, JOG)).toEqual({ moveX: 0, moveY: 0 });
+    expect(localMoveVector(1e-9, 1e-9, 0, 0, JOG)).toEqual({ moveX: 0, moveY: 0 });
+  });
+
+  it('maps movement along the facing direction to forward', () => {
+    // Facing 0 means +Z is forward.
+    const move = localMoveVector(0, 1, 0, JOG, JOG);
+    expect(move.moveY).toBeCloseTo(1, 6);
+    expect(move.moveX).toBeCloseTo(0, 6);
+  });
+
+  it('maps movement opposite the facing to backward', () => {
+    const move = localMoveVector(0, -1, 0, JOG, JOG);
+    expect(move.moveY).toBeCloseTo(-1, 6);
+  });
+
+  it('maps sideways movement to the strafe axis', () => {
+    expect(localMoveVector(1, 0, 0, JOG, JOG).moveX).toBeCloseTo(1, 6);
+    expect(localMoveVector(-1, 0, 0, JOG, JOG).moveX).toBeCloseTo(-1, 6);
+  });
+
+  it('rotates with the facing, so the same world motion reads differently', () => {
+    // Facing +90 degrees: world +Z is now to the character's left.
+    const move = localMoveVector(0, 1, Math.PI / 2, JOG, JOG);
+    expect(move.moveY).toBeCloseTo(0, 6);
+    expect(move.moveX).toBeCloseTo(-1, 6);
+  });
+
+  // The bug this fixes: a normalized direction sat at radius 1 the instant the object moved, so the
+  // blend point jumped from idle straight to the rim and never visited the walk range between.
+  it('scales the magnitude with speed, so the blend point leaves the origin gradually', () => {
+    const crawl = localMoveVector(0, 1, 0, JOG * 0.25, JOG);
+    const half = localMoveVector(0, 1, 0, JOG * 0.5, JOG);
+    const full = localMoveVector(0, 1, 0, JOG, JOG);
+    expect(crawl.moveY).toBeCloseTo(0.25, 6);
+    expect(half.moveY).toBeCloseTo(0.5, 6);
+    expect(full.moveY).toBeCloseTo(1, 6);
+  });
+
+  it('clamps sprinting to the rim rather than running off the sample hull', () => {
+    expect(localMoveVector(0, 1, 0, JOG * 3, JOG).moveY).toBeCloseTo(1, 6);
+  });
+
+  it('never exceeds unit length, whatever the direction', () => {
+    for (let angle = 0; angle < Math.PI * 2; angle += 0.2) {
+      const move = localMoveVector(Math.sin(angle), Math.cos(angle), 0.7, JOG * 2, JOG);
+      expect(Math.hypot(move.moveX, move.moveY)).toBeLessThanOrEqual(1 + 1e-9);
+    }
+  });
+
+  // An animated prop with no character controller has no move speed to scale against; it keeps the
+  // original plain-direction behaviour rather than collapsing to zero.
+  it('falls back to the plain direction when there is no reference speed', () => {
+    const move = localMoveVector(0, 1, 0, 0.01, 0);
+    expect(move.moveY).toBeCloseTo(1, 6);
+  });
+
+  it('produces finite values for degenerate input', () => {
+    for (const move of [
+      localMoveVector(0, 1, 0, NaN, JOG),
+      localMoveVector(0, 1, 0, JOG, -1),
+      localMoveVector(1e12, 1e12, 0, JOG, JOG),
+    ]) {
+      expect(Number.isFinite(move.moveX)).toBe(true);
+      expect(Number.isFinite(move.moveY)).toBe(true);
+    }
   });
 });

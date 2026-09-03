@@ -54,7 +54,7 @@ import { FoliageInteractor, MAX_FOLIAGE_INTERACTORS, updateFoliageInteractors } 
 import { resolveMaterial } from '../../three/materialResolve';
 import { CharacterControllerComponent, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
 import { worldToLocalUnderParent, worldTransformOf } from '../../utils/transformHierarchy';
-import { animatorStateClipDuration, getAnimatorControllerRuntime } from './animatorRuntime';
+import { animatorStateClipDuration, getAnimatorControllerRuntime, localMoveVector } from './animatorRuntime';
 import { cinematicActionsAt, cinematicCameraAt, cinematicFadeAt, cinematicMaterialsAt, cinematicTextAt, cinematicTimeScaleAt, cinematicTransformsAt, clamp01, mixVec3 } from './cinematics';
 import { RuntimeAnimator, defaultPhysics, defaultWaterVolume, lerpAngle, resolveCharacter, resolveVehicle, withPhysicsDefaults } from './defaults';
 import { cloneGraphValue, coerceGraphValue, defaultValueForType } from './graph';
@@ -6119,14 +6119,10 @@ export const applyRuntimeTick = (
           const dz = after[2] - before.position[2];
           horizontalSpeed = Math.hypot(dx, dz) / dt;
           verticalSpeed = dy / dt;
-          const h = Math.hypot(dx, dz);
-          if (h > 1e-4) {
-            const facing = sourceObj.transform.rotation[1] - (sourceObj.character?.modelYawOffset ?? 0);
-            const wx = dx / h;
-            const wz = dz / h;
-            moveY = wx * Math.sin(facing) + wz * Math.cos(facing); // forward axis (sin,cos)
-            moveX = wx * Math.cos(facing) - wz * Math.sin(facing); // right axis (cos,−sin)
-          }
+          const facing = sourceObj.transform.rotation[1] - (sourceObj.character?.modelYawOffset ?? 0);
+          // Scaled by speed relative to the character's own move speed, so the blend point travels out
+          // from the origin as it accelerates instead of snapping to the rim (see localMoveVector).
+          ({ moveX, moveY } = localMoveVector(dx, dz, facing, horizontalSpeed, sourceObj.character?.moveSpeed ?? 0));
         }
 
         const prev = state.runtimeAnimators[object.id];

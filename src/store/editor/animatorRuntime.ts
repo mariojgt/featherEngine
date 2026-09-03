@@ -60,3 +60,50 @@ export const animatorStateClipDuration = (
   if (!(raw > 0)) return 0;
   return raw / Math.max(state.speed ?? 1, 0.01);
 };
+
+/** Local move direction for directional (2D) blend spaces. */
+export interface LocalMoveVector {
+  /** Right axis: -1 fully left, +1 fully right. */
+  moveX: number;
+  /** Forward axis: -1 fully backward, +1 fully forward. */
+  moveY: number;
+}
+
+/**
+ * The object's movement this frame expressed in its own facing frame, scaled by how fast it is going
+ * relative to `referenceSpeed` (its walk/jog speed).
+ *
+ * The scaling is the point. These feed 2D directional blend spaces, which are authored with idle at
+ * the origin and the directional clips out at radius 1 — the bundled pawn does exactly that. A pure
+ * normalized direction is always length 1 the instant the object moves at all, so the blend point
+ * teleported from the origin to the rim and never visited anything in between: idle only ever had
+ * weight while completely stopped, and a character easing into motion snapped straight to a full jog
+ * while its body was still accelerating, which reads as sliding feet. Scaling by speed makes the point
+ * travel out from the origin as the object accelerates, which is the layout the samples describe.
+ *
+ * Sprinting pushes the magnitude past 1 and therefore outside the sample hull, where the blend clamps
+ * to the nearest edge — the full-speed pose, which is what you want.
+ *
+ * `referenceSpeed` of 0 (an animated object with no character controller) disables the scaling and
+ * returns the plain direction, preserving the original behaviour for those.
+ */
+export const localMoveVector = (
+  dx: number,
+  dz: number,
+  facing: number,
+  speed: number,
+  referenceSpeed: number,
+): LocalMoveVector => {
+  const horizontal = Math.hypot(dx, dz);
+  // Below this the object is effectively still, and the direction is numerical noise.
+  if (!(horizontal > 1e-4)) return { moveX: 0, moveY: 0 };
+  const wx = dx / horizontal;
+  const wz = dz / horizontal;
+  const forward = wx * Math.sin(facing) + wz * Math.cos(facing);
+  const right = wx * Math.cos(facing) - wz * Math.sin(facing);
+  // A non-finite speed (a bad transform upstream) must not poison the parameter: a NaN here would
+  // flow into the blend weights and NaN the whole pose. Fall back to the plain direction instead.
+  const ratio = referenceSpeed > 0 ? speed / referenceSpeed : 1;
+  const scale = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 1;
+  return { moveX: right * scale, moveY: forward * scale };
+};
