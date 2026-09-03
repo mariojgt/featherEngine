@@ -10,7 +10,7 @@ import { effectiveSelection, selectActiveObjects, useEditorStore } from '../stor
 import { isTransientVfx, nonVfxObjectsSignature, useVfxObjects } from '../store/stableSelectors';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
-import { recordRender, recordRenderTime } from '../runtime/perfStats';
+import { countSceneStats, recordRender, recordRenderTime, type CountableNode } from '../runtime/perfStats';
 import { readTransform } from '../runtime/transformBuffer';
 import { captureViewportScreenshot, setViewportCaptureHandler, setViewportImageHandler } from '../runtime/viewportCaptureBridge';
 import { saveViewportScreenshot } from '../runtime/viewportScreenshot';
@@ -1457,6 +1457,7 @@ function ViewportFallback() {
  */
 function RenderStatsProbe() {
   const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
   // Wrap WebGLRenderer.render with a wall-clock accumulator: a frame may render several times
   // (post-fx passes, shadow updates happen inside), so sum all calls between two useFrames. The
   // pre-render useFrame below then publishes the PREVIOUS frame's total — same 1-frame lag as gl.info.
@@ -1479,9 +1480,19 @@ function RenderStatsProbe() {
       (gl as { render: typeof gl.render }).render = original;
     };
   }, [gl]);
+  // Scene counters need a graph walk, which is exactly the "excessive scene traversal" to avoid on a
+  // hot path — so they are resampled about once a second and held between samples. They change on the
+  // timescale of editing a scene, not of a frame, so a stale second is invisible in the readout.
+  const sceneCounts = useRef(countSceneStats(undefined));
+  const nextSceneSampleAt = useRef(0);
   useFrame(() => {
     recordRenderTime(renderAccum.current);
     renderAccum.current = 0;
+    const now = performance.now();
+    if (now >= nextSceneSampleAt.current) {
+      sceneCounts.current = countSceneStats(scene as unknown as CountableNode);
+      nextSceneSampleAt.current = now + 1000;
+    }
     const info = gl.info;
     recordRender({
       calls: callsAccum.current,
@@ -1489,6 +1500,7 @@ function RenderStatsProbe() {
       programs: info.programs?.length ?? 0,
       geometries: info.memory.geometries,
       textures: info.memory.textures,
+      ...sceneCounts.current,
     });
     callsAccum.current = 0;
     trianglesAccum.current = 0;
