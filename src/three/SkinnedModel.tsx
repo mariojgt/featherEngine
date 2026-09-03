@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
+import { blend1D, blend2D } from './blendSpace';
 import { useFootIK } from './footIK';
 import { useAimIK } from './aimIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
@@ -255,57 +256,6 @@ export function SkinnedModel({
  * Animation / Controller assets, falling back to the renderer's `modelAssetId` GLB and the legacy
  * raw `clip`. `clipSourceUrls` lists every GLB whose clips must be loaded for smooth crossfades.
  */
-/**
- * Weights for a 1D blend space at parameter value `v`. Returns a weight for EVERY sample (0 for those
- * outside the active bracket) so the set of playing clips stays constant for the whole state — only their
- * weights change. That avoids restarting clips when `v` crosses a sample boundary (which would otherwise
- * reset the animation and make walking/running stutter).
- */
-function blend1D(samples: { animationId: string; value: number }[], v: number): { animationId: string; weight: number }[] {
-  const sorted = [...samples].sort((a, b) => a.value - b.value);
-  const weights = new Map<string, number>(samples.map((s) => [s.animationId, 0]));
-  if (sorted.length) {
-    const first = sorted[0];
-    const last = sorted[sorted.length - 1];
-    if (v <= first.value) {
-      weights.set(first.animationId, 1);
-    } else if (v >= last.value) {
-      weights.set(last.animationId, 1);
-    } else {
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const a = sorted[i];
-        const b = sorted[i + 1];
-        if (v >= a.value && v <= b.value) {
-          const t = (v - a.value) / (b.value - a.value || 1);
-          weights.set(a.animationId, (weights.get(a.animationId) ?? 0) + (1 - t));
-          weights.set(b.animationId, (weights.get(b.animationId) ?? 0) + t);
-          break;
-        }
-      }
-    }
-  }
-  // Keep original sample order; one entry per sample (constant set).
-  return samples.map((s) => ({ animationId: s.animationId, weight: weights.get(s.animationId) ?? 0 }));
-}
-
-/**
- * Weights for a 2D blend space at point (x,y) via inverse-distance-squared weighting, normalized. Every
- * sample gets a weight (constant set), so directional locomotion (e.g. moveX × moveY → strafe) blends
- * smoothly without restarting clips.
- */
-function blend2D(samples: { animationId: string; value: number; y?: number }[], x: number, y: number): { animationId: string; weight: number }[] {
-  let total = 0;
-  const raw = samples.map((s) => {
-    const dx = s.value - x;
-    const dy = (s.y ?? 0) - y;
-    const d2 = dx * dx + dy * dy;
-    const w = d2 < 1e-4 ? 1e4 : 1 / d2;
-    total += w;
-    return { animationId: s.animationId, w };
-  });
-  return raw.map((r) => ({ animationId: r.animationId, weight: total > 0 ? r.w / total : 0 }));
-}
-
 export function useResolvedAnimator(object: SceneObject): {
   meshUrl?: string;
   clipSourceUrls: string[];
