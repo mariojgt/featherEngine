@@ -11,7 +11,7 @@ import {
 } from './environmentSettings';
 import { withDayCycleVisuals } from './dayCycle';
 import { useEditorStore } from '../store/editorStore';
-import { qualityProfile } from './quality';
+import { qualityProfile, SHADOW_NORMAL_BIAS } from './quality';
 import { resetAerialFog, setAerialFog } from './aerialFog';
 
 const skyVertexShader = `
@@ -247,7 +247,7 @@ export function SceneEnvironment({
         shadow-mapSize-width={profile.shadowMapSize}
         shadow-mapSize-height={profile.shadowMapSize}
         shadow-bias={-0.0004}
-        shadow-normalBias={0.02}
+        shadow-normalBias={SHADOW_NORMAL_BIAS}
         shadow-radius={profile.shadowMapSize >= 2048 ? 2.25 : 1.25}
         shadow-camera-near={0.5}
         shadow-camera-far={200}

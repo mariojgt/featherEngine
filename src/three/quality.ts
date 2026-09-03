@@ -68,6 +68,36 @@ export const QUALITY_PROFILES: Record<QualityLevel, QualityProfile> = {
 
 export const DEFAULT_QUALITY: QualityLevel = 'High';
 
+/**
+ * Shadow-map bias applied along the surface normal, shared by every shadow-casting light.
+ *
+ * Plain `shadow.bias` is a constant depth offset: large enough to kill acne on a sloped surface and it
+ * detaches the shadow from its caster (peter-panning). Offsetting the lookup along the normal instead
+ * scales naturally with the angle to the light, which is what actually fixes acne on curved geometry.
+ * 0.02 is roughly half a shadow texel for the default sun (a 160-unit frustum over a 2048 map).
+ */
+export const SHADOW_NORMAL_BIAS = 0.02;
+
+/**
+ * Shadow-map resolution for one light, derived from the active quality tier.
+ *
+ * Scene lights used to hardcode 2048/1024/512 for directional/spot/point, so the tier's
+ * `shadowMapSize` only ever reached the environment sun — Medium still paid for 2048² maps and Epic
+ * never got its 4096. The ratios below reproduce exactly the old numbers at the default High tier, so
+ * existing scenes look identical, while Medium and Epic now actually mean something.
+ *
+ * Point lights are quartered because a point shadow is a cubemap: six faces, so a given resolution
+ * costs six times what a directional light's single map does.
+ */
+export const lightShadowMapSize = (
+  profile: QualityProfile,
+  kind: 'directional' | 'spot' | 'point',
+): number => {
+  const divisor = kind === 'directional' ? 1 : kind === 'spot' ? 2 : 4;
+  // Never drop below 256 — a smaller map is all aliasing and saves nothing worth having.
+  return Math.max(256, Math.round(profile.shadowMapSize / divisor));
+};
+
 /** Resolve a profile, falling back to High for an unset/unknown level. */
 export const qualityProfile = (level: QualityLevel | undefined): QualityProfile =>
   QUALITY_PROFILES[level ?? DEFAULT_QUALITY] ?? QUALITY_PROFILES[DEFAULT_QUALITY];
