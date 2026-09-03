@@ -341,3 +341,27 @@ function distribute(samples: BlendSpaceSample[], members: number[][], pointWeigh
   });
   return out;
 }
+
+/**
+ * Sums blend weights per resolved animation action.
+ *
+ * Two samples can point at the same clip, and therefore at the same action. Calling
+ * `setEffectiveWeight` once per sample would let the last call win — often the ~0 one — and the clip
+ * would vanish from the pose. So collapse the samples onto their actions first, then write each
+ * action's weight exactly once.
+ *
+ * Generic over the action type (and writing into a caller-owned map) so it stays allocation-free on
+ * the hot path and unit-testable without a real mixer.
+ */
+export function sumBlendWeights<A>(
+  blend: readonly { name: string; weight: number }[],
+  resolve: (name: string) => A | null | undefined,
+  out: Map<A, number>,
+): Map<A, number> {
+  out.clear();
+  for (const sample of blend) {
+    const action = resolve(sample.name);
+    if (action) out.set(action, (out.get(action) ?? 0) + sample.weight);
+  }
+  return out;
+}

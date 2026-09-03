@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
-import { blend1D, blend2D } from './blendSpace';
+import { blend1D, blend2D, sumBlendWeights } from './blendSpace';
 import { useFootIK } from './footIK';
 import { useAimIK } from './aimIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
@@ -186,6 +186,20 @@ export function SkinnedModel({
   // Joined with "\n" (NOT "|") because exported clip names can contain "|" (e.g. "Armature|Armature|Idle").
   const activeNames = (blend && blend.length ? blend.map((b) => b.name) : clipName ? [clipName] : []).join('\n');
 
+  /**
+   * Writes this frame's blend weights onto the mixer. Called both from useFrame and immediately after
+   * the active clip set changes — drei's useAnimations subscribes its `mixer.update` before this
+   * component's useFrame, so a state entered without seeding weights here would render one frame with
+   * every sample action still at the weight `reset()` gave it (1). With a nine-sample directional
+   * blend space that frame is the average of all nine clips: a visible pose pop on every entry.
+   */
+  const applyBlendWeights = () => {
+    const b = blendRef.current;
+    if (ragdoll || !b) return;
+    const byAction = sumBlendWeights(b, resolveAction, BLEND_WEIGHT_SCRATCH);
+    for (const [action, weight] of byAction) action.setEffectiveWeight(weight);
+  };
+
   useEffect(() => {
     // While ragdolling, the physics owns the bones — keep the mixer quiet.
     if (ragdoll) {
@@ -204,6 +218,8 @@ export function SkinnedModel({
       if (blending) action.play();
       else action.fadeIn(fade).play();
     });
+    // Seed the weights now so the mixer's first update after this change already has the real pose.
+    if (blending) applyBlendWeights();
     return () => {
       acts.forEach((action) => action.fadeOut(fade));
     };
@@ -211,19 +227,8 @@ export function SkinnedModel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actions, activeNames, loop, speed, fade, ragdoll, mixer]);
 
-  // Drive blend-space weights live. Sum weights PER ACTION first — two samples can map to the same clip,
-  // and calling setEffectiveWeight twice would otherwise let the last (often ~0) call win → the clip vanishes.
-  useFrame(() => {
-    const b = blendRef.current;
-    if (ragdoll || !b) return;
-    const byAction = BLEND_WEIGHT_SCRATCH;
-    byAction.clear();
-    for (const sample of b) {
-      const action = resolveAction(sample.name);
-      if (action) byAction.set(action, (byAction.get(action) ?? 0) + sample.weight);
-    }
-    for (const [action, weight] of byAction) action.setEffectiveWeight(weight);
-  });
+  // Drive blend-space weights live.
+  useFrame(applyBlendWeights);
 
   // Keep playback speed live without restarting the clip.
   useEffect(() => {
