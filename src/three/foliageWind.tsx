@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { Vector3Tuple } from '../types';
@@ -322,6 +322,10 @@ export function WindFoliage({
     () => makeWindMaterial(color, map, alphaTest, uniforms.current),
     [color, map, alphaTest],
   );
+
+  // Rebuilt whenever the colour, texture or cutoff changes, and built imperatively, so nothing else
+  // frees the previous one. (The blade/cross GEOMETRIES are module-level singletons — never dispose.)
+  useEffect(() => () => material.dispose(), [material]);
 
   useLayoutEffect(() => {
     const mesh = meshRef.current;

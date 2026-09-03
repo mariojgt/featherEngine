@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { StylizedGrassSettings, Vector3Tuple } from '../types';
@@ -472,6 +472,10 @@ export function StylizedGrass({
   useLayoutEffect(() => {
     material.color.set(color);
   }, [material, color]);
+
+  // Built imperatively per component, so nothing else frees it. (The clump GEOMETRY is a module-level
+  // singleton shared by every grass patch and must NOT be disposed here.)
+  useEffect(() => () => material.dispose(), [material]);
 
   useLayoutEffect(() => {
     const mesh = meshRef.current;
