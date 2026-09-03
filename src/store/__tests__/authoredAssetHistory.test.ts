@@ -107,3 +107,84 @@ describe('animator controller undo/redo', () => {
     expect(objects.find((object) => object.id === objectId)?.name).toBe('Keep Me');
   });
 });
+
+/**
+ * The same gap applied to every other project asset with its own editor panel. Each is authored
+ * interactively and referenced by scene objects, so undo has to move them together with `scenes`.
+ */
+describe('authored project assets undo/redo', () => {
+  beforeEach(() => {
+    useEditorStore.getState().setPlaying(false);
+    initHistory();
+    clearHistory();
+  });
+
+  afterEach(() => {
+    clearHistory();
+  });
+
+  it('undoes creating a material', async () => {
+    const before = useEditorStore.getState().materials.length;
+    useEditorStore.getState().createMaterial('Brass');
+    expect(useEditorStore.getState().materials.length).toBe(before + 1);
+
+    await settle();
+    undo();
+    expect(useEditorStore.getState().materials.length).toBe(before);
+    redo();
+    expect(useEditorStore.getState().materials.length).toBe(before + 1);
+  });
+
+  it('undoes a material edit', async () => {
+    const id = useEditorStore.getState().createMaterial('Brass');
+    await settle();
+    const original = useEditorStore.getState().materials.find((m) => m.id === id)?.name;
+
+    useEditorStore.getState().updateMaterial(id, { name: 'Polished Brass' });
+    expect(useEditorStore.getState().materials.find((m) => m.id === id)?.name).toBe('Polished Brass');
+
+    await settle();
+    undo();
+    expect(useEditorStore.getState().materials.find((m) => m.id === id)?.name).toBe(original);
+  });
+
+  it('undoes creating a particle system', async () => {
+    const before = useEditorStore.getState().particleSystems.length;
+    useEditorStore.getState().createParticleSystem('Sparks');
+    await settle();
+    undo();
+    expect(useEditorStore.getState().particleSystems.length).toBe(before);
+  });
+
+  it('undoes creating a tree spec', async () => {
+    const before = useEditorStore.getState().treeSpecs.length;
+    useEditorStore.getState().createTreeSpec('broadleaf', 'Test Oak');
+    expect(useEditorStore.getState().treeSpecs.length).toBe(before + 1);
+    await settle();
+    undo();
+    expect(useEditorStore.getState().treeSpecs.length).toBe(before);
+  });
+
+  it('undoes creating a UI document', async () => {
+    const before = useEditorStore.getState().uiDocuments.length;
+    useEditorStore.getState().createUIDocument('HUD');
+    await settle();
+    undo();
+    expect(useEditorStore.getState().uiDocuments.length).toBe(before);
+  });
+
+  it('leaves an earlier scene edit alone when undoing a material edit', async () => {
+    const objectId = useEditorStore.getState().createObjectWithProps('cube');
+    await settle();
+    useEditorStore.getState().renameObject(objectId, 'Untouched');
+    await settle();
+
+    const materialId = useEditorStore.getState().createMaterial('Brass');
+    await settle();
+
+    undo();
+    expect(useEditorStore.getState().materials.some((m) => m.id === materialId)).toBe(false);
+    const objects = useEditorStore.getState().scenes.flatMap((scene) => scene.objects);
+    expect(objects.find((object) => object.id === objectId)?.name).toBe('Untouched');
+  });
+});

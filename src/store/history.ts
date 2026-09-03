@@ -1,4 +1,14 @@
-import type { AnimatorController, ModelSpec, ProjectGraph, Scene, ScriptBlueprint } from '../types';
+import type {
+  AnimatorController,
+  MaterialDefinition,
+  ModelSpec,
+  ParticleSystemDefinition,
+  ProjectGraph,
+  Scene,
+  ScriptBlueprint,
+  TreeSpec,
+  UIDocument,
+} from '../types';
 import { useEditorStore } from './editorStore';
 import { canEditCollaborativeProject, collaborationAccess } from '../collaboration/access';
 
@@ -20,10 +30,18 @@ type HistoryEntry = {
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   modelSpecs: ModelSpec[];
-  /** Animator controllers are authored interactively (states, transitions, dragged blend samples), so
-   *  they belong in undo alongside graphs and blueprints. They also reference scene objects and are
-   *  referenced by them, so snapshotting one without the other left undo internally inconsistent. */
+  /** Project-level content that is AUTHORED in a panel rather than imported: animator controllers,
+   *  materials, particle systems, tree specs and UI documents each have their own editor and each is
+   *  referenced by scene objects. Undo has to move them together with `scenes`, or reverting an edit
+   *  leaves the two halves disagreeing — and an edit to one of them that history did not watch at all
+   *  would make the next undo revert some older, unrelated change instead. Imported assets
+   *  (skeletons, animations, textures) stay out: rolling an import back out from under its references
+   *  is a different problem from undoing an edit. */
   animatorControllers: AnimatorController[];
+  materials: MaterialDefinition[];
+  particleSystems: ParticleSystemDefinition[];
+  treeSpecs: TreeSpec[];
+  uiDocuments: UIDocument[];
   activeSceneId: string;
   activeBlueprintId: string;
   activeModelSpecId: string;
@@ -74,6 +92,10 @@ const snapshotFrom = (state: {
   graphs: ProjectGraph[];
   modelSpecs: ModelSpec[];
   animatorControllers: AnimatorController[];
+  materials: MaterialDefinition[];
+  particleSystems: ParticleSystemDefinition[];
+  treeSpecs: TreeSpec[];
+  uiDocuments: UIDocument[];
   activeSceneId: string;
   activeBlueprintId: string;
   activeModelSpecId: string;
@@ -86,6 +108,10 @@ const snapshotFrom = (state: {
   graphs: state.graphs,
   modelSpecs: state.modelSpecs,
   animatorControllers: state.animatorControllers,
+  materials: state.materials,
+  particleSystems: state.particleSystems,
+  treeSpecs: state.treeSpecs,
+  uiDocuments: state.uiDocuments,
   activeSceneId: state.activeSceneId,
   activeBlueprintId: state.activeBlueprintId,
   activeModelSpecId: state.activeModelSpecId,
@@ -215,6 +241,10 @@ const apply = (entry: HistoryEntry) => {
     graphs: entry.graphs,
     modelSpecs: entry.modelSpecs,
     animatorControllers: entry.animatorControllers,
+    materials: entry.materials,
+    particleSystems: entry.particleSystems,
+    treeSpecs: entry.treeSpecs,
+    uiDocuments: entry.uiDocuments,
     activeSceneId: entry.activeSceneId,
     activeBlueprintId: entry.activeBlueprintId,
     activeModelSpecId: entry.activeModelSpecId,
@@ -273,6 +303,10 @@ export const initHistory = () => {
       state.scenes === prev.scenes &&
       state.modelSpecs === prev.modelSpecs &&
       state.animatorControllers === prev.animatorControllers &&
+      state.materials === prev.materials &&
+      state.particleSystems === prev.particleSystems &&
+      state.treeSpecs === prev.treeSpecs &&
+      state.uiDocuments === prev.uiDocuments &&
       !blueprintContentChanged(state.blueprints, prev.blueprints) &&
       !graphContentChanged(state.graphs, prev.graphs)
     ) return;
