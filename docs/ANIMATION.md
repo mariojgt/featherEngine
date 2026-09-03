@@ -132,7 +132,11 @@ single clip.
 4. Add states, then drag between them to author transitions. Drag from **Any State** for global ones.
    Select a transition to set its conditions, crossfade duration and optional exit time.
 5. Select a state and add **blend samples** to turn it into a blend space: pick the X parameter, add a
-   Y parameter for 2D, then assign a clip and coordinates per sample.
+   Y parameter for 2D, then assign a clip and coordinates per sample. A **blend space graph** appears
+   above the sample list — samples plotted on their axes, draggable to reposition (snapped to 0.05),
+   each sized by the weight it is currently contributing, with a ring marking the live parameter
+   position. The numeric fields remain the precise input; the graph is for seeing and roughing out the
+   layout.
 6. Press **Play** and watch the **Animation Debug** card in the left rail: active state, time in state,
    blend-axis values, every parameter's live value, and the clips in the pose with weight bars. A blend
    that looks wrong is usually visible here immediately — a parameter stuck at 0, or a sample holding

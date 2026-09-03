@@ -18,6 +18,7 @@ import {
 } from '@xyflow/react';
 import { LayoutGrid, Plus, Trash2, Workflow } from 'lucide-react';
 import { AnimatorDebugView } from './AnimatorDebugView';
+import { BlendSpaceGraph } from './BlendSpaceGraph';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type {
   AnimatorCondition,
@@ -239,6 +240,14 @@ function StateInspector({ controller, stateId }: { controller: AnimatorControlle
                       ))}
                     </select>
                   </label>
+                  <BlendSpaceGraph
+                    controller={controller}
+                    state={state}
+                    labelOf={(animationId) => clips.find((clip) => clip.id === animationId)?.name ?? animationId}
+                    onMoveSample={(index, next) =>
+                      setSamples(samples.map((s, j) => (j === index ? { ...s, ...next } : s)))
+                    }
+                  />
                   <span className="field-hint">Samples — clip @ X{state.blendParameterIdY ? ' , Y' : ''}, blended by the parameter{state.blendParameterIdY ? 's' : ''}.</span>
                   {samples.map((sample, i) => (
                     <div key={i} className="socket-offset" style={{ gridTemplateColumns: state.blendParameterIdY ? '1fr 56px 56px 28px' : '1fr 70px 28px' }}>

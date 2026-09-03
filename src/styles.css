@@ -16463,3 +16463,99 @@ body.is-scrubbing * {
   background: var(--accent);
   transition: width 90ms linear;
 }
+
+/* ---- Blend space graph (BlendSpaceGraph) ----------------------------------- */
+/* Samples plotted on their parameter axes, draggable, with a live cursor. The
+   aspect-ratio must match the SVG viewBox so pointer→data mapping stays exact. */
+.blendspace-graph {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+
+.blendspace-graph svg {
+  width: 100%;
+  aspect-ratio: 240 / 180;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 6px;
+  background: rgba(8, 10, 15, 0.42);
+  touch-action: none;
+}
+
+.blendspace-plot {
+  fill: none;
+  stroke: color-mix(in srgb, var(--muted) 26%, transparent);
+  stroke-width: 0.6;
+}
+
+.blendspace-zero,
+.blendspace-axis-line {
+  stroke: color-mix(in srgb, var(--muted) 34%, transparent);
+  stroke-width: 0.6;
+  stroke-dasharray: 2 2;
+}
+
+.blendspace-cursor-line {
+  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
+  stroke-width: 0.7;
+}
+
+.blendspace-cursor {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+
+.blendspace-sample-halo {
+  fill: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.blendspace-sample-dot {
+  fill: color-mix(in srgb, var(--muted) 60%, transparent);
+  stroke: rgba(8, 10, 15, 0.6);
+  stroke-width: 0.8;
+  cursor: grab;
+}
+
+.blendspace-sample.active .blendspace-sample-dot {
+  fill: var(--accent);
+}
+
+.blendspace-sample-dot:active {
+  cursor: grabbing;
+}
+
+.blendspace-sample-label {
+  fill: var(--muted);
+  font-size: 7px;
+  paint-order: stroke;
+  stroke: rgba(8, 10, 15, 0.75);
+  stroke-width: 2px;
+  text-anchor: middle;
+}
+
+.blendspace-sample.active .blendspace-sample-label {
+  fill: var(--text);
+}
+
+.blendspace-tick {
+  fill: var(--muted);
+  font-size: 7px;
+}
+
+.blendspace-tick.end {
+  text-anchor: end;
+}
+
+.blendspace-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--muted);
+  font-size: var(--text-2xs);
+}
+
+.blendspace-legend strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
