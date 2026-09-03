@@ -116,7 +116,7 @@ Blueprints, replace assets, and reuse the systems in your own game.
 | **Assets and animation** | GLB, glTF, FBX, PNG, JPEG, WebP, MP3, and WAV import; skeleton inspection, sockets, bone attachments, animation state machines, 1D and 2D blend spaces, foot and look-at IK, a live animation debugger, reusable prefabs, LOD, instancing, and optional KTX2 texture compression. |
 | **UI and input** | Screen-space and world-space UI, interactive controls, HUD bindings, minimap, keyboard, mouse, gamepad focus, and automatic touch controls in exported games. |
 | **Cinematics** | Shot sequencing, camera paths, cuts and blends, timed object/audio/event actions, overlays, frame-locked WebM capture, and MP4 export through ffmpeg.wasm. |
-| **Runtime diagnostics** | On-screen console, live variable watch, execution and value tracing, problem reporting, performance profiler, render/physics statistics, and replay capture. |
+| **Runtime diagnostics** | On-screen console, live variable watch, execution and value tracing, problem reporting, performance profiler with hitch and stall attribution, render statistics including lights, shadow casters and skinned meshes, a live animation debugger, and replay capture. |
 | **AI authoring** | Bring-your-own-key support for OpenAI, Anthropic, and Google models, tool-driven scene editing, smart routing, and a localhost-only MCP bridge for external agents. |
 | **Live collaboration** | Host/editor/viewer roles, presence and participant controls, reconnect-safe CRDT editing, and authenticated host-to-guest asset streaming without a Feather cloud server. |
 | **Production export** | Self-contained game bundles, a portable web player, native desktop installers, mobile shells, build verification, and a platform-readiness doctor. |
