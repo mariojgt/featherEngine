@@ -167,6 +167,10 @@ function CameraViewModel({ object }: { object: SceneObject }) {
         meshUrl={resolvedAnimator.meshUrl}
         clipSourceUrls={resolvedAnimator.clipSourceUrls}
         clipName={resolvedAnimator.clipName}
+        // The view model never forwarded the blend, so a character whose locomotion is a blend space
+        // rendered only its first sample in first person while third person blended properly.
+        blend={resolvedAnimator.blend}
+        syncPhase={resolvedAnimator.syncPhase}
         speed={resolvedAnimator.speed}
         loop={resolvedAnimator.loop}
         fade={resolvedAnimator.fade}

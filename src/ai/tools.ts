@@ -2687,9 +2687,13 @@ const rawEngineTools = {
       stateId: z.string(),
       parameterName: z.string().describe('Float parameter for the X axis (e.g. "Speed" or "MoveX").'),
       parameterNameY: z.string().optional().describe('Float parameter for the Y axis — makes it a 2D blend space.'),
+      syncPhase: z
+        .boolean()
+        .optional()
+        .describe('Retime samples to a shared cycle length so footfalls stay aligned. Recommended for locomotion.'),
       samples: z.array(z.object({ animationId: z.string(), value: z.number(), y: z.number().optional() })),
     }),
-    execute: async ({ controllerId, stateId, parameterName, parameterNameY, samples }) => {
+    execute: async ({ controllerId, stateId, parameterName, parameterNameY, samples, syncPhase }) => {
       const controller = findController(controllerId);
       if (!controller) return `No controller with id ${controllerId}.`;
       if (!controller.states.some((s) => s.id === stateId)) return `No state ${stateId} in controller.`;
@@ -2703,6 +2707,7 @@ const rawEngineTools = {
         blendParameterId: samples.length ? param.id : undefined,
         blendParameterIdY: samples.length ? paramY?.id : undefined,
         blendSamples: samples.length ? samples : undefined,
+        syncPhase: samples.length ? syncPhase || undefined : undefined,
       });
       return samples.length
         ? `State ${stateId} is now a ${paramY ? '2D' : '1D'} blend space (${samples.length} samples).`

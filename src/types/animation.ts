@@ -217,6 +217,14 @@ export interface AnimatorState {
   blendParameterId?: string;
   blendParameterIdY?: string;
   blendSamples?: AnimatorBlendSample[];
+  /**
+   * BLEND SPACE PHASE SYNC (Unreal "sync group"): retime the samples so they all complete one cycle
+   * in the same period, keeping their footfalls aligned. Blending clips of different lengths — a 1.0s
+   * walk against a 0.7s run — otherwise drifts them apart within a stride and the character appears to
+   * skate. Leave it off for a blend space whose samples are unrelated motions rather than the same
+   * motion at different speeds. Optional and off by default, so existing blend spaces are unchanged.
+   */
+  syncPhase?: boolean;
 }
 
 /** One sample of a blend space: an animation placed at `value` on the X axis (and `y` on the Y axis for 2D). */

@@ -303,6 +303,7 @@ function Primitive({
           clipSourceUrls={resolvedAnimator.clipSourceUrls}
           clipName={resolvedAnimator.clipName}
           blend={resolvedAnimator.blend}
+          syncPhase={resolvedAnimator.syncPhase}
           speed={resolvedAnimator.speed}
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}

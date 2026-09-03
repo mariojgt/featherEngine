@@ -86,6 +86,21 @@ the pose. Outside the sample hull the point is projected onto the nearest edge, 
 boundary stays continuous. Sample sets that cannot be triangulated (fewer than three samples, or all
 collinear) fall back to 1D interpolation along their dominant axis.
 
+### Phase sync
+
+Blending clips of different lengths is what makes locomotion slide: a 1.0s walk against a 0.7s run
+drifts apart within a stride, so one foot plants while the other is still swinging. Setting `syncPhase`
+on a blend-space state retimes every sample onto the weighted mean cycle length — longer clips speed
+up, shorter ones slow down — so their footfalls stay locked. The samples already start in phase
+(entering a state resets them together), so holding their cycle lengths equal keeps them there, and
+because the mean moves continuously with the weights the retiming never snaps.
+
+The correction is clamped to 0.5x–2x. Sync assumes the samples are the same motion at different
+speeds; a blend space that also holds a long idle loop would otherwise drag a stride into slow motion
+as it fades in past the idle. **Leave sync off for blend spaces mixing genuinely different cycle
+lengths** — it is opt-in for exactly that reason, and off by default so existing blend spaces are
+unchanged.
+
 Two properties matter for smoothness and are guaranteed by tests:
 
 - **Weights always sum to 1**, everywhere on the plane and far outside the hull.
@@ -218,6 +233,9 @@ and moves eight-way, then build a 2D blend space over the `moveX` / `moveY` para
 
 ## Limitations
 
+- **Phase sync has no per-sample opt-out.** It is on or off for the whole state; Unreal's per-sample
+  sync-group membership (which is how an idle is normally excluded) is not implemented, which is why
+  the correction is clamped instead.
 - **One blend space per state.** A state is either a single clip or one blend space; nested blend
   spaces are not supported.
 - **No animation layers yet.** There is a single base pose, so "run while aiming" is handled by the

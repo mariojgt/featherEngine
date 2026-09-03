@@ -41,6 +41,7 @@ const CONTROLLER: AnimatorController = {
       loop: true,
       blendParameterId: 'p-mx',
       blendParameterIdY: 'p-speed',
+      syncPhase: true,
       blendSamples: [
         { animationId: 'a-idle', value: 0, y: 0 },
         { animationId: 'a-walkF', value: 0, y: 1 },
@@ -106,6 +107,14 @@ describe('animator controller serialization', () => {
     expect(state?.blendParameterId).toBe('p-mx');
     expect(state?.blendParameterIdY).toBe('p-speed');
     expect(state?.blendSamples?.map((sample) => sample.y)).toEqual([0, 1, 0, 2]);
+  });
+
+  it('keeps the phase-sync flag', () => {
+    const state = roundTrip(withController()).animatorControllers[0].states.find((s) => s.id === 's-loco-2d');
+    expect(state?.syncPhase).toBe(true);
+    // Off is represented by the field being absent, so it must not come back as an explicit false.
+    const plain = roundTrip(withController()).animatorControllers[0].states.find((s) => s.id === 's-loco-1d');
+    expect(plain?.syncPhase).toBeUndefined();
   });
 
   it('keeps every parameter type, including trigger and bool defaults', () => {

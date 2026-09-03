@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { blend1D, blend2D, sumBlendWeights, type BlendSpaceSample } from '../blendSpace';
+import {
+  blend1D,
+  blend2D,
+  phaseSyncTimeScale,
+  PHASE_SYNC_MAX_SCALE,
+  PHASE_SYNC_MIN_SCALE,
+  sumBlendWeights,
+  type BlendSpaceSample,
+} from '../blendSpace';
 
 const sum = (weights: { weight: number }[]) => weights.reduce((acc, w) => acc + w.weight, 0);
 const weightOf = (weights: { animationId: string; weight: number }[], id: string) =>
@@ -278,5 +286,63 @@ describe('sumBlendWeights', () => {
     ).map((w) => ({ name: w.animationId, weight: w.weight }));
     sumBlendWeights(weights, resolve, out);
     expect([...out.values()].reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+  });
+});
+
+describe('phaseSyncTimeScale', () => {
+  it('leaves a clip alone when it already matches the shared cycle', () => {
+    expect(phaseSyncTimeScale(1, 1)).toBe(1);
+  });
+
+  // The point of sync: a 1.0s walk and a 0.7s run blended 50/50 share a 0.85s cycle, so both must
+  // complete one stride in 0.85s or the feet drift apart and the character skates.
+  it('retimes samples onto a shared cycle length', () => {
+    const mean = 0.5 * 1.0 + 0.5 * 0.7;
+    const walk = phaseSyncTimeScale(1.0, mean);
+    const run = phaseSyncTimeScale(0.7, mean);
+    expect(1.0 / walk).toBeCloseTo(mean, 6);
+    expect(0.7 / run).toBeCloseTo(mean, 6);
+    // The longer clip speeds up, the shorter one slows down.
+    expect(walk).toBeGreaterThan(1);
+    expect(run).toBeLessThan(1);
+  });
+
+  it('is continuous as the weights move, so retiming never snaps', () => {
+    let previous = phaseSyncTimeScale(1.0, 1.0);
+    for (let t = 0; t <= 1; t += 0.01) {
+      const mean = (1 - t) * 1.0 + t * 0.7;
+      const current = phaseSyncTimeScale(1.0, mean);
+      expect(Math.abs(current - previous)).toBeLessThan(0.05);
+      previous = current;
+    }
+  });
+
+  // A blend space holding a long idle next to a stride would otherwise ask for a 0.25x jog while the
+  // jog fades in past the idle. Clamping keeps that a mild retime rather than obvious slow motion.
+  it('clamps an extreme correction', () => {
+    expect(phaseSyncTimeScale(1, 4)).toBe(PHASE_SYNC_MIN_SCALE);
+    expect(phaseSyncTimeScale(4, 1)).toBe(PHASE_SYNC_MAX_SCALE);
+  });
+
+  it('falls back to the authored rate for a degenerate duration', () => {
+    expect(phaseSyncTimeScale(0, 1)).toBe(1);
+    expect(phaseSyncTimeScale(1, 0)).toBe(1);
+    expect(phaseSyncTimeScale(-1, 1)).toBe(1);
+    expect(phaseSyncTimeScale(NaN, 1)).toBe(1);
+    expect(phaseSyncTimeScale(1, NaN)).toBe(1);
+  });
+
+  it('never returns a non-finite or zero scale, which would freeze or explode playback', () => {
+    for (const [duration, mean] of [
+      [1, 1],
+      [0.7, 1],
+      [1e-9, 1e9],
+      [1e9, 1e-9],
+      [Infinity, 1],
+    ]) {
+      const scale = phaseSyncTimeScale(duration, mean);
+      expect(Number.isFinite(scale)).toBe(true);
+      expect(scale).toBeGreaterThan(0);
+    }
   });
 });

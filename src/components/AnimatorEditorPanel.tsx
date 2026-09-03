@@ -240,6 +240,16 @@ function StateInspector({ controller, stateId }: { controller: AnimatorControlle
                       ))}
                     </select>
                   </label>
+                  <label className="field-row">
+                    <span title="Retime the samples to a shared cycle length so their footfalls stay aligned. Leave off when the samples are unrelated motions rather than the same motion at different speeds.">
+                      Sync phase
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(state.syncPhase)}
+                      onChange={(event) => updateAnimatorState(controller.id, state.id, { syncPhase: event.target.checked || undefined })}
+                    />
+                  </label>
                   <BlendSpaceGraph
                     controller={controller}
                     state={state}

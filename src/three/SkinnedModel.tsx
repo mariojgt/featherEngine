@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
-import { blend1D, blend2D, sumBlendWeights } from './blendSpace';
+import { blend1D, blend2D, phaseSyncTimeScale, sumBlendWeights } from './blendSpace';
 import { useFootIK } from './footIK';
 import { useAimIK } from './aimIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
@@ -34,6 +34,7 @@ export function SkinnedModel({
   clipSourceUrls,
   clipName,
   blend,
+  syncPhase,
   speed = 1,
   loop = true,
   fade = 0.2,
@@ -46,6 +47,7 @@ export function SkinnedModel({
   clipName?: string;
   /** Blend-space mode: clips to play simultaneously with per-clip weights (updated live each frame). */
   blend?: { name: string; weight: number }[];
+  syncPhase?: boolean;
   speed?: number;
   loop?: boolean;
   /** Crossfade seconds when the clip changes (state-machine transition duration). */
@@ -177,6 +179,8 @@ export function SkinnedModel({
   // Latest blend weights, read live in useFrame (weights change every tick within a blend).
   const blendRef = useRef(blend);
   blendRef.current = blend;
+  const syncPhaseRef = useRef(syncPhase);
+  syncPhaseRef.current = syncPhase;
   const resolveAction = (n: string) => {
     const key = Object.keys(actions).find((k) => k.toLowerCase() === n.toLowerCase()) ?? n;
     return actions[key];
@@ -198,6 +202,19 @@ export function SkinnedModel({
     if (ragdoll || !b) return;
     const byAction = sumBlendWeights(b, resolveAction, BLEND_WEIGHT_SCRATCH);
     for (const [action, weight] of byAction) action.setEffectiveWeight(weight);
+    if (!syncPhaseRef.current) return;
+    // Phase sync: retime every sample to the weighted mean cycle length so footfalls stay aligned.
+    // Two passes over the scratch map rather than building an array — this runs every frame.
+    let totalWeight = 0;
+    let weightedDuration = 0;
+    for (const [action, weight] of byAction) {
+      totalWeight += weight;
+      weightedDuration += weight * action.getClip().duration;
+    }
+    const meanDuration = totalWeight > 0 ? weightedDuration / totalWeight : 0;
+    for (const [action] of byAction) {
+      action.timeScale = phaseSyncTimeScale(action.getClip().duration, meanDuration);
+    }
   };
 
   useEffect(() => {
@@ -272,6 +289,8 @@ export function useResolvedAnimator(object: SceneObject): {
   clipName?: string;
   /** When the active state is a blend space, the clips + weights to play simultaneously. */
   blend?: { name: string; weight: number }[];
+  /** Retime blend samples to a shared cycle length so their footfalls stay aligned. */
+  syncPhase?: boolean;
   loop: boolean;
   speed: number;
   fade: number;
@@ -347,6 +366,7 @@ export function useResolvedAnimator(object: SceneObject): {
       clipSourceUrls,
       clipName: clip?.name ?? (blend?.[0]?.name),
       blend,
+      syncPhase: activeState?.syncPhase,
       loop: activeState?.loop ?? true,
       speed: activeState?.speed ?? 1,
       fade: (isPlaying && live?.fade) || 0.2,

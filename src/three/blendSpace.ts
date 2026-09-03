@@ -365,3 +365,32 @@ export function sumBlendWeights<A>(
   }
   return out;
 }
+
+/**
+ * Playback rate for one blend-space sample so it stays in phase with the others.
+ *
+ * Blending clips of different lengths is what makes locomotion slide. A 1.0s walk and a 0.7s run
+ * mixed 50/50 drift apart within a stride: one foot is planting while the other is still swinging, and
+ * the result reads as skating. Unreal solves this with sync groups; the same trick works here.
+ *
+ * Retime every sample so they all complete one cycle in the same period — the weighted mean of their
+ * durations. A clip longer than the mean speeds up, a shorter one slows down, and because the mean
+ * moves continuously with the weights the retiming never snaps. The samples start in phase (entering
+ * a state resets them all to time 0 together), so holding their cycle lengths equal keeps them there.
+ *
+ * The correction is clamped. Sync assumes the samples are the same motion at different speeds; a
+ * blend space that also holds a long idle loop would otherwise drag a stride into slow motion while it
+ * fades in past the idle (a 4s idle against a 1s jog asks for a 0.25x jog). Clamping degrades that to
+ * a mild retime instead of an obvious one, at the cost of exact phase lock in a case that could not
+ * hold phase anyway. Blend spaces mixing genuinely different cycle lengths should leave sync off.
+ *
+ * Returns 1 for a degenerate duration so a malformed clip plays at its authored rate rather than
+ * stopping dead or running away.
+ */
+export const PHASE_SYNC_MIN_SCALE = 0.5;
+export const PHASE_SYNC_MAX_SCALE = 2;
+
+export const phaseSyncTimeScale = (duration: number, meanDuration: number): number => {
+  if (!(duration > 0) || !(meanDuration > 0)) return 1;
+  return Math.min(PHASE_SYNC_MAX_SCALE, Math.max(PHASE_SYNC_MIN_SCALE, duration / meanDuration));
+};
