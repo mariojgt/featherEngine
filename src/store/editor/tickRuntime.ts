@@ -54,7 +54,7 @@ import { FoliageInteractor, MAX_FOLIAGE_INTERACTORS, updateFoliageInteractors } 
 import { resolveMaterial } from '../../three/materialResolve';
 import { CharacterControllerComponent, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
 import { worldToLocalUnderParent, worldTransformOf } from '../../utils/transformHierarchy';
-import { getAnimatorControllerRuntime } from './animatorRuntime';
+import { animatorStateClipDuration, getAnimatorControllerRuntime } from './animatorRuntime';
 import { cinematicActionsAt, cinematicCameraAt, cinematicFadeAt, cinematicMaterialsAt, cinematicTextAt, cinematicTimeScaleAt, cinematicTransformsAt, clamp01, mixVec3 } from './cinematics';
 import { RuntimeAnimator, defaultPhysics, defaultWaterVolume, lerpAngle, resolveCharacter, resolveVehicle, withPhysicsDefaults } from './defaults';
 import { cloneGraphValue, coerceGraphValue, defaultValueForType } from './graph';
@@ -6184,8 +6184,7 @@ export const applyRuntimeTick = (
         let fromStateId = prev?.stateId ?? controller.defaultStateId ?? controller.states[0].id;
         if (!statesById.has(fromStateId)) fromStateId = controller.states[0].id;
         const fromState = statesById.get(fromStateId);
-        const fromAnim = fromState?.animationId ? animationById.get(fromState.animationId) : undefined;
-        const clipDuration = fromAnim ? fromAnim.duration / Math.max(fromState?.speed ?? 1, 0.01) : 0;
+        const clipDuration = animatorStateClipDuration(fromState, (id) => animationById.get(id)?.duration);
         const timeInState = (prev?.stateId === fromStateId ? prev.time : 0) + dt;
 
         // Evaluate transitions from the current state (plus "any state" transitions).
