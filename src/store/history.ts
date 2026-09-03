@@ -1,4 +1,4 @@
-import type { ModelSpec, ProjectGraph, Scene, ScriptBlueprint } from '../types';
+import type { AnimatorController, ModelSpec, ProjectGraph, Scene, ScriptBlueprint } from '../types';
 import { useEditorStore } from './editorStore';
 import { canEditCollaborativeProject, collaborationAccess } from '../collaboration/access';
 
@@ -20,6 +20,10 @@ type HistoryEntry = {
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   modelSpecs: ModelSpec[];
+  /** Animator controllers are authored interactively (states, transitions, dragged blend samples), so
+   *  they belong in undo alongside graphs and blueprints. They also reference scene objects and are
+   *  referenced by them, so snapshotting one without the other left undo internally inconsistent. */
+  animatorControllers: AnimatorController[];
   activeSceneId: string;
   activeBlueprintId: string;
   activeModelSpecId: string;
@@ -69,6 +73,7 @@ const snapshotFrom = (state: {
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   modelSpecs: ModelSpec[];
+  animatorControllers: AnimatorController[];
   activeSceneId: string;
   activeBlueprintId: string;
   activeModelSpecId: string;
@@ -80,6 +85,7 @@ const snapshotFrom = (state: {
   blueprints: state.blueprints,
   graphs: state.graphs,
   modelSpecs: state.modelSpecs,
+  animatorControllers: state.animatorControllers,
   activeSceneId: state.activeSceneId,
   activeBlueprintId: state.activeBlueprintId,
   activeModelSpecId: state.activeModelSpecId,
@@ -208,6 +214,7 @@ const apply = (entry: HistoryEntry) => {
     blueprints,
     graphs: entry.graphs,
     modelSpecs: entry.modelSpecs,
+    animatorControllers: entry.animatorControllers,
     activeSceneId: entry.activeSceneId,
     activeBlueprintId: entry.activeBlueprintId,
     activeModelSpecId: entry.activeModelSpecId,
@@ -265,6 +272,7 @@ export const initHistory = () => {
     if (
       state.scenes === prev.scenes &&
       state.modelSpecs === prev.modelSpecs &&
+      state.animatorControllers === prev.animatorControllers &&
       !blueprintContentChanged(state.blueprints, prev.blueprints) &&
       !graphContentChanged(state.graphs, prev.graphs)
     ) return;
