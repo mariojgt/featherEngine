@@ -231,6 +231,12 @@ const controller = {
 For a directional strafe blend, set `strafe: true` on the character controller so it faces the camera
 and moves eight-way, then build a 2D blend space over the `moveX` / `moveY` parameter sources.
 
+Those two sources are the local move direction **scaled by speed** relative to the character's
+`moveSpeed`, so the blend point travels out from the origin as the character accelerates. Author them
+the way the bundled pawn does: idle at `(0, 0)` and the directional clips out at radius 1. Sprinting
+pushes the point past radius 1 and therefore outside the sample hull, where the blend clamps to the
+nearest edge — the full-speed pose.
+
 ## Limitations
 
 - **Phase sync has no per-sample opt-out.** It is on or off for the whole state; Unreal's per-sample

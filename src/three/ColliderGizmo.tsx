@@ -1,5 +1,5 @@
 import { useFrame } from '@react-three/fiber';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import type { SceneObject } from '../types';
 import {
@@ -110,6 +110,11 @@ function MeshColliderGizmo({ object, convex }: { object: SceneObject; convex: bo
     g.setIndex(new THREE.BufferAttribute(geo.indices, 1));
     return g;
   }, [geo]);
+
+  // This geometry holds a copy of the whole model's vertex and index buffers and is built
+  // imperatively, so React/R3F will not clean it up. Without this, every select/deselect of a
+  // mesh-collider object leaked one — and once rendered it has been uploaded to the GPU.
+  useEffect(() => () => geometry?.dispose(), [geometry]);
 
   if (!geometry) return null;
   return (

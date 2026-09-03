@@ -30,6 +30,12 @@ export function PhysicsDebugView() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // The debug line's buffers are re-uploaded every frame while open; release them on unmount.
+  useEffect(() => {
+    const geometry = geometryRef.current;
+    return () => geometry.dispose();
+  }, []);
+
   useFrame(() => {
     const line = lineRef.current;
     if (!line) return;
