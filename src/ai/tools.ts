@@ -2647,12 +2647,13 @@ const rawEngineTools = {
       animationId: z.string().optional(),
       speed: z.number().optional(),
       loop: z.boolean().optional(),
+      layerId: z.string().optional().describe('Add to this animation layer instead of the base machine.'),
     }),
-    execute: async ({ controllerId, name, animationId, speed, loop }) => {
+    execute: async ({ controllerId, name, animationId, speed, loop, layerId }) => {
       if (!findController(controllerId)) return `No controller with id ${controllerId}.`;
       if (animationId && !store().animations.some((a) => a.id === animationId)) return `No animation asset with id ${animationId}.`;
-      const id = store().addAnimatorState(controllerId, { name, animationId, speed, loop });
-      return id ? `Added state "${name}" (${id}).` : `Couldn't add state.`;
+      const id = store().addAnimatorState(controllerId, { name, animationId, speed, loop }, layerId);
+      return id ? `Added state "${name}" (${id})${layerId ? ` to layer ${layerId}` : ''}.` : `Couldn't add state.`;
     },
   }),
 
@@ -2691,24 +2692,32 @@ const rawEngineTools = {
         .boolean()
         .optional()
         .describe('Retime samples to a shared cycle length so footfalls stay aligned. Recommended for locomotion.'),
+      layerId: z.string().optional().describe('The state lives on this animation layer rather than the base machine.'),
       samples: z.array(z.object({ animationId: z.string(), value: z.number(), y: z.number().optional() })),
     }),
-    execute: async ({ controllerId, stateId, parameterName, parameterNameY, samples, syncPhase }) => {
+    execute: async ({ controllerId, stateId, parameterName, parameterNameY, samples, syncPhase, layerId }) => {
       const controller = findController(controllerId);
       if (!controller) return `No controller with id ${controllerId}.`;
-      if (!controller.states.some((s) => s.id === stateId)) return `No state ${stateId} in controller.`;
+      const machine = layerId ? controller.layers?.find((l) => l.id === layerId) : controller;
+      if (!machine) return `No layer ${layerId} in controller.`;
+      if (!machine.states.some((s) => s.id === stateId)) return `No state ${stateId} in ${layerId ? 'layer' : 'controller'}.`;
       const param = controller.parameters.find((p) => p.name === parameterName);
       if (!param) return `No parameter "${parameterName}" on this controller.`;
       const paramY = parameterNameY ? controller.parameters.find((p) => p.name === parameterNameY) : undefined;
       if (parameterNameY && !paramY) return `No parameter "${parameterNameY}" on this controller.`;
       const bad = samples.find((s) => !store().animations.some((a) => a.id === s.animationId));
       if (bad) return `No animation asset with id ${bad.animationId}.`;
-      store().updateAnimatorState(controllerId, stateId, {
-        blendParameterId: samples.length ? param.id : undefined,
-        blendParameterIdY: samples.length ? paramY?.id : undefined,
-        blendSamples: samples.length ? samples : undefined,
-        syncPhase: samples.length ? syncPhase || undefined : undefined,
-      });
+      store().updateAnimatorState(
+        controllerId,
+        stateId,
+        {
+          blendParameterId: samples.length ? param.id : undefined,
+          blendParameterIdY: samples.length ? paramY?.id : undefined,
+          blendSamples: samples.length ? samples : undefined,
+          syncPhase: samples.length ? syncPhase || undefined : undefined,
+        },
+        layerId,
+      );
       return samples.length
         ? `State ${stateId} is now a ${paramY ? '2D' : '1D'} blend space (${samples.length} samples).`
         : `Cleared blend space on ${stateId}.`;
@@ -2734,14 +2743,90 @@ const rawEngineTools = {
       duration: z.number().optional(),
       hasExitTime: z.boolean().optional(),
       exitTime: z.number().optional().describe('Fraction 0–1 of the clip that must play before leaving (default 1 = clip end).'),
+      layerId: z.string().optional().describe('Wire states of this animation layer instead of the base machine.'),
     }),
-    execute: async ({ controllerId, from, to, conditions, duration, hasExitTime, exitTime }) => {
+    execute: async ({ controllerId, from, to, conditions, duration, hasExitTime, exitTime, layerId }) => {
       const controller = findController(controllerId);
       if (!controller) return `No controller with id ${controllerId}.`;
-      if (from !== 'any' && !controller.states.some((s) => s.id === from)) return `No state ${from} in controller.`;
-      if (!controller.states.some((s) => s.id === to)) return `No state ${to} in controller.`;
-      const id = store().addAnimatorTransition(controllerId, { from, to, conditions, duration, hasExitTime, exitTime });
+      const machine = layerId ? controller.layers?.find((l) => l.id === layerId) : controller;
+      if (!machine) return `No layer ${layerId} in controller.`;
+      const where = layerId ? 'layer' : 'controller';
+      if (from !== 'any' && !machine.states.some((s) => s.id === from)) return `No state ${from} in ${where}.`;
+      if (!machine.states.some((s) => s.id === to)) return `No state ${to} in ${where}.`;
+      const id = store().addAnimatorTransition(controllerId, { from, to, conditions, duration, hasExitTime, exitTime }, layerId);
       return id ? `Added transition ${from} → ${to} (${id}).` : `Couldn't add transition.`;
+    },
+  }),
+
+  add_animation_layer: tool({
+    description:
+      'Add an ANIMATION LAYER to a controller: a masked state machine played over the base one, so a character can run and aim at the same time. maskRootBones names the bones the layer drives — each one brings its whole subtree, so ["Spine"] is the upper body. Empty mask = whole skeleton. Author its states/transitions with the same tools, passing this layerId. Returns layerId.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      name: z.string().optional(),
+      maskRootBones: z
+        .array(z.string())
+        .optional()
+        .describe('Root bones this layer drives; each brings its subtree. Use the rig bone names, e.g. ["Spine"].'),
+      weight: z.number().min(0).max(1).optional().describe('Blend weight, 0..1. Default 1.'),
+      weightParameterName: z
+        .string()
+        .optional()
+        .describe('Drive the weight from this parameter instead (a bool gates the layer, a float fades it).'),
+    }),
+    execute: async ({ controllerId, name, maskRootBones, weight, weightParameterName }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      const param = weightParameterName
+        ? controller.parameters.find((p) => p.name === weightParameterName)
+        : undefined;
+      if (weightParameterName && !param) return `No parameter "${weightParameterName}" on this controller.`;
+      const id = store().addAnimatorLayer(controllerId, { name, maskRootBones, weight });
+      if (!id) return `Couldn't add layer.`;
+      if (param) store().updateAnimatorLayer(controllerId, id, { weightParameterId: param.id });
+      return `Added layer "${name ?? 'Layer'}" (${id}) masked to ${maskRootBones?.join(', ') || 'the whole skeleton'}.`;
+    },
+  }),
+
+  update_animation_layer: tool({
+    description: 'Update an animation layer: name, mask root bones, weight, or the parameter driving its weight.',
+    inputSchema: z.object({
+      controllerId: z.string(),
+      layerId: z.string(),
+      name: z.string().optional(),
+      maskRootBones: z.array(z.string()).optional(),
+      weight: z.number().min(0).max(1).optional(),
+      weightParameterName: z.string().nullable().optional().describe('Parameter name, or null to use the static weight.'),
+    }),
+    execute: async ({ controllerId, layerId, name, maskRootBones, weight, weightParameterName }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      if (!controller.layers?.some((l) => l.id === layerId)) return `No layer ${layerId} in controller.`;
+      let weightParameterId: string | undefined;
+      if (weightParameterName) {
+        const param = controller.parameters.find((p) => p.name === weightParameterName);
+        if (!param) return `No parameter "${weightParameterName}" on this controller.`;
+        weightParameterId = param.id;
+      }
+      store().updateAnimatorLayer(controllerId, layerId, {
+        ...(name !== undefined ? { name } : {}),
+        ...(maskRootBones !== undefined ? { maskRootBones } : {}),
+        ...(weight !== undefined ? { weight } : {}),
+        ...(weightParameterName !== undefined ? { weightParameterId } : {}),
+      });
+      return `Updated layer ${layerId}.`;
+    },
+  }),
+
+  remove_animation_layer: tool({
+    description: 'Remove an animation layer and all of its states and transitions.',
+    inputSchema: z.object({ controllerId: z.string(), layerId: z.string() }),
+    execute: async ({ controllerId, layerId }) => {
+      const controller = findController(controllerId);
+      if (!controller) return `No controller with id ${controllerId}.`;
+      if (!controller.layers?.some((l) => l.id === layerId)) return `No layer ${layerId} in controller.`;
+      store().removeAnimatorLayer(controllerId, layerId);
+      return `Removed layer ${layerId}.`;
     },
   }),
 

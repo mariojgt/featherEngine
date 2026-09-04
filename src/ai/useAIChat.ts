@@ -247,6 +247,12 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Added transition';
     case 'set_blendspace':
       return Array.isArray(input.samples) && input.samples.length ? 'Set blend space' : 'Cleared blend space';
+    case 'add_animation_layer':
+      return 'Added animation layer';
+    case 'update_animation_layer':
+      return 'Updated animation layer';
+    case 'remove_animation_layer':
+      return 'Removed animation layer';
     case 'set_object_controller':
       return input.controllerId ? 'Assigned controller' : 'Detached controller';
     case 'set_anim_parameter':

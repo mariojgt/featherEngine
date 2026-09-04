@@ -20,11 +20,16 @@ The payoff is that no gameplay code names a clip. The built-in character control
 Animator component (per object)
   └─ Animator Controller (reusable asset)
        ├─ Parameters ── driven by a source (speed / grounded / a project variable / scripts)
-       ├─ States ────── one clip, or a 1D/2D blend space
-       └─ Transitions ─ conditions + crossfade duration (+ optional exit time)
+       ├─ Base machine
+       │    ├─ States ────── one clip, or a 1D/2D blend space
+       │    └─ Transitions ─ conditions + crossfade duration (+ optional exit time)
+       └─ Layers ─────── the same machine again, masked to part of the skeleton
                               │
                               ▼
                      Blend weights (blendSpace.ts)
+                              │
+                              ▼
+                   Bone masking (boneMask.ts) ── base excluded from layer bones
                               │
                               ▼
                 Three.js AnimationMixer actions ── SkinnedModel
@@ -41,6 +46,7 @@ Animator component (per object)
 | Asset + component types | [`src/types/animation.ts`](../src/types/animation.ts) |
 | Controller lookup caches | [`src/store/editor/animatorRuntime.ts`](../src/store/editor/animatorRuntime.ts) |
 | Blend-space weighting maths | [`src/three/blendSpace.ts`](../src/three/blendSpace.ts) |
+| Bone masking for layers | [`src/three/boneMask.ts`](../src/three/boneMask.ts) |
 | Mixer binding + crossfades | [`src/three/SkinnedModel.tsx`](../src/three/SkinnedModel.tsx) |
 | Debug snapshot | [`src/store/editor/animatorDebug.ts`](../src/store/editor/animatorDebug.ts) |
 | Graph editor + debug panel | [`src/components/AnimatorEditorPanel.tsx`](../src/components/AnimatorEditorPanel.tsx), [`AnimatorDebugView.tsx`](../src/components/AnimatorDebugView.tsx) |
@@ -107,6 +113,56 @@ Two properties matter for smoothness and are guaranteed by tests:
 - **The set of playing clips is constant** for the lifetime of the state. Every sample gets an entry
   (weight 0 when inactive), so crossing a sample boundary changes weights only — it never restarts an
   action, which is what would make locomotion visibly stutter.
+
+## Animation layers
+
+A layer is a second state machine that drives only part of the skeleton, on top of the base one. This
+is what lets a character run and aim at the same time: the base owns the legs and hips, an upper-body
+layer owns the spine, arms and head.
+
+```
+Base layer      Locomotion blend space        → hips, legs
+Upper Body      Rest ⇄ Aim (on IsAiming)      → Spine and below-in-hierarchy
+```
+
+A layer holds its own `states`, `transitions` and `defaultStateId` and runs through the **same
+evaluator** as the base (`stepStateMachine`), so everything a base state can do a layer state can do
+too — blend spaces, exit time, any-state transitions. Parameters are **shared** with the controller,
+so one `isAiming` drives the base and every layer at once.
+
+### Masking, and why it is mandatory
+
+`maskRootBones` names the bones a layer takes over. Each named bone brings its **whole subtree**, so
+`["Spine"]` is the upper body without listing forty bones. An empty mask means the whole skeleton (a
+full-body override).
+
+Masking is not a convenience. three's `AnimationMixer` blends every action targeting the same property
+and normalizes by total weight, so two actions both driving `Spine.quaternion` at weight 1 produce the
+**average** of the two poses — a half-aiming, half-running spine. Layers therefore need disjoint track
+sets: the layer plays only its bones' tracks, and the base is masked out of exactly those bones. Each
+property then has one contributor at full weight.
+
+When a layer is only partly faded in, the base contributes to the layer's bones as well, at
+`1 - layerWeight`, so those bones land on a clean linear blend. Without that the bone would blend
+against whatever it held last frame — a lag filter rather than a blend.
+
+**Keep layer masks disjoint.** A bone claimed by two partly-faded layers receives a base contribution
+from each, so overlapping masks blend only approximately.
+
+### Weight
+
+Either a static `weight` (0..1) or a `weightParameterId`, which drives it instead: a bool parameter
+gates the layer on and off, a float fades it. A non-finite value resolves to 0 rather than sending NaN
+into the mixer. A layer at zero weight is kept out of the mixer entirely.
+
+### Editor workflow
+
+The Animator panel's **machine selector** (left rail) switches the graph between "Base (full body)"
+and each layer. Everything follows the selection — the node graph, both inspectors, entry state,
+deletes, and the live-play highlight, which tracks the selected layer's state. Layer name, mask bones,
+weight and weight parameter are edited in the same card. The **Animation Debug** readout lists every
+layer with its state, weight and contributing clips, which is how you tell a zero weight from a mask
+that matches no bone in this rig from a stuck layer state — all three look identical from outside.
 
 ## Public API
 
@@ -189,7 +245,26 @@ fields on a state, so projects saved before blend spaces existed load unchanged:
 }
 ```
 
-`blendParameterIdY` absent means 1D. Parameter ids are remapped when a controller is packaged into a
+`blendParameterIdY` absent means 1D. Layers live under an optional `layers` array on the controller,
+each with the same `states` / `transitions` / `defaultStateId` shape plus `maskRootBones`, `weight` and
+an optional `weightParameterId`:
+
+```json
+"layers": [
+  {
+    "id": "l-upper",
+    "name": "Upper Body",
+    "maskRootBones": ["Spine"],
+    "weight": 1,
+    "weightParameterId": "p-aiming",
+    "states": [{ "id": "ls-aim", "name": "Aim", "animationId": "a-aim", "speed": 1, "loop": true }],
+    "defaultStateId": "ls-aim",
+    "transitions": []
+  }
+]
+```
+
+ Parameter ids are remapped when a controller is packaged into a
 prefab ([`src/project/package.ts`](../src/project/package.ts)), and
 [`src/project/runtimeCompatibility.ts`](../src/project/runtimeCompatibility.ts) reports blend samples
 pointing at missing animations. The round trip is covered by
@@ -244,9 +319,14 @@ nearest edge — the full-speed pose.
   the correction is clamped instead.
 - **One blend space per state.** A state is either a single clip or one blend space; nested blend
   spaces are not supported.
-- **No animation layers yet.** There is a single base pose, so "run while aiming" is handled by the
-  additive aim/look-at IK pass rather than by a masked upper-body layer. Bone-masked layering is not
-  implemented.
+- **Overlapping layer masks are approximate.** A bone claimed by two partly-faded layers gets a base
+  contribution from each. Disjoint masks are exact; overlapping ones drift.
+- **Layers are override, not additive.** A layer replaces the base pose on its bones rather than
+  adding to it, so an additive recoil that rides on top of an aim pose is not expressible yet (three
+  supports additive blend modes, but nothing authors them here).
+- **Masks are authored as bone names.** There is no picker reading the bound skeleton, so a mask
+  naming a bone the rig does not have silently shrinks — the Animation Debug readout is what surfaces
+  that.
 - **No root motion.** Movement comes from the character controller or physics; clips are treated as
   in-place. Root-motion extraction is not implemented.
 - **2D blend spaces need a 2D sample layout.** Collinear samples degrade to 1D by design; a blend
