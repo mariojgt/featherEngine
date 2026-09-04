@@ -54,7 +54,7 @@ import { FoliageInteractor, MAX_FOLIAGE_INTERACTORS, updateFoliageInteractors } 
 import { resolveMaterial } from '../../three/materialResolve';
 import { CharacterControllerComponent, CompareOperator, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
 import { worldToLocalUnderParent, worldTransformOf } from '../../utils/transformHierarchy';
-import { getAnimatorControllerRuntime, localMoveVector, stepStateMachine } from './animatorRuntime';
+import { getAnimatorControllerRuntime, localMoveVector, resolveLayerWeight, stepStateMachine } from './animatorRuntime';
 import { cinematicActionsAt, cinematicCameraAt, cinematicFadeAt, cinematicMaterialsAt, cinematicTextAt, cinematicTimeScaleAt, cinematicTransformsAt, clamp01, mixVec3 } from './cinematics';
 import { RuntimeAnimator, defaultPhysics, defaultWaterVolume, lerpAngle, resolveCharacter, resolveVehicle, withPhysicsDefaults } from './defaults';
 import { cloneGraphValue, coerceGraphValue, defaultValueForType } from './graph';
@@ -6094,7 +6094,8 @@ export const applyRuntimeTick = (
         if (!controllerId) continue;
         const controller = controllerById.get(controllerId);
         if (!controller || !controller.states.length) continue;
-        const { statesById, paramsById, paramsByName, transitionCandidatesByState } = getAnimatorControllerRuntime(controller);
+        const { statesById, paramsById, paramsByName, transitionCandidatesByState, layerTransitionCandidates } =
+          getAnimatorControllerRuntime(controller);
 
         // A first-person view model (arms/weapon) is pinned to the camera and never moves, and has no
         // character of its own — so its animator sources state from the OWNER pawn (speed, grounded,
@@ -6195,6 +6196,28 @@ export const applyRuntimeTick = (
         const nextStateId = baseStep.stateId;
         const fade = baseStep.fade;
 
+        // Animation layers: each runs its own state machine over the SHARED parameters, so one
+        // `isAiming` drives the base and every layer alike. Evaluated after the base so a layer can
+        // react to the same frame's parameter values.
+        let layerSteps: RuntimeAnimator['layers'];
+        for (const layer of controller.layers ?? []) {
+          if (!layer.states.length) continue;
+          const step = stepStateMachine({
+            states: layer.states,
+            transitionCandidatesByState: layerTransitionCandidates.get(layer.id) ?? new Map(),
+            defaultStateId: layer.defaultStateId,
+            prev: prev?.layers?.[layer.id],
+            dt,
+            params,
+            paramsById,
+            durationOf,
+            compare,
+          });
+          if (!step.stateId) continue;
+          layerSteps ??= {};
+          layerSteps[layer.id] = { ...step, weight: resolveLayerWeight(layer, params) };
+        }
+
         // Consume triggers (one-shot) so they don't re-fire next frame.
         for (const id of triggered) {
           const param = paramsById.get(id);
@@ -6213,7 +6236,7 @@ export const applyRuntimeTick = (
         }
         if (montage && montage.remaining <= 0) montage = undefined;
 
-        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: baseStep.time, montage };
+        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: baseStep.time, montage, layers: layerSteps };
 
         // Death → ragdoll: entering a state named like "death"/"dead"/"die" goes limp automatically.
         const nextStateName = statesById.get(nextStateId)?.name ?? '';

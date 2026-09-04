@@ -3,6 +3,7 @@ import {
   animatorStateClipDuration,
   buildAnimatorControllerRuntime,
   localMoveVector,
+  resolveLayerWeight,
   stepStateMachine,
   type StateMachineStep,
 } from '../animatorRuntime';
@@ -359,5 +360,78 @@ describe('stepStateMachine', () => {
         compare,
       }),
     ).toEqual({ stateId: '', fade: 0, time: 0 });
+  });
+});
+
+describe('resolveLayerWeight', () => {
+  it('uses the static weight when no parameter is bound', () => {
+    expect(resolveLayerWeight({ weight: 0.5 }, {})).toBe(0.5);
+  });
+
+  it('lets a bool parameter gate the layer outright', () => {
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'aim' }, { aim: true })).toBe(1);
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'aim' }, { aim: false })).toBe(0);
+  });
+
+  it('lets a float parameter fade the layer', () => {
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'w' }, { w: 0.35 })).toBeCloseTo(0.35);
+  });
+
+  it('clamps out-of-range values', () => {
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'w' }, { w: 4 })).toBe(1);
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'w' }, { w: -2 })).toBe(0);
+    expect(resolveLayerWeight({ weight: 9 }, {})).toBe(1);
+  });
+
+  // A NaN weight would reach setEffectiveWeight and destroy the pose, not merely look wrong.
+  it('falls back to off for a missing or non-finite value', () => {
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'gone' }, {})).toBe(0);
+    expect(resolveLayerWeight({ weight: NaN }, {})).toBe(0);
+    expect(resolveLayerWeight({ weight: 1, weightParameterId: 'w' }, { w: NaN })).toBe(0);
+  });
+});
+
+describe('layer transition indexing', () => {
+  it('indexes each layer separately, including its any-state transitions', () => {
+    const controller: AnimatorController = {
+      id: 'c',
+      name: 'C',
+      parameters: [],
+      states: [state({ id: 'base', name: 'Base' })],
+      transitions: [],
+      layers: [
+        {
+          id: 'upper',
+          name: 'Upper Body',
+          maskRootBones: ['Spine'],
+          weight: 1,
+          states: [state({ id: 'idle', name: 'Idle' }), state({ id: 'aim', name: 'Aim' })],
+          defaultStateId: 'idle',
+          transitions: [
+            { id: 'l1', from: 'idle', to: 'aim', conditions: [], duration: 0.2 },
+            { id: 'l2', from: 'any', to: 'idle', conditions: [], duration: 0.1 },
+          ],
+        },
+      ],
+      createdAt: 0,
+    };
+    const runtime = buildAnimatorControllerRuntime(controller);
+    const perState = runtime.layerTransitionCandidates.get('upper');
+    expect(perState?.get('idle')?.map((t) => t.id)).toEqual(['l1', 'l2']);
+    expect(perState?.get('aim')?.map((t) => t.id)).toEqual(['l2']);
+    // The base machine's index must not have picked up the layer's transitions.
+    expect(runtime.transitionCandidatesByState.get('base')).toEqual([]);
+  });
+
+  it('has no layer index for a controller without layers', () => {
+    const controller: AnimatorController = {
+      id: 'c',
+      name: 'C',
+      parameters: [],
+      states: [state({ id: 'base', name: 'Base' })],
+      transitions: [],
+      createdAt: 0,
+    };
+    expect(buildAnimatorControllerRuntime(controller).layerTransitionCandidates.size).toBe(0);
   });
 });

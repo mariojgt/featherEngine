@@ -69,6 +69,39 @@ const CONTROLLER: AnimatorController = {
       exitTime: 0.8,
     },
   ],
+  layers: [
+    {
+      id: 'l-upper',
+      name: 'Upper Body',
+      maskRootBones: ['Spine', 'LeftShoulder'],
+      weight: 0.8,
+      weightParameterId: 'p-grounded',
+      states: [
+        { id: 'ls-rest', name: 'Rest', animationId: 'a-idle', speed: 1, loop: true, position: { x: 5, y: 6 } },
+        {
+          id: 'ls-aim',
+          name: 'Aim',
+          speed: 1,
+          loop: true,
+          blendParameterId: 'p-mx',
+          blendSamples: [
+            { animationId: 'a-aimL', value: -1 },
+            { animationId: 'a-aimR', value: 1 },
+          ],
+        },
+      ],
+      defaultStateId: 'ls-rest',
+      transitions: [
+        {
+          id: 'lt-1',
+          from: 'ls-rest',
+          to: 'ls-aim',
+          conditions: [{ parameterId: 'p-grounded', op: '==', value: true }],
+          duration: 0.25,
+        },
+      ],
+    },
+  ],
   createdAt: 1_700_000_000_000,
 };
 
@@ -107,6 +140,52 @@ describe('animator controller serialization', () => {
     expect(state?.blendParameterId).toBe('p-mx');
     expect(state?.blendParameterIdY).toBe('p-speed');
     expect(state?.blendSamples?.map((sample) => sample.y)).toEqual([0, 1, 0, 2]);
+  });
+
+  describe('animation layers', () => {
+    it('survives save -> reload with its mask, weight and weight parameter', () => {
+      const layer = roundTrip(withController()).animatorControllers[0].layers![0];
+      expect(layer.name).toBe('Upper Body');
+      expect(layer.maskRootBones).toEqual(['Spine', 'LeftShoulder']);
+      expect(layer.weight).toBe(0.8);
+      expect(layer.weightParameterId).toBe('p-grounded');
+    });
+
+    it('keeps the layer own states, entry state and node positions', () => {
+      const layer = roundTrip(withController()).animatorControllers[0].layers![0];
+      expect(layer.states.map((s) => s.id)).toEqual(['ls-rest', 'ls-aim']);
+      expect(layer.defaultStateId).toBe('ls-rest');
+      expect(layer.states[0].position).toEqual({ x: 5, y: 6 });
+    });
+
+    it('keeps a blend space authored on a layer state', () => {
+      const aim = roundTrip(withController()).animatorControllers[0].layers![0].states[1];
+      expect(aim.blendParameterId).toBe('p-mx');
+      expect(aim.blendSamples).toEqual([
+        { animationId: 'a-aimL', value: -1 },
+        { animationId: 'a-aimR', value: 1 },
+      ]);
+    });
+
+    it('keeps the layer own transitions and their conditions', () => {
+      const layer = roundTrip(withController()).animatorControllers[0].layers![0];
+      expect(layer.transitions[0]).toMatchObject({ from: 'ls-rest', to: 'ls-aim', duration: 0.25 });
+      expect(layer.transitions[0].conditions).toEqual([{ parameterId: 'p-grounded', op: '==', value: true }]);
+    });
+
+    // Layers are optional, so a project authored before they existed must not gain an empty array.
+    it('stays absent for a controller that has none', () => {
+      const legacy = blankProject('Legacy');
+      const plain: AnimatorController = {
+        id: 'ctrl-old',
+        name: 'Old',
+        parameters: [],
+        states: [{ id: 's', name: 'Idle', animationId: 'a-idle', speed: 1, loop: true }],
+        transitions: [],
+        createdAt: 0,
+      };
+      expect(roundTrip({ ...legacy, animatorControllers: [plain] }).animatorControllers[0].layers).toBeUndefined();
+    });
   });
 
   it('keeps the phase-sync flag', () => {

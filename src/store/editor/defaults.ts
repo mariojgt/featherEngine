@@ -37,6 +37,11 @@ export interface RuntimeAnimator {
   time: number;
   /** Active one-shot montage (Play Animation node): overrides the state machine's clip until it ends. */
   montage?: { animationId: string; remaining: number; speed: number };
+  /**
+   * Per animation layer, where that layer's own state machine is, keyed by layer id. Absent when the
+   * controller has no layers, so a project without them carries no extra runtime state.
+   */
+  layers?: Record<string, { stateId: string; fade: number; time: number; weight: number }>;
 }
 
 /** A factory for a fresh default animator component (used when one is first enabled). */

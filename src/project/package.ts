@@ -2,6 +2,8 @@ import {
   PROJECT_VERSION,
   type AnimationAsset,
   type AnimatorController,
+  type AnimatorState,
+  type AnimatorTransition,
   type AssetItem,
   type DataAsset,
   type MaterialDefinition,
@@ -358,7 +360,16 @@ export function collectPackage(
     }
     for (const ac of src.animatorControllers.filter((a) => ids.animatorController.has(a.id))) {
       add.skeleton(ac.skeletonId);
-      for (const state of ac.states) add.animation(state.animationId);
+      const addMachineAnimations = (machine: { states: AnimatorState[] }) => {
+        for (const state of machine.states) {
+          add.animation(state.animationId);
+          // Blend samples are the ONLY animation reference on a pure blend state (animationId is
+          // optional), so missing these shipped a blend space with none of its clips.
+          for (const sample of state.blendSamples ?? []) add.animation(sample.animationId);
+        }
+      };
+      addMachineAnimations(ac);
+      for (const layer of ac.layers ?? []) addMachineAnimations(layer);
       for (const param of ac.parameters) add.variable(param.variableId);
     }
     for (const anim of src.animations.filter((a) => ids.animation.has(a.id))) {
@@ -780,26 +791,50 @@ export function remapPackageForImport(
     ac.folderId = intoFolder(ac.folderId);
     // Re-id internal parameter/state/transition ids and rewire the references between them.
     const paramMap: IdMap = new Map();
-    const stateMap: IdMap = new Map();
     ac.parameters.forEach((p) => paramMap.set(p.id, newId('param')));
-    ac.states.forEach((s) => stateMap.set(s.id, newId('state')));
     for (const param of ac.parameters) {
       param.id = paramMap.get(param.id)!;
       param.variableId = remap(maps.variable, param.variableId);
     }
-    for (const state of ac.states) {
-      state.id = stateMap.get(state.id)!;
-      state.animationId = remap(maps.animation, state.animationId);
-      state.blendParameterId = remap(paramMap, state.blendParameterId);
-      state.blendParameterIdY = remap(paramMap, state.blendParameterIdY);
+
+    /**
+     * Re-ids one state machine — the controller's own, or an animation layer's. Layer transitions
+     * reference layer states, so each machine needs its OWN state map; sharing one would let a layer
+     * transition resolve to a base state.
+     */
+    const remapMachine = (machine: {
+      states: AnimatorState[];
+      transitions: AnimatorTransition[];
+      defaultStateId?: string;
+    }) => {
+      const stateMap: IdMap = new Map();
+      machine.states.forEach((state) => stateMap.set(state.id, newId('state')));
+      for (const state of machine.states) {
+        state.id = stateMap.get(state.id)!;
+        state.animationId = remap(maps.animation, state.animationId);
+        state.blendParameterId = remap(paramMap, state.blendParameterId);
+        state.blendParameterIdY = remap(paramMap, state.blendParameterIdY);
+        // Blend-space samples were previously missed here, so a packaged prefab's blend space kept
+        // pointing at the SOURCE project's animation ids and lost every clip on import.
+        for (const sample of state.blendSamples ?? []) {
+          sample.animationId = remap(maps.animation, sample.animationId) ?? sample.animationId;
+        }
+      }
+      for (const t of machine.transitions) {
+        t.id = newId('trans');
+        if (t.from !== 'any') t.from = remap(stateMap, t.from)!;
+        t.to = remap(stateMap, t.to)!;
+        for (const cond of t.conditions) cond.parameterId = remap(paramMap, cond.parameterId)!;
+      }
+      machine.defaultStateId = remap(stateMap, machine.defaultStateId);
+    };
+
+    remapMachine(ac);
+    for (const layer of ac.layers ?? []) {
+      layer.id = newId('layer');
+      layer.weightParameterId = remap(paramMap, layer.weightParameterId);
+      remapMachine(layer);
     }
-    for (const t of ac.transitions) {
-      t.id = newId('trans');
-      if (t.from !== 'any') t.from = remap(stateMap, t.from)!;
-      t.to = remap(stateMap, t.to)!;
-      for (const cond of t.conditions) cond.parameterId = remap(paramMap, cond.parameterId)!;
-    }
-    ac.defaultStateId = remap(stateMap, ac.defaultStateId);
   }
   for (const anim of c.animations) {
     anim.id = remap(maps.animation, anim.id)!;

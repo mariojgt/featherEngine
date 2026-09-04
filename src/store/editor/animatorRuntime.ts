@@ -1,5 +1,6 @@
 import type {
   AnimatorController,
+  AnimatorLayer,
   AnimatorParameter,
   AnimatorState,
   AnimatorTransition,
@@ -12,6 +13,8 @@ export interface AnimatorControllerRuntime {
   paramsById: Map<string, AnimatorParameter>;
   paramsByName: Map<string, AnimatorParameter>;
   transitionCandidatesByState: Map<string, AnimatorTransition[]>;
+  /** Per animation layer, the same per-state candidate index as the base machine above. */
+  layerTransitionCandidates: Map<string, Map<string, AnimatorTransition[]>>;
 }
 
 const animatorRuntimeCache = new WeakMap<AnimatorController, AnimatorControllerRuntime>();
@@ -29,7 +32,19 @@ export const buildAnimatorControllerRuntime = (controller: AnimatorController): 
     );
   }
 
-  return { controller, statesById, paramsById, paramsByName, transitionCandidatesByState };
+  const layerTransitionCandidates = new Map<string, Map<string, AnimatorTransition[]>>();
+  for (const layer of controller.layers ?? []) {
+    const perState = new Map<string, AnimatorTransition[]>();
+    for (const state of layer.states) {
+      perState.set(
+        state.id,
+        layer.transitions.filter((transition) => transition.from === state.id || transition.from === 'any'),
+      );
+    }
+    layerTransitionCandidates.set(layer.id, perState);
+  }
+
+  return { controller, statesById, paramsById, paramsByName, transitionCandidatesByState, layerTransitionCandidates };
 };
 
 export const getAnimatorControllerRuntime = (controller: AnimatorController): AnimatorControllerRuntime => {
@@ -184,3 +199,20 @@ export function stepStateMachine(input: StateMachineInput): StateMachineStep {
 
   return { stateId: nextStateId, fade, time: nextStateId === fromStateId ? timeInState : 0 };
 }
+
+/**
+ * A layer's blend weight this frame: its parameter when one is bound, otherwise its static weight.
+ *
+ * A bool parameter reads as 0 or 1 so `isAiming` can gate a layer directly; a float is clamped to
+ * 0..1 so a half-raised weapon pose is expressible. A non-finite value falls back to 0 — a NaN weight
+ * would propagate into the mixer and destroy the pose rather than merely looking wrong.
+ */
+export const resolveLayerWeight = (
+  layer: Pick<AnimatorLayer, 'weight' | 'weightParameterId'>,
+  params: Record<string, number | boolean>,
+): number => {
+  const raw = layer.weightParameterId ? params[layer.weightParameterId] : layer.weight;
+  const value = typeof raw === 'boolean' ? (raw ? 1 : 0) : Number(raw);
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+};

@@ -55,6 +55,7 @@ import {
   type SkeletalMeshAsset,
   type AnimationAsset,
   type AnimatorController,
+  type AnimatorLayer,
   type AnimatorParameter,
   type AnimatorState,
   type AnimatorTransition,
@@ -352,6 +353,9 @@ import {
   applyRemoveAnimatorParameter,
   applyRemoveAnimatorState,
   applyRemoveAnimatorTransition,
+  applyAddAnimatorLayer,
+  applyUpdateAnimatorLayer,
+  applyRemoveAnimatorLayer,
   applySetActiveAnimatorController,
   applySetObjectAnimatorController,
   applySetRuntimeAnimatorParam,
@@ -1171,12 +1175,20 @@ export interface EditorState {
   addAnimatorParameter: (controllerId: string, param: { name: string; type: AnimatorParameter['type']; source?: AnimatorParameter['source']; variableId?: string; defaultValue?: number | boolean }) => string | undefined;
   updateAnimatorParameter: (controllerId: string, paramId: string, patch: Partial<Omit<AnimatorParameter, 'id'>>) => void;
   removeAnimatorParameter: (controllerId: string, paramId: string) => void;
-  addAnimatorState: (controllerId: string, state?: { name?: string; animationId?: string; speed?: number; loop?: boolean; position?: { x: number; y: number } }) => string | undefined;
-  updateAnimatorState: (controllerId: string, stateId: string, patch: Partial<Omit<AnimatorState, 'id'>>) => void;
-  removeAnimatorState: (controllerId: string, stateId: string) => void;
-  addAnimatorTransition: (controllerId: string, transition: { from: string; to: string; conditions?: AnimatorCondition[]; duration?: number; hasExitTime?: boolean; exitTime?: number }) => string | undefined;
-  updateAnimatorTransition: (controllerId: string, transitionId: string, patch: Partial<Omit<AnimatorTransition, 'id'>>) => void;
-  removeAnimatorTransition: (controllerId: string, transitionId: string) => void;
+  /**
+   * State and transition mutators take an optional `layerId`: omit it to edit the controller's own
+   * machine, pass one to edit that animation layer's. One code path serves both so they cannot drift.
+   */
+  addAnimatorState: (controllerId: string, state?: { name?: string; animationId?: string; speed?: number; loop?: boolean; position?: { x: number; y: number } }, layerId?: string) => string | undefined;
+  updateAnimatorState: (controllerId: string, stateId: string, patch: Partial<Omit<AnimatorState, 'id'>>, layerId?: string) => void;
+  removeAnimatorState: (controllerId: string, stateId: string, layerId?: string) => void;
+  addAnimatorTransition: (controllerId: string, transition: { from: string; to: string; conditions?: AnimatorCondition[]; duration?: number; hasExitTime?: boolean; exitTime?: number }, layerId?: string) => string | undefined;
+  updateAnimatorTransition: (controllerId: string, transitionId: string, patch: Partial<Omit<AnimatorTransition, 'id'>>, layerId?: string) => void;
+  removeAnimatorTransition: (controllerId: string, transitionId: string, layerId?: string) => void;
+  /** Animation layers: masked state machines layered over the base one (upper-body aim over locomotion). */
+  addAnimatorLayer: (controllerId: string, input?: { name?: string; maskRootBones?: string[]; weight?: number }) => string | undefined;
+  updateAnimatorLayer: (controllerId: string, layerId: string, patch: Partial<Omit<AnimatorLayer, 'id'>>) => void;
+  removeAnimatorLayer: (controllerId: string, layerId: string) => void;
   // --- Built-in character controller ---
   /** Enable/disable the character controller on an object (seeds defaults when first enabled). */
   toggleCharacterController: (id: string) => void;
@@ -1828,12 +1840,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   addAnimatorParameter: (controllerId, param) => applyAddAnimatorParameter(set, get, controllerId, param),
   updateAnimatorParameter: (controllerId, paramId, patch) => applyUpdateAnimatorParameter(set, controllerId, paramId, patch),
   removeAnimatorParameter: (controllerId, paramId) => applyRemoveAnimatorParameter(set, controllerId, paramId),
-  addAnimatorState: (controllerId, stateInput) => applyAddAnimatorState(set, get, controllerId, stateInput),
-  updateAnimatorState: (controllerId, stateId, patch) => applyUpdateAnimatorState(set, controllerId, stateId, patch),
-  removeAnimatorState: (controllerId, stateId) => applyRemoveAnimatorState(set, controllerId, stateId),
-  addAnimatorTransition: (controllerId, transition) => applyAddAnimatorTransition(set, get, controllerId, transition),
-  updateAnimatorTransition: (controllerId, transitionId, patch) => applyUpdateAnimatorTransition(set, controllerId, transitionId, patch),
-  removeAnimatorTransition: (controllerId, transitionId) => applyRemoveAnimatorTransition(set, controllerId, transitionId),
+  addAnimatorState: (controllerId, stateInput, layerId) => applyAddAnimatorState(set, get, controllerId, stateInput, layerId),
+  updateAnimatorState: (controllerId, stateId, patch, layerId) => applyUpdateAnimatorState(set, controllerId, stateId, patch, layerId),
+  removeAnimatorState: (controllerId, stateId, layerId) => applyRemoveAnimatorState(set, controllerId, stateId, layerId),
+  addAnimatorTransition: (controllerId, transition, layerId) => applyAddAnimatorTransition(set, get, controllerId, transition, layerId),
+  updateAnimatorTransition: (controllerId, transitionId, patch, layerId) => applyUpdateAnimatorTransition(set, controllerId, transitionId, patch, layerId),
+  removeAnimatorTransition: (controllerId, transitionId, layerId) => applyRemoveAnimatorTransition(set, controllerId, transitionId, layerId),
+  addAnimatorLayer: (controllerId, input) => applyAddAnimatorLayer(set, get, controllerId, input),
+  updateAnimatorLayer: (controllerId, layerId, patch) => applyUpdateAnimatorLayer(set, controllerId, layerId, patch),
+  removeAnimatorLayer: (controllerId, layerId) => applyRemoveAnimatorLayer(set, controllerId, layerId),
   toggleCharacterController: (id) => applyToggleCharacterController(set, id),
   updateCharacterController: (id, patch) => applyUpdateCharacterController(set, id, patch),
   setVehicleEnabled: (id, enabled) => applySetVehicleEnabled(set, id, enabled),

@@ -249,6 +249,38 @@ export interface AnimatorTransition {
   exitTime?: number;
 }
 
+/**
+ * An ANIMATION LAYER: a second state machine that drives only part of the skeleton, on top of the
+ * base one. This is what lets a character run and aim at the same time — the base layer owns the legs
+ * and hips, an upper-body layer owns the spine, arms and head.
+ *
+ * A layer holds its own `states`/`transitions`/`defaultStateId` and runs the identical rules as the
+ * base machine, so everything a base state can do (blend spaces, exit time, any-state transitions) a
+ * layer state can do too. Parameters are SHARED with the controller, so one `isAiming` drives both.
+ *
+ * `maskRootBones` names the bones this layer takes over; each named bone and its whole subtree belong
+ * to the layer, and the base is masked out of exactly those bones. That partitioning is required
+ * rather than cosmetic: three's mixer averages two actions driving the same bone, so without it an
+ * aim pose and a run pose blend into a broken half-of-each. An EMPTY mask means the whole skeleton,
+ * which makes the layer a full-body override.
+ */
+export interface AnimatorLayer {
+  id: string;
+  name: string;
+  /** Bones this layer drives — each named bone plus its descendants. Empty = the whole skeleton. */
+  maskRootBones: string[];
+  /** Static blend weight, 0..1. 0 is off, 1 fully replaces the base pose on the masked bones. */
+  weight: number;
+  /**
+   * Parameter that drives the weight instead of the static value, so a layer can fade in with a
+   * condition (an `isAiming` bool reads as 0 or 1; a float is clamped to 0..1).
+   */
+  weightParameterId?: string;
+  states: AnimatorState[];
+  defaultStateId?: string;
+  transitions: AnimatorTransition[];
+}
+
 /** A reusable animation state machine (Unreal Animation Blueprint / Unity Animator Controller). */
 export interface AnimatorController {
   id: string;
@@ -259,6 +291,11 @@ export interface AnimatorController {
   states: AnimatorState[];
   defaultStateId?: string;
   transitions: AnimatorTransition[];
+  /**
+   * Additive state machines driving masked parts of the skeleton on top of the base states above.
+   * Optional, so controllers authored before layers existed load unchanged.
+   */
+  layers?: AnimatorLayer[];
   folderId?: string;
   createdAt: number;
 }
