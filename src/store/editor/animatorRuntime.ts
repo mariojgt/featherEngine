@@ -1,4 +1,10 @@
-import type { AnimatorController, AnimatorParameter, AnimatorState, AnimatorTransition } from '../../types';
+import type {
+  AnimatorController,
+  AnimatorParameter,
+  AnimatorState,
+  AnimatorTransition,
+  CompareOperator,
+} from '../../types';
 
 export interface AnimatorControllerRuntime {
   controller: AnimatorController;
@@ -107,3 +113,74 @@ export const localMoveVector = (
   const scale = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 1;
   return { moveX: right * scale, moveY: forward * scale };
 };
+
+/** Where a state machine is this frame. */
+export interface StateMachineStep {
+  stateId: string;
+  /** Crossfade seconds for the transition that produced this state (0 when it did not change). */
+  fade: number;
+  /** Seconds elapsed in this state, reset to 0 on entry. */
+  time: number;
+}
+
+export interface StateMachineInput {
+  states: AnimatorState[];
+  /** Pre-indexed candidates per state, including any-state transitions. */
+  transitionCandidatesByState: Map<string, AnimatorTransition[]>;
+  defaultStateId?: string;
+  /** Previous frame's step, or undefined on the first frame in this machine. */
+  prev?: StateMachineStep;
+  dt: number;
+  /** Live parameter values, keyed by parameter id. */
+  params: Record<string, number | boolean>;
+  paramsById: Map<string, AnimatorParameter>;
+  durationOf: (animationId: string) => number | undefined;
+  /** Condition comparison, injected so this module stays free of the graph value machinery. */
+  compare: (left: number | boolean, right: number | boolean, op: CompareOperator) => boolean;
+}
+
+/**
+ * Advances one animation state machine by a frame: works out which state is active, whether any
+ * transition out of it fires, and how long the machine has been where it is.
+ *
+ * Extracted so the base machine and every animation layer run the identical rules. A layer with its
+ * own states and transitions is not a special case — it is another instance of this.
+ *
+ * Returns the unchanged state when nothing fires. A machine with no states returns an empty stateId,
+ * which callers treat as "this layer contributes nothing".
+ */
+export function stepStateMachine(input: StateMachineInput): StateMachineStep {
+  const { states, transitionCandidatesByState, defaultStateId, prev, dt, params, paramsById, durationOf, compare } =
+    input;
+  if (!states.length) return { stateId: '', fade: 0, time: 0 };
+
+  const statesById = new Map(states.map((state) => [state.id, state]));
+  // A prior state that has since been deleted falls back to the entry state rather than sticking.
+  let fromStateId = prev?.stateId ?? defaultStateId ?? states[0].id;
+  if (!statesById.has(fromStateId)) fromStateId = defaultStateId && statesById.has(defaultStateId) ? defaultStateId : states[0].id;
+
+  const fromState = statesById.get(fromStateId);
+  const clipDuration = animatorStateClipDuration(fromState, durationOf);
+  const timeInState = (prev?.stateId === fromStateId ? prev.time : 0) + dt;
+
+  let nextStateId = fromStateId;
+  let fade = 0;
+  for (const transition of transitionCandidatesByState.get(fromStateId) ?? []) {
+    if (transition.to === fromStateId) continue;
+    if (!statesById.has(transition.to)) continue;
+    // Exit time: wait until the current clip has played far enough before leaving.
+    if (transition.hasExitTime && timeInState < clipDuration * (transition.exitTime ?? 1)) continue;
+    const pass = transition.conditions.every((condition) => {
+      const param = paramsById.get(condition.parameterId);
+      if (!param) return false;
+      return Boolean(compare(params[param.id], condition.value, condition.op));
+    });
+    if (pass) {
+      nextStateId = transition.to;
+      fade = transition.duration;
+      break;
+    }
+  }
+
+  return { stateId: nextStateId, fade, time: nextStateId === fromStateId ? timeInState : 0 };
+}

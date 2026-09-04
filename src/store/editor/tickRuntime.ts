@@ -52,9 +52,9 @@ import { createTerrainHeightSampler } from '../../terrain/terrain';
 import { wrapDayCycleTime } from '../../three/dayCycle';
 import { FoliageInteractor, MAX_FOLIAGE_INTERACTORS, updateFoliageInteractors } from '../../three/foliageInteractors';
 import { resolveMaterial } from '../../three/materialResolve';
-import { CharacterControllerComponent, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
+import { CharacterControllerComponent, CompareOperator, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
 import { worldToLocalUnderParent, worldTransformOf } from '../../utils/transformHierarchy';
-import { animatorStateClipDuration, getAnimatorControllerRuntime, localMoveVector } from './animatorRuntime';
+import { getAnimatorControllerRuntime, localMoveVector, stepStateMachine } from './animatorRuntime';
 import { cinematicActionsAt, cinematicCameraAt, cinematicFadeAt, cinematicMaterialsAt, cinematicTextAt, cinematicTimeScaleAt, cinematicTransformsAt, clamp01, mixVec3 } from './cinematics';
 import { RuntimeAnimator, defaultPhysics, defaultWaterVolume, lerpAngle, resolveCharacter, resolveVehicle, withPhysicsDefaults } from './defaults';
 import { cloneGraphValue, coerceGraphValue, defaultValueForType } from './graph';
@@ -6176,33 +6176,24 @@ export const applyRuntimeTick = (
           if (write.trigger) triggered.add(param.id);
         }
 
-        // Current state + how long we've been in it (drives exit-time / one-shot clips like Jump Land).
-        let fromStateId = prev?.stateId ?? controller.defaultStateId ?? controller.states[0].id;
-        if (!statesById.has(fromStateId)) fromStateId = controller.states[0].id;
-        const fromState = statesById.get(fromStateId);
-        const clipDuration = animatorStateClipDuration(fromState, (id) => animationById.get(id)?.duration);
-        const timeInState = (prev?.stateId === fromStateId ? prev.time : 0) + dt;
-
-        // Evaluate transitions from the current state (plus "any state" transitions).
-        let nextStateId = fromStateId;
-        let fade = 0;
-        const candidates = transitionCandidatesByState.get(fromStateId) ?? [];
-        for (const transition of candidates) {
-          if (transition.to === fromStateId) continue;
-          if (!statesById.has(transition.to)) continue;
-          // Exit time: wait until the current clip has played far enough before leaving.
-          if (transition.hasExitTime && timeInState < clipDuration * (transition.exitTime ?? 1)) continue;
-          const pass = transition.conditions.every((condition) => {
-            const param = paramsById.get(condition.parameterId);
-            if (!param) return false;
-            return Boolean(compareValues(params[param.id] as GraphValue, condition.value as GraphValue, condition.op));
-          });
-          if (pass) {
-            nextStateId = transition.to;
-            fade = transition.duration;
-            break;
-          }
-        }
+        // Base state machine. The same evaluator runs every animation layer below, so a layer is not a
+        // special case — it is another instance of these rules.
+        const durationOf = (id: string) => animationById.get(id)?.duration;
+        const compare = (left: number | boolean, right: number | boolean, op: CompareOperator) =>
+          Boolean(compareValues(left as GraphValue, right as GraphValue, op));
+        const baseStep = stepStateMachine({
+          states: controller.states,
+          transitionCandidatesByState,
+          defaultStateId: controller.defaultStateId,
+          prev: prev ? { stateId: prev.stateId, fade: prev.fade, time: prev.time } : undefined,
+          dt,
+          params,
+          paramsById,
+          durationOf,
+          compare,
+        });
+        const nextStateId = baseStep.stateId;
+        const fade = baseStep.fade;
 
         // Consume triggers (one-shot) so they don't re-fire next frame.
         for (const id of triggered) {
@@ -6222,7 +6213,7 @@ export const applyRuntimeTick = (
         }
         if (montage && montage.remaining <= 0) montage = undefined;
 
-        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: nextStateId === fromStateId ? timeInState : 0, montage };
+        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: baseStep.time, montage };
 
         // Death → ragdoll: entering a state named like "death"/"dead"/"die" goes limp automatically.
         const nextStateName = statesById.get(nextStateId)?.name ?? '';

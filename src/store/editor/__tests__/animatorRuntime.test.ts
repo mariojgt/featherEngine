@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { animatorStateClipDuration, buildAnimatorControllerRuntime, localMoveVector } from '../animatorRuntime';
-import type { AnimatorController, AnimatorState } from '../../../types';
+import {
+  animatorStateClipDuration,
+  buildAnimatorControllerRuntime,
+  localMoveVector,
+  stepStateMachine,
+  type StateMachineStep,
+} from '../animatorRuntime';
+import type { AnimatorController, AnimatorState, AnimatorTransition } from '../../../types';
 
 const DURATIONS: Record<string, number> = { idle: 4, walk: 1, run: 0.7, dodgeL: 0.9, dodgeR: 1.1 };
 const durationOf = (id: string) => DURATIONS[id];
@@ -168,5 +174,190 @@ describe('localMoveVector', () => {
       expect(Number.isFinite(move.moveX)).toBe(true);
       expect(Number.isFinite(move.moveY)).toBe(true);
     }
+  });
+});
+
+/**
+ * The transition rules were inline in tickRuntime, a ~6000-line function, so nothing could test them.
+ * Extracting them so animation layers could reuse the same evaluator also made them testable for the
+ * first time.
+ */
+describe('stepStateMachine', () => {
+  const compare = (left: number | boolean, right: number | boolean, op: string): boolean => {
+    switch (op) {
+      case '==': return left === right;
+      case '!=': return left !== right;
+      case '>': return Number(left) > Number(right);
+      case '>=': return Number(left) >= Number(right);
+      case '<': return Number(left) < Number(right);
+      case '<=': return Number(left) <= Number(right);
+      default: return false;
+    }
+  };
+
+  const IDLE = state({ id: 'idle', name: 'Idle', animationId: 'idle' });
+  const RUN = state({ id: 'run', name: 'Run', animationId: 'walk' });
+  const LAND = state({ id: 'land', name: 'Land', animationId: 'walk', loop: false });
+
+  const speedParam = { id: 'p-speed', name: 'Speed', type: 'float' as const, defaultValue: 0, source: 'speed' as const };
+  const paramsById = new Map([[speedParam.id, speedParam]]);
+
+  const machine = (transitions: AnimatorTransition[], states = [IDLE, RUN, LAND]) => {
+    const candidates = new Map<string, AnimatorTransition[]>();
+    for (const s of states) {
+      candidates.set(s.id, transitions.filter((t) => t.from === s.id || t.from === 'any'));
+    }
+    return { states, transitionCandidatesByState: candidates };
+  };
+
+  const run = (
+    transitions: AnimatorTransition[],
+    params: Record<string, number | boolean>,
+    prev?: StateMachineStep,
+    dt = 1 / 60,
+    states?: typeof IDLE[],
+  ) =>
+    stepStateMachine({
+      ...machine(transitions, states),
+      defaultStateId: 'idle',
+      prev,
+      dt,
+      params,
+      paramsById,
+      durationOf,
+      compare,
+    });
+
+  const toRun: AnimatorTransition = {
+    id: 't1',
+    from: 'idle',
+    to: 'run',
+    conditions: [{ parameterId: 'p-speed', op: '>', value: 0.1 }],
+    duration: 0.2,
+  };
+
+  it('starts in the entry state', () => {
+    expect(run([], {}).stateId).toBe('idle');
+  });
+
+  it('stays put when no condition passes, and accumulates time', () => {
+    const first = run([toRun], { 'p-speed': 0 });
+    expect(first.stateId).toBe('idle');
+    const second = run([toRun], { 'p-speed': 0 }, first);
+    expect(second.time).toBeCloseTo(first.time * 2, 6);
+    expect(second.fade).toBe(0);
+  });
+
+  it('takes a transition whose condition passes, carrying its crossfade', () => {
+    const step = run([toRun], { 'p-speed': 4 });
+    expect(step.stateId).toBe('run');
+    expect(step.fade).toBe(0.2);
+  });
+
+  it('resets time on entering a new state', () => {
+    const inIdle = { stateId: 'idle', fade: 0, time: 5 };
+    expect(run([toRun], { 'p-speed': 4 }, inIdle).time).toBe(0);
+  });
+
+  it('ANDs every condition on a transition', () => {
+    const both: AnimatorTransition = {
+      ...toRun,
+      conditions: [
+        { parameterId: 'p-speed', op: '>', value: 0.1 },
+        { parameterId: 'p-speed', op: '<', value: 1 },
+      ],
+    };
+    expect(run([both], { 'p-speed': 0.5 }).stateId).toBe('run');
+    expect(run([both], { 'p-speed': 4 }).stateId).toBe('idle');
+  });
+
+  it('takes the first matching transition, so authoring order is the priority', () => {
+    const toLand: AnimatorTransition = { id: 't2', from: 'idle', to: 'land', conditions: [], duration: 0.5 };
+    expect(run([toRun, toLand], { 'p-speed': 4 }).stateId).toBe('run');
+    expect(run([toLand, toRun], { 'p-speed': 4 }).stateId).toBe('land');
+  });
+
+  it('fires an any-state transition from wherever it is', () => {
+    const anyToLand: AnimatorTransition = {
+      id: 't3',
+      from: 'any',
+      to: 'land',
+      conditions: [{ parameterId: 'p-speed', op: '<', value: 0 }],
+      duration: 0.1,
+    };
+    expect(run([anyToLand], { 'p-speed': -1 }, { stateId: 'run', fade: 0, time: 1 }).stateId).toBe('land');
+  });
+
+  it('never transitions a state to itself', () => {
+    const selfLoop: AnimatorTransition = { id: 't4', from: 'idle', to: 'idle', conditions: [], duration: 0.3 };
+    const step = run([selfLoop], {}, { stateId: 'idle', fade: 0, time: 2 });
+    expect(step.stateId).toBe('idle');
+    expect(step.fade).toBe(0); // not a re-entry, so no crossfade and time keeps running
+    expect(step.time).toBeGreaterThan(2);
+  });
+
+  it('ignores a transition pointing at a deleted state', () => {
+    const dangling: AnimatorTransition = { id: 't5', from: 'idle', to: 'gone', conditions: [], duration: 0.2 };
+    expect(run([dangling], {}).stateId).toBe('idle');
+  });
+
+  it('fails a condition on a parameter that no longer exists', () => {
+    const orphan: AnimatorTransition = {
+      id: 't6',
+      from: 'idle',
+      to: 'run',
+      conditions: [{ parameterId: 'gone', op: '>', value: 0 }],
+      duration: 0.2,
+    };
+    expect(run([orphan], {}).stateId).toBe('idle');
+  });
+
+  describe('exit time', () => {
+    // 'walk' is 1s long, so exitTime 0.5 means it may leave after 0.5s in state.
+    const exitHalf: AnimatorTransition = {
+      id: 'te',
+      from: 'run',
+      to: 'idle',
+      conditions: [],
+      duration: 0.1,
+      hasExitTime: true,
+      exitTime: 0.5,
+    };
+
+    it('holds the state until the clip has played far enough', () => {
+      const early = run([exitHalf], {}, { stateId: 'run', fade: 0, time: 0.2 }, 0.01);
+      expect(early.stateId).toBe('run');
+    });
+
+    it('leaves once the exit point is reached', () => {
+      const late = run([exitHalf], {}, { stateId: 'run', fade: 0, time: 0.6 }, 0.01);
+      expect(late.stateId).toBe('idle');
+    });
+
+    it('scales with the state speed, since a 2x state reaches its exit point sooner', () => {
+      const fast = [IDLE, state({ id: 'run', name: 'Run', animationId: 'walk', speed: 2 }), LAND];
+      // 1s clip at 2x = 0.5s of runtime, so exitTime 0.5 lands at 0.25s.
+      expect(run([exitHalf], {}, { stateId: 'run', fade: 0, time: 0.3 }, 0.01, fast).stateId).toBe('idle');
+      expect(run([exitHalf], {}, { stateId: 'run', fade: 0, time: 0.1 }, 0.01, fast).stateId).toBe('run');
+    });
+  });
+
+  it('recovers to the entry state when the previous state was deleted', () => {
+    expect(run([], {}, { stateId: 'deleted', fade: 0, time: 3 }).stateId).toBe('idle');
+  });
+
+  // A layer with no states must contribute nothing rather than crash or claim a state.
+  it('returns an empty state id for a machine with no states', () => {
+    expect(
+      stepStateMachine({
+        states: [],
+        transitionCandidatesByState: new Map(),
+        dt: 1 / 60,
+        params: {},
+        paramsById,
+        durationOf,
+        compare,
+      }),
+    ).toEqual({ stateId: '', fade: 0, time: 0 });
   });
 });
