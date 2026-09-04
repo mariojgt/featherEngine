@@ -16,8 +16,9 @@ import {
   type NodeProps,
   type NodeTypes,
 } from '@xyflow/react';
-import { LayoutGrid, Plus, Trash2, Workflow } from 'lucide-react';
+import { Layers, LayoutGrid, Plus, Trash2, Workflow } from 'lucide-react';
 import { AnimatorDebugView } from './AnimatorDebugView';
+import { RangeField } from './InspectorPanel';
 import { BlendSpaceGraph } from './BlendSpaceGraph';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type {
@@ -144,14 +145,165 @@ function ParametersEditor({ controller }: { controller: AnimatorController }) {
   );
 }
 
+/**
+ * The state machine the graph is currently editing: the controller's own, or one of its animation
+ * layers. Both expose the same three fields, and every state/transition mutator takes an optional
+ * layerId, so the whole editor works on a layer with no parallel code path.
+ */
+function machineOf(controller: AnimatorController, layerId?: string) {
+  const layer = layerId ? controller.layers?.find((item) => item.id === layerId) : undefined;
+  return layer ?? controller;
+}
+
+/**
+ * Picks which machine the graph edits — the controller's base states, or one of its animation layers
+ * — and manages the layers themselves.
+ *
+ * A layer masks part of the skeleton and plays over the base, which is how a character runs and aims
+ * at once. The mask is authored as a few ROOT bones; each one brings its whole subtree, so "Spine" is
+ * the upper body without naming forty bones. An empty mask means the whole skeleton.
+ */
+function MachineSelector({
+  controller,
+  activeLayerId,
+  onSelect,
+}: {
+  controller: AnimatorController;
+  activeLayerId?: string;
+  onSelect: (layerId?: string) => void;
+}) {
+  const addAnimatorLayer = useEditorStore((state) => state.addAnimatorLayer);
+  const updateAnimatorLayer = useEditorStore((state) => state.updateAnimatorLayer);
+  const removeAnimatorLayer = useEditorStore((state) => state.removeAnimatorLayer);
+  const layers = controller.layers ?? [];
+  const active = layers.find((layer) => layer.id === activeLayerId);
+  const floatParams = controller.parameters.filter((p) => p.type !== 'trigger');
+
+  return (
+    <section className="inspector-section">
+      <div className="graph-inspector-header">
+        <strong>
+          <Layers size={12} aria-hidden /> Machine
+        </strong>
+        <button
+          className="icon-button compact"
+          title="Add an animation layer — a masked state machine played over the base"
+          onClick={() => {
+            const id = addAnimatorLayer(controller.id);
+            if (id) onSelect(id);
+          }}
+        >
+          <Plus size={12} aria-hidden />
+        </button>
+      </div>
+
+      <label className="field-row">
+        <span>Editing</span>
+        <select value={activeLayerId ?? ''} onChange={(event) => onSelect(event.target.value || undefined)}>
+          <option value="">Base (full body)</option>
+          {layers.map((layer) => (
+            <option key={layer.id} value={layer.id}>
+              {layer.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {active && (
+        <>
+          <label className="field-row">
+            <span>Name</span>
+            <input
+              value={active.name}
+              onChange={(event) => updateAnimatorLayer(controller.id, active.id, { name: event.target.value })}
+            />
+          </label>
+          <label className="field-row">
+            <span title="Root bones this layer drives. Each one brings its whole subtree, so Spine covers the upper body. Comma-separated; empty means the whole skeleton.">
+              Mask bones
+            </span>
+            <input
+              value={active.maskRootBones.join(', ')}
+              placeholder="Spine"
+              onChange={(event) =>
+                updateAnimatorLayer(controller.id, active.id, {
+                  maskRootBones: event.target.value
+                    .split(',')
+                    .map((bone) => bone.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </label>
+          <RangeField
+            label="Weight"
+            value={active.weight}
+            onChange={(weight) => updateAnimatorLayer(controller.id, active.id, { weight })}
+          />
+          <label className="field-row">
+            <span title="Drive the weight from a parameter instead of the slider — a bool gates the layer on and off, a float fades it.">
+              Weight from
+            </span>
+            <select
+              value={active.weightParameterId ?? ''}
+              onChange={(event) =>
+                updateAnimatorLayer(controller.id, active.id, { weightParameterId: event.target.value || undefined })
+              }
+            >
+              <option value="">Slider above</option>
+              {floatParams.map((param) => (
+                <option key={param.id} value={param.id}>
+                  {param.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="full-button"
+            onClick={() => {
+              removeAnimatorLayer(controller.id, active.id);
+              onSelect(undefined);
+            }}
+          >
+            <Trash2 size={12} aria-hidden /> Delete layer
+          </button>
+        </>
+      )}
+      {!layers.length && (
+        <span className="field-hint">
+          Add a layer to play a masked pose over the base — an upper-body aim while the legs keep running.
+        </span>
+      )}
+    </section>
+  );
+}
+
 // ---- Selected-item inspectors ------------------------------------------------
 
-function StateInspector({ controller, stateId }: { controller: AnimatorController; stateId: string }) {
+function StateInspector({
+  controller,
+  stateId,
+  layerId,
+}: {
+  controller: AnimatorController;
+  stateId: string;
+  layerId?: string;
+}) {
   const animations = useEditorStore((state) => state.animations);
-  const updateAnimatorState = useEditorStore((state) => state.updateAnimatorState);
+  const updateAnimatorStateRaw = useEditorStore((state) => state.updateAnimatorState);
   const updateAnimatorController = useEditorStore((state) => state.updateAnimatorController);
-  const removeAnimatorState = useEditorStore((state) => state.removeAnimatorState);
-  const state = controller.states.find((s) => s.id === stateId);
+  const updateAnimatorLayer = useEditorStore((state) => state.updateAnimatorLayer);
+  const removeAnimatorStateRaw = useEditorStore((state) => state.removeAnimatorState);
+  const machine = machineOf(controller, layerId);
+  // Curried so every call site below stays scoped to whichever machine is being edited.
+  const updateAnimatorState = (cid: string, sid: string, patch: Parameters<typeof updateAnimatorStateRaw>[2]) =>
+    updateAnimatorStateRaw(cid, sid, patch, layerId);
+  const removeAnimatorState = (cid: string, sid: string) => removeAnimatorStateRaw(cid, sid, layerId);
+  const setEntryState = (sid: string) =>
+    layerId
+      ? updateAnimatorLayer(controller.id, layerId, { defaultStateId: sid })
+      : updateAnimatorController(controller.id, { defaultStateId: sid });
+  const state = machine.states.find((s) => s.id === stateId);
   if (!state) return null;
   const clips = controller.skeletonId ? animations.filter((a) => a.skeletonId === controller.skeletonId) : animations;
 
@@ -303,7 +455,7 @@ function StateInspector({ controller, stateId }: { controller: AnimatorControlle
 
         <label className="field-row">
           <span>Entry state</span>
-          <input type="checkbox" checked={controller.defaultStateId === state.id} onChange={() => updateAnimatorController(controller.id, { defaultStateId: state.id })} />
+          <input type="checkbox" checked={machine.defaultStateId === state.id} onChange={() => setEntryState(state.id)} />
         </label>
         <button className="full-button" onClick={() => removeAnimatorState(controller.id, state.id)}>
           <Trash2 size={14} aria-hidden /> Delete state
@@ -313,8 +465,20 @@ function StateInspector({ controller, stateId }: { controller: AnimatorControlle
   );
 }
 
-function ConditionRow({ controller, transition, index }: { controller: AnimatorController; transition: AnimatorTransition; index: number }) {
-  const updateAnimatorTransition = useEditorStore((state) => state.updateAnimatorTransition);
+function ConditionRow({
+  controller,
+  transition,
+  index,
+  layerId,
+}: {
+  controller: AnimatorController;
+  transition: AnimatorTransition;
+  index: number;
+  layerId?: string;
+}) {
+  const updateAnimatorTransitionRaw = useEditorStore((state) => state.updateAnimatorTransition);
+  const updateAnimatorTransition = (cid: string, tid: string, patch: Parameters<typeof updateAnimatorTransitionRaw>[2]) =>
+    updateAnimatorTransitionRaw(cid, tid, patch, layerId);
   const condition = transition.conditions[index];
   const param = controller.parameters.find((p) => p.id === condition.parameterId);
   const isBool = param?.type === 'bool' || param?.type === 'trigger';
@@ -353,12 +517,24 @@ function ConditionRow({ controller, transition, index }: { controller: AnimatorC
   );
 }
 
-function TransitionInspector({ controller, transitionId }: { controller: AnimatorController; transitionId: string }) {
-  const updateAnimatorTransition = useEditorStore((state) => state.updateAnimatorTransition);
-  const removeAnimatorTransition = useEditorStore((state) => state.removeAnimatorTransition);
-  const transition = controller.transitions.find((t) => t.id === transitionId);
+function TransitionInspector({
+  controller,
+  transitionId,
+  layerId,
+}: {
+  controller: AnimatorController;
+  transitionId: string;
+  layerId?: string;
+}) {
+  const updateAnimatorTransitionRaw = useEditorStore((state) => state.updateAnimatorTransition);
+  const removeAnimatorTransitionRaw = useEditorStore((state) => state.removeAnimatorTransition);
+  const machine = machineOf(controller, layerId);
+  const updateAnimatorTransition = (cid: string, tid: string, patch: Parameters<typeof updateAnimatorTransitionRaw>[2]) =>
+    updateAnimatorTransitionRaw(cid, tid, patch, layerId);
+  const removeAnimatorTransition = (cid: string, tid: string) => removeAnimatorTransitionRaw(cid, tid, layerId);
+  const transition = machine.transitions.find((t) => t.id === transitionId);
   if (!transition) return null;
-  const name = (id: string) => (id === 'any' ? 'Any State' : controller.states.find((s) => s.id === id)?.name ?? '—');
+  const name = (id: string) => (id === 'any' ? 'Any State' : machine.states.find((s) => s.id === id)?.name ?? '—');
 
   return (
     <aside className="graph-inspector">
@@ -369,7 +545,7 @@ function TransitionInspector({ controller, transitionId }: { controller: Animato
       <div className="node-inspector-body">
         <p className="field-hint">Taken when ALL conditions pass:</p>
         {transition.conditions.map((_, index) => (
-          <ConditionRow key={index} controller={controller} transition={transition} index={index} />
+          <ConditionRow key={index} controller={controller} transition={transition} index={index} layerId={layerId} />
         ))}
         <button
           className="full-button"
@@ -450,6 +626,11 @@ function computeAnimatorLayout(controller: AnimatorController): Record<string, {
 }
 
 function AnimatorFlow({ controller }: { controller: AnimatorController }) {
+  // Which machine the graph is editing: undefined = the controller's base states, otherwise a layer.
+  const [activeLayerId, setActiveLayerId] = useState<string | undefined>(undefined);
+  // A layer deleted from under us falls back to the base rather than showing an empty graph.
+  const layerId = activeLayerId && controller.layers?.some((l) => l.id === activeLayerId) ? activeLayerId : undefined;
+  const machine = machineOf(controller, layerId);
   const addAnimatorState = useEditorStore((state) => state.addAnimatorState);
   const addAnimatorTransition = useEditorStore((state) => state.addAnimatorTransition);
   const updateAnimatorState = useEditorStore((state) => state.updateAnimatorState);
@@ -466,7 +647,9 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
   const liveStateId = useEditorStore((state) => {
     for (const object of selectActiveObjects(state)) {
       if (object.animator?.controllerId === controller.id && state.runtimeAnimators[object.id]) {
-        return state.runtimeAnimators[object.id]?.stateId;
+        const live = state.runtimeAnimators[object.id];
+        // While editing a layer, highlight where THAT layer is, not the base machine.
+        return layerId ? live?.layers?.[layerId]?.stateId : live?.stateId;
       }
     }
     return undefined;
@@ -484,14 +667,14 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
   };
 
   const buildNodes = (): Node[] => {
-    const stateNodes: Node[] = controller.states.map((state, index) => ({
+    const stateNodes: Node[] = machine.states.map((state, index) => ({
       id: state.id,
       type: 'animatorState',
       position: state.position ?? { x: 80 + (index % 3) * 220, y: 40 + Math.floor(index / 3) * 130 },
       data: {
         label: state.name,
         clip: state.animationId ? animations.find((a) => a.id === state.animationId)?.name : undefined,
-        isDefault: controller.defaultStateId === state.id,
+        isDefault: machine.defaultStateId === state.id,
         isLive: liveStateId === state.id,
       } satisfies StateNodeData,
     }));
@@ -500,7 +683,7 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
   };
 
   const buildEdges = (): Edge[] =>
-    controller.transitions.map((t) => ({
+    machine.transitions.map((t) => ({
       id: t.id,
       source: t.from === 'any' ? ANY_ID : t.from,
       target: t.to,
@@ -515,8 +698,8 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges());
 
   // Re-seed from the store when the machine's *structure* changes (not on every drag).
-  const statesKey = controller.states.map((s) => `${s.id}:${s.name}:${s.animationId ?? ''}`).join('|') + `#${controller.defaultStateId ?? ''}#${liveStateId ?? ''}`;
-  const edgesKey = controller.transitions.map((t) => `${t.id}:${t.from}>${t.to}:${t.conditions.length}`).join('|');
+  const statesKey = machine.states.map((s) => `${s.id}:${s.name}:${s.animationId ?? ''}`).join('|') + `#${machine.defaultStateId ?? ''}#${liveStateId ?? ''}`;
+  const edgesKey = machine.transitions.map((t) => `${t.id}:${t.from}>${t.to}:${t.conditions.length}`).join('|');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setNodes(buildNodes()), [statesKey]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -524,13 +707,13 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
 
   const onConnect = (connection: Connection) => {
     if (!connection.source || !connection.target || connection.target === ANY_ID) return;
-    addAnimatorTransition(controller.id, { from: connection.source === ANY_ID ? 'any' : connection.source, to: connection.target });
+    addAnimatorTransition(controller.id, { from: connection.source === ANY_ID ? 'any' : connection.source, to: connection.target }, layerId);
   };
 
   // Auto-arrange: tidy left→right layered layout of the states; persists positions + updates the live graph.
   const autoArrange = () => {
     const layout = computeAnimatorLayout(controller);
-    for (const [id, position] of Object.entries(layout)) updateAnimatorState(controller.id, id, { position });
+    for (const [id, position] of Object.entries(layout)) updateAnimatorState(controller.id, id, { position }, layerId);
     setNodes((current) => current.map((node) => (layout[node.id] ? { ...node, position: layout[node.id] } : node)));
   };
 
@@ -541,12 +724,13 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
           <strong>{controller.name}</strong>
           <span>Drag between states to add transitions. Drag from “Any State” for global ones.</span>
         </div>
-        <button className="full-button" onClick={() => { const id = addAnimatorState(controller.id); if (id) setSelected({ kind: 'state', id }); }}>
+        <button className="full-button" onClick={() => { const id = addAnimatorState(controller.id, undefined, layerId); if (id) setSelected({ kind: 'state', id }); }}>
           <Plus size={14} aria-hidden /> Add State
         </button>
         <button className="full-button" onClick={autoArrange} title="Tidy the state graph into a left→right layered layout">
           <LayoutGrid size={14} aria-hidden /> Auto Arrange
         </button>
+        <MachineSelector controller={controller} activeLayerId={layerId} onSelect={setActiveLayerId} />
         <ParametersEditor controller={controller} />
         <AnimatorDebugView controller={controller} />
       </aside>
@@ -560,12 +744,12 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeDragStop={(_, node) => {
-            if (node.id !== ANY_ID) updateAnimatorState(controller.id, node.id, { position: node.position });
+            if (node.id !== ANY_ID) updateAnimatorState(controller.id, node.id, { position: node.position }, layerId);
           }}
           onNodeClick={(_, node) => setSelected(node.id === ANY_ID ? null : { kind: 'state', id: node.id })}
           onEdgeClick={(_, edge) => setSelected({ kind: 'transition', id: edge.id })}
-          onNodesDelete={(deleted) => deleted.forEach((node) => node.id !== ANY_ID && removeAnimatorState(controller.id, node.id))}
-          onEdgesDelete={(deleted) => deleted.forEach((edge) => removeAnimatorTransition(controller.id, edge.id))}
+          onNodesDelete={(deleted) => deleted.forEach((node) => node.id !== ANY_ID && removeAnimatorState(controller.id, node.id, layerId))}
+          onEdgesDelete={(deleted) => deleted.forEach((edge) => removeAnimatorTransition(controller.id, edge.id, layerId))}
           onPaneClick={() => setSelected(null)}
           deleteKeyCode={['Delete', 'Backspace']}
           defaultEdgeOptions={{ type: 'smoothstep' }}
@@ -577,8 +761,10 @@ function AnimatorFlow({ controller }: { controller: AnimatorController }) {
         </ReactFlow>
       </div>
 
-      {selected?.kind === 'state' && <StateInspector controller={controller} stateId={selected.id} />}
-      {selected?.kind === 'transition' && <TransitionInspector controller={controller} transitionId={selected.id} />}
+      {selected?.kind === 'state' && <StateInspector controller={controller} stateId={selected.id} layerId={layerId} />}
+      {selected?.kind === 'transition' && (
+        <TransitionInspector controller={controller} transitionId={selected.id} layerId={layerId} />
+      )}
     </div>
   );
 }

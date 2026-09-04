@@ -91,6 +91,36 @@ export function AnimatorDebugView({ controller }: { controller: AnimatorControll
         </>
       )}
 
+      {snapshot.layers.length > 0 && (
+        <>
+          <span className="animator-debug-label">Layers</span>
+          {snapshot.layers.map((layer) => (
+            <div key={layer.id} className="animator-debug-clip">
+              <div className="animator-debug-clip-head">
+                <span title={`${layer.name} - mask: ${layer.maskRootBones.join(', ') || 'whole skeleton'}`}>
+                  {layer.name} · {layer.stateName}
+                </span>
+                <span className="animator-debug-num">{layer.weight.toFixed(2)}</span>
+              </div>
+              <div className="animator-debug-bar">
+                <div
+                  className="animator-debug-bar-fill"
+                  style={{ width: `${Math.min(100, Math.max(0, layer.weight * 100))}%` }}
+                />
+              </div>
+              {/* A layer at zero weight, or one whose mask matches no bone, silently does nothing —
+                  showing the mask and its clips here is what makes that diagnosable. */}
+              {layer.clips.map((clip) => (
+                <div key={clip.animationId} className="animator-debug-kv">
+                  <span title={clip.label}>{clip.label}</span>
+                  <span className="animator-debug-num">{(clip.weight * layer.weight).toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+
       <span className="animator-debug-label">Active Clips</span>
       {snapshot.clips.length === 0 ? (
         <span>No clip on this state.</span>

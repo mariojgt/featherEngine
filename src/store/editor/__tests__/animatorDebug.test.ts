@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildAnimatorDebugSnapshot } from '../animatorDebug';
 import type { RuntimeAnimator } from '../defaults';
-import type { AnimationAsset, AnimatorController } from '../../../types';
+import type { AnimationAsset, AnimatorController, AnimatorLayer } from '../../../types';
 
 const anim = (id: string, name: string): AnimationAsset => ({
   id,
@@ -167,5 +167,94 @@ describe('buildAnimatorDebugSnapshot', () => {
     const snapshot = buildAnimatorDebugSnapshot(controller(), runtime({ stateId: 'deleted' }), ANIMATIONS);
     expect(snapshot.stateName).toBe('—');
     expect(snapshot.clips).toEqual([]);
+  });
+});
+
+describe('buildAnimatorDebugSnapshot - animation layers', () => {
+  const withLayer = (over: Partial<AnimatorLayer> = {}): AnimatorController => {
+    const ctrl = controller();
+    ctrl.layers = [
+      {
+        id: 'l-upper',
+        name: 'Upper Body',
+        maskRootBones: ['Spine'],
+        weight: 1,
+        states: [
+          { id: 'ls-rest', name: 'Rest', animationId: 'a-idle', speed: 1, loop: true },
+          { id: 'ls-aim', name: 'Aim', animationId: 'a-run', speed: 1, loop: true },
+        ],
+        defaultStateId: 'ls-rest',
+        transitions: [],
+        ...over,
+      },
+    ];
+    return ctrl;
+  };
+
+  it('is empty for a controller with no layers', () => {
+    expect(buildAnimatorDebugSnapshot(controller(), undefined, ANIMATIONS).layers).toEqual([]);
+  });
+
+  it('reports each layer name, state, mask and weight', () => {
+    const [layer] = buildAnimatorDebugSnapshot(withLayer(), undefined, ANIMATIONS).layers;
+    expect(layer).toMatchObject({ name: 'Upper Body', stateName: 'Rest', weight: 1, maskRootBones: ['Spine'] });
+  });
+
+  it('reports the layer clips', () => {
+    const [layer] = buildAnimatorDebugSnapshot(withLayer(), undefined, ANIMATIONS).layers;
+    expect(layer.clips).toEqual([{ animationId: 'a-idle', label: 'Idle', weight: 1 }]);
+  });
+
+  it('reads the live layer state and weight during Play', () => {
+    const snapshot = buildAnimatorDebugSnapshot(
+      withLayer(),
+      runtime({ layers: { 'l-upper': { stateId: 'ls-aim', fade: 0, time: 0.5, weight: 0.35 } } }),
+      ANIMATIONS,
+    );
+    expect(snapshot.layers[0]).toMatchObject({ stateName: 'Aim', weight: 0.35 });
+    expect(snapshot.layers[0].clips[0].label).toBe('Run');
+  });
+
+  // Outside Play the readout previews the authored weight, so an aim layer is visible in the editor.
+  it('previews the authored weight outside Play', () => {
+    expect(buildAnimatorDebugSnapshot(withLayer({ weight: 0.6 }), undefined, ANIMATIONS).layers[0].weight).toBeCloseTo(0.6);
+  });
+
+  it('previews a parameter-driven weight from the parameter default', () => {
+    const ctrl = withLayer({ weight: 1, weightParameterId: 'p-grounded' });
+    // Grounded defaults to true, so the layer previews fully on.
+    expect(buildAnimatorDebugSnapshot(ctrl, undefined, ANIMATIONS).layers[0].weight).toBe(1);
+  });
+
+  it('reports a blend space on a layer state', () => {
+    const ctrl = withLayer({
+      states: [
+        {
+          id: 'ls-rest',
+          name: 'Rest',
+          speed: 1,
+          loop: true,
+          blendParameterId: 'p-speed',
+          blendSamples: [
+            { animationId: 'a-idle', value: 0 },
+            { animationId: 'a-run', value: 4 },
+          ],
+        },
+      ],
+      defaultStateId: 'ls-rest',
+    });
+    const snapshot = buildAnimatorDebugSnapshot(ctrl, runtime({ params: { 'p-speed': 2 } }), ANIMATIONS);
+    expect(snapshot.layers[0].clips.map((c) => c.label).sort()).toEqual(['Idle', 'Run']);
+    expect(snapshot.layers[0].clips.reduce((acc, c) => acc + c.weight, 0)).toBeCloseTo(1);
+  });
+
+  it('survives a layer whose live state no longer exists', () => {
+    const snapshot = buildAnimatorDebugSnapshot(
+      withLayer(),
+      runtime({ layers: { 'l-upper': { stateId: 'deleted', fade: 0, time: 0, weight: 1 } } }),
+      ANIMATIONS,
+    );
+    expect(snapshot.layers[0].stateName).toBe('—');
+    expect(snapshot.layers[0].clips).toEqual([]);
   });
 });

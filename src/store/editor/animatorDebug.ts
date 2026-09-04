@@ -1,5 +1,6 @@
 import { blend1D, blend2D } from '../../three/blendSpace';
-import type { AnimationAsset, AnimatorController, AnimatorParamType } from '../../types';
+import { resolveLayerWeight } from './animatorRuntime';
+import type { AnimationAsset, AnimatorController, AnimatorParamType, AnimatorState } from '../../types';
 import type { RuntimeAnimator } from './defaults';
 
 /**
@@ -45,6 +46,21 @@ export interface AnimatorDebugSnapshot {
   montage?: { label: string; remaining: number };
   /** True when these values are coming from a running Play session. */
   live: boolean;
+  /** Animation layers and what each is contributing, in controller order. */
+  layers: AnimatorDebugLayer[];
+}
+
+/** One animation layer's live state. */
+export interface AnimatorDebugLayer {
+  id: string;
+  name: string;
+  stateName: string;
+  /** Blend weight of the whole layer, 0..1. */
+  weight: number;
+  /** Bones the layer drives (root bones; each brings its subtree). Empty means the whole skeleton. */
+  maskRootBones: string[];
+  /** Clips in this layer's pose, heaviest first. Weights are within the layer, before its weight. */
+  clips: AnimatorDebugClip[];
 }
 
 /** Weights below this are noise and would only clutter the readout. */
@@ -83,6 +99,9 @@ export function buildAnimatorDebugSnapshot(
     };
   });
 
+  const paramValues: Record<string, number | boolean> = {};
+  for (const parameter of parameters) paramValues[parameter.id] = parameter.value;
+
   const valueOf = (parameterId?: string): number => {
     if (!parameterId) return 0;
     const parameter = controller.parameters.find((item) => item.id === parameterId);
@@ -92,6 +111,40 @@ export function buildAnimatorDebugSnapshot(
   const nameOf = (parameterId?: string): string =>
     controller.parameters.find((item) => item.id === parameterId)?.name ?? '—';
 
+  const weightsOfState = (target?: AnimatorState): AnimatorDebugClip[] => {
+    if (target?.blendSamples?.length && target.blendParameterId) {
+      const x = valueOf(target.blendParameterId);
+      const weights = target.blendParameterIdY
+        ? blend2D(target.blendSamples, x, valueOf(target.blendParameterIdY))
+        : blend1D(target.blendSamples, x);
+      return weights
+        .filter((weight) => weight.weight > WEIGHT_EPSILON)
+        .map((weight) => ({ animationId: weight.animationId, label: labelOf(weight.animationId), weight: weight.weight }))
+        .sort((a, b) => b.weight - a.weight);
+    }
+    if (target?.animationId) {
+      return [{ animationId: target.animationId, label: labelOf(target.animationId), weight: 1 }];
+    }
+    return [];
+  };
+
+  // Layers, so a masked pose that is not showing up can be diagnosed here rather than guessed at:
+  // a zero weight, an unmatched mask bone and a stuck layer state all look different in this readout.
+  const layers: AnimatorDebugLayer[] = [];
+  for (const layer of controller.layers ?? []) {
+    const liveLayer = runtime?.layers?.[layer.id];
+    const layerStateId = liveLayer?.stateId || layer.defaultStateId || layer.states[0]?.id;
+    const layerState = layer.states.find((item) => item.id === layerStateId);
+    layers.push({
+      id: layer.id,
+      name: layer.name,
+      stateName: layerState?.name ?? '—',
+      weight: liveLayer ? liveLayer.weight : resolveLayerWeight(layer, paramValues),
+      maskRootBones: layer.maskRootBones,
+      clips: weightsOfState(layerState),
+    });
+  }
+
   const base: AnimatorDebugSnapshot = {
     stateId,
     stateName: state?.name ?? '—',
@@ -99,6 +152,7 @@ export function buildAnimatorDebugSnapshot(
     parameters,
     clips: [],
     live,
+    layers,
   };
 
   // A montage (Play Animation node) replaces the state machine's output entirely until it ends.
@@ -112,29 +166,17 @@ export function buildAnimatorDebugSnapshot(
   }
 
   if (state?.blendSamples?.length && state.blendParameterId) {
-    const x = valueOf(state.blendParameterId);
-    const y = state.blendParameterIdY ? valueOf(state.blendParameterIdY) : undefined;
-    const weights = state.blendParameterIdY
-      ? blend2D(state.blendSamples, x, y ?? 0)
-      : blend1D(state.blendSamples, x);
     return {
       ...base,
       blend: {
         xName: nameOf(state.blendParameterId),
-        x,
+        x: valueOf(state.blendParameterId),
         yName: state.blendParameterIdY ? nameOf(state.blendParameterIdY) : undefined,
-        y,
+        y: state.blendParameterIdY ? valueOf(state.blendParameterIdY) : undefined,
       },
-      clips: weights
-        .filter((weight) => weight.weight > WEIGHT_EPSILON)
-        .map((weight) => ({ animationId: weight.animationId, label: labelOf(weight.animationId), weight: weight.weight }))
-        .sort((a, b) => b.weight - a.weight),
+      clips: weightsOfState(state),
     };
   }
 
-  if (state?.animationId) {
-    return { ...base, clips: [{ animationId: state.animationId, label: labelOf(state.animationId), weight: 1 }] };
-  }
-
-  return base;
+  return { ...base, clips: weightsOfState(state) };
 }
