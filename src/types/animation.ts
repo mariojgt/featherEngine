@@ -8,6 +8,19 @@ import type { SkeletonSocket } from './environment';
  * `renderer.modelAssetId`. Later phases replace `clip` with a `controllerId` (a reusable
  * Animator Controller state machine) and a `skeletalMeshId` decoupled from the renderer.
  */
+/**
+ * How an animation's own root-bone displacement is used.
+ *
+ * - `disabled` (default): the clip poses the root as authored and nothing is measured. In-place clips,
+ *   which is most of them, are unaffected either way.
+ * - `extract`: the root is pinned back to its rest position each frame so the mesh cannot drift off
+ *   its object origin, and the travelled distance is measured and published — but movement still comes
+ *   from code. Use this to play a root-motion clip on a code-driven character without the two fighting.
+ * - `apply`: as `extract`, and the measured speed replaces the character controller's own move speed,
+ *   so the character travels exactly as far as the animator authored and the feet cannot slide.
+ */
+export type RootMotionMode = 'disabled' | 'extract' | 'apply';
+
 export interface AnimatorComponent {
   enabled: boolean;
   /**
@@ -27,6 +40,15 @@ export interface AnimatorComponent {
   clip?: string;
   /** Playback speed multiplier (1 = authored speed). */
   speed: number;
+  /**
+   * Root motion handling. Off by default, so existing projects are untouched.
+   *
+   * `apply` needs the locomotion blend space driven by the `inputSpeed` parameter source rather than
+   * `speed`: blending on MEASURED speed while the animation supplies that same speed is a feedback
+   * loop, and it settles at a standstill (idle produces no travel, so speed stays zero and the
+   * character never starts). `inputSpeed` is the speed the input is ASKING for, which breaks it.
+   */
+  rootMotion?: RootMotionMode;
   /** Loop the clip, or play once and hold the final frame. */
   loop: boolean;
   /** AIM / LOOK-AT IK: after the clip poses the skeleton, rotate the head (or a chosen bone) to track a

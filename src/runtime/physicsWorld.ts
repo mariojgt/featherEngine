@@ -22,6 +22,7 @@ import * as THREE from 'three';
 import type { SceneObject, Vector3Tuple } from '../types';
 import { resolveVehicleWheels, type ResolvedVehicleWheel } from './vehicleWheels';
 import { clearRagdolls } from './ragdollState';
+import { clearRootMotion } from './rootMotion';
 import {
   capsuleParams,
   colliderKindFor,
@@ -2764,6 +2765,7 @@ export function stopPhysics() {
     runtime = null;
   }
   clearRagdolls();
+  clearRootMotion();
 }
 
 /** The live world if Play is active and Rapier finished initializing, else null. */

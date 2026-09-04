@@ -9,6 +9,7 @@ import { accumulateWeight, blend1D, blend2D, phaseSyncTimeScale } from './blendS
 import { collectMaskedBones, maskClip, type BoneMaskMode } from './boneMask';
 import { useFootIK } from './footIK';
 import { useAimIK } from './aimIK';
+import { useRootMotion } from './rootMotion';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
 import { RagdollRig } from './RagdollRig';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
@@ -380,6 +381,9 @@ export function SkinnedModel({
   useFootIK(model, registerId);
   // Aim / look-at IK — rotate the head to track a target. Opt-in (animator.aimEnabled), additive, clamped.
   useAimIK(model, registerId);
+  // Root motion — measure the root bone's travel and pin it back so the mesh cannot drift off its
+  // object origin. Opt-in (animator.rootMotion) and a no-op when disabled.
+  useRootMotion(model, registerId);
 
   return (
     <>
