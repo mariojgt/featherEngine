@@ -2580,8 +2580,14 @@ const rawEngineTools = {
       aimAxis: z.enum(['z', '-z', 'x', '-x', 'y', '-y']).optional().describe('Which LOCAL axis of the bone points out of the face (glTF usually +z, the default; flip if the head aims the wrong way).'),
       aimWeight: z.number().optional().describe('0..1 blend between the animated pose and full tracking (default 1).'),
       aimMaxAngle: z.number().optional().describe('Max tracking cone in degrees so the head never snaps unnaturally (default 80).'),
+      rootMotion: z
+        .enum(['disabled', 'extract', 'apply'])
+        .optional()
+        .describe(
+          'Use the displacement the ANIMATION applies to the root bone. "extract" pins the root so the mesh cannot drift off its object and measures the travel; "apply" also drives the character at the animation speed so the feet cannot slide. When applying, blend the locomotion space on the "inputSpeed" parameter source, NOT "speed" — blending on measured speed while the animation supplies it settles at a standstill.',
+        ),
     }),
-    execute: async ({ objectId, enabled, animationId, speed, loop, aimEnabled, aimTargetObjectId, aimBone, aimAxis, aimWeight, aimMaxAngle }) => {
+    execute: async ({ objectId, enabled, animationId, speed, loop, aimEnabled, aimTargetObjectId, aimBone, aimAxis, aimWeight, aimMaxAngle, rootMotion }) => {
       const object = findObject(objectId);
       if (!object) return `No object with id ${objectId}.`;
       if (animationId && !store().animations.some((anim) => anim.id === animationId)) {
@@ -2603,6 +2609,7 @@ const rawEngineTools = {
       if (aimAxis !== undefined) patch.aimAxis = aimAxis;
       if (aimWeight !== undefined) patch.aimWeight = aimWeight;
       if (aimMaxAngle !== undefined) patch.aimMaxAngle = aimMaxAngle;
+      if (rootMotion !== undefined) patch.rootMotion = rootMotion === 'disabled' ? undefined : rootMotion;
       if (Object.keys(patch).length) store().updateAnimator(objectId, patch);
       return `Updated animator on ${objectId}.`;
     },

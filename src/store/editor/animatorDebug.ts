@@ -1,6 +1,12 @@
 import { blend1D, blend2D } from '../../three/blendSpace';
 import { resolveLayerWeight } from './animatorRuntime';
-import type { AnimationAsset, AnimatorController, AnimatorParamType, AnimatorState } from '../../types';
+import type {
+  AnimationAsset,
+  AnimatorController,
+  AnimatorParamType,
+  AnimatorState,
+  RootMotionMode,
+} from '../../types';
 import type { RuntimeAnimator } from './defaults';
 
 /**
@@ -48,6 +54,8 @@ export interface AnimatorDebugSnapshot {
   live: boolean;
   /** Animation layers and what each is contributing, in controller order. */
   layers: AnimatorDebugLayer[];
+  /** Root motion, when the animator has it enabled. */
+  rootMotion?: { mode: RootMotionMode; speed: number };
 }
 
 /** One animation layer's live state. */
@@ -76,6 +84,8 @@ export function buildAnimatorDebugSnapshot(
   controller: AnimatorController,
   runtime: RuntimeAnimator | undefined,
   animations: AnimationAsset[],
+  /** The animator's root-motion mode, and the speed currently measured from the pose. */
+  rootMotion?: { mode: RootMotionMode; speed: number },
 ): AnimatorDebugSnapshot {
   const live = Boolean(runtime);
   // Outside Play, preview the entry state so the readout is meaningful before pressing Play.
@@ -153,6 +163,8 @@ export function buildAnimatorDebugSnapshot(
     clips: [],
     live,
     layers,
+    // Reported only when enabled, so the readout stays quiet for the vast majority of animators.
+    rootMotion: rootMotion && rootMotion.mode !== 'disabled' ? rootMotion : undefined,
   };
 
   // A montage (Play Animation node) replaces the state machine's output entirely until it ends.

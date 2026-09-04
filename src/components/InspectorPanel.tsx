@@ -10,7 +10,7 @@ import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
 import { focusWorkspacePanel } from './workspacePanels';
 import { SocketPickerModal } from './SocketPickerModal';
-import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, AxisLockTuple, CableComponent, CharacterControllerComponent, ClothComponent, ExtraCollider, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, QualityLevel, ReflectionProbeComponent, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, TreeArchetype, TreeComponent, TreeSpec, Vector3Tuple, VehicleComponent, VehicleWheelSetup, WaterVolumeComponent } from '../types';
+import type { AnimationAsset, AnimatorComponent, AnimatorController, AssetItem, AxisLockTuple, CableComponent, CharacterControllerComponent, ClothComponent, ExtraCollider, JointComponent, JointType, LightComponent, MaterialDefinition, MeshRendererComponent, ParticleEmitterShape, ParticleSystemComponent, PhysicsComponent, QualityLevel, ReflectionProbeComponent, RootMotionMode, SceneObject, SkeletalMeshAsset, TerrainComponent, TransformComponent, TreeArchetype, TreeComponent, TreeSpec, Vector3Tuple, VehicleComponent, VehicleWheelSetup, WaterVolumeComponent } from '../types';
 import { resolveVehicleWheels } from '../runtime/vehicleWheels';
 import { BEHAVIOR_PRESETS } from '../project/behaviors';
 import { particlePresetIds } from '../runtime/particlePresets';
@@ -676,6 +676,23 @@ function AnimatorSection({
               </label>
             </>
           ) : null}
+
+          {/* Root motion — post-mixer, applies in both controller and manual modes. */}
+          {animator?.enabled && (
+            <label className="field-row">
+              <span title="Use the displacement the ANIMATION applies to the root bone. Extract pins the root so the mesh cannot drift off its object; Apply also drives the character at the animation's speed, so the feet cannot slide. Blend locomotion on Input speed when applying, not Object speed.">
+                Root motion
+              </span>
+              <select
+                value={animator.rootMotion ?? 'disabled'}
+                onChange={(event) => onChange({ rootMotion: event.target.value as RootMotionMode })}
+              >
+                <option value="disabled">Disabled</option>
+                <option value="extract">Extract (pin root, measure only)</option>
+                <option value="apply">Apply (drive the character)</option>
+              </select>
+            </label>
+          )}
 
           {/* Aim / Look-At IK — applies in both controller and manual modes (post-mixer, additive). */}
           {animator?.enabled && (

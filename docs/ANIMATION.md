@@ -47,6 +47,8 @@ Animator component (per object)
 | Controller lookup caches | [`src/store/editor/animatorRuntime.ts`](../src/store/editor/animatorRuntime.ts) |
 | Blend-space weighting maths | [`src/three/blendSpace.ts`](../src/three/blendSpace.ts) |
 | Bone masking for layers | [`src/three/boneMask.ts`](../src/three/boneMask.ts) |
+| Root motion extraction | [`src/three/rootMotion.ts`](../src/three/rootMotion.ts) |
+| Root motion transport | [`src/runtime/rootMotion.ts`](../src/runtime/rootMotion.ts) |
 | Mixer binding + crossfades | [`src/three/SkinnedModel.tsx`](../src/three/SkinnedModel.tsx) |
 | Debug snapshot | [`src/store/editor/animatorDebug.ts`](../src/store/editor/animatorDebug.ts) |
 | Graph editor + debug panel | [`src/components/AnimatorEditorPanel.tsx`](../src/components/AnimatorEditorPanel.tsx), [`AnimatorDebugView.tsx`](../src/components/AnimatorDebugView.tsx) |
@@ -163,6 +165,56 @@ deletes, and the live-play highlight, which tracks the selected layer's state. L
 weight and weight parameter are edited in the same card. The **Animation Debug** readout lists every
 layer with its state, weight and contributing clips, which is how you tell a zero weight from a mask
 that matches no bone in this rig from a stuck layer state — all three look identical from outside.
+
+## Root motion
+
+Most clips are authored **in place**: the character runs on the spot and the engine moves it. A clip
+authored **with root motion** instead translates the root bone, so the travel is baked into the
+animation. Root motion means using that travel to drive the character, which guarantees the feet
+cover exactly the ground the animator authored — the definitive fix for foot sliding.
+
+Set `animator.rootMotion` to one of:
+
+| Mode | Behaviour |
+| --- | --- |
+| `disabled` (default) | The clip poses the root as authored; nothing is measured. In-place clips are unaffected either way. |
+| `extract` | The root is pinned back to its rest position each frame, so the mesh cannot drift off its object origin, and the travel is measured and published. Movement still comes from code. |
+| `apply` | As `extract`, and the measured speed replaces the character controller's move speed. |
+
+`apply` changes exactly one number — the controller's target speed. Direction, camera-relative input,
+the acceleration ramp, facing, gravity, jumping, mantling, sliding and lock-on are all untouched,
+which is what makes it safe to bolt onto a controller with this many interacting features.
+
+Only **horizontal** travel is used. Gravity and jumping own the Y axis, and a clip fighting them is
+precisely how root motion destabilises a character, so vertical displacement stays with the clip.
+
+### The feedback loop, and `inputSpeed`
+
+Blending a locomotion space on the `speed` source (which is *measured* speed) while root motion
+supplies that same speed is a loop, and it settles at a standstill: idle produces no travel, so speed
+reads zero, so idle keeps playing and the character never starts.
+
+Use the **`inputSpeed`** source instead when applying root motion. It is the speed the input is
+*asking* for — move speed times gait, before acceleration and before root motion — so the animation
+choice is driven by intent and the travel by the animation. `inputSpeed` is worth using on its own as
+the "desired speed" most locomotion systems blend on.
+
+### Why the transport looks the way it does
+
+The pose is produced in the **render loop** (the mixer, inside `SkinnedModel`) and movement is applied
+in the **runtime tick**. `src/runtime/rootMotion.ts` bridges them as a module singleton, the same
+pattern as `ragdollState` and `boneRegistry`.
+
+The renderer *accumulates* distance alongside the animation time it covers, and the tick *drains*.
+Publishing a velocity would be wrong: the loops run at unrelated rates, so several render frames may
+land between ticks or none at all. Summing both numbers and dividing on drain gives the correct
+average for the interval whatever the ratio, and draining guarantees each frame is consumed exactly
+once. A tick that drains nothing means "no reading", not "speed zero" — the authored speed is kept,
+or the character would stutter whenever the loops interleave unevenly.
+
+A looping clip wraps the root from the end of its cycle back to the start. That frame is a
+discontinuity, not travel, and applying it would teleport the character; a wrap is hundreds of units
+per second while a sprint is under ten, so a fixed ceiling separates them with room to spare.
 
 ## Public API
 
@@ -324,6 +376,10 @@ nearest edge — the full-speed pose.
 - **Layers are override, not additive.** A layer replaces the base pose on its bones rather than
   adding to it, so an additive recoil that rides on top of an aim pose is not expressible yet (three
   supports additive blend modes, but nothing authors them here).
+- **Root motion rotation is not extracted.** Only translation is read, so a clip that turns the
+  character through its root track will not steer it; the controller still owns facing.
+- **Root motion needs a root track to measure.** A rig whose motion is baked into the hips of an
+  in-place clip has nothing to extract, and all three modes look identical.
 - **Masks are authored as bone names.** There is no picker reading the bound skeleton, so a mask
   naming a bone the rig does not have silently shrinks — the Animation Debug readout is what surfaces
   that.

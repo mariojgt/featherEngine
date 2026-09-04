@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Activity } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { buildAnimatorDebugSnapshot } from '../store/editor/animatorDebug';
+import { peekRootMotion, rootMotionSpeed } from '../runtime/rootMotion';
 import type { AnimatorController } from '../types';
 
 /**
@@ -26,9 +27,27 @@ export function AnimatorDebugView({ controller }: { controller: AnimatorControll
     return undefined;
   });
 
+  // Root motion mode lives on the object's animator, and the measured speed on the render-loop bus.
+  const rootMotion = useEditorStore((state) => {
+    for (const object of selectActiveObjects(state)) {
+      if (object.animator?.controllerId === controller.id) {
+        const mode = object.animator.rootMotion ?? 'disabled';
+        return mode === 'disabled' ? undefined : { mode, objectId: object.id };
+      }
+    }
+    return undefined;
+  });
+
   const snapshot = useMemo(
-    () => buildAnimatorDebugSnapshot(controller, runtime, animations),
-    [controller, runtime, animations],
+    () =>
+      buildAnimatorDebugSnapshot(
+        controller,
+        runtime,
+        animations,
+        // Peeked, never drained: draining here would steal the sample from the character controller.
+        rootMotion ? { mode: rootMotion.mode, speed: rootMotionSpeed(peekRootMotion(rootMotion.objectId)) } : undefined,
+      ),
+    [controller, runtime, animations, rootMotion],
   );
 
   const fmt = (value: number) => (Number.isFinite(value) ? value.toFixed(2) : '—');
@@ -89,6 +108,15 @@ export function AnimatorDebugView({ controller }: { controller: AnimatorControll
             </div>
           ))}
         </>
+      )}
+
+      {snapshot.rootMotion && (
+        <div className="animator-debug-kv">
+          <span title="Root motion is driving this character's travel. Extract measures only; Apply also moves the character.">
+            Root motion ({snapshot.rootMotion.mode})
+          </span>
+          <span className="animator-debug-num">{fmt(snapshot.rootMotion.speed)} u/s</span>
+        </div>
       )}
 
       {snapshot.layers.length > 0 && (

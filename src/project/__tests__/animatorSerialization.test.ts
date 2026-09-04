@@ -188,6 +188,53 @@ describe('animator controller serialization', () => {
     });
   });
 
+  it('keeps the animator root-motion mode on an object', () => {
+    const project = blankProject('Root Motion');
+    const scenes = project.scenes.map((scene, index) =>
+      index === 0
+        ? {
+            ...scene,
+            objects: [
+              {
+                id: 'o-hero',
+                name: 'Hero',
+                kind: 'capsule' as const,
+                transform: { position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] },
+                animator: { enabled: true, speed: 1, loop: true, rootMotion: 'apply' as const },
+              },
+            ],
+          }
+        : scene,
+    );
+    const reloaded = roundTrip({ ...project, scenes });
+    const hero = reloaded.scenes.flatMap((scene) => scene.objects).find((object) => object.id === 'o-hero');
+    expect(hero?.animator?.rootMotion).toBe('apply');
+  });
+
+  // Off is the absence of the field, so it must not come back as an explicit 'disabled'.
+  it('leaves root motion absent when it was never set', () => {
+    const project = blankProject('No Root Motion');
+    const scenes = project.scenes.map((scene, index) =>
+      index === 0
+        ? {
+            ...scene,
+            objects: [
+              {
+                id: 'o-plain',
+                name: 'Plain',
+                kind: 'capsule' as const,
+                transform: { position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] },
+                animator: { enabled: true, speed: 1, loop: true },
+              },
+            ],
+          }
+        : scene,
+    );
+    const reloaded = roundTrip({ ...project, scenes });
+    const plain = reloaded.scenes.flatMap((scene) => scene.objects).find((object) => object.id === 'o-plain');
+    expect(plain?.animator?.rootMotion).toBeUndefined();
+  });
+
   it('keeps the phase-sync flag', () => {
     const state = roundTrip(withController()).animatorControllers[0].states.find((s) => s.id === 's-loco-2d');
     expect(state?.syncPhase).toBe(true);
