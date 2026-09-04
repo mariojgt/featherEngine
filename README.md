@@ -113,7 +113,7 @@ Blueprints, replace assets, and reuse the systems in your own game.
 | **Rendering and worlds** | Three.js renderer, procedural or image skies, day/night cycles, aerial and volumetric fog, water, terrain, procedural trees, reflection probes, shadows, bloom, color grading, and scalable quality presets. |
 | **Gameplay and physics** | Rapier rigid bodies, colliders, triggers, collision layers, joints, raycasts, vehicles, characters, ragdolls, cloth, cables, projectiles, damage, explosions, decals, and fracture effects. |
 | **Scripting** | Reusable Blueprint graphs, typed execution/value wires, functions, global and per-instance variables, data tables, save slots, runtime events, and FeatherScript source. |
-| **Assets and animation** | GLB, glTF, FBX, PNG, JPEG, WebP, MP3, and WAV import; skeleton inspection, sockets, bone attachments, animation state machines, 1D and 2D blend spaces, bone-masked animation layers, foot and look-at IK, a live animation debugger, reusable prefabs, LOD, instancing, and optional KTX2 texture compression. |
+| **Assets and animation** | GLB, glTF, FBX, PNG, JPEG, WebP, MP3, and WAV import; skeleton inspection, sockets, bone attachments, animation state machines, 1D and 2D blend spaces, bone-masked animation layers, optional root motion, foot and look-at IK, a live animation debugger, reusable prefabs, LOD, instancing, and optional KTX2 texture compression. |
 | **UI and input** | Screen-space and world-space UI, interactive controls, HUD bindings, minimap, keyboard, mouse, gamepad focus, and automatic touch controls in exported games. |
 | **Cinematics** | Shot sequencing, camera paths, cuts and blends, timed object/audio/event actions, overlays, frame-locked WebM capture, and MP4 export through ffmpeg.wasm. |
 | **Runtime diagnostics** | On-screen console, live variable watch, execution and value tracing, problem reporting, performance profiler with hitch and stall attribution, render statistics including lights, shadow casters and skinned meshes, a live animation debugger, and replay capture. |
@@ -330,7 +330,7 @@ verify the workflow end to end. The complete checklist is in
 
 ## Documentation
 
-- [Animation System](docs/ANIMATION.md) — animator controllers, blend spaces, animation layers, bone masking, IK, and the debug readout
+- [Animation System](docs/ANIMATION.md) — animator controllers, blend spaces, animation layers, bone masking, root motion, IK, and the debug readout
 - [Live Collaboration](docs/COLLABORATION.md) — start/join workflow, authority model, security, and limitations
 - [Plugin SDK](docs/PLUGIN_SDK.md) — commands, dockable panels, safe project APIs, and plugin lifecycle
 - [Production Export](docs/PRODUCTION_EXPORT.md) — web, desktop, Android, and iOS packaging
