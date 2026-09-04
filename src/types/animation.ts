@@ -183,6 +183,10 @@ export type AnimatorParamType = 'float' | 'bool' | 'trigger';
 export type AnimatorParamSource =
   | 'manual'
   | 'speed'
+  /** The speed the input is ASKING for (move speed x gait), before acceleration and before root
+   *  motion. Blend a locomotion space on this rather than `speed` when root motion is applied, or the
+   *  animation supplies the speed that picks the animation and the loop settles at a standstill. */
+  | 'inputSpeed'
   | 'verticalSpeed'
   | 'moving'
   | 'crouching'

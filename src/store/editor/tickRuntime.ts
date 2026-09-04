@@ -39,6 +39,7 @@ import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '..
 import { findNavPath } from '../../runtime/navGrid';
 import { sendParticleCommand } from '../../runtime/particleBus';
 import { recordRuntimeSection } from '../../runtime/perfStats';
+import { drainRootMotion, rootMotionSpeed } from '../../runtime/rootMotion';
 import { applyPhysicsMaterialPreset } from '../../runtime/physicsMaterials';
 import { PhysicsContactEvent, VehicleWheelState, getActivePhysics, setModelSpecResolver, startPhysics } from '../../runtime/physicsWorld';
 import { getRagdollRoot, isRagdoll, setRagdoll } from '../../runtime/ragdollState';
@@ -625,6 +626,13 @@ export const applyRuntimeTick = (
       const nextSlide: EditorState['runtimeSlide'] = {};
       const nextRollDir: EditorState['runtimeRollDir'] = {};
       const nextMantle: EditorState['runtimeMantle'] = {};
+      /**
+       * The speed each character's input is ASKING for this tick, before acceleration and before root
+       * motion. Feeds the `inputSpeed` animator source, which exists to break the root-motion feedback
+       * loop: a locomotion blend space driven by MEASURED speed while the animation supplies that same
+       * speed settles at a standstill, because idle produces no travel so speed stays zero forever.
+       */
+      const desiredSpeedById: Record<string, number> = {};
       const nextTurnInPlace: Record<string, number> = {};
       const nextCoyote: Record<string, number> = {};
       const nextAttack: Record<string, number> = {};
@@ -4366,9 +4374,24 @@ export const applyRuntimeTick = (
           const sprinting = Boolean(currentKeys[cc.keySprint]);
           const crouching = Boolean(currentKeys[cc.keyCrouch]);
           const crawling = Boolean(cc.keyCrawl && currentKeys[cc.keyCrawl]);
-          const speed =
+          // Speed the input is asking for: the authored move speed with its gait multiplier.
+          const inputSpeed =
             cc.moveSpeed *
-            (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1) *
+            (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
+          desiredSpeedById[object.id] = inputSpeed;
+          /**
+           * Root motion `apply`: the animation's own travel replaces the authored speed, so the
+           * character covers exactly the ground the animator authored and the feet cannot slide. Only
+           * this one scalar changes — direction, camera-relative input, the acceleration ramp, facing,
+           * gravity, jumping, mantling and sliding all stay exactly as they were.
+           *
+           * A tick with no render frame between it and the last drains nothing; that is "no reading",
+           * not "speed zero", so the authored speed is kept rather than stopping the character dead.
+           */
+          const rootSample = object.animator?.rootMotion === 'apply' ? drainRootMotion(object.id) : undefined;
+          const rootSpeed = rootSample ? rootMotionSpeed(rootSample) : undefined;
+          const speed =
+            (rootSpeed !== undefined ? rootSpeed : inputSpeed) *
             (1 - 0.6 * landPenalty); // hard landings briefly sap the target speed (landing recovery)
           // Target velocity from the (camera-relative) input direction; 0 when no key is held (→ decelerate to stop).
           let targetX = 0;
@@ -6135,6 +6158,8 @@ export const applyRuntimeTick = (
         // Auto-source parameters (object/world state → animator), then manual script writes.
         for (const param of controller.parameters) {
           if (param.source === 'speed') params[param.id] = horizontalSpeed;
+          // Desired speed rather than measured — the source to blend on when root motion is applied.
+          else if (param.source === 'inputSpeed') params[param.id] = desiredSpeedById[sourceId] ?? 0;
           else if (param.source === 'verticalSpeed') params[param.id] = verticalSpeed;
           else if (param.source === 'moving') params[param.id] = horizontalSpeed > 0.1;
           else if (param.source === 'crouching') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyCrouch]);

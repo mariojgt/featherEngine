@@ -32,7 +32,8 @@ import type {
 const COMPARE_OPS: CompareOperator[] = ['==', '!=', '>', '>=', '<', '<='];
 const PARAM_SOURCES: Array<{ value: AnimatorParameter['source']; label: string }> = [
   { value: 'manual', label: 'Manual (scripts/AI)' },
-  { value: 'speed', label: 'Object speed' },
+  { value: 'speed', label: 'Object speed (measured)' },
+  { value: 'inputSpeed', label: 'Input speed (desired — use with root motion)' },
   { value: 'verticalSpeed', label: 'Vertical speed' },
   { value: 'moving', label: 'Is moving' },
   { value: 'crouching', label: 'Is crouching' },
