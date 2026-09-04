@@ -171,6 +171,7 @@ function CameraViewModel({ object }: { object: SceneObject }) {
         // rendered only its first sample in first person while third person blended properly.
         blend={resolvedAnimator.blend}
         syncPhase={resolvedAnimator.syncPhase}
+        layers={resolvedAnimator.layers}
         speed={resolvedAnimator.speed}
         loop={resolvedAnimator.loop}
         fade={resolvedAnimator.fade}

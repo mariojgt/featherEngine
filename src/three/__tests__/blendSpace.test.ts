@@ -5,7 +5,7 @@ import {
   phaseSyncTimeScale,
   PHASE_SYNC_MAX_SCALE,
   PHASE_SYNC_MIN_SCALE,
-  sumBlendWeights,
+  accumulateWeight,
   type BlendSpaceSample,
 } from '../blendSpace';
 
@@ -233,58 +233,61 @@ describe('blend2D', () => {
   });
 });
 
-describe('sumBlendWeights', () => {
+describe('accumulateWeight', () => {
   interface FakeAction {
     id: string;
   }
-  const actions: Record<string, FakeAction> = { idle: { id: 'idle' }, walk: { id: 'walk' } };
-  const resolve = (name: string) => actions[name];
+  const idle: FakeAction = { id: 'idle' };
+  const walk: FakeAction = { id: 'walk' };
 
-  // Regression: two samples can point at the same clip, so the same action. Writing one
-  // setEffectiveWeight per sample let the last call win — often the ~0 one — and the clip
-  // dropped out of the pose entirely.
-  it('sums the weights of samples that resolve to the same action', () => {
+  // Regression: several sources can resolve to the same action — two blend samples on one clip, or a
+  // base clip feeding both the unmasked bones and a half-faded layer's bones. Assigning rather than
+  // adding let the last write win, often the ~0 one, and the clip dropped out of the pose.
+  it('sums repeated contributions to the same action', () => {
     const out = new Map<FakeAction, number>();
-    sumBlendWeights(
-      [
-        { name: 'idle', weight: 0.3 },
-        { name: 'idle', weight: 0.2 },
-        { name: 'walk', weight: 0.5 },
-      ],
-      resolve,
-      out,
-    );
-    expect(out.get(actions.idle)).toBeCloseTo(0.5);
-    expect(out.get(actions.walk)).toBeCloseTo(0.5);
+    accumulateWeight(out, idle, 0.3);
+    accumulateWeight(out, idle, 0.2);
+    accumulateWeight(out, walk, 0.5);
+    expect(out.get(idle)).toBeCloseTo(0.5);
+    expect(out.get(walk)).toBeCloseTo(0.5);
   });
 
-  it('skips samples whose clip is missing from the mixer', () => {
+  it('drops a missing action', () => {
     const out = new Map<FakeAction, number>();
-    sumBlendWeights([{ name: 'nope', weight: 1 }, { name: 'idle', weight: 0.4 }], resolve, out);
-    expect(out.size).toBe(1);
-    expect(out.get(actions.idle)).toBeCloseTo(0.4);
+    accumulateWeight(out, null, 1);
+    accumulateWeight(out, undefined, 1);
+    expect(out.size).toBe(0);
   });
 
-  // The map is a module-level scratch reused every frame, so a stale entry would keep a clip
-  // weighted after it left the blend space.
-  it('clears prior contents so the caller-owned scratch map cannot leak weights', () => {
+  // A zero-weight voice must not be handed to the mixer at all.
+  it('drops non-positive and non-finite weights', () => {
     const out = new Map<FakeAction, number>();
-    out.set(actions.walk, 99);
-    sumBlendWeights([{ name: 'idle', weight: 1 }], resolve, out);
-    expect(out.has(actions.walk)).toBe(false);
-    expect(out.get(actions.idle)).toBe(1);
+    accumulateWeight(out, idle, 0);
+    accumulateWeight(out, idle, -1);
+    accumulateWeight(out, idle, NaN);
+    expect(out.size).toBe(0);
+  });
+
+  it('leaves the caller to clear the map, so a scratch map can be reused', () => {
+    const out = new Map<FakeAction, number>();
+    accumulateWeight(out, walk, 1);
+    out.clear();
+    accumulateWeight(out, idle, 1);
+    expect(out.has(walk)).toBe(false);
+    expect(out.get(idle)).toBe(1);
   });
 
   it('preserves the normalization coming out of the blend functions', () => {
-    const out = new Map<FakeAction, number>();
-    const weights = blend1D(
+    const out = new Map<string, number>();
+    for (const w of blend1D(
       [
         { animationId: 'idle', value: 0 },
         { animationId: 'walk', value: 4 },
       ],
       1,
-    ).map((w) => ({ name: w.animationId, weight: w.weight }));
-    sumBlendWeights(weights, resolve, out);
+    )) {
+      accumulateWeight(out, w.animationId, w.weight);
+    }
     expect([...out.values()].reduce((a, b) => a + b, 0)).toBeCloseTo(1);
   });
 });

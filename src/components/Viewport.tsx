@@ -304,6 +304,7 @@ function Primitive({
           clipName={resolvedAnimator.clipName}
           blend={resolvedAnimator.blend}
           syncPhase={resolvedAnimator.syncPhase}
+          layers={resolvedAnimator.layers}
           speed={resolvedAnimator.speed}
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}

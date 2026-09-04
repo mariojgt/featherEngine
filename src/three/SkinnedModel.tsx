@@ -5,13 +5,15 @@ import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { registerSkinnedRoot, unregisterSkinnedRoot } from './boneRegistry';
-import { blend1D, blend2D, phaseSyncTimeScale, sumBlendWeights } from './blendSpace';
+import { accumulateWeight, blend1D, blend2D, phaseSyncTimeScale } from './blendSpace';
+import { collectMaskedBones, maskClip, type BoneMaskMode } from './boneMask';
 import { useFootIK } from './footIK';
 import { useAimIK } from './aimIK';
 import { isRagdoll, toggleRagdoll } from '../runtime/ragdollState';
 import { RagdollRig } from './RagdollRig';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from './gltfDecoders';
-import type { SceneObject } from '../types';
+import { resolveLayerWeight } from '../store/editor/animatorRuntime';
+import type { AnimatorState, SceneObject } from '../types';
 
 /** Scratch for the mixer distance-LOD check (synchronous per-frame use; never retained). */
 const MIXER_LOD_SCRATCH = new THREE.Vector3();
@@ -35,6 +37,7 @@ export function SkinnedModel({
   clipName,
   blend,
   syncPhase,
+  layers,
   speed = 1,
   loop = true,
   fade = 0.2,
@@ -48,6 +51,8 @@ export function SkinnedModel({
   /** Blend-space mode: clips to play simultaneously with per-clip weights (updated live each frame). */
   blend?: { name: string; weight: number }[];
   syncPhase?: boolean;
+  /** Animation layers posed on top of the base, each masked to its own bones. */
+  layers?: ResolvedAnimatorLayer[];
   speed?: number;
   loop?: boolean;
   /** Crossfade seconds when the clip changes (state-machine transition duration). */
@@ -186,24 +191,111 @@ export function SkinnedModel({
     return actions[key];
   };
 
-  // Which clips are active this state. For a blend space it's the bracketing samples; otherwise one clip.
-  // Joined with "\n" (NOT "|") because exported clip names can contain "|" (e.g. "Armature|Armature|Idle").
-  const activeNames = (blend && blend.length ? blend.map((b) => b.name) : clipName ? [clipName] : []).join('\n');
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
+
+  /** Every bone name in this rig, for a layer authored with an empty mask (= whole skeleton). */
+  const allBones = useMemo(() => {
+    const out = new Set<string>();
+    model.traverse((node) => {
+      if (node.name) out.add(node.name);
+    });
+    return out;
+  }, [model]);
+
+  // Resolving a mask walks the skeleton, so key it on the masks themselves rather than the `layers`
+  // array, which the resolver rebuilds every render.
+  const layerMaskKey = (layers ?? []).map((layer) => `${layer.id}:${layer.maskRootBones.join(',')}`).join('|');
+  const layerBones = useMemo(() => {
+    const out = new Map<string, Set<string>>();
+    for (const layer of layersRef.current ?? []) {
+      out.set(layer.id, layer.maskRootBones.length ? collectMaskedBones(model, layer.maskRootBones) : allBones);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerMaskKey, model, allBones]);
+
+  /** Union of every layer's bones — exactly what the base must give up. */
+  const baseExcluded = useMemo(() => {
+    const out = new Set<string>();
+    for (const bones of layerBones.values()) for (const bone of bones) out.add(bone);
+    return out;
+  }, [layerBones]);
 
   /**
-   * Writes this frame's blend weights onto the mixer. Called both from useFrame and immediately after
-   * the active clip set changes — drei's useAnimations subscribes its `mixer.update` before this
+   * An action for `clipName` restricted to (or excluded from) a bone set.
+   *
+   * `mixer.clipAction` caches per clip+root, so calling this every frame returns the same action
+   * rather than piling up new ones. When the mask cannot change the clip we hand back drei's own
+   * action instead of a derived duplicate; when it masks everything away there is nothing to play.
+   */
+  const maskedAction = (name: string, bones: Set<string>, mode: BoneMaskMode): THREE.AnimationAction | null => {
+    const source = resolveAction(name);
+    if (!source) return null;
+    const clip = source.getClip();
+    const masked = maskClip(clip, bones, mode);
+    if (masked === clip) return source;
+    if (!masked.tracks.length) return null;
+    return mixer.clipAction(masked, model);
+  };
+
+  /**
+   * Everything that should be posing the skeleton this frame, as (action, weight) pairs.
+   *
+   * The base is split in two when a layer is only partly faded in. Its `exclude` variant drives the
+   * bones no layer owns, at full weight. Its `include` variant drives the layer's bones at
+   * (1 - layer weight), so those bones land on a clean linear blend between the base and layer poses.
+   * Without that second variant a half-weight layer would blend against whatever the bone happened to
+   * hold last frame — a lag filter rather than a blend. It is skipped entirely once the layer reaches
+   * full weight, which is the common case for a binary aim layer, so a fully-on layer costs nothing
+   * extra.
+   *
+   * Overlapping masks are approximate: a bone claimed by two partly-faded layers receives a base
+   * contribution from each. Keep layer masks disjoint (upper body vs legs) and it is exact.
+   */
+  const collectVoices = (out: Map<THREE.AnimationAction, number>): Map<THREE.AnimationAction, number> => {
+    out.clear();
+    const add = (action: THREE.AnimationAction | null, weight: number) => accumulateWeight(out, action, weight);
+
+    const activeLayers = layersRef.current ?? [];
+    const baseClips = blendRef.current?.length
+      ? blendRef.current
+      : clipName
+        ? [{ name: clipName, weight: 1 }]
+        : [];
+
+    for (const clip of baseClips) {
+      add(maskedAction(clip.name, baseExcluded, 'exclude'), clip.weight);
+      for (const layer of activeLayers) {
+        if (layer.weight >= 1 - 1e-4) continue;
+        const bones = layerBones.get(layer.id);
+        if (!bones?.size) continue;
+        add(maskedAction(clip.name, bones, 'include'), clip.weight * (1 - layer.weight));
+      }
+    }
+
+    for (const layer of activeLayers) {
+      const bones = layerBones.get(layer.id);
+      if (!bones?.size) continue;
+      for (const clip of layer.clips) add(maskedAction(clip.name, bones, 'include'), clip.weight * layer.weight);
+    }
+
+    return out;
+  };
+
+  /**
+   * Writes this frame's weights onto the mixer. Called both from useFrame and immediately after the
+   * active clip set changes — drei's useAnimations subscribes its `mixer.update` before this
    * component's useFrame, so a state entered without seeding weights here would render one frame with
-   * every sample action still at the weight `reset()` gave it (1). With a nine-sample directional
-   * blend space that frame is the average of all nine clips: a visible pose pop on every entry.
+   * every action still at the weight `reset()` gave it (1). With a nine-sample directional blend space
+   * that frame is the average of all nine clips: a visible pose pop on every entry.
    */
   const applyBlendWeights = () => {
-    const b = blendRef.current;
-    if (ragdoll || !b) return;
-    const byAction = sumBlendWeights(b, resolveAction, BLEND_WEIGHT_SCRATCH);
+    if (ragdoll) return;
+    const byAction = collectVoices(BLEND_WEIGHT_SCRATCH);
     for (const [action, weight] of byAction) action.setEffectiveWeight(weight);
     if (!syncPhaseRef.current) return;
-    // Phase sync: retime every sample to the weighted mean cycle length so footfalls stay aligned.
+    // Phase sync: retime every voice to the weighted mean cycle length so footfalls stay aligned.
     // Two passes over the scratch map rather than building an array — this runs every frame.
     let totalWeight = 0;
     let weightedDuration = 0;
@@ -217,6 +309,19 @@ export function SkinnedModel({
     }
   };
 
+  /**
+   * Identity of the active action SET, so the effect below re-runs when the set changes but not when
+   * only weights move. Includes the layer masks and clips, since either changes which actions exist.
+   * Joined with "\n" (NOT "|") because exported clip names can contain "|" (e.g. "Armature|Armature|Idle").
+   */
+  const activeNames = [
+    ...(blend?.length ? blend.map((b) => b.name) : clipName ? [clipName] : []),
+    ...(layers ?? []).flatMap((layer) => [
+      `@${layer.id}:${layer.maskRootBones.join(',')}:${layer.weight >= 1 - 1e-4 ? 'full' : 'partial'}`,
+      ...layer.clips.map((clip) => clip.name),
+    ]),
+  ].join('\n');
+
   // useLayoutEffect, not useEffect: this is what starts the actions, and until one has been applied the
   // skinned mesh renders in its bind pose — the T-pose flash. A passive effect is flushed after paint,
   // so r3f's render loop can get a frame in first; layout effects run synchronously with the commit,
@@ -227,9 +332,11 @@ export function SkinnedModel({
       mixer.stopAllAction();
       return;
     }
-    const names = activeNames ? activeNames.split('\n') : [];
-    const acts = names.map(resolveAction).filter(Boolean) as THREE.AnimationAction[];
-    const blending = Boolean(blend && blend.length);
+    // Build the voice set once here; weights are then driven per frame by applyBlendWeights.
+    const acts = [...collectVoices(new Map()).keys()];
+    // Always weight-driven now: a layer means several actions share the skeleton, so fadeIn's
+    // implicit full weight would fight the per-frame weights.
+    const blending = acts.length > 1 || Boolean(blend?.length) || Boolean(layers?.length);
     acts.forEach((action) => {
       action.reset();
       action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
@@ -282,6 +389,20 @@ export function SkinnedModel({
   );
 }
 
+/** One animation layer resolved to concrete clips, ready to mask and pose. */
+export interface ResolvedAnimatorLayer {
+  id: string;
+  /** Bones this layer owns; each named bone plus its subtree. Empty means the whole skeleton. */
+  maskRootBones: string[];
+  /** Blend weight of the layer as a whole, 0..1. */
+  weight: number;
+  /** The layer state's clips and their in-state weights (one entry for a plain clip). */
+  clips: { name: string; weight: number }[];
+  syncPhase?: boolean;
+  loop: boolean;
+  speed: number;
+}
+
 /**
  * Resolves an object's animator into concrete URLs + the active clip. Prefers the Skeletal Mesh /
  * Animation / Controller assets, falling back to the renderer's `modelAssetId` GLB and the legacy
@@ -295,6 +416,8 @@ export function useResolvedAnimator(object: SceneObject): {
   blend?: { name: string; weight: number }[];
   /** Retime blend samples to a shared cycle length so their footfalls stay aligned. */
   syncPhase?: boolean;
+  /** Animation layers to pose on top of the base, each masked to its own bones. */
+  layers?: ResolvedAnimatorLayer[];
   loop: boolean;
   speed: number;
   fade: number;
@@ -326,25 +449,71 @@ export function useResolvedAnimator(object: SceneObject): {
     const clip = clipOf(activeState?.animationId);
     // Every clip the controller might play must be loaded so crossfades between states are seamless —
     // including every blend-space sample clip on any state.
-    const clipSourceUrls = controller.states
-      .flatMap((s) => [clipOf(s.animationId)?.url, ...(s.blendSamples ?? []).map((sample) => clipOf(sample.animationId)?.url)])
-      .filter((url): url is string => Boolean(url));
+    const urlsOfStates = (states: AnimatorState[]) =>
+      states.flatMap((s) => [
+        clipOf(s.animationId)?.url,
+        ...(s.blendSamples ?? []).map((sample) => clipOf(sample.animationId)?.url),
+      ]);
+    const clipSourceUrls = [
+      ...urlsOfStates(controller.states),
+      // Layer clips too, or a layer would have nothing to play the first time it activates.
+      ...(controller.layers ?? []).flatMap((layer) => urlsOfStates(layer.states)),
+    ].filter((url): url is string => Boolean(url));
 
-    // Blend space: blend the samples by the live value(s) of the driving parameter(s) (defaults in the editor).
-    let blend: { name: string; weight: number }[] | undefined;
-    if (activeState?.blendSamples?.length && activeState.blendParameterId) {
-      const liveParam = (id?: string) => {
-        const p = controller.parameters.find((q) => q.id === id);
-        const raw = (isPlaying && id && live?.params?.[id]) ?? p?.defaultValue ?? 0;
-        return typeof raw === 'number' ? raw : Number(raw) || 0;
-      };
-      const x = liveParam(activeState.blendParameterId);
-      const weighted = activeState.blendParameterIdY
-        ? blend2D(activeState.blendSamples, x, liveParam(activeState.blendParameterIdY))
-        : blend1D(activeState.blendSamples, x);
-      blend = weighted
+    // Parameter defaults, for previewing layer weights in the editor where there is no runtime.
+    const previewParams: Record<string, number | boolean> = {};
+    for (const parameter of controller.parameters) previewParams[parameter.id] = parameter.defaultValue;
+
+    const liveParam = (id?: string) => {
+      const p = controller.parameters.find((q) => q.id === id);
+      const raw = (isPlaying && id && live?.params?.[id]) ?? p?.defaultValue ?? 0;
+      return typeof raw === 'number' ? raw : Number(raw) || 0;
+    };
+
+    /**
+     * A state's clips and their weights: the blended samples for a blend space, otherwise nothing
+     * (the caller falls back to the state's single clip). Shared by the base machine and every layer
+     * so a layer state blends exactly like a base one.
+     */
+    const blendOfState = (state?: AnimatorState): { name: string; weight: number }[] | undefined => {
+      if (!state?.blendSamples?.length || !state.blendParameterId) return undefined;
+      const x = liveParam(state.blendParameterId);
+      const weighted = state.blendParameterIdY
+        ? blend2D(state.blendSamples, x, liveParam(state.blendParameterIdY))
+        : blend1D(state.blendSamples, x);
+      return weighted
         .map((b) => ({ name: clipOf(b.animationId)?.name, weight: b.weight }))
         .filter((b): b is { name: string; weight: number } => Boolean(b.name));
+    };
+
+    // Blend space: blend the samples by the live value(s) of the driving parameter(s) (defaults in the editor).
+    const blend = blendOfState(activeState);
+
+    // Animation layers. Outside Play the layer previews its entry state at its authored weight, so a
+    // masked aim pose is visible in the editor without pressing Play.
+    const resolvedLayers: ResolvedAnimatorLayer[] = [];
+    for (const layer of controller.layers ?? []) {
+      if (!layer.states.length) continue;
+      const liveLayer = isPlaying ? live?.layers?.[layer.id] : undefined;
+      const layerStateId = liveLayer?.stateId || layer.defaultStateId || layer.states[0]?.id;
+      const layerState = layer.states.find((item) => item.id === layerStateId);
+      if (!layerState) continue;
+      const weight = liveLayer ? liveLayer.weight : resolveLayerWeight(layer, previewParams);
+      // A layer at zero weight contributes nothing, so keep it out of the mixer entirely.
+      if (weight <= 1e-4) continue;
+      const layerBlend = blendOfState(layerState);
+      const single = clipOf(layerState.animationId)?.name;
+      const clips = layerBlend ?? (single ? [{ name: single, weight: 1 }] : []);
+      if (!clips.length) continue;
+      resolvedLayers.push({
+        id: layer.id,
+        maskRootBones: layer.maskRootBones,
+        weight,
+        clips,
+        syncPhase: layerState.syncPhase,
+        loop: layerState.loop ?? true,
+        speed: layerState.speed ?? 1,
+      });
     }
 
     // Montage override (Play Animation node): while a one-shot montage is active it replaces the state
@@ -371,6 +540,7 @@ export function useResolvedAnimator(object: SceneObject): {
       clipName: clip?.name ?? (blend?.[0]?.name),
       blend,
       syncPhase: activeState?.syncPhase,
+      layers: resolvedLayers.length ? resolvedLayers : undefined,
       loop: activeState?.loop ?? true,
       speed: activeState?.speed ?? 1,
       fade: (isPlaying && live?.fade) || 0.2,
