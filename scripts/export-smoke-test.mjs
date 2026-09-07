@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { sha256 } from './lib/release-evidence.mjs';
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
@@ -73,6 +74,14 @@ function assertAssembledPlayer(output, expectedBundle) {
   assert.deepEqual(buildReport.stagedTargets, []);
   assert.deepEqual(buildReport.failedTargets, []);
   assert.deepEqual(buildReport.errors, []);
+  assert.match(buildReport.bundleSha256, /^[a-f0-9]{64}$/);
+  assert.ok(buildReport.contentInventory.scenes.length);
+  assert.ok(buildReport.artifacts.some((artifact) => artifact.path === 'game-bundle.js'));
+  for (const artifact of buildReport.artifacts) {
+    const bytes = readFileSync(resolve(output, artifact.path));
+    assert.equal(bytes.length, artifact.bytes);
+    assert.equal(sha256(bytes), artifact.sha256, `Checksum mismatch: ${artifact.path}`);
+  }
 
   const files = walkFiles(output);
   const relativeFiles = files.map((file) => relative(output, file).replaceAll('\\', '/'));

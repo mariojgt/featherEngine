@@ -1,3 +1,4 @@
+import { anchorInsets } from './anchorLayout';
 /**
  * Shared, recursive renderer for a UI element tree. Used by the HUD overlay (`ScreenUILayer`),
  * world-space widgets (`WorldUIAnchor`) and the editor preview (`UIEditorPanel`).
@@ -37,13 +38,14 @@ export interface UIElementViewProps {
    * element is emitted — an instance must not add a DOM level, or it changes the layout and the
    * CSS structure around it (flex/grid item promotion, `>` and `:nth-child` rules).
    */
-  instanceOf?: { id: string; docScopeId: string; className?: string; style?: UIStyle; anchor?: UIAnchor };
+  instanceOf?: { id: string; docScopeId: string; className?: string; style?: UIStyle; anchor?: UIAnchor; resolved?: Partial<Record<string, unknown>> };
   /**
    * Fallback click event supplied by an enclosing component INSTANCE. A reusable button widget
    * cannot hard-code what clicking it does — every instance means something different — so the
    * instance's own `onClickEvent` is used by any button inside it that does not define one.
    */
   inheritedClickEvent?: string;
+  inheritedDisabled?: boolean;
   /**
    * Documents currently being rendered up the stack. A component that (transitively) instances
    * itself would recurse forever, so the chain is carried down and checked before descending.
@@ -75,12 +77,11 @@ export function anchorWrapStyle(anchor: UIAnchor): CSSProperties {
   const column = anchor.h === 'stretch';
   return {
     position: 'absolute',
-    inset: 0,
+    ...anchorInsets(anchor),
     display: 'flex',
     flexDirection: column ? 'column' : 'row',
     justifyContent: column ? (anchor.v === 'stretch' ? 'flex-start' : main(anchor.v)) : main(anchor.h),
     alignItems: column ? 'stretch' : anchor.v === 'stretch' ? 'stretch' : main(anchor.v),
-    padding: `${anchor.offsetY}px ${anchor.offsetX}px`,
     pointerEvents: 'none',
   };
 }
@@ -117,13 +118,16 @@ export function UIElementView({
   componentStack,
   instanceOf,
   inheritedClickEvent,
+  inheritedDisabled = false,
 }: UIElementViewProps) {
   // Pointer states for interactive elements (always declared so hook order is stable).
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
 
   // Runtime visibility override (ui.setVisible) wins over bind-visible expressions.
-  if (element.id in (visibleOverrides ?? {}) && !visibleOverrides![element.id]) return null;
+  const identity = instanceOf?.id ?? element.id;
+  const forcedVisible = visibleOverrides?.[identity];
+  if (forcedVisible === false) return null;
 
   // Resolve this element's bindings into a small map of target → value.
   const resolved: Partial<Record<string, unknown>> = {};
@@ -131,12 +135,14 @@ export function UIElementView({
     resolved[binding.target] = evalExpression(binding.expression, ctx);
   }
 
+  Object.assign(resolved, instanceOf?.resolved);
+
   // A `visible` binding evaluating to false removes the element (and its subtree) entirely —
   // unless a runtime override forced it visible.
-  if (!('visible' in (visibleOverrides ?? {}) && visibleOverrides![element.id]) && 'visible' in resolved && !truthyBind(resolved.visible)) return null;
+  if (forcedVisible !== true && 'visible' in resolved && !truthyBind(resolved.visible)) return null;
 
   const interactive = INTERACTIVE.has(element.kind);
-  const disabled = 'disabled' in resolved && truthyBind(resolved.disabled);
+  const disabled = inheritedDisabled || ('disabled' in resolved && truthyBind(resolved.disabled));
 
   // Base style + pointer-state overlays (hover/active/disabled), then binding overrides.
   // An instance layers its own style over the component root's, so placement set on the instance
@@ -155,7 +161,7 @@ export function UIElementView({
   if ('width' in resolved && resolved.width != null) style.width = String(resolved.width);
   Object.assign(style, animationStyle(element.animation));
 
-  const overridden = textOverrides?.[element.id];
+  const overridden = textOverrides?.[identity];
   const boundText = 'text' in resolved && resolved.text != null ? String(resolved.text) : undefined;
   const text = overridden ?? boundText ?? element.text ?? '';
 
@@ -176,6 +182,7 @@ export function UIElementView({
       resolveComponent={resolveComponent}
       componentStack={componentStack}
       inheritedClickEvent={inheritedClickEvent}
+      inheritedDisabled={disabled}
     />
   ));
 
@@ -408,7 +415,7 @@ export function UIElementView({
         // item promotion and break `>` / `:nth-child` rules written against the original markup.
         return (
           <UIElementView
-            element={source.root}
+            element={{ ...source.root, anchor: undefined }}
             ctx={{ ...ctx, params }}
             textOverrides={textOverrides}
             visibleOverrides={visibleOverrides}
@@ -418,12 +425,15 @@ export function UIElementView({
             resolveComponent={resolveComponent}
             componentStack={[...(componentStack ?? []), source.id]}
             inheritedClickEvent={element.onClickEvent ?? inheritedClickEvent}
+            inheritedDisabled={disabled}
             instanceOf={{
-              id: element.id,
+              id: identity,
               docScopeId: source.id,
               className: element.className,
-              style: element.style,
-              anchor: element.anchor,
+              style: merged,
+              resolved,
+              // The enclosing instance applies its anchor once, after resolving this root.
+              anchor: undefined,
             }}
           />
         );

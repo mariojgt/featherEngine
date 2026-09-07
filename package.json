@@ -31,6 +31,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:e2e": "node scripts/e2e/run.mjs",
+    "test:beginner": "node scripts/e2e/creator.mjs && node scripts/e2e/beginner-journey.mjs",
     "test:e2e:local-ai": "node scripts/e2e/local-ai.mjs",
     "uikit:capture": "node scripts/uikit/capture.mjs",
     "uikit:pack": "node scripts/uikit/pack.mjs"

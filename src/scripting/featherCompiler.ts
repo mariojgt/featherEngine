@@ -1473,6 +1473,8 @@ class FeatherGraphBuilder {
       }
       case 'key_down':
         return this.addNode('event.keyDown', { keyCode: unquote(handler.args[0] ?? '') ?? 'KeyW' }, 0);
+      case 'key_pressed':
+        return this.addNode('event.keyDown', { keyCode: unquote(handler.args[0] ?? '') ?? 'KeyW', keyTriggerMode: 'pressed' }, 0);
       case 'key_up':
         return this.addNode('event.keyUp', { keyCode: unquote(handler.args[0] ?? '') ?? 'KeyW' }, 0);
       case 'collision_enter':

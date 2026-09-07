@@ -1,3 +1,4 @@
+import { anchorInsets } from './anchorLayout';
 /**
  * WebGL twin of `UIElementView`: renders the SAME `UIElement` tree inside the R3F canvas using
  * @react-three/uikit (flexbox layout + instanced meshes) instead of DOM. Used when a `UIDocument`
@@ -27,6 +28,9 @@ export interface UIElementMeshProps {
   resolveComponent?: (documentId: string) => UIDocument | undefined;
   /** Documents already being rendered up the stack — guards a component that instances itself. */
   componentStack?: readonly string[];
+  inheritedClickEvent?: string;
+  inheritedDisabled?: boolean;
+  bindingOverrides?: Partial<Record<string, unknown>>;
 }
 
 /** Clamp a fill expression result (0..1, or 0..100 if >1) to a uikit percentage width. */
@@ -41,16 +45,17 @@ function truthy(value: unknown): boolean {
   return typeof value === 'number' ? value !== 0 : Boolean(value);
 }
 
-export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, resolveAssetUrl, onButtonClick, resolveComponent, componentStack }: UIElementMeshProps) {
+export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, resolveAssetUrl, onButtonClick, resolveComponent, componentStack, inheritedClickEvent, inheritedDisabled = false, bindingOverrides }: UIElementMeshProps) {
   if (element.id in (visibleOverrides ?? {}) && !visibleOverrides![element.id]) return null;
 
   const resolved: Partial<Record<string, unknown>> = {};
   for (const binding of element.bindings) resolved[binding.target] = evalExpression(binding.expression, ctx);
 
-  if (!('visible' in (visibleOverrides ?? {}) && visibleOverrides![element.id]) && 'visible' in resolved && !truthy(resolved.visible)) return null;
+  Object.assign(resolved, bindingOverrides);
+  if (!(element.id in (visibleOverrides ?? {}) && visibleOverrides![element.id]) && 'visible' in resolved && !truthy(resolved.visible)) return null;
 
   const props = styleToUikit(element.style);
-  const disabled = 'disabled' in resolved && truthy(resolved.disabled);
+  const disabled = inheritedDisabled || ('disabled' in resolved && truthy(resolved.disabled));
   if (disabled && element.states?.disabled) Object.assign(props, styleToUikit({ ...element.style, ...element.states.disabled }));
   // uikit drives hover/active off its own pointer state — feed the per-state style overlays through.
   const hover = element.states?.hover ? styleToUikit(element.states.hover) : undefined;
@@ -93,6 +98,8 @@ export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, r
       onButtonClick={onButtonClick}
       resolveComponent={resolveComponent}
       componentStack={componentStack}
+      inheritedClickEvent={inheritedClickEvent}
+      inheritedDisabled={disabled}
     />
   ));
 
@@ -108,9 +115,8 @@ export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, r
           params[key] = evalExpression(expression, ctx);
         }
         return (
-          <Container {...props}>
-            <UIElementMesh
-              element={source.root}
+          <UIElementMesh
+              element={{ ...source.root, id: element.id, anchor: undefined, style: { ...source.root.style, ...element.style } }}
               ctx={{ ...ctx, params }}
               textOverrides={textOverrides}
               visibleOverrides={visibleOverrides}
@@ -118,9 +124,10 @@ export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, r
               onButtonClick={onButtonClick}
               resolveComponent={resolveComponent}
               componentStack={[...(componentStack ?? []), source.id]}
+              inheritedClickEvent={element.onClickEvent ?? inheritedClickEvent}
+              inheritedDisabled={disabled}
+              bindingOverrides={resolved}
             />
-            {childMeshes}
-          </Container>
         );
       }
 
@@ -142,7 +149,7 @@ export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, r
             cursor={disabled ? 'default' : 'pointer'}
             hover={hover}
             active={active}
-            onClick={!disabled && onButtonClick ? () => onButtonClick(element) : undefined}
+            onClick={!disabled && onButtonClick ? () => onButtonClick({ ...element, onClickEvent: element.onClickEvent ?? inheritedClickEvent }) : undefined}
             backgroundColor={props.backgroundColor ?? '#5B8CFF'}
           >
             {text ? (
@@ -234,15 +241,10 @@ export function UIElementMesh({ element, ctx, textOverrides, visibleOverrides, r
   return (
     <Container
       positionType="absolute"
-      width="100%"
-      height="100%"
+      {...anchorInsets(anchor)}
       flexDirection={column ? 'column' : 'row'}
       justifyContent={column ? (anchor.v === 'stretch' ? 'flex-start' : main(anchor.v)) : main(anchor.h)}
       alignItems={column ? 'stretch' : anchor.v === 'stretch' ? 'stretch' : main(anchor.v)}
-      paddingLeft={anchor.offsetX}
-      paddingRight={anchor.offsetX}
-      paddingTop={anchor.offsetY}
-      paddingBottom={anchor.offsetY}
     >
       {content}
     </Container>

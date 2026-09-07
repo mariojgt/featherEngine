@@ -270,6 +270,18 @@ export interface CharacterControllerComponent {
    * the controller's normal input path. Defaults to false for backwards compatibility.
    */
   autoInputWithScript?: boolean;
+  /** Integrate jump displacement using average velocity. New presets opt in; legacy projects retain their arc. */
+  stableJumpArc?: boolean;
+  /** Maximum stair height in meters. Zero disables automatic stepping. Legacy default 0.4. */
+  stepHeight?: number;
+  /** Minimum stair tread width in meters. Legacy default 0.2. */
+  stepMinWidth?: number;
+  /** Distance in meters to follow descending ground. Zero disables snapping. Legacy default 0.4. */
+  groundSnap?: number;
+  /** Steepest climbable slope, in degrees. Omitted preserves Rapier defaults. */
+  maxSlopeDegrees?: number;
+  /** Slope angle above which sliding begins, in degrees. */
+  slideSlopeDegrees?: number;
   /** Ground move speed (units/sec). */
   moveSpeed: number;
   /** Speed multiplier while the sprint key (Shift) is held. */

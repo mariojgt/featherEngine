@@ -1,3 +1,4 @@
+import { CHARACTER_MOVEMENT_PRESETS } from '../runtime/characterPresets';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
@@ -1221,6 +1222,34 @@ const rawEngineTools = {
     },
   }),
 
+  update_simple_interaction: tool({
+    description: 'Edit, enable, disable, duplicate, or delete a Creator rule by its stable interaction id. Custom graph edits are protected. Duplicates start disabled. Use the same action as the Inspector rule cards.',
+    inputSchema: z.object({
+      objectId: z.string(), interactionId: z.string(),
+      operation: z.enum(['edit', 'enable', 'disable', 'duplicate', 'delete']),
+      trigger: z.enum(['interact', 'collision', 'trigger-enter', 'trigger-exit', 'start', 'timer', 'health-zero']).optional(),
+      action: z.enum(['move', 'rotate', 'scale', 'destroy', 'damage', 'score', 'play-animation', 'play-sound', 'spawn', 'event']).optional(),
+      spawnKind: z.enum(['cube', 'sphere', 'capsule', 'empty', 'light', 'camera']).optional(),
+      value: z.number().optional(), vector: vec3.optional(),
+      seconds: z.number().min(0.05).optional(), duration: z.number().min(0.01).optional(),
+      reference: z.string().optional().describe('Replacement sound asset id, animation id, or event name.'),
+    }),
+    execute: async ({ objectId, interactionId, operation, trigger, action: actionType, spawnKind, value, vector, seconds, duration, reference }) => {
+      const object = findObject(objectId);
+      const rule = object?.creatorInteractions?.find((item) => item.id === interactionId);
+      if (!rule) return `No interaction ${interactionId} on object ${objectId}.`;
+      const action = { ...rule.action, ...(actionType ? { type: actionType } : {}), ...(spawnKind ? { spawnKind } : {}), ...(value !== undefined ? { value } : {}), ...(vector ? { vector: asVec3(vector) } : {}) };
+      if (reference !== undefined) {
+        if (action.type === 'play-sound') action.assetId = reference;
+        else if (action.type === 'play-animation') action.animationId = reference;
+        else if (action.type === 'event') action.eventName = reference;
+      }
+      const draft = { ...rule, action, trigger: { ...rule.trigger, ...(trigger ? { type: trigger } : {}), ...(seconds !== undefined ? { seconds } : {}) }, ...(duration !== undefined ? { duration } : {}), ...(operation === 'enable' ? { enabled: true } : operation === 'disable' || operation === 'duplicate' ? { enabled: false } : {}) };
+      const result = operation === 'duplicate' ? store().addSimpleInteraction(objectId, draft) : store().updateSimpleInteraction(objectId, interactionId, operation === 'delete' ? null : draft);
+      return result.ok ? `Interaction ${operation} complete on ${objectId}${result.interaction ? ` (interactionId ${result.interaction.id})` : ''}.` : `Could not change interaction: ${result.diagnostics?.[0] ?? result.error}.`;
+    },
+  }),
+
   create_gameplay_kit: tool({
     description:
       'Add a complete playable starter in one call through Creator Actions. Kits: third-person-starter, collectible-game, combat-starter, platformer-starter, interaction-starter. Everything created is a normal Feather object, UI document, variable, component, or editable Blueprint.',
@@ -1761,9 +1790,9 @@ const rawEngineTools = {
 
   create_model_spec: tool({
     description:
-      'Add a prototype-model asset (Model Forge) from a starter kit: blank, crate, fence, barrel, tile, arch, table, chair, stairs, lamp, rock, robot, ring, nut, or tent. Then shape it with add_model_part/update_model_part, paint it with paint_model_part, and place it with place_model. For a custom prop, start from blank and kit-bash a FEW chunky parts.',
+      'Add a prototype-model asset (Model Forge) from a starter kit: cloudstep-crate, cloudstep-lantern, cloudstep-gate (matching pastel garden kit), blank, crate, fence, barrel, tile, arch, table, chair, stairs, lamp, rock, robot, ring, nut, or tent. Then shape it with add_model_part/update_model_part, paint it with paint_model_part, and place it with place_model. For a custom prop, start from blank and kit-bash a FEW chunky parts.',
     inputSchema: z.object({
-      starter: z.enum(['blank', 'crate', 'fence', 'barrel', 'tile', 'arch', 'table', 'chair', 'stairs', 'lamp', 'rock', 'robot', 'ring', 'nut', 'tent']).optional().describe('Defaults to blank.'),
+      starter: z.enum(['blank', 'cloudstep-crate', 'cloudstep-lantern', 'cloudstep-gate', 'crate', 'fence', 'barrel', 'tile', 'arch', 'table', 'chair', 'stairs', 'lamp', 'rock', 'robot', 'ring', 'nut', 'tent']).optional().describe('Defaults to blank.'),
       name: z.string().optional(),
     }),
     execute: async ({ starter, name }) => {
@@ -2414,6 +2443,23 @@ const rawEngineTools = {
     },
   }),
 
+  replace_object_appearance: tool({
+    description: 'Replace a non-rigged mesh with an imported model, preserving its collision root, scripts and transform. Creates a separate visual child. Pass assetId:null to restore the original mesh. Rigged characters and linked Model Forge models require their existing animation/model editors.',
+    inputSchema: z.object({ objectId: z.string(), assetId: z.string().nullable() }),
+    execute: async ({ objectId, assetId }) => JSON.stringify(store().replaceObjectAppearance(objectId, assetId)),
+  }),
+
+  apply_movement_preset: tool({
+    description: 'Apply the same beginner Movement feel preset as Gameplay in the inspector. Preserves key bindings, camera, animation and scripted input policy. The object must already have a character controller.',
+    inputSchema: z.object({ objectId: z.string(), preset: z.enum(['forgiving-platformer', 'grounded-adventure']) }),
+    execute: async ({ objectId, preset }) => {
+      if (!findObject(objectId)?.character) return 'Choose an object with a character controller first.';
+      const choice = CHARACTER_MOVEMENT_PRESETS.find((item) => item.id === preset)!;
+      store().updateCharacterController(objectId, choice.patch);
+      return `Applied ${choice.name} to ${objectId}.`;
+    },
+  }),
+
   apply_physics_preset: tool({
     description:
       "Turn the object into a ready-made physics setup in one click (enables physics too). Options: wall-or-floor (immovable solid box), scenery-mesh (immovable, hugs the model exactly — use on imported props), pushable-crate (dynamic box that slides/knocks over but won't tip from bumps), bouncy-ball (light sphere that rolls and bounces), light-prop (small box that blows around in wind, easy to knock over), ice-floor (very slippery fixed floor), fragile-prop (chunks on strong impact — pair with set_fracture), trigger-zone (detects overlaps but blocks nothing). This is the same set as the inspector's quick-physics buttons — use it instead of hand-setting many set_physics fields for these common cases.",
@@ -2791,6 +2837,12 @@ const rawEngineTools = {
       gravity: z.number().optional(),
       turnSpeed: z.number().optional(),
       groundLevel: z.number().optional(),
+      stableJumpArc: z.boolean().optional().describe('Use average-velocity jump displacement for consistent height across render cadences; beginner presets enable this.'),
+      stepHeight: z.number().min(0).max(2).optional(),
+      stepMinWidth: z.number().min(0.01).max(2).optional(),
+      groundSnap: z.number().min(0).max(2).optional(),
+      maxSlopeDegrees: z.number().min(0).max(89).optional(),
+      slideSlopeDegrees: z.number().min(0).max(89).optional(),
       // Movement "feel" — fix stiff/floaty. acceleration/deceleration ramp horizontal speed (higher = snappier
       // starts/stops; lower = weightier). airControl (0..1) dampens mid-air steering. fallMultiplier >1 makes the
       // jump fall faster than it rose (less floaty). jumpCutMultiplier (0..1) shortens a tapped jump. coyoteTime
@@ -5630,6 +5682,7 @@ const rawEngineTools = {
     inputSchema: z.object({
       blueprintId: z.string(),
       type: z.enum(NODE_LABELS),
+      keyTriggerMode: z.enum(['held', 'pressed']).optional().describe('Key Down: repeat while held (legacy default), or fire once per press including short taps; use pressed for toggles.'),
       keyCode: z.string().optional().describe('Key Down/Up: any KeyboardEvent.code such as KeyW, KeyE, Digit1, ShiftLeft, Enter, F1, ArrowUp, or mouse code Mouse0/Mouse1/Mouse2.'),
       axis: z.enum(['x', 'y', 'z']).optional(),
       space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),
@@ -5922,6 +5975,7 @@ const rawEngineTools = {
     inputSchema: z.object({
       blueprintId: z.string(),
       nodeId: z.string(),
+      keyTriggerMode: z.enum(['held', 'pressed']).optional().describe('Key Down: repeat while held (legacy default), or fire once per press including short taps; use pressed for toggles.'),
       keyCode: z.string().optional().describe('Key Down/Up: any KeyboardEvent.code such as KeyW, KeyE, Digit1, ShiftLeft, Enter, F1, ArrowUp, or mouse code Mouse0/Mouse1/Mouse2.'),
       axis: z.enum(['x', 'y', 'z']).optional(),
       space: z.enum(['world', 'local']).optional().describe('Apply Impulse: world axes or target local axes. Use local +Z for car-forward nitro/dashes.'),

@@ -1,5 +1,7 @@
 # Feather Plugin SDK
 
+For the built-in starter creator, local plugin discovery and reusable game UI workflow, see [Widgets, packages and plugins](UI_PLUGIN_AUTHORING.md).
+
 Feather has two deliberately separate extension paths:
 
 - **Assets and `.nfpack` packages** are portable project content: models, textures, audio, prefabs,

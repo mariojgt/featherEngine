@@ -13,11 +13,24 @@ import { pixelArtTreesPlugin } from './pixelArtTrees';
  * persists the choice (src/store/pluginStore.ts); a manifest naming a module this build doesn't
  * include fails with a clear "needs a newer Feather" message instead of appearing to work.
  */
-export const AVAILABLE_PLUGINS: readonly FeatherPluginDefinition[] = [
+const userPlugins = import.meta.glob<FeatherPluginDefinition>('./userPlugins/*.tsx', { eager: true, import: 'default' });
+
+const candidates: readonly FeatherPluginDefinition[] = [
   arborForgePlugin,
   modelForgePlugin,
   pixelArtTreesPlugin,
+  ...Object.keys(userPlugins).sort().map((path) => userPlugins[path]),
 ];
+
+const ids = new Set<string>();
+export const AVAILABLE_PLUGINS = candidates.filter((plugin) => {
+  if (!plugin?.id || typeof plugin.activate !== 'function' || ids.has(plugin.id)) {
+    console.error('[Feather plugins] Skipping invalid or duplicate local plugin:', plugin?.id);
+    return false;
+  }
+  ids.add(plugin.id);
+  return true;
+});
 
 export const getAvailablePlugin = (pluginId: string): FeatherPluginDefinition | undefined =>
   AVAILABLE_PLUGINS.find((plugin) => plugin.id === pluginId);

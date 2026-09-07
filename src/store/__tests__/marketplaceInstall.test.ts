@@ -187,7 +187,7 @@ describe('bundled asset store — catalog to installed content', () => {
     expect(template).toMatchObject({
       title: 'Cloudstep Garden',
       kind: 'project',
-      contents: { scenes: 1, prefabs: 1, materials: 9, blueprints: 15, assets: 0, uiDocuments: 1 },
+      contents: { scenes: 1, prefabs: 1, materials: 9, blueprints: 16, assets: 0, uiDocuments: 1 },
     });
 
     await useMarketplaceStore.getState().install(template!);
@@ -215,6 +215,10 @@ describe('bundled asset store — catalog to installed content', () => {
       jumpBufferTime: 0.18,
     });
     expect(objects.filter((object) => object.particles)).toHaveLength(22);
+    const workshop = objects.filter((object) => object.name.startsWith('Workshop'));
+    expect(workshop).toHaveLength(3);
+    for (const object of workshop) expect(editor.modelSpecs.some((spec) => spec.id === object.model?.specId)).toBe(true);
+    expect(editor.blueprints.some((blueprint) => blueprint.name === 'Cloudstep Game Flow')).toBe(true);
     const hud = editor.uiDocuments.find((document) => document.name === 'Cloudstep HUD');
     expect(hud).toBeDefined();
     expect(flattenUI(hud!.root).some((element) => element.bindings.some((binding) => binding.expression === 'LevelComplete'))).toBe(true);

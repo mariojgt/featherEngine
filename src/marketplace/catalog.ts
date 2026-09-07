@@ -1,3 +1,4 @@
+import { parseTemplateLesson, type TemplateLesson } from '../creator/templateLessons';
 import { normalizePackageKind, type PackageKind } from '../project/package';
 
 /**
@@ -38,6 +39,7 @@ export interface StoreListing {
   kind: PackageKind;
   tags: string[];
   license?: string;
+  learning?: TemplateLesson;
   /** 0 for the free catalog. Reserved so paid listings don't need a schema change. */
   priceCents: number;
   /** Data URL or absolute image URL for the card. */
@@ -86,6 +88,7 @@ function parseListing(raw: unknown, baseUrl: string): StoreListing | null {
     kind: normalizePackageKind(raw.kind),
     tags: Array.isArray(raw.tags) ? raw.tags.filter((tag): tag is string => typeof tag === 'string') : [],
     license: typeof raw.license === 'string' ? raw.license : undefined,
+    learning: parseTemplateLesson(raw.learning),
     priceCents: num(raw.priceCents),
     thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : undefined,
     sizeBytes: num(raw.sizeBytes),

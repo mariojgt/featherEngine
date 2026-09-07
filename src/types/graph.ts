@@ -232,6 +232,8 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   /** event.functionEntry / logic.callFunction: name binding a Call Function to its Function entry. */
   functionName?: string;
   keyCode?: string;
+  /** Legacy Key Down repeats while held; pressed mode fires once and retains short taps. */
+  keyTriggerMode?: 'held' | 'pressed';
   axis?: 'x' | 'y' | 'z';
   /** action.applyImpulse / applyForceAtPoint: whether axis/vector values are interpreted in world axes or the target actor's local axes. */
   space?: 'world' | 'local';

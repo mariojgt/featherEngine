@@ -104,6 +104,8 @@ export class ExtensionRegistry {
     this.plugins.delete(id);
     try {
       record.deactivate();
+    } catch (error) {
+      console.error(`[Feather plugins] Cleanup failed for ${id}`, error);
     } finally {
       this.publish();
     }

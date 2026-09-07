@@ -186,12 +186,49 @@ export interface ModelStarter {
   name: string;
   tagline: string;
   build: () => ModelPart[];
+  palette?: readonly string[];
 }
 
 const P = (shape: ModelPartShape, name: string, position: Vector3Tuple, scale: Vector3Tuple, colorSlot: number, rotation: Vector3Tuple = [0, 0, 0]): ModelPart =>
   makeModelPart(shape, { name, position, rotation, scale, colorSlot });
 
+const CLOUDSTEP_PALETTE = ['#FFF4D7', '#EF7894', '#60CABA', '#F9CF62', '#294C62'];
+
 export const MODEL_STARTERS: readonly ModelStarter[] = [
+  {
+    id: 'cloudstep-crate', name: 'Cloudstep Gift Crate', palette: CLOUDSTEP_PALETTE,
+    tagline: 'A rounded coral crate with mint straps and a sunny clasp. One meter tall.',
+    build: () => [
+      P('box', 'Coral body', [0, .48, 0], [.9, .86, .9], 1),
+      P('box', 'Cream lid', [0, .93, 0], [1, .14, 1], 0),
+      P('box', 'Mint strap across', [0, .48, 0], [.15, .97, .94], 2),
+      P('box', 'Mint strap around', [0, .48, 0], [.94, .97, .15], 2),
+      P('sphere', 'Sunny clasp', [0, .55, .51], [.22, .22, .09], 3),
+    ],
+  },
+  {
+    id: 'cloudstep-lantern', name: 'Cloudstep Sprout Lantern', palette: CLOUDSTEP_PALETTE,
+    tagline: 'A warm lantern with a mint canopy, clear silhouette, and ground-level origin.',
+    build: () => [
+      P('cylinder', 'Weighted base', [0, .1, 0], [.65, .2, .65], 2),
+      P('cylinder', 'Stem', [0, .58, 0], [.12, .95, .12], 4),
+      P('sphere', 'Warm globe', [0, 1.13, 0], [.55, .55, .55], 3),
+      P('cone', 'Mint canopy', [0, 1.47, 0], [.85, .28, .85], 2),
+      P('sphere', 'Sprout finial', [0, 1.66, 0], [.18, .25, .18], 0),
+    ],
+  },
+  {
+    id: 'cloudstep-gate', name: 'Cloudstep Garden Gate', palette: CLOUDSTEP_PALETTE,
+    tagline: 'A modular cream-and-mint arch. Its open passage is visible in the collision preview.',
+    build: () => [
+      P('box', 'Left post', [-1, 1.2, 0], [.3, 2.4, .38], 0),
+      P('box', 'Right post', [1, 1.2, 0], [.3, 2.4, .38], 0),
+      P('box', 'Mint lintel', [0, 2.4, 0], [2.6, .25, .5], 2),
+      P('sphere', 'Left sunny cap', [-1, 2.7, 0], [.42, .42, .42], 3),
+      P('sphere', 'Right sunny cap', [1, 2.7, 0], [.42, .42, .42], 3),
+      P('sphere', 'Coral crest', [0, 2.65, 0], [.4, .32, .15], 1),
+    ].map((part) => ({ ...part, collider: part.shape === 'box' ? 'box' : 'none' })),
+  },
   {
     id: 'blank',
     name: 'Blank',
@@ -364,7 +401,7 @@ export const getModelStarter = (starterId: string): ModelStarter | undefined =>
 export function modelSpecFromStarter(starterId: string, id: string, name?: string): ModelSpec | null {
   const starter = getModelStarter(starterId);
   if (!starter) return null;
-  return { id, name: name ?? starter.name, palette: [...DEFAULT_MODEL_PALETTE], parts: starter.build(), style: { ...DEFAULT_MODEL_STYLE } };
+  return { id, name: name ?? starter.name, palette: [...(starter.palette ?? DEFAULT_MODEL_PALETTE)], parts: starter.build(), style: { ...DEFAULT_MODEL_STYLE } };
 }
 
 /** The one-crate library a fresh project starts with, so the Model Forge never opens empty. */

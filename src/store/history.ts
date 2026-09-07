@@ -1,4 +1,4 @@
-import type { ModelSpec, ProjectGraph, Scene, ScriptBlueprint } from '../types';
+import type { ModelSpec, ProjectGraph, Scene, ScriptBlueprint, ProjectVariable, MaterialDefinition } from '../types';
 import { useEditorStore } from './editorStore';
 import { canEditCollaborativeProject, collaborationAccess } from '../collaboration/access';
 
@@ -16,6 +16,8 @@ import { canEditCollaborativeProject, collaborationAccess } from '../collaborati
  */
 
 type HistoryEntry = {
+  variables: ProjectVariable[];
+  materials: MaterialDefinition[];
   scenes: Scene[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
@@ -39,6 +41,9 @@ let isTimeTraveling = false;
 let lastChangeAt = 0;
 let attached = false;
 let historySuppressionDepth = 0;
+
+/** A deliberate form submission must be one undo step, separate from a preceding edit. */
+export function separateHistoryAction() { lastChangeAt = 0; }
 
 export interface CollaborationUndoDelegate {
   undo: () => void;
@@ -65,6 +70,8 @@ export function applyWithoutHistory<T>(apply: () => T): T {
 }
 
 const snapshotFrom = (state: {
+  variables: ProjectVariable[];
+  materials: MaterialDefinition[];
   scenes: Scene[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
@@ -76,6 +83,8 @@ const snapshotFrom = (state: {
   selectedObjectIds: string[];
   selectedGraphNodeId?: string;
 }): HistoryEntry => ({
+  variables: state.variables,
+  materials: state.materials,
   scenes: state.scenes,
   blueprints: state.blueprints,
   graphs: state.graphs,
@@ -204,6 +213,8 @@ const apply = (entry: HistoryEntry) => {
     };
   });
   useEditorStore.setState({
+    variables: entry.variables,
+    materials: entry.materials,
     scenes: entry.scenes,
     blueprints,
     graphs: entry.graphs,
@@ -264,6 +275,8 @@ export const initHistory = () => {
     // so compare those transient flags explicitly rather than treating every new array as an edit.
     if (
       state.scenes === prev.scenes &&
+      state.variables === prev.variables &&
+      state.materials === prev.materials &&
       state.modelSpecs === prev.modelSpecs &&
       !blueprintContentChanged(state.blueprints, prev.blueprints) &&
       !graphContentChanged(state.graphs, prev.graphs)

@@ -383,7 +383,9 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
     case 'event.update':
       return { label: 'Update', description: 'Runs every preview frame while Play is active. Set Interval above 0 to throttle it.' };
     case 'event.keyDown':
-      return { label: `Key Down: ${keyLabel}`, description: `Fires while ${keyLabel} is pressed during preview.` };
+      return data.keyTriggerMode === 'pressed'
+        ? { label: `Key Pressed: ${keyLabel}`, description: `Fires once per ${keyLabel} press, including short taps between frames.` }
+        : { label: `Key Down: ${keyLabel}`, description: `Fires while ${keyLabel} is pressed during preview.` };
     case 'event.keyUp':
       return { label: `Key Up: ${keyLabel}`, description: `Fires once when ${keyLabel} is released.` };
     case 'event.custom':

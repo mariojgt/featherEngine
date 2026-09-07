@@ -911,6 +911,16 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
           </label>
         )}
 
+        {node.data.nodeKind === 'event.keyDown' && (
+          <label className="node-field">
+            <span>When to run</span>
+            <select value={node.data.keyTriggerMode ?? 'held'} onChange={(event) => updateGraphNodeData(node.id, { keyTriggerMode: event.target.value as 'held' | 'pressed' })}>
+              <option value="held">Every frame while held</option>
+              <option value="pressed">Once per press (toggles and menus)</option>
+            </select>
+          </label>
+        )}
+
         {updatesEventName && (
           <label className="node-field">
             <span>Event Name</span>

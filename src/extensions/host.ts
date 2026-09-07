@@ -35,15 +35,24 @@ export function activateExtensionPlugin(
   }
   if (environment.registry.hasPlugin(plugin.id)) throw new Error(`Extension plugin id already active: ${plugin.id}`);
 
+  let alive = true;
   const registrations: FeatherDispose[] = [];
   const track = (dispose: FeatherDispose) => {
     registrations.push(dispose);
     return dispose;
   };
-  const api = createFeatherPluginAPI(plugin.id, environment.registry, environment.eventBus, track);
+  const capabilities = createFeatherPluginAPI(plugin.id, environment.registry, environment.eventBus, track);
+  // Copy before wrapping: capability groups are frozen and cannot be wrapped with a get Proxy.
+  const api = Object.freeze(Object.fromEntries(Object.entries(capabilities).map(([key, value]) => [key,
+    value && typeof value === 'object' && key !== 'log'
+      ? Object.freeze(Object.fromEntries(Object.entries(value).map(([method, fn]) => [method, typeof fn === 'function'
+        ? (...args: unknown[]) => { if (!alive) throw new Error(`Plugin ${plugin.id} is no longer active.`); return fn(...args); }
+        : fn]))) : value,
+  ]))) as unknown as typeof capabilities;
   let pluginCleanup: FeatherDispose | undefined;
 
   const cleanup = () => {
+    alive = false;
     try {
       pluginCleanup?.();
     } catch (error) {
@@ -59,17 +68,21 @@ export function activateExtensionPlugin(
   };
 
   try {
-    pluginCleanup = plugin.activate(api) ?? undefined;
+    const result = plugin.activate(api);
+    if (result !== undefined && typeof result !== 'function') {
+      // Consume a mistakenly returned Promise, including a possible late cleanup function.
+      Promise.resolve(result).then((dispose) => { if (typeof dispose === 'function') (dispose as FeatherDispose)(); }).catch((error) => console.error(`[Feather plugin: ${plugin.id}] Async activation failed`, error));
+      throw new Error('Plugin activation must be synchronous and return only a cleanup function or nothing.');
+    }
+    pluginCleanup = typeof result === 'function' ? result : undefined;
     environment.registry.registerPlugin(plugin, cleanup);
   } catch (error) {
     cleanup();
     throw error;
   }
 
-  let active = true;
   return () => {
-    if (!active) return;
-    active = false;
+    if (!alive) return;
     environment.registry.deactivatePlugin(plugin.id);
   };
 }

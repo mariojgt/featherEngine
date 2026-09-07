@@ -81,6 +81,9 @@ export interface AssetSource {
 }
 
 export interface AssetItem {
+  modelInspection?: import('../three/inspectModel').ModelInspection;
+  /** Original model retained when an optimized copy is imported. */
+  originalAssetId?: string;
   id: string;
   name: string;
   type: AssetType;
@@ -222,6 +225,15 @@ export interface UIStyle {
   display?: 'flex' | 'block' | 'none' | 'grid';
   /** Number of equal-width columns when `display: 'grid'` (default 2). */
   gridColumns?: number;
+  /** Child slot sizing and alignment (DOM designer). */
+  flexGrow?: number;
+  flexShrink?: number;
+  flexBasis?: string;
+  alignSelf?: string;
+  gridColumn?: string;
+  gridRow?: string;
+  overflow?: 'visible' | 'hidden' | 'auto';
+  zIndex?: number;
   flexDirection?: 'row' | 'column';
   /** Allow flex children to wrap onto multiple lines (DOM only; required for grid-like flex). */
   flexWrap?: 'nowrap' | 'wrap';

@@ -9,6 +9,7 @@
  *
  * Run: npm run build:store  (vite-node, so it can share the container code in src/)
  */
+import { TEMPLATE_LESSONS } from '../src/creator/templateLessons';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -1198,6 +1199,7 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
   return {
     id: pkg.meta.id,
     slug,
+    learning: TEMPLATE_LESSONS[slug],
     title: pkg.meta.name,
     description: pkg.meta.description ?? '',
     author: pkg.meta.author ?? 'Feather',

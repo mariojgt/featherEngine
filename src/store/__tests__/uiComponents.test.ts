@@ -61,7 +61,7 @@ describe('extractUIComponent', () => {
     expect(countKind(docById(docId).root, 'component')).toBe(10);
 
     // One edit to the component is the edit for all ten — there is nothing to propagate.
-    const textId = docById(componentId).root.children[0].children[0].id;
+    const textId = docById(componentId).root.children[0].id;
     store().updateUIElement(componentId, textId, { text: 'Q' });
     expect(find(docById(componentId).root, textId)!.text).toBe('Q');
     expect(countKind(docById(docId).root, 'text')).toBe(0);

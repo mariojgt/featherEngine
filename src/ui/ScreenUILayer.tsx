@@ -35,7 +35,7 @@ export function ScreenUILayer() {
   // unchanged, so these no longer allocate (or re-render the HUD tree) 60×/s.
   // `webgl` docs are drawn in-canvas by WebGLScreenUILayer; the DOM overlay handles the rest.
   const docs = useMemo(
-    () => uiDocuments.filter((doc) => doc.surface === 'screen' && doc.renderMode !== 'webgl' && visible[doc.id]),
+    () => uiDocuments.filter((doc) => !doc.isComponent && doc.surface === 'screen' && doc.renderMode !== 'webgl' && visible[doc.id]),
     [uiDocuments, visible],
   );
   const ctx = useMemo(
@@ -45,7 +45,7 @@ export function ScreenUILayer() {
 
   // Enable keyboard/gamepad focus navigation whenever there's an interactive control on screen.
   const [overlay, setOverlay] = useState<HTMLDivElement | null>(null);
-  const navActive = isPlaying && docs.some((doc) => hasInteractive(doc));
+  const navActive = isPlaying && docs.some((doc) => hasInteractive(doc, uiDocuments));
   useUIFocusNavigation(overlay, navActive);
 
   if (!isPlaying || docs.length === 0) return null;
@@ -82,9 +82,12 @@ export function ScreenUILayer() {
 
 const INTERACTIVE_KINDS = new Set(['button', 'input', 'toggle', 'slider', 'dropdown']);
 /** Whether a document's tree contains any focusable/interactive control (gates focus navigation). */
-function hasInteractive(doc: UIDocument): boolean {
+export function hasInteractive(doc: UIDocument, documents: UIDocument[], visited = new Set<string>()): boolean {
+  if (visited.has(doc.id)) return false;
+  visited.add(doc.id);
   const walk = (el: import('../types').UIElement): boolean =>
-    INTERACTIVE_KINDS.has(el.kind) || el.children.some(walk);
+    INTERACTIVE_KINDS.has(el.kind) || el.children.some(walk) ||
+    (el.kind === 'component' && documents.some((source) => source.id === el.componentId && hasInteractive(source, documents, visited)));
   return walk(doc.root);
 }
 

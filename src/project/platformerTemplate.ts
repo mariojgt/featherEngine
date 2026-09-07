@@ -1,3 +1,4 @@
+import { addPlatformerGameMenu, PLATFORMER_MENU_CSS } from '../creator/templateGameMenu';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type { MaterialDefinition, ParticleSystemComponent, SceneObjectKind, Vector3Tuple } from '../types';
 
@@ -405,6 +406,12 @@ export async function createPlatformerTemplate(): Promise<string> {
   const playerId = player.objectId;
   store.updateCharacterController(playerId, {
     autoInputWithScript: true,
+    stableJumpArc: true,
+    stepHeight: 0.3,
+    stepMinWidth: 0.2,
+    groundSnap: 0.3,
+    maxSlopeDegrees: 45,
+    slideSlopeDegrees: 50,
     moveSpeed: 5.2,
     sprintMultiplier: 1.38,
     jumpStrength: 9.4,
@@ -1892,11 +1899,13 @@ export async function createPlatformerTemplate(): Promise<string> {
   store.updateUIElement(hudId, clearScore, { name: 'Clear Score', text: 'SUN SEEDS  0 / 10', style: { color: '#173B4D', fontSize: '14px', fontWeight: '800' } });
   store.setUIBinding(hudId, clearScore, 'text', `'SUN SEEDS  ' + (Score / 10) + ' / 10'`);
   const clearHint = store.addUIElement(hudId, clearPanel, 'text');
-  store.updateUIElement(hudId, clearHint, { name: 'Clear Hint', text: 'Keep exploring, or reshape the course in Edit mode.', style: { color: '#446779', fontSize: '11px', fontWeight: '600' } });
+  store.updateUIElement(hudId, clearHint, { name: 'Clear Hint', text: 'You found Sunny! Play again to collect every seed.', style: { color: '#446779', fontSize: '11px', fontWeight: '600' } });
 
+  addPlatformerGameMenu(hudId, worldRoot, clearPanel, sceneId);
   store.setUIDocumentCss(
     hudId,
     [
+      PLATFORMER_MENU_CSS,
       '@keyframes cloudstep-drift { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }',
       '@keyframes cloudstep-shine { 0% { transform: translateX(-140%) skewX(-18deg); } 70%,100% { transform: translateX(240%) skewX(-18deg); } }',
       '@keyframes cloudstep-confetti { 0%,100% { transform: translateY(0) rotate(-2deg) scale(.96); } 50% { transform: translateY(-6px) rotate(2deg) scale(1.06); } }',
@@ -1965,6 +1974,19 @@ export async function createPlatformerTemplate(): Promise<string> {
       '@media (prefers-reduced-motion: reduce) { .seed-pill, .checkpoint-chip, .fall-icon, .clear-confetti, .clear-card::after, .speed-lines { animation: none; } }',
     ].join('\n'),
   );
+
+  // A small matching Model Forge kit gives creators real reusable models to open, reshape, and export.
+  for (const [starter, name, position] of [
+    ['cloudstep-crate', 'Workshop — Gift Crate', [4.2, 0, -1.4]],
+    ['cloudstep-lantern', 'Workshop — Sprout Lantern', [-4.2, 0, -1.4]],
+    ['cloudstep-gate', 'Workshop — Garden Gate', [0, 0, -8.5]],
+  ] as const) {
+    const specId = store.createModelSpec(starter, name);
+    if (specId) {
+      const propId = store.createObjectWithProps('cube', { name, position: [...position], parentId: worldRoot });
+      store.attachModelSpec(propId, specId);
+    }
+  }
 
   store.selectObject(playerId);
   return playerId;

@@ -287,6 +287,9 @@ describe('Cloudstep Garden platformer template', () => {
     state.setPlaying(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     useEditorStore.getState().tickRuntime(0);
+    useEditorStore.getState().fireCustomEvent('CloudstepResume');
+    useEditorStore.getState().tickRuntime(0);
+    useEditorStore.getState().tickRuntime(0);
     const targetIds = new Set(Object.values(useEditorStore.getState().runtimeTweens).map((session) => session.targetId));
     expect(targetIds.has(firstHead.id)).toBe(true);
     expect(targetIds.has(secondHead.id)).toBe(true);
@@ -302,6 +305,9 @@ describe('Cloudstep Garden platformer template', () => {
 
     useEditorStore.getState().setPlaying(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
+    useEditorStore.getState().tickRuntime(0);
+    useEditorStore.getState().fireCustomEvent('CloudstepResume');
+    useEditorStore.getState().tickRuntime(0);
     useEditorStore.getState().tickRuntime(0);
     useEditorStore.getState().tickRuntime(0.5);
 
@@ -319,6 +325,9 @@ describe('Cloudstep Garden platformer template', () => {
     const playerId = await createPlatformerTemplate();
     useEditorStore.getState().setPlaying(true);
     await new Promise((resolve) => setTimeout(resolve, 100));
+    useEditorStore.getState().tickRuntime(0);
+    useEditorStore.getState().fireCustomEvent('CloudstepResume');
+    useEditorStore.getState().tickRuntime(0);
     for (let frame = 0; frame < 300; frame += 1) useEditorStore.getState().tickRuntime(1 / 60);
 
     const live = selectActiveObjects(useEditorStore.getState()).find((object) => object.id === playerId)!;
@@ -333,6 +342,9 @@ describe('Cloudstep Garden platformer template', () => {
     const authored = selectActiveObjects(useEditorStore.getState()).find((object) => object.id === playerId)!;
     useEditorStore.getState().setPlaying(true);
     stopPhysics();
+    useEditorStore.getState().tickRuntime(0);
+    useEditorStore.getState().fireCustomEvent('CloudstepResume');
+    useEditorStore.getState().tickRuntime(0);
 
     for (let frame = 0; frame < 180; frame += 1) useEditorStore.getState().tickRuntime(1 / 60);
 
@@ -362,6 +374,9 @@ describe('Cloudstep Garden platformer template', () => {
     const playerId = await createPlatformerTemplate();
     useEditorStore.getState().setPlaying(true);
     await new Promise((resolve) => setTimeout(resolve, 100));
+    useEditorStore.getState().tickRuntime(0);
+    useEditorStore.getState().fireCustomEvent('CloudstepResume');
+    useEditorStore.getState().tickRuntime(0);
     for (let frame = 0; frame < 120; frame += 1) useEditorStore.getState().tickRuntime(1 / 60);
     const start = selectActiveObjects(useEditorStore.getState()).find((object) => object.id === playerId)!;
 

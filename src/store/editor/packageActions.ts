@@ -1,6 +1,6 @@
 import type { StoreApi } from 'zustand';
 import type { EditorState } from '../editorStore';
-import type { AssetItem, NodeForgeProject } from '../../types';
+import type { AssetItem, NodeForgeProject, SceneObject } from '../../types';
 import { PREFAB_EDIT_SCENE_ID, PROJECT_VERSION } from '../../types';
 import {
   collectPackage,
@@ -149,6 +149,8 @@ export const applyMarkClean = (set: SetState): void => {
 export const applyBuildPrefabPackage = (set: SetState, get: GetState, prefabId: string): { content: PackageContent; assetIds: string[] } | null => {
   const state = get();
   const src: PackageSource = {
+    modelSpecs: state.modelSpecs,
+    treeSpecs: state.treeSpecs,
     prefabs: state.prefabs,
     blueprints: state.blueprints,
     graphs: state.graphs,
@@ -197,6 +199,8 @@ export const applyBuildFolderPackage = (set: SetState, get: GetState, folderId: 
   };
   if (!Object.values(seeds).some((list) => list && list.length)) return null;
   const src: PackageSource = {
+    modelSpecs: state.modelSpecs,
+    treeSpecs: state.treeSpecs,
     prefabs: state.prefabs,
     blueprints: state.blueprints,
     graphs: state.graphs,
@@ -218,6 +222,8 @@ export const applyBuildFolderPackage = (set: SetState, get: GetState, folderId: 
 export const applyBuildProjectPackage = (set: SetState, get: GetState): { content: PackageContent; assetIds: string[] } => {
   const state = get();
   const src: PackageSource = {
+    modelSpecs: state.modelSpecs,
+    treeSpecs: state.treeSpecs,
     // Never ship the transient prefab-editing scene — it isn't part of the project.
     scenes: state.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID),
     prefabs: state.prefabs,
@@ -243,6 +249,8 @@ export const applyMergeProjectPackage = (set: SetState, content: PackageContent,
     const scenes = content.scenes ?? [];
     return {
       assets: [...state.assets, ...assets],
+      modelSpecs: [...state.modelSpecs, ...(content.modelSpecs ?? [])],
+      treeSpecs: [...state.treeSpecs, ...(content.treeSpecs ?? [])],
       prefabs: [...state.prefabs, ...content.prefabs],
       blueprints: [...state.blueprints, ...content.blueprints],
       graphs: [...state.graphs, ...content.graphs],
@@ -279,8 +287,25 @@ export const applyMergeProjectPackage = (set: SetState, content: PackageContent,
 
 export const applyMergePackage = (set: SetState, content: PackageContent, assets: AssetItem[]): void => {
   set((state) => ({
+    // UI asset packs carry their logic Blueprint but no scene. Install a controller so their
+    // buttons work immediately, without requiring the author to open the Logic tab first.
+    scenes: state.scenes.map((scene) => {
+      if (scene.id !== state.activeSceneId) return scene;
+      const attached = new Set(scene.objects.map((object) => object.script?.blueprintId));
+      const controllers: SceneObject[] = [];
+      for (const doc of content.uiDocuments) {
+        const blueprintId = doc.logicBlueprintId;
+        if (!blueprintId || doc.isComponent || attached.has(blueprintId) || !content.blueprints.some((item) => item.id === blueprintId)) continue;
+        attached.add(blueprintId);
+        controllers.push({ id: makeId('obj'), kind: 'empty', name: `${doc.name} UI Logic`,
+          transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, script: { blueprintId, graphId: content.blueprints.find((item) => item.id === blueprintId)!.graphId, enabled: true } });
+      }
+      return controllers.length ? { ...scene, objects: [...scene.objects, ...controllers] } : scene;
+    }),
     // Everything was re-id'd on import, so a plain append can't collide with existing content.
     assets: [...state.assets, ...assets],
+    modelSpecs: [...state.modelSpecs, ...(content.modelSpecs ?? [])],
+    treeSpecs: [...state.treeSpecs, ...(content.treeSpecs ?? [])],
     prefabs: [...state.prefabs, ...content.prefabs],
     blueprints: [...state.blueprints, ...content.blueprints],
     graphs: [...state.graphs, ...content.graphs],

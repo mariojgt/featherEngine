@@ -75,13 +75,13 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   terrain: { component: 'terrain', title: 'Terrain', ref: 'viewport', direction: 'below' },
   trees: { component: 'trees', title: 'Tree', ref: 'viewport', direction: 'below' },
   animator: { component: 'animator', title: 'Animator', ref: 'viewport', direction: 'below' },
-  ui: { component: 'ui', title: 'UI', ref: 'viewport', direction: 'below' },
+  ui: { component: 'ui', title: 'UI', ref: 'viewport', direction: 'below', preferredHeightRatio: 0.68 },
   scripting: {
     component: 'scripting',
     title: 'Scripting',
     ref: 'viewport',
     direction: 'below',
-    preferredHeightRatio: 0.58,
+    preferredHeightRatio: 0.7,
   },
   cinematic: { component: 'cinematic', title: 'Film Mode', ref: 'viewport', direction: 'below' },
   // Kept registered so old saved layouts and pop-out windows still resolve it, but no longer
@@ -257,7 +257,7 @@ function buildScriptingLayout(api: DockviewApi) {
   buildShell(api);
   const scripting = api.addPanel({ id: 'scripting', component: 'scripting', title: 'Scripting', position: { referencePanel: 'viewport', direction: 'below' } });
   const availableHeight = api.height || (typeof window === 'undefined' ? 900 : window.innerHeight);
-  scripting.api.setSize({ height: Math.max(360, Math.round(availableHeight * 0.58)) });
+  scripting.api.setSize({ height: Math.max(360, Math.round(availableHeight * 0.7)) });
 }
 
 /** Animation-first: Animator front-and-centre. */

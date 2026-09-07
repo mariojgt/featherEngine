@@ -1,3 +1,4 @@
+import { PACKAGE_SEMVER } from '../project/packageValidation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -28,6 +29,8 @@ export function PackageDetailsDialog() {
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const requestRef = useRef(request);
+  requestRef.current = request;
 
   // Reset to this request's defaults whenever a new one opens.
   useEffect(() => {
@@ -66,11 +69,12 @@ export function PackageDetailsDialog() {
     setBusy('file');
     setError(null);
     try {
-      setThumbnail(await makeCoverImage(file));
+      const cover = await makeCoverImage(file);
+      if (requestRef.current === request) setThumbnail(cover);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not read that image.');
+      if (requestRef.current === request) setError(caught instanceof Error ? caught.message : 'Could not read that image.');
     } finally {
-      setBusy(null);
+      if (requestRef.current === request) setBusy(null);
     }
   };
 
@@ -80,17 +84,19 @@ export function PackageDetailsDialog() {
     try {
       const shot = await captureViewportImage();
       if (!shot) throw new Error('The 3D viewport is not open, so there is nothing to capture.');
-      setThumbnail(await makeCoverImage(shot));
+      const cover = await makeCoverImage(shot);
+      if (requestRef.current === request) setThumbnail(cover);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not capture the viewport.');
+      if (requestRef.current === request) setError(caught instanceof Error ? caught.message : 'Could not capture the viewport.');
     } finally {
-      setBusy(null);
+      if (requestRef.current === request) setBusy(null);
     }
   };
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || busy) return;
+    if (!PACKAGE_SEMVER.test(version.trim() || '1.0.0')) { setError('Use a version such as 1.0.0 or 1.0.0-beta.1.'); return; }
     respond({
       name: name.trim(),
       description: description.trim() || undefined,

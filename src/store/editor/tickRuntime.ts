@@ -895,7 +895,9 @@ export const applyRuntimeTick = (
           case 'event.update':
             return Number(node.data.numberValue ?? 0) > 0 ? firedTimers.has(`${objectId}:${node.id}`) : true;
           case 'event.keyDown':
-            return Boolean(currentKeys[node.data.keyCode ?? 'KeyW']);
+            return node.data.keyTriggerMode === 'pressed'
+              ? keyPressedThisTick(node.data.keyCode ?? 'KeyW')
+              : Boolean(currentKeys[node.data.keyCode ?? 'KeyW']);
           case 'event.keyUp': {
             const keyCode = node.data.keyCode ?? 'KeyW';
             return Boolean(previousKeys[keyCode]) && !currentKeys[keyCode];
@@ -4600,8 +4602,10 @@ export const applyRuntimeTick = (
             cc.gravity *
             zoneG *
             (nearApex ? cc.apexHang ?? 0.65 : verticalVelocity < 0 ? cc.fallMultiplier ?? 1.9 : 1);
+          // Average velocity removes the render-cadence bias in new preset jump arcs.
+          // Legacy projects keep their authored semi-implicit arc until they opt into a preset.
+          position[1] += (verticalVelocity - g * delta * (cc.stableJumpArc ? 0.5 : 1)) * delta;
           verticalVelocity -= g * delta;
-          position[1] += verticalVelocity * delta;
           // Over TERRAIN, do NOT clamp the vertical here — let the Rapier kinematic controller resolve the
           // capsule against the (continuous) heightfield. Clamping to the analytic surface fights the physics
           // (camera jitter) and can bury the capsule below the collider (which then blocks horizontal movement).

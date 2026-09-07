@@ -25,6 +25,10 @@ export function UIStyleSheet({ doc }: { doc: UIDocument }) {
     () => buildUIDocumentCss(doc, (id) => uiDocuments.find((d) => d.id === id)),
     [doc, uiDocuments],
   );
-  if (!css) return null;
-  return <style data-ui-css={doc.id}>{css}</style>;
+  // Zero-specificity defaults make nested widgets containing blocks without overriding a kit's
+  // own absolute positioning. Inline defaults would silently defeat authored stylesheet rules.
+  return <>
+    <style data-ui-layout>{':where([data-uidoc]) :where([data-uiel-id]) { position: relative; }'}</style>
+    {css && <style data-ui-css={doc.id}>{css}</style>}
+  </>;
 }

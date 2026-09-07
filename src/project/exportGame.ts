@@ -115,10 +115,10 @@ async function readAssetBytes(asset: AssetItem): Promise<{ dataUrl: string; hash
 export async function embedAssets(assets: AssetItem[]): Promise<AssetItem[]> {
   return await Promise.all(
     assets.map(async (asset) => {
-      if (!asset.url) return { ...asset, unresolved: true };
+      if (!asset.url) return asset.data?.startsWith('data:') ? { ...asset, unresolved: false } : { ...asset, unresolved: true };
       try {
         const { dataUrl, hash } = await readAssetBytes(asset);
-        return { ...asset, data: dataUrl, hash };
+        return { ...asset, data: dataUrl, hash, unresolved: false };
       } catch {
         return { ...asset, unresolved: true };
       }

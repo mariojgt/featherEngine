@@ -45,6 +45,9 @@ export interface SimpleInteractionAction {
  */
 export interface SimpleInteraction {
   id: string;
+  enabled?: boolean;
+  /** False for legacy/custom rules whose graph is no longer owned by the card editor. */
+  managed?: boolean;
   trigger: SimpleInteractionTrigger;
   action: SimpleInteractionAction;
   duration?: number;

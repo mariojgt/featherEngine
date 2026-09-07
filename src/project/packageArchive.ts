@@ -1,3 +1,4 @@
+import { dataUrlToBytes, sha256Hex } from '../utils/contentHash';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { parsePackage, type NodeForgePackage } from './package';
 import type { AssetItem } from '../types';
@@ -19,6 +20,10 @@ import type { AssetItem } from '../types';
  * Older `.nfpack` files are plain JSON. Readers sniff the first bytes, so both still open — a v1
  * file a user exported months ago must not stop working because the container changed.
  */
+
+const MAX_PACKAGE_BYTES = 256 * 1024 * 1024;
+const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
 
 const MANIFEST_ENTRY = 'package.json';
 const ASSET_DIR = 'assets/';
@@ -60,6 +65,7 @@ export function writePackageArchive(
   bytes: Map<string, Uint8Array>,
   options: PackageArchiveWriteOptions = {},
 ): Uint8Array {
+  parsePackage(pkg);
   const files: Zippable = {};
   const manifestAssets: AssetItem[] = [];
 
@@ -96,9 +102,19 @@ export const shouldDeflate = (entryName: string) => !STORED_EXTENSIONS.has(exten
 export function readPackageArchive(archive: Uint8Array): PackageArchive {
   let files: Record<string, Uint8Array>;
   try {
-    files = unzipSync(archive);
-  } catch {
-    throw new Error('That file is not a readable package archive.');
+    if (archive.byteLength > MAX_PACKAGE_BYTES) throw new Error('Package exceeds the 256 MB compressed size limit.');
+    let total = 0;
+    const names = new Set<string>();
+    files = unzipSync(archive, { filter: (entry) => {
+      total += entry.originalSize;
+      if (names.has(entry.name)) throw new Error('Package contains duplicate archive entries.');
+      names.add(entry.name);
+      if (names.size > 10000 || total > MAX_UNPACKED_BYTES || (entry.name === MANIFEST_ENTRY && entry.originalSize > MAX_MANIFEST_BYTES)) throw new Error('Package exceeds the archive size or entry limit.');
+      if (entry.name.includes('\\') || entry.name.startsWith('/') || entry.name.split('/').includes('..')) throw new Error('Package contains an invalid archive path.');
+      return entry.name === MANIFEST_ENTRY || entry.name.startsWith(ASSET_DIR);
+    } });
+  } catch (error) {
+    throw new Error(`That file is not a readable package archive: ${error instanceof Error ? error.message : 'invalid ZIP'}`);
   }
 
   const manifestBytes = files[MANIFEST_ENTRY];
@@ -116,7 +132,10 @@ export function readPackageArchive(archive: Uint8Array): PackageArchive {
   for (const asset of pkg.assets) {
     if (!asset.hash) continue;
     const data = files[assetEntryName(asset, asset.hash)];
-    if (data) bytes.set(asset.id, data);
+    if (data) {
+      if (typeof asset.size === 'number' && asset.size !== data.byteLength) throw new Error(`Asset "${asset.name}" has the wrong byte length.`);
+      bytes.set(asset.id, data);
+    } else if (!asset.data && !asset.source?.url) throw new Error(`Package archive is missing bytes for "${asset.name}".`);
   }
   return { pkg, bytes };
 }
@@ -126,6 +145,7 @@ export function readPackageArchive(archive: Uint8Array): PackageArchive {
  * came off disk or the network and get back a uniform result.
  */
 export function readPackageFile(input: Uint8Array): PackageArchive {
+  if (input.byteLength > MAX_PACKAGE_BYTES) throw new Error('Package exceeds the 256 MB size limit.');
   if (isPackageArchive(input)) return readPackageArchive(input);
   let raw: unknown;
   try {
@@ -134,4 +154,12 @@ export function readPackageFile(input: Uint8Array): PackageArchive {
     throw new Error('That file is not a NodeForge package (.nfpack).');
   }
   return { pkg: parsePackage(raw), bytes: new Map() };
+}
+
+/** Complete the integrity pass before any package content is merged or written to disk. */
+export async function verifyPackageIntegrity({ pkg, bytes }: PackageArchive): Promise<void> {
+  for (const asset of pkg.assets) {
+    const data = bytes.get(asset.id) ?? (asset.data ? dataUrlToBytes(asset.data) : undefined);
+    if (data && asset.hash && await sha256Hex(data) !== asset.hash) throw new Error(`Asset "${asset.name}" failed its integrity check; the package was not installed.`);
+  }
 }

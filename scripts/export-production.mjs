@@ -11,6 +11,7 @@
 //
 // Legacy flags remain supported: --native, --android, --ios, --no-web.
 import { execFileSync } from 'node:child_process';
+import { artifactInventory, engineEvidence, sha256 } from './lib/release-evidence.mjs';
 import {
   cpSync,
   existsSync,
@@ -416,7 +417,10 @@ if (targets.includes('android') && profile.configuration === 'release') {
   packagingWarnings.push('Android AAB generation does not verify your Play Store release keystore configuration.');
 }
 const buildReport = {
-  formatVersion: '1.1.0',
+  formatVersion: '1.2.0',
+  engine: engineEvidence(root),
+  bundleSha256: sha256(JSON.stringify(bundle)),
+  contentInventory: { scenes: bundle.project.scenes.map((scene) => ({ id: scene.id, name: scene.name, objects: scene.objects.length })), assets: bundle.project.assets.map((asset) => ({ id: asset.id, name: asset.name, type: asset.type, bytes: asset.size, copyright: asset.modelInspection?.stats?.copyright ?? null })) },
   builtAt: new Date().toISOString(),
   bundleVersion: bundle.bundleVersion,
   projectVersion: bundle.project.version,
@@ -430,7 +434,10 @@ const buildReport = {
 };
 
 function writeBuildReport(directory) {
-  writeFileSync(resolve(directory, 'build-report.json'), `${JSON.stringify(buildReport, null, 2)}\n`);
+  const credits = bundle.project.assets.filter((asset) => asset.modelInspection?.stats?.copyright).map((asset) => `${asset.name}: ${asset.modelInspection.stats.copyright}`);
+  writeFileSync(resolve(directory, 'ASSET-CREDITS.txt'), ['Asset attribution supplied by imported models', '', ...(credits.length ? credits : ['No embedded model copyright metadata was supplied.']), '', 'Review your asset licenses before distributing this game.'].join('\n'));
+  const report = { ...buildReport, artifacts: artifactInventory(directory) };
+  writeFileSync(resolve(directory, 'build-report.json'), `${JSON.stringify(report, null, 2)}\n`);
 }
 
 let webOut = null;

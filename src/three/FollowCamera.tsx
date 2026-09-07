@@ -326,6 +326,11 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
   // offset/pitch shows a stable resting framing and never hijacks the editor pointer.
   const useMouse = Boolean(resolveCameraConfig(target)?.mouseLook) && Boolean(target) && !preview;
   const wantsMouseLook = useMouse;
+  const gamePaused = useEditorStore((state) => state.isPlayPaused || state.runtimeTimeScale === 0);
+
+  useEffect(() => {
+    if (gamePaused && document.pointerLockElement === gl.domElement) document.exitPointerLock?.();
+  }, [gamePaused, gl]);
 
   // Mouse-look. Two ways, both supported so it always works: (1) click to capture the pointer
   // (Unreal-style free-look, ESC releases), or (2) click-drag in the view to orbit. Active only
@@ -341,9 +346,11 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
     // Mouse wheel zooms the camera in/out (scales the resting distance). preventDefault stops the page scrolling.
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      if (useEditorStore.getState().runtimeTimeScale === 0 || useEditorStore.getState().isPlayPaused) return;
       zoomTarget.current = THREE.MathUtils.clamp(zoomTarget.current + event.deltaY * 0.0012, 0.45, 2.2);
     };
     const onPointerDown = () => {
+      if (useEditorStore.getState().runtimeTimeScale === 0 || useEditorStore.getState().isPlayPaused) return;
       dragging = true;
       // First click in the viewport captures the pointer (this also hides the OS cursor
       // natively), so you can't accidentally click the scene behind the game. ESC releases.
@@ -353,9 +360,11 @@ export function FollowCamera({ preview = false }: { preview?: boolean }) {
       dragging = false;
     };
     const onDblClick = () => {
+      if (useEditorStore.getState().runtimeTimeScale === 0 || useEditorStore.getState().isPlayPaused) return;
       if (!locked()) canvas.requestPointerLock?.();
     };
     const onMove = (event: MouseEvent) => {
+      if (useEditorStore.getState().runtimeTimeScale === 0 || useEditorStore.getState().isPlayPaused) return;
       if (!locked() && !dragging) return;
       mouseLook.dx += event.movementX;
       mouseLook.dy += event.movementY;

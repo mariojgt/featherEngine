@@ -1,3 +1,4 @@
+import { canEditCollaborativeProject } from '../collaboration/access';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import {
@@ -31,7 +32,7 @@ const clone = <T,>(value: T): T => {
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 const validVector = (value: Vector3Tuple): boolean =>
-  value.length === 3 && value.every((part) => Number.isFinite(part));
+  Array.isArray(value) && value.length === 3 && value.every((part) => Number.isFinite(part));
 
 const OBJECT_KINDS: ReadonlySet<SceneObjectKind> = new Set([
   'empty',
@@ -52,6 +53,7 @@ function requireOwnedId(pluginId: string, id: string, kind: string): void {
 
 function requireEditableProject(): void {
   const project = useProjectStore.getState();
+  if (!canEditCollaborativeProject()) throw new Error('This shared project is read-only for viewers.');
   if (!project.hasProject) throw new Error('No Feather project is open.');
   if (useEditorStore.getState().isPlaying) throw new Error('Project edits are disabled while Play mode is running.');
 }
@@ -116,6 +118,9 @@ export function createFeatherPluginAPI(
       requireEditableProject();
       if (!findObject(id)) return false;
       for (const field of ['position', 'rotation', 'scale'] as const) {
+        if (patch[field] !== undefined && !validVector(patch[field]!)) throw new Error(`Object ${field} must contain three finite numbers.`);
+      }
+      for (const field of ['position', 'rotation', 'scale'] as const) {
         const value = patch[field];
         if (!value) continue;
         if (!validVector(value)) throw new Error(`Object ${field} must contain three finite numbers.`);
@@ -145,7 +150,7 @@ export function createFeatherPluginAPI(
 
   const trees: FeatherPluginAPI['trees'] = {
     library: () => clone(useEditorStore.getState().treeSpecs),
-    presets: () => STYLIZED_TREE_PRESETS,
+    presets: () => clone(STYLIZED_TREE_PRESETS),
     addPreset: (presetId, name) => {
       requireEditableProject();
       const id = useEditorStore.getState().createTreeSpecFromPreset(presetId, name);
@@ -314,8 +319,7 @@ export function createFeatherPluginAPI(
       requireOwnedId(pluginId, definition.id, 'Panel');
       const unregister = registry.registerPanel(pluginId, definition);
       return track(() => {
-        closeWorkspacePanel(definition.id);
-        unregister();
+        try { closeWorkspacePanel(definition.id); } finally { unregister(); }
       });
     },
     open: (id) => {

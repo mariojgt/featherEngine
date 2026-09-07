@@ -1,3 +1,4 @@
+import { TEMPLATE_LESSONS } from '../creator/templateLessons';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -22,7 +23,7 @@ import {
 } from '../creator/gameTemplates';
 
 /** The starter world shown first. Everything else keeps the catalog's order. */
-const FEATURED_SLUG = 'template-spline-studio';
+const FEATURED_SLUG = 'template-platformer';
 
 function formatAgo(ms: number): string {
   const seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -90,6 +91,10 @@ export function Launcher() {
 
   const createQuickStart = async (quickStart: CreatorQuickStart) => {
     if (busy || quickStart.comingSoon) return;
+    if (quickStart.builtInTemplate) {
+      await useProjectStore.getState().newProjectFromStarter(projectName(), quickStart.builtInTemplate);
+      return;
+    }
     if (quickStart.gameplayKitId) {
       await newProject(projectName());
       if (useProjectStore.getState().hasProject) {
@@ -297,8 +302,8 @@ export function Launcher() {
             </div>
 
             <div className="launcher-quick-grid">
-              {CREATOR_QUICK_STARTS.map((quickStart) => {
-                const available = Boolean(quickStart.gameplayKitId) || !quickStart.templateSlug || templates.some((entry) => entry.slug === quickStart.templateSlug);
+              {[...CREATOR_QUICK_STARTS].sort((a, b) => Number(Boolean(b.builtInTemplate)) - Number(Boolean(a.builtInTemplate))).map((quickStart) => {
+                const available = Boolean(quickStart.builtInTemplate || quickStart.gameplayKitId) || !quickStart.templateSlug || templates.some((entry) => entry.slug === quickStart.templateSlug);
                 return (
                   <button
                     type="button"
@@ -306,12 +311,15 @@ export function Launcher() {
                     className="launcher-quick-card"
                     data-quick-start={quickStart.id}
                     disabled={busy || quickStart.comingSoon || !available}
+                    title={!available ? 'Waiting for the starter catalog. Try Platformer, which is included with Feather, or retry below.' : undefined}
                     onClick={() => void createQuickStart(quickStart)}
                   >
                     <span className="launcher-quick-icon" aria-hidden>{quickStart.icon}</span>
                     <span>
                       <strong>{quickStart.label}</strong>
+                      {quickStart.builtInTemplate && <em>Recommended · included offline</em>}
                       <small>{quickStart.description}</small>
+                      {quickStart.templateSlug && TEMPLATE_LESSONS[quickStart.templateSlug] && <small>{TEMPLATE_LESSONS[quickStart.templateSlug].difficulty} · {TEMPLATE_LESSONS[quickStart.templateSlug].minutes}-minute lesson</small>}
                     </span>
                     {quickStart.comingSoon ? <em>Coming soon</em> : <ArrowRight size={15} aria-hidden />}
                   </button>
@@ -331,7 +339,7 @@ export function Launcher() {
 
             {catalogStatus === 'loading' && <p className="launcher-template-hint">Loading starter worlds…</p>}
             {catalogStatus === 'error' && (
-              <p className="launcher-template-hint">Could not load starter worlds ({catalogError}). Blank is still available.</p>
+              <div className="launcher-template-hint" role="alert"><p>Could not load starter worlds ({catalogError}). Platformer and Blank are still available.</p><button type="button" disabled={busy} onClick={() => void loadCatalog(true)}>Retry starter catalog</button></div>
             )}
 
             <div className="template-grid">

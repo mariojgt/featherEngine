@@ -264,9 +264,9 @@
       "id": "pkg-feather-plugin-model-forge",
       "slug": "model-forge",
       "title": "Model Forge — Prototype Modeler",
-      "description": "Prototype props without leaving the engine: kit-bash five primitives (box, cylinder, sphere, cone, wedge) into fences, crates, tiles and arches, paint faces from a stylized palette, and pick the finish — smooth Spline-style rounded corners with a satin sheen, or crisp flat-shaded Meshy facets. Placed copies stay live-linked and restyle as you edit the asset; when a prop graduates, bake it into a real GLB model asset — thumbnailed, placeable anywhere, shipped in exports, and openable in Blender.",
+      "description": "Prototype props without leaving the engine in a Blender-inspired Object, Edit and Paint workspace. Kit-bash five primitives, shape box control cages by vertex, edge or face, search twelve starter models, paint from a stylized palette, and choose smooth rounded or crisp flat finishes. Placed copies stay live-linked; finished props bake into real GLB assets for projects and exports.",
       "author": "Feather",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "kind": "plugin",
       "tags": [
         "plugin",
@@ -278,7 +278,7 @@
       "license": "CC0-1.0",
       "priceCents": 0,
       "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjRTlBMTNCIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjNEEyNTA4Ii8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPvCflKg8L3RleHQ+PC9zdmc+",
-      "sizeBytes": 1201,
+      "sizeBytes": 1146,
       "downloadUrl": "packages/plugins/model-forge.nfpack",
       "engineVersion": "0.8.0",
       "pluginId": "feather.model-forge",
@@ -356,6 +356,19 @@
     {
       "id": "pkg-feather-template-cube-realm",
       "slug": "template-cube-realm",
+      "learning": {
+        "version": 1,
+        "difficulty": "Intermediate",
+        "minutes": 20,
+        "goal": "Explore and modify the action starter with enemies and objectives.",
+        "controls": "Read the in-game controls before starting the encounter.",
+        "lessons": [
+          "Find the Player and objective objects.",
+          "Inspect enemy behavior in Logic.",
+          "Replace scenery while keeping collision roots.",
+          "Play through the objective and export."
+        ]
+      },
       "title": "Cube Realm",
       "description": "An action slice with a combo system, day cycle and a shrine to find.",
       "author": "Feather",
@@ -413,6 +426,19 @@
     {
       "id": "pkg-feather-template-first-person",
       "slug": "template-first-person",
+      "learning": {
+        "version": 1,
+        "difficulty": "Intermediate",
+        "minutes": 20,
+        "goal": "Remix an FPS arena with weapons, targets, and a working HUD.",
+        "controls": "Read the in-game controls for movement and weapon bindings.",
+        "lessons": [
+          "Inspect the Player and weapon objects.",
+          "Tune a target in Gameplay.",
+          "Change the HUD in the UI editor.",
+          "Check input and assets in your exported build."
+        ]
+      },
       "title": "First Person Shooter",
       "description": "Neon cyberpunk FPS starter: guns, grenades, explosive barrels and enemies.",
       "author": "Feather",
@@ -500,6 +526,19 @@
     {
       "id": "pkg-feather-template-platformer",
       "slug": "template-platformer",
+      "learning": {
+        "version": 1,
+        "difficulty": "Beginner",
+        "minutes": 10,
+        "goal": "Collect sun seeds and reach Sunny at the end of the cloud course.",
+        "controls": "WASD move · Space jump · Shift dash · Left click bop · P pause",
+        "lessons": [
+          "Change a Sun Seed color in Appearance.",
+          "Tune collectible points in Gameplay.",
+          "Add a timed rule to a plain prop.",
+          "Play, save, and export your own cloud course."
+        ]
+      },
       "title": "Cloudstep Garden",
       "description": "A bright primitive-built 3D platformer with a reusable live-linked Pip character prefab, expressive cartoon motion and VFX, moving clouds, Sun Seeds, three-heart checkpoint recovery and a polished responsive HUD.",
       "author": "Feather",
@@ -517,13 +556,13 @@
       "license": "CC0-1.0",
       "priceCents": 0,
       "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjRkY3MTk2Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMjM2Nzg0Ii8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPuKYgO+4jzwvdGV4dD48L3N2Zz4=",
-      "sizeBytes": 93733,
+      "sizeBytes": 99131,
       "downloadUrl": "packages/projects/template-platformer.nfpack",
       "engineVersion": "0.8.0",
       "contents": {
         "prefabs": 1,
         "materials": 9,
-        "blueprints": 15,
+        "blueprints": 16,
         "assets": 0,
         "scenes": 1,
         "uiDocuments": 1
@@ -592,6 +631,19 @@
     {
       "id": "pkg-feather-template-third-person",
       "slug": "template-third-person",
+      "learning": {
+        "version": 1,
+        "difficulty": "Beginner",
+        "minutes": 15,
+        "goal": "Explore a small tutorial world with a controllable character and follow camera.",
+        "controls": "WASD move · Space jump · Shift sprint · Mouse look",
+        "lessons": [
+          "Select the Player and try a movement preset.",
+          "Change a prop into a Door using Make It.",
+          "Import a model and replace a prop appearance.",
+          "Test your changes in Play, then export."
+        ]
+      },
       "title": "Third Person Starter",
       "description": "A playable third-person character with follow camera, melee and ranged weapons, and a six-room tutorial corridor to explore.",
       "author": "Feather",

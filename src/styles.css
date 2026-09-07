@@ -757,7 +757,7 @@
 /* Density: compact tightens the chrome around the toolbar + panel headers + popovers.
    Doesn't touch the viewport or content panels themselves. */
 :root[data-density="compact"] .editor-shell {
-  grid-template-rows: 48px minmax(0, 1fr) 22px;
+  grid-template-rows: 48px auto minmax(0, 1fr) 22px;
 }
 
 :root[data-density="compact"] .toolbar {
@@ -832,7 +832,7 @@ button {
 
 .editor-shell {
   display: grid;
-  grid-template-rows: 54px minmax(0, 1fr) 26px;
+  grid-template-rows: 54px auto minmax(0, 1fr) 26px;
   width: 100%;
   height: 100%;
   background:
@@ -857,9 +857,9 @@ button {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
-/* Persistent bottom status bar — the third editor-shell grid row. */
+/* Persistent bottom status bar, below the guide and workspace. */
 .status-bar {
-  grid-row: 3;
+  grid-row: 4;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -16293,3 +16293,109 @@ body.is-scrubbing * {
     gap: 5px;
   }
 }
+
+/* A small, resumable lesson above the existing dock. */
+.first-game-guide { flex: 0 0 auto; min-width: 0; padding: 8px 16px 10px; border-bottom: 1px solid var(--border); background: var(--panel, #171c26); color: var(--text); }
+.first-game-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.first-game-toggle { display: flex; align-items: center; gap: 8px; padding: 3px 0; background: none; border: 0; color: inherit; font-size: 12px; }
+.first-game-toggle > span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.first-game-guide.collapsed { padding-block: 5px; }
+.first-game-guide.collapsed .first-game-toggle > svg:last-child { transform: rotate(-90deg); }
+.first-game-content { display: flex; gap: 20px; align-items: center; }
+.first-game-steps { display: flex; flex-wrap: wrap; gap: 4px; padding: 0; margin: 4px 0 0; list-style: none; }
+.first-game-steps button { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border: 1px solid transparent; background: transparent; color: var(--muted); border-radius: 6px; font-size: 11px; white-space: nowrap; }
+.first-game-steps button[aria-current] { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.first-game-steps button > span { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); }
+.first-game-lesson { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex: 1; min-width: 0; }
+.first-game-lesson p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); max-width: 560px; }
+.first-game-lesson > button { flex-shrink: 0; padding: 8px 12px; border-radius: 6px; }
+.first-game-guide button:focus-visible, .creator-inspector-section button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 1350px) { .first-game-content { flex-wrap: wrap; gap: 7px; } .first-game-lesson { flex-basis: 100%; } }
+@media (max-height: 780px) { .first-game-guide { padding-block: 5px; } .first-game-content { gap: 5px 14px; } .first-game-lesson p { font-size: 11px; } }
+.creator-rule { border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.creator-rule-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 6px; }
+.creator-rule-actions > span { margin-right: auto; font-size: 10px; color: var(--muted); }
+.creator-rule-actions button { padding: 3px 5px; font-size: 10px; border-radius: 4px; }
+.creator-vector-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.creator-vector-inputs input { min-width: 0; width: 100%; }
+.model-import-report { margin: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; font-size: 11px; }
+.model-import-report > div { max-height: 180px; overflow: auto; padding-top: 7px; }
+.model-import-report article + article { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+.model-import-report p { margin: 4px 0; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.creator-model-appearance { display: grid; gap: 8px; margin-bottom: 12px; }
+.creator-model-appearance label { display: grid; gap: 5px; font-size: 11px; }
+.creator-model-appearance select { width: 100%; min-width: 0; }
+.model-stats { display: grid; gap: 5px; margin: 0; font-size: 11px; }
+.model-stats > div { display: flex; justify-content: space-between; gap: 6px; }
+.model-stats dt { color: var(--muted); } .model-stats dd { margin: 0; }
+
+.build-steps { display: flex; list-style: none; gap: 8px; flex-wrap: wrap; padding: 16px 20px 0; margin: 0; font-size: 12px; color: var(--muted); }
+.build-steps li { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; }
+.build-steps [aria-current="step"] { color: var(--text); background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); }
+.report-body [hidden] { display: none !important; }
+.report-section > summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
+.creator-gameplay-field > select { max-width: 160px; min-width: 0; }
+.build-output-actions { display: flex; gap: 12px; margin-top: 16px; }
+
+@media (max-width: 1350px) {
+  .creator-toolbar .brand { min-width: 34px; }
+  .creator-toolbar .brand div { display: none; }
+  .creator-toolbar-authoring { flex: 0 0 auto; }
+  .creator-toolbar .cmdk-launch { display: none; }
+  .creator-toolbar .scene-switcher { flex: 0 0 auto; }
+  .creator-toolbar .scene-switcher select { width: 95px; max-width: 95px; min-width: 0; text-overflow: ellipsis; }
+}
+
+/* Widget designer: dedicated workspace with a logical-pixel device artboard. */
+.ui-design-workspace {
+  display: grid;
+  grid-template-columns: minmax(160px, 210px) minmax(160px, 1fr) minmax(210px, 260px);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: 'tools tools tools' 'hierarchy stage details';
+  overflow: hidden;
+}
+.ui-design-workspace .ui-float-dock {
+  grid-area: tools; position: static; transform: none; width: auto; max-width: none;
+  border-radius: 0; box-shadow: none; justify-content: flex-start; border-width: 0 0 1px;
+}
+.ui-design-workspace .ui-float-panel {
+  position: static; width: auto; min-width: 0; min-height: 0; border-radius: 0; box-shadow: none;
+  background: var(--panel); backdrop-filter: none; border-width: 0; padding: 10px;
+}
+.ui-design-workspace .ui-float-layers { grid-area: hierarchy; border-right: 1px solid var(--border); }
+.ui-design-workspace .ui-float-inspector { grid-area: details; border-left: 1px solid var(--border); }
+.ui-designer-stage { grid-area: stage; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #0b0d12; }
+.ui-preview-controls { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; border-bottom: 1px solid var(--border); }
+.ui-preview-controls select { min-width: 0; max-width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 5px; font-size: 11px; }
+.ui-preview-scroll { flex: 1; min-height: 0; overflow: auto; display: grid; padding: 20px; place-items: safe center; }
+.ui-artboard-space { position: relative; flex: none; outline: 1px solid #536078; box-shadow: 0 8px 35px #0008; }
+.ui-device-artboard { position: absolute; left: 0; top: 0; transform-origin: top left; }
+.ui-preview-hint { padding: 7px 10px; color: var(--muted); font-size: 10px; border-top: 1px solid var(--border); }
+.ui-widget-search { min-width: 0; width: 100%; padding: 7px; background: var(--input); border: 1px solid var(--border); border-radius: 5px; color: var(--text); }
+.ui-widget-palette { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.ui-widget-palette button { display: flex; gap: 5px; align-items: center; padding: 7px 5px; font-size: 11px; color: var(--text); background: #ffffff06; border: 1px solid var(--border); border-radius: 5px; text-align: left; overflow-wrap: anywhere; }
+.ui-widget-palette button:hover { border-color: var(--accent); background: #5b8cff16; }
+.ui-tree-expand { flex: 0 0 16px; padding: 0; background: none; border: 0; color: var(--muted); cursor: pointer; }
+.ui-design-workspace .ui-node { flex-wrap: wrap; }
+.ui-design-workspace .ui-node-main { min-width: 0; }
+.ui-design-workspace .ui-node-tools { margin-left: auto; }
+.ui-design-workspace .ui-node-kind { display: none; }
+.ui-design-workspace .ui-inspector .node-field { min-width: 0; }
+.plugin-creator { padding: 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
+.plugin-creator summary { cursor: pointer; font-weight: 600; }
+.plugin-creator p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.plugin-creator-fields { display: flex; flex-wrap: wrap; gap: 12px; }
+.plugin-creator-fields label { flex: 1; min-width: 140px; }
+.plugin-local-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
+.plugin-local-row span { flex: 1; }
+.plugin-local-row small { color: var(--muted); }
+.plugin-local-row button { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 5px 10px; border-radius: 5px; }
+.ui-design-workspace .ui-node { display: grid; grid-template-columns: 16px minmax(0, 1fr); }
+.ui-design-workspace .ui-node-main { grid-column: 2; }
+.ui-design-workspace .ui-tree-expand { grid-column: 1; grid-row: 1; }
+.ui-design-workspace .ui-node-tools { display: none; grid-column: 1 / -1; }
+.ui-design-workspace .ui-node:hover .ui-node-tools,
+.ui-design-workspace .ui-node:focus-within .ui-node-tools,
+.ui-design-workspace .ui-node.selected .ui-node-tools { display: flex; }
+.ui-focus-button { flex: none; padding: 6px 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); background: var(--panel); }
+.ui-design-workspace .ui-dock-seg { min-width: 136px; }

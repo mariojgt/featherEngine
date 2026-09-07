@@ -157,12 +157,14 @@ export function BuildReportDialog() {
   const platforms = useProjectStore((state) => state.exportPlatforms);
   const platformsError = useProjectStore((state) => state.exportPlatformsError);
   const [stripUnused, setStripUnused] = useState(() => localStorage.getItem(STRIP_PREF_KEY) !== '0');
+  const [step, setStep] = useState<'platform' | 'check'>('platform');
   const [profile, setProfile] = useState<ExportProfile | null>(null);
 
   const isProduction = pending?.mode === 'production';
 
   useEffect(() => {
     if (!pending) return;
+    setStep('platform');
     setProfile(structuredClone(pending.bundle.buildProfile));
     if (isProduction) void loadExportPlatforms();
     const onKey = (e: KeyboardEvent) => {
@@ -258,15 +260,35 @@ export function BuildReportDialog() {
               </button>
             </header>
 
+            {isProduction && <ol className="build-steps" aria-label="Build steps">
+              <li aria-current={step === 'platform' ? 'step' : undefined}>1 Choose platform</li>
+              <li aria-current={step === 'check' ? 'step' : undefined}>2 Check project</li>
+              <li>3 Build</li><li>4 Test output</li>
+            </ol>}
             <div className="report-body">
-              <div className="report-total">
+              {isProduction && profile && step === 'platform' && <>
+                <p>Start with Web to share a playable game in a browser. Your chosen profile is saved with the project.</p>
+                <div className="report-profile-grid">
+                  <label><span>Game name</span><input value={profile.application.productName} onChange={(event) => setProfile({ ...profile, application: { ...profile.application, productName: event.target.value }, window: { ...profile.window, title: profile.window.title === profile.application.productName ? event.target.value : profile.window.title } })} /></label>
+                  <label><span>First scene</span><select value={profile.startSceneId} onChange={(event) => setProfile({ ...profile, startSceneId: event.target.value })}>{pending.bundle.project.scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.name}</option>)}</select></label>
+                </div>
+                <PlatformPicker selected={new Set(profile.targets)} onToggle={toggleTarget} platforms={platforms ?? (runningInDesktopShell ? null : STAGED_PLATFORMS)} staged={!runningInDesktopShell} error={platformsError} onRetry={() => void loadExportPlatforms()} />
+                {!runningInDesktopShell && <p>The browser editor downloads a build package. Run its build command from the engine folder to create the playable output.</p>}
+              </>}
+              {isProduction && step === 'check' && <section className="report-section">
+                <h3>{hasErrors || profileErrors.length ? 'Resolve the errors below' : 'Project checks passed'}</h3>
+                <p>{profile?.application.productName} · {profile?.targets.join(', ')} · {profile?.configuration}</p>
+                <p>{hasWarnings ? 'Review the warnings before continuing.' : 'Required content and logic references were checked.'} Test the finished game before sharing it.</p>
+                <details><summary>What to test in the output</summary><p>Open the game through a local web server. Check Start, movement, sound, pause, win, restart, and saved progress. For a website, test both the site root and your game’s subfolder.</p></details>
+              </section>}
+              <div className="report-total" hidden={isProduction && step !== 'check'}>
                 <strong>{humanSize(report.totalBytes)}</strong>
                 <span>
                   total bundle{willStrip ? ` · ≈${humanSize(Math.max(0, report.totalBytes - strippedBytes))} after stripping` : ''}
                 </span>
               </div>
 
-              <section className="report-section">
+              <section className="report-section" hidden={isProduction && step !== 'check'}>
                 <h3>Contents</h3>
                 <ul className="report-summary">
                   {report.summary.map((line) => (
@@ -275,9 +297,9 @@ export function BuildReportDialog() {
                 </ul>
               </section>
 
-              {isProduction && profile && (
-                <section className="report-section">
-                  <h3>Build profile — {profile.name}</h3>
+              {isProduction && profile && step === 'platform' && (
+                <details className="report-section" open={profileErrors.length > 0 ? true : undefined}>
+                  <summary>Advanced settings · identity, version, window</summary>
                   <div className="report-profile-grid">
                     <label>
                       <span>Product name</span>
@@ -456,10 +478,10 @@ export function BuildReportDialog() {
                       ))}
                     </ul>
                   )}
-                </section>
+                </details>
               )}
 
-              {hasErrors && (
+              {hasErrors && (!isProduction || step === 'check') && (
                 <section className="report-section">
                   <h3 className="report-h-error">
                     <OctagonX size={14} aria-hidden /> Errors — export blocked
@@ -472,7 +494,7 @@ export function BuildReportDialog() {
                 </section>
               )}
 
-              {hasWarnings && (
+              {hasWarnings && (!isProduction || step === 'check') && (
                 <section className="report-section">
                   <h3 className="report-h-warn">
                     <AlertTriangle size={14} aria-hidden /> Warnings
@@ -485,7 +507,7 @@ export function BuildReportDialog() {
                 </section>
               )}
 
-              {report.assets.length > 0 && (
+              {report.assets.length > 0 && (!isProduction || step === 'check') && (
                 <section className="report-section">
                   <h3>Assets ({report.assets.length})</h3>
                   <table className="report-assets">
@@ -517,17 +539,6 @@ export function BuildReportDialog() {
                 </section>
               )}
 
-              {isProduction && profile && (
-                <PlatformPicker
-                  selected={new Set(profile.targets)}
-                  onToggle={toggleTarget}
-                  platforms={platforms ?? (runningInDesktopShell ? null : STAGED_PLATFORMS)}
-                  staged={!runningInDesktopShell}
-                  error={platformsError}
-                  onRetry={() => void loadExportPlatforms()}
-                />
-              )}
-
               {selectedUnavailable.length > 0 && (
                 <section className="report-section">
                   <ul className="report-issues warn">
@@ -538,7 +549,7 @@ export function BuildReportDialog() {
                 </section>
               )}
 
-              <section className="report-section">
+              <section className="report-section" hidden={isProduction && step !== 'check'}>
                 <label className="report-strip-toggle">
                   <input
                     type="checkbox"
@@ -563,10 +574,11 @@ export function BuildReportDialog() {
               <button className="prefs-link-button" onClick={cancel}>
                 Cancel
               </button>
+              {isProduction && step === 'check' && <button className="prefs-link-button" onClick={() => setStep('platform')}>Back to platforms</button>}
               <button
                 className="prefs-primary-button"
                 disabled={
-                  hasErrors ||
+                  (hasErrors && (!isProduction || step === 'check')) ||
                   profileErrors.length > 0 ||
                   selectedUnavailable.length > 0 ||
                   (isProduction && (!profile || (runningInDesktopShell && !platforms)))
@@ -578,9 +590,9 @@ export function BuildReportDialog() {
                       ? 'Waiting for the local platform check.'
                       : undefined
                 }
-                onClick={() => void confirm(stripUnused, isProduction ? profile ?? undefined : undefined)}
+                onClick={() => isProduction && step === 'platform' ? setStep('check') : void confirm(stripUnused, isProduction ? profile ?? undefined : undefined)}
               >
-                {isProduction ? 'Build' : hasWarnings ? 'Export anyway' : 'Export'}
+                {isProduction ? step === 'platform' ? 'Check project' : runningInDesktopShell ? 'Build game' : 'Download build package' : hasWarnings ? 'Export anyway' : 'Export'}
               </button>
             </footer>
           </motion.div>

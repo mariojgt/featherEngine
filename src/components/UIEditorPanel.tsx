@@ -1,3 +1,4 @@
+import { isWorkspacePanelMaximized, onWorkspacePanelMaximizedChange, toggleWorkspacePanelMaximized } from './workspacePanels';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Blocks,
@@ -34,7 +35,8 @@ import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { UI_TEMPLATES, UI_THEMES, wouldCreateUICycle, type UITemplateKind } from '../store/editor/ui';
 import { UI_ANIMATION_TYPES } from '../ui/uiAnimations';
-import { UIEditLayer } from '../ui/UIEditLayer';
+import { UIDesignerStage } from './UIDesignerStage';
+import { UIWidgetLayoutFields } from './UIWidgetLayoutFields';
 import { UILogicGraph } from './UILogicGraph';
 import type { UIBinding, UIDocument, UIElement, UIElementKind, UIPresetKind } from '../types';
 
@@ -46,6 +48,7 @@ const TEMPLATE_ICON: Record<UITemplateKind, typeof PanelIcon> = {
   gameOver: Skull,
   settings: SlidersHorizontal,
   login: LogIn,
+  inventory: Blocks,
 };
 
 type Mode = 'design' | 'logic';
@@ -210,13 +213,19 @@ function TreeRow({ element, doc, depth, addingUnder, setAddingUnder }: { element
   const componentName = useEditorStore((state) =>
     element.kind === 'component' ? state.uiDocuments.find((d) => d.id === element.componentId)?.name : undefined,
   );
+  const [collapsed, setCollapsed] = useState(false);
+  const reparent = useEditorStore((state) => state.reparentUIElement);
   const isRoot = element.id === doc.root.id;
   const Icon = KIND_ICON[element.kind];
   const componentLabel = componentName ?? (element.componentId ? 'missing' : 'unset');
 
   return (
     <>
-      <div className={clsx('ui-node', (selectedId || doc.root.id) === element.id && 'selected')}>
+      <div className={clsx('ui-node', (selectedId || doc.root.id) === element.id && 'selected')}
+        draggable={!isRoot} onDragStart={(event) => { event.dataTransfer.setData('application/feather-widget', JSON.stringify({ docId: doc.id, id: element.id })); event.dataTransfer.effectAllowed = 'move'; }}
+        onDragOver={(event) => { if (['panel', 'scroll'].includes(element.kind) && event.dataTransfer.types.includes('application/feather-widget')) event.preventDefault(); }}
+        onDrop={(event) => { event.preventDefault(); try { const data = JSON.parse(event.dataTransfer.getData('application/feather-widget')); if (data.docId === doc.id) { reparent(doc.id, data.id, element.id); setCollapsed(false); } } catch { /* unrelated drop */ } }}>
+        {element.children.length > 0 && <button className="ui-tree-expand" aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${element.name}`} aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>{collapsed ? '▸' : '▾'}</button>}
         <button className="ui-node-main" style={{ paddingLeft: 6 + depth * 14 }} onClick={() => selectUIElement(element.id)}>
           <Icon size={14} aria-hidden />
           <span className="ui-node-name">{element.name}</span>
@@ -266,7 +275,7 @@ function TreeRow({ element, doc, depth, addingUnder, setAddingUnder }: { element
         </div>
       )}
 
-      {element.children.map((child) => (
+      {!collapsed && element.children.map((child) => (
         <TreeRow key={child.id} element={child} doc={doc} depth={depth + 1} addingUnder={addingUnder} setAddingUnder={setAddingUnder} />
       ))}
     </>
@@ -410,6 +419,8 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
         </label>
       )}
 
+      <UIWidgetLayoutFields doc={doc} element={element} />
+
       {/* Style */}
       <h4 className="ui-inspector-sub">Style</h4>
       <StyleField label="Background" type="color" value={element.style.background ?? '#000000'} onChange={(v) => patchStyle({ background: v })} />
@@ -432,16 +443,18 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
           <label className="node-field">
             <span>Layout</span>
             <select
-              value={element.style.display === 'grid' ? 'grid' : element.style.flexDirection === 'row' ? 'row' : 'column'}
+              value={element.style.display === 'block' ? 'canvas' : element.style.display === 'grid' ? 'grid' : element.style.flexDirection === 'row' ? 'row' : 'column'}
               onChange={(event) => {
                 const v = event.target.value;
-                if (v === 'grid') patchStyle({ display: 'grid', flexDirection: undefined });
+                if (v === 'canvas') patchStyle({ display: 'block', position: 'relative' });
+                else if (v === 'grid') patchStyle({ display: 'grid', position: 'relative', flexDirection: undefined });
                 else patchStyle({ display: 'flex', flexDirection: v as 'row' | 'column' });
               }}
             >
               <option value="column">Stack (column)</option>
               <option value="row">Row</option>
               <option value="grid">Grid</option>
+              <option value="canvas">Canvas · free placement</option>
             </select>
           </label>
           {element.style.display === 'grid' && (
@@ -486,7 +499,7 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
         <>
           <h4 className="ui-inspector-sub">Anchor</h4>
           <label className="node-field">
-            <span>Pin to screen</span>
+            <span>Pin to parent</span>
             <select
               value={element.anchor ? `${element.anchor.h}:${element.anchor.v}` : ''}
               onChange={(event) => {
@@ -740,10 +753,15 @@ export function UIEditorPanel() {
   const selectUIElement = useEditorStore((state) => state.selectUIElement);
   const [addingUnder, setAddingUnder] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('design');
+  const [widgetSearch, setWidgetSearch] = useState('');
+  const [focused, setFocused] = useState(() => isWorkspacePanelMaximized('ui'));
+  useEffect(() => onWorkspacePanelMaximizedChange('ui', setFocused), []);
+  const addUIElement = useEditorStore((state) => state.addUIElement);
+  const insertUIComponent = useEditorStore((state) => state.insertUIComponent);
 
   const doc = uiDocuments.find((item) => item.id === activeUIDocumentId) ?? uiDocuments[0];
   const selectedElement = doc ? findInTree(doc.root, selectedId) ?? doc.root : undefined;
-  const presetParent = () => (selectedElement?.kind === 'panel' ? selectedElement.id : doc?.root.id);
+  const presetParent = () => (selectedElement && ['panel', 'scroll'].includes(selectedElement.kind) ? selectedElement.id : doc?.root.id);
 
   return (
     <section className="panel ui-panel">
@@ -767,6 +785,7 @@ export function UIEditorPanel() {
           </select>
         )}
         <UINewMenu />
+        <button className="ui-focus-button" title="Focus UI designer" onClick={() => toggleWorkspacePanelMaximized('ui')}>{focused ? 'Exit focus' : 'Focus designer'}</button>
       </div>
 
       {doc && mode === 'logic' && (
@@ -807,11 +826,9 @@ export function UIEditorPanel() {
       ) : mode === 'logic' ? (
         <UILogicGraph doc={doc} />
       ) : (
-        // Spline-style: full-bleed canvas with floating docks (layers left, inspector right, tools top).
-        <div className="ui-design ui-design-canvas-first">
-          <div className="ui-design-frame">
-            <UIEditLayer doc={doc} fillParent={doc.surface === 'screen'} />
-          </div>
+        // Dedicated palette, hierarchy, artboard and details stay separate while composing widgets.
+        <div className="ui-design ui-design-workspace">
+          <UIDesignerStage doc={doc} />
 
           <div className="ui-float-dock" role="toolbar" aria-label="UI tools">
             <div className="ui-seg ui-dock-seg">
@@ -866,7 +883,13 @@ export function UIEditorPanel() {
           </div>
 
           <aside className="ui-float-panel ui-float-layers">
-            <div className="ui-section-title">Layers</div>
+            <div className="ui-section-title">Widget palette</div>
+            <input className="ui-widget-search" aria-label="Search widgets" placeholder="Search widgets…" value={widgetSearch} onChange={(event) => setWidgetSearch(event.target.value)} />
+            <div className="ui-widget-palette">
+              {ELEMENT_KINDS.filter((item) => item.label.toLowerCase().includes(widgetSearch.toLowerCase())).map(({ kind, label, icon: Icon }) => <button key={kind} onClick={() => selectUIElement(addUIElement(doc.id, presetParent(), kind))}><Icon size={13} />{label}</button>)}
+              {uiDocuments.filter((item) => item.isComponent && item.name.toLowerCase().includes(widgetSearch.toLowerCase()) && !wouldCreateUICycle(doc.id, item.id, uiDocuments)).map((item) => <button key={item.id} onClick={() => { const id = insertUIComponent(doc.id, presetParent(), item.id); if (id) selectUIElement(id); }}><Blocks size={13} />{item.name}</button>)}
+            </div>
+            <div className="ui-section-title">Hierarchy</div>
             <div className="ui-tree">
               <TreeRow element={doc.root} doc={doc} depth={0} addingUnder={addingUnder} setAddingUnder={setAddingUnder} />
             </div>
@@ -877,6 +900,7 @@ export function UIEditorPanel() {
               <div className="ui-section-title">
                 {selectedElement.name} <span className="ui-section-kind">{selectedElement.kind}</span>
               </div>
+              {doc.renderMode === 'webgl' && <p className="nfn-desc">Use DOM for editable inputs, toggles, dropdowns and CSS grid spans. WebGL displays these controls as readouts.</p>}
               <Properties doc={doc} element={selectedElement} />
               <details className="ui-section ui-doc-settings">
                 <summary>Document</summary>
@@ -968,7 +992,7 @@ function ComponentInstanceFields({ doc, element }: { doc: UIDocument; element: U
               onChange={(event) => setNewKey(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' || !newKey.trim()) return;
-                setUIComponentParam(doc.id, element.id, newKey.trim(), ' ');
+                setUIComponentParam(doc.id, element.id, newKey.trim(), "''");
                 setNewKey('');
               }}
             />
@@ -977,7 +1001,7 @@ function ComponentInstanceFields({ doc, element }: { doc: UIDocument; element: U
               title="Add parameter"
               disabled={!newKey.trim()}
               onClick={() => {
-                setUIComponentParam(doc.id, element.id, newKey.trim(), ' ');
+                setUIComponentParam(doc.id, element.id, newKey.trim(), "''");
                 setNewKey('');
               }}
             >

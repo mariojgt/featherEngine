@@ -1,6 +1,7 @@
 import { Profiler, useEffect, type ReactNode } from 'react';
 import { profileRender, resetReactProfile } from './runtime/reactProfile';
 import { Launcher } from './components/Launcher';
+import { FirstGameGuide } from './creator/components/FirstGameGuide';
 import { useProjectStore } from './store/projectStore';
 import { Toolbar } from './components/Toolbar';
 import { Workspace } from './components/Workspace';
@@ -294,6 +295,7 @@ export default function App() {
       <RuntimePreviewLoop />
       <PrefabEditGuard />
       {profiled('toolbar', <Toolbar />)}
+      <div className="first-game-slot"><FirstGameGuide /></div>
       <Workspace />
       <StatusBar />
       {profiled('console', <RuntimeConsole />)}

@@ -220,7 +220,7 @@ export const makeUIPreset = (preset: UIPresetKind, variableName: string): UIElem
 // One click drops in a complete, good-looking, data-bound screen — instead of assembling widgets
 // element by element. Each returns a whole document plus the project variables it binds to (created
 // by the store if missing) so it works out of the box.
-export type UITemplateKind = 'shooter' | 'platformer' | 'racing' | 'pauseMenu' | 'gameOver' | 'settings' | 'login';
+export type UITemplateKind = 'shooter' | 'platformer' | 'racing' | 'pauseMenu' | 'gameOver' | 'settings' | 'login' | 'inventory';
 
 export const UI_TEMPLATES: Array<{ kind: UITemplateKind; label: string; blurb: string }> = [
   { kind: 'shooter', label: 'Shooter HUD', blurb: 'Health · ammo · score · crosshair' },
@@ -229,11 +229,12 @@ export const UI_TEMPLATES: Array<{ kind: UITemplateKind; label: string; blurb: s
   { kind: 'pauseMenu', label: 'Pause Menu', blurb: 'Resume · Restart · Quit' },
   { kind: 'gameOver', label: 'Game Over', blurb: 'Score readout · Retry' },
   { kind: 'settings', label: 'Settings Menu', blurb: 'Volume · difficulty · toggle · name' },
+  { kind: 'inventory', label: 'Inventory & Details', blurb: 'Reusable item cards · responsive grid · selection · live controls' },
   { kind: 'login', label: 'Login Screen', blurb: 'Username · password · sign in' },
 ];
 
 export type UITemplateVar = { name: string; defaultValue: number | string | boolean; type?: 'number' | 'string' | 'boolean' };
-export type UITemplateResult = { doc: UIDocument; vars: UITemplateVar[] };
+export type UITemplateResult = { doc: UIDocument; vars: UITemplateVar[]; components?: UIDocument[]; actions?: Array<{ eventName: string; variableName?: string; value?: string }> };
 
 const anchor = (el: UIElement, h: UIAnchor['h'], v: UIAnchor['v'], offsetX = 24, offsetY = 22): UIElement => {
   el.anchor = { h, v, offsetX, offsetY };
@@ -259,6 +260,44 @@ const menuButton = (label: string, event: string): UIElement => {
 /** Build a complete UI document from a template, plus the variables it expects to exist. */
 export const makeUITemplate = (kind: UITemplateKind): UITemplateResult => {
   switch (kind) {
+    case 'inventory': {
+      const doc = makeUIDocument('Inventory & Details', 'screen');
+      doc.root.style = { display: 'flex', flexDirection: 'column', padding: '24px', gap: '18px', color: '#e8efff', background: '#101724', overflow: 'auto', fontFamily: 'system-ui, sans-serif' };
+      const item = { ...makeUIDocument('Inventory Item Card', 'screen'), isComponent: true, visibleOnStart: false };
+      item.root = makeUIElement('button', 'Item card');
+      item.root.text = '';
+      item.root.style = { display: 'flex', flexDirection: 'column', gap: '12px', padding: '18px', minHeight: '142px', textAlign: 'left', background: '#1e2d44', color: '#e8efff', border: '1px solid #354963', borderRadius: '12px' };
+      item.root.states = { hover: { background: '#2a4262' }, active: { background: '#335a85' } };
+      item.root.children = [text('Item symbol', '', { fontSize: '28px' }, 'param.symbol'), text('Item name', '', { fontSize: '15px', fontWeight: '700' }, 'param.label'), text('Quantity', '', { fontSize: '12px', color: '#adc4e4' }, "'Quantity: ' + param.quantity")];
+      const title = text('Title', 'FIELD INVENTORY', { fontSize: '26px', fontWeight: '800' });
+      const subtitle = text('Subtitle', 'Choose an item to inspect it. Press I to open or close.', { fontSize: '13px', color: '#adc4e4' });
+      const body = makeUIElement('panel', 'Inventory layout');
+      body.style = { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '20px', padding: '0', flexGrow: 1, minHeight: '0' };
+      const grid = makeUIElement('scroll', 'Item grid');
+      grid.style = { display: 'grid', gridColumns: 3, gap: '12px', padding: '0', flexGrow: 2, flexBasis: '440px', minWidth: '0px', overflow: 'auto', custom: { gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', alignContent: 'start' } };
+      const actions: NonNullable<UITemplateResult['actions']> = [];
+      const items = [['Health potion', '✚', 3], ['Iron sword', '⚔', 1], ['Travel rations', '◈', 8], ['Ancient key', '⚿', 1], ['Mana crystal', '◆', 5], ['Field journal', '▤', 1]] as const;
+      grid.children = items.map(([label, symbol, quantity], index) => {
+        const instance = makeUIElement('component', label);
+        instance.componentId = item.id;
+        instance.componentParams = { label: quoteUIExpressionString(label), symbol: quoteUIExpressionString(symbol), quantity: String(quantity) };
+        instance.onClickEvent = doc.id + '.select.' + index;
+        actions.push({ eventName: instance.onClickEvent, variableName: 'inventorySelection', value: label });
+        return instance;
+      });
+      const details = makeUIElement('panel', 'Details');
+      details.style = { display: 'flex', flexDirection: 'column', gap: '16px', padding: '22px', flexGrow: 1, flexBasis: '230px', minWidth: '0', background: '#192539', borderRadius: '12px' };
+      const selected = text('Selected item', '', { fontSize: '22px', fontWeight: '700' }, 'inventorySelection');
+      const notes = makeUIElement('input', 'Item notes'); notes.placeholder = 'Write a note…'; notes.valueVariable = 'inventoryNote'; notes.style.width = '100%';
+      const favorite = makeUIElement('toggle', 'Favorite'); favorite.text = 'Mark as favorite'; favorite.valueVariable = 'inventoryFavorite';
+      const notePreview = text('Note preview', '', { fontSize: '13px', color: '#adc4e4' }, "'Note: ' + inventoryNote");
+      const close = makeUIElement('button', 'Close inventory'); close.text = 'Close inventory'; close.onClickEvent = doc.id + '.close';
+      details.children = [text('Details heading', 'ITEM DETAILS', { fontSize: '11px', color: '#8babd5', fontWeight: '700' }), selected, notes, notePreview, favorite, close];
+      body.children = [grid, details];
+      doc.root.children = [title, subtitle, body];
+      actions.push({ eventName: close.onClickEvent });
+      return { doc, components: [item], actions, vars: [{ name: 'inventorySelection', type: 'string', defaultValue: 'Health potion' }, { name: 'inventoryNote', type: 'string', defaultValue: '' }, { name: 'inventoryFavorite', type: 'boolean', defaultValue: false }] };
+    }
     case 'shooter': {
       const doc = makeUIDocument('Shooter HUD', 'screen');
       doc.root.style = {};

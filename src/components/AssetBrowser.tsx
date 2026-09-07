@@ -1,3 +1,4 @@
+import { packGltfFile } from '../three/modelDocument';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bone,
@@ -233,7 +234,15 @@ export function AssetBrowser() {
     return map;
   }, [folders]);
 
+  const [importReport, setImportReport] = useState<Array<{ name: string; messages: string[]; error?: string }>>([]);
+  const importing = useRef(false);
+
   const importFiles = async (files: FileList | File[], folderId?: string) => {
+    if (importing.current) return;
+    importing.current = true;
+    const report: Array<{ name: string; messages: string[]; error?: string }> = [];
+    setImportReport([]);
+    try {
     const dropped = Array.from(files);
     const all = dropped.filter((file) => isAccepted(file.name));
     const platform = await getPlatform();
@@ -250,15 +259,18 @@ export function AssetBrowser() {
     let savedBytes = 0;
     // Drag-and-drop bypasses the picker's `accept`, so filter to supported types here.
     for (const original of all.filter((file) => isAccepted(file.name))) {
+      const receipt: { name: string; messages: string[]; error?: string } = { name: original.name, messages: [] };
+      report.push(receipt);
       try {
         // FBX is converted to GLB on import so storage/rendering/export only deal with glTF.
         // The whole selection is passed along so the FBX's sibling texture images resolve.
-        let file = original;
+        let file = /\.gltf$/i.test(original.name) ? await packGltfFile(original, dropped) : original;
+        let originalAssetId: string | undefined;
         if (/\.fbx$/i.test(original.name)) {
           // Sidecar images may be TGA/BMP (Unreal-style) and are not imported as their own assets.
           const converted = await fbxToGlb(original, dropped);
           file = converted.file;
-          if (converted.droppedTextures > 0) strippedTextures = true;
+          if (converted.droppedTextures > 0) { strippedTextures = true; receipt.messages.push('Some FBX textures are missing. Re-import the FBX together with its texture images.'); }
         }
         // GPU-compress embedded textures to KTX2 (cuts VRAM ~6–8× and shrinks the exported game).
         // On ANY failure we keep the original bytes, so a bad encode never blocks the import.
@@ -267,11 +279,17 @@ export function AssetBrowser() {
             useProjectStore.setState({ toast: { kind: 'success', message: `Compressing textures in "${file.name}"…` } });
             const result = await compressGlbTextures(await file.arrayBuffer());
             if (result.compressed) {
+              const sourceFile = new File([await file.arrayBuffer()], file.name.replace(/\.glb$/i, '.original.glb'), { type: file.type });
+              const source = await platform.importAsset(dir, sourceFile);
+              originalAssetId = `asset-${crypto.randomUUID()}`;
+              items.push({ id: originalAssetId, name: sourceFile.name, type: 'model', size: sourceFile.size, path: source.path, url: source.url, folderId, createdAt: Date.now() });
+              receipt.messages.push('Original model kept in Assets; this copy uses compressed textures.');
               file = new File([result.data], file.name, { type: 'model/gltf-binary' });
               savedBytes += Math.max(0, result.beforeBytes - result.afterBytes);
               compressedCount += 1;
             }
           } catch (compressError) {
+            receipt.messages.push('Texture optimization failed; the original quality was preserved.');
             console.warn(`Texture compression failed for "${file.name}", importing uncompressed:`, compressError);
           }
         }
@@ -279,6 +297,7 @@ export function AssetBrowser() {
         const assetId = `asset-${crypto.randomUUID()}`;
         items.push({
           id: assetId,
+          originalAssetId,
           name: file.name,
           type: detectType(file.name),
           size: file.size,
@@ -291,11 +310,15 @@ export function AssetBrowser() {
         if (detectType(file.name) === 'model') {
           try {
             const inspection = await inspectModel(file);
+            items.find((item) => item.id === assetId)!.modelInspection = inspection;
+            receipt.messages.push(`${inspection.stats?.triangles.toLocaleString() ?? '?'} triangles · ${inspection.materials.length} materials · ${inspection.clips.length} animations`);
+            receipt.messages.push(...(inspection.warnings ?? []));
             modelImports.push({ assetId, assetName: file.name, inspection });
             if (inspection.skeleton) {
               riggedCount += 1;
             }
           } catch (inspectError) {
+            receipt.messages.push(`Model imported; metadata could not be inspected: ${inspectError instanceof Error ? inspectError.message : String(inspectError)}`);
             console.error(`Couldn't inspect model "${file.name}" for animations:`, inspectError);
           }
         }
@@ -303,6 +326,7 @@ export function AssetBrowser() {
         // Don't fail the whole batch — log and surface this one file, keep importing the rest.
         console.error(`Import failed for "${original.name}":`, error);
         const reason = error instanceof Error ? error.message : 'unknown error';
+        receipt.error = reason;
         useProjectStore.setState({
           toast: { kind: 'error', message: `Couldn't import "${original.name}": ${reason}` },
         });
@@ -352,6 +376,10 @@ export function AssetBrowser() {
         },
       });
     }
+    setImportReport(report);
+    } catch (error) {
+      setImportReport([{ name: 'Import', messages: [], error: error instanceof Error ? error.message : String(error) }]);
+    } finally { importing.current = false; }
   };
 
   const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab', id: string, current: string) => {
@@ -1223,7 +1251,7 @@ export function AssetBrowser() {
           type="file"
           hidden
           multiple
-          accept=".glb,.gltf,.fbx,.png,.jpg,.jpeg,.webp,.mp3,.wav"
+          accept=".glb,.gltf,.fbx,.bin,.ktx2,.tga,.bmp,.png,.jpg,.jpeg,.webp,.mp3,.wav"
           onChange={(event) => {
             if (event.target.files) void importFiles(event.target.files, importTargetRef.current);
             event.target.value = '';
@@ -1231,6 +1259,10 @@ export function AssetBrowser() {
         />
       </div>
 
+      {importReport.length > 0 && <details className="model-import-report" open>
+        <summary>Last import · {importReport.filter((item) => !item.error).length} completed · {importReport.filter((item) => item.error).length} failed</summary>
+        <div role="status">{importReport.map((item, index) => <article key={index}><strong>{item.name}</strong>{item.error && <p className="ai-error">{item.error}</p>}{item.messages.map((message, i) => <p key={i}>{message}</p>)}</article>)}</div>
+      </details>}
       <label className="search-field">
         <Search size={14} aria-hidden />
         <input value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="Search assets" />

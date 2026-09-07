@@ -381,6 +381,9 @@ function Primitive({
     />
   );
 
+  // A disabled mesh can remain as a collision/script parent for a replacement visual child.
+  if (renderer?.enabled === false) return null;
+
   if (object.kind === 'light') {
     const l = object.light;
     const lightEl =

@@ -34,7 +34,7 @@ function pickFile(): Promise<File | null> {
 
 /**
  * Browser fallback: projects live in memory; Save downloads a single .nforge file and Open
- * reads one back. Assets stay as blob URLs (not persisted). The desktop app is the full product.
+ * reads one back. The project store embeds imported asset bytes before saving; blob URLs are session-only.
  */
 export const webPlatform: Platform = {
   isDesktop: false,

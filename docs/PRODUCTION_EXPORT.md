@@ -24,13 +24,13 @@ input pipes, so existing templates and key bindings work on phones with no per-g
 
 1. Open the project in the desktop editor.
 2. Click **Export → Production** in the toolbar.
-3. Choose the build profile metadata (product name, stable reverse-DNS application id,
-   version/build number, launch scene, Release/Development, window size) and tick exactly
-   the platforms you want. Web is an ordinary optional target. Missing local toolchains show what
-   to install; targets that require another operating system produce a runner-ready staging folder.
-4. Pick an output folder and wait for the build overlay to finish.
-5. Share `<game>-web.zip`, install from the OS-named desktop folder, use the Android package,
-   or finish iOS signing in Xcode.
+3. Choose a platform, game name, and launch scene. Advanced settings contain the stable application
+   id, version, build mode, and window size. Missing local tooling shows what is needed; a target
+   requiring another OS produces a staging folder with instructions for that host.
+4. Continue to **Check project**, resolve blocking issues, then build. Pick an output folder in
+   the desktop editor. In the browser, download the build package and follow the displayed CLI command.
+5. Read the retained build result and logs. Test the finished web folder or native package before
+   sharing it. A staged package still needs a build on the indicated host; signing is a separate step.
 
 For an existing Steam app, the desktop editor also provides **Export → Upload to Steam…**. It
 previews or uploads one unpacked depot folder with the Steamworks SDK installed locally; it does
@@ -106,6 +106,9 @@ node scripts/export-production.mjs --bundle "path/to/game.json" --name "My Game"
    exact target folder, and restores the reusable player.
 6. Every output includes the final `build-report.json` with its project/bundle versions, selected
    profile, built/staged/failed targets, required runtime features, content inventory, and warnings.
+   Reports also record the engine revision, dirty/source fingerprint, bundle SHA-256, and output-file
+   hashes. `ASSET-CREDITS.txt` carries model copyright metadata when supplied. File hashes exclude the
+   report itself to avoid a circular checksum. Metadata credits do not establish an asset’s license.
 
 The restore step keeps repeated native exports from leaving game-specific generated files in the reusable player build.
 

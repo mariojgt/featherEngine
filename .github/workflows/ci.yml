@@ -42,6 +42,24 @@ jobs:
       - name: Smoke-test portable export
         run: npm run test:production
 
+      - name: Verify beginner creation and exported starter
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/feather-vite.log 2>&1 &
+          trap 'kill $!' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:17420/ > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run test:beginner
+
+      - name: Preserve beginner acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beginner-acceptance
+          path: exports/beginner-acceptance/
+          if-no-files-found: ignore
+
   rust:
     name: Rust checks
     runs-on: ubuntu-22.04

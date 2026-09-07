@@ -14,6 +14,7 @@ import {
 } from '../project/package';
 import {
   readPackageFile,
+  verifyPackageIntegrity,
   writePackageArchive,
   type PackageArchive,
 } from '../project/packageArchive';
@@ -202,6 +203,7 @@ async function applyPackage(
       `"${pkg.meta?.name ?? 'This package'}" is an editor plugin — install it from the Asset Store panel, not as project content.`,
     );
   }
+  await verifyPackageIntegrity({ pkg, bytes });
   const editor = useEditorStore.getState();
   const { content, assets } = remapPackageForImport(pkg, editor.skeletons, editor.assets);
   // The archive keys bytes by the package's ORIGINAL asset ids while remap hands back new ones, so
@@ -246,7 +248,7 @@ interface ProjectState {
   error: string | null;
   toast: { kind: 'success' | 'error'; message: string } | null;
   /** Live progress while a production build runs (desktop). Null when idle. */
-  buildProgress: { running: boolean; lines: string[] } | null;
+  buildProgress: { running: boolean; lines: string[]; status?: 'complete' | 'failed' | 'staged'; output?: string } | null;
   /** Most recent successful production artifact root in this project session. */
   lastProductionOutput: string | null;
   /** A built+verified bundle waiting for the user's go-ahead in the Build Report dialog. */
@@ -264,6 +266,7 @@ interface ProjectState {
   /** Confirm the Build Report dialog with an immutable profile snapshot. */
   confirmPendingExport: (stripUnused: boolean, profile?: ExportProfile) => Promise<void>;
   newProject: (name: string) => Promise<void>;
+  newProjectFromStarter: (name: string, template: 'platformer') => Promise<boolean>;
   openProject: () => Promise<void>;
   openRecent: (dir: string) => Promise<void>;
   /** Drop a recent project from the launcher list (does not delete files on disk). */
@@ -409,14 +412,14 @@ export const useProjectStore = create<ProjectState>()(
               },
             );
             set({
-              buildProgress: null,
+              buildProgress: { running: false, status: 'complete', output: outDir, lines: [...(get().buildProgress?.lines ?? []), '', `Output: ${outDir}`, 'Review build-report.json for built and staged targets. Test your game before sharing it.'] },
               lastProductionOutput: outDir,
               toast: { kind: 'success', message: `Production export finished → ${outDir}` },
             });
           } catch (err) {
             const message = errorMessage(err);
             set({
-              buildProgress: null,
+              buildProgress: { running: false, status: 'failed', lines: [...(get().buildProgress?.lines ?? []), '', `Build failed: ${message}`] },
               error: message,
               toast: { kind: 'error', message: `Build failed: ${message}` },
             });
@@ -426,6 +429,7 @@ export const useProjectStore = create<ProjectState>()(
 
         // Web fallback: stage the bundle and tell the user the CLI command.
         const path = await platform.stageProduction(projectName, bundle);
+        set({ buildProgress: { running: false, status: 'staged', lines: ['Build package downloaded. It still needs to be compiled.', 'Move game.json from Downloads into the engine folder at exports/staging/game.json.', 'From that engine folder, run:', 'npm run export:production -- --bundle exports/staging/game.json', '', 'After the build, serve the resulting web folder using a local HTTP server.', 'Test Start, movement, sound, pause, win, restart, and saving before sharing.', 'Other platforms must be built and tested on their target OS.'] } });
         if (path) {
           set({
             toast: {
@@ -494,6 +498,26 @@ export const useProjectStore = create<ProjectState>()(
           }
         },
 
+        newProjectFromStarter: async (name, template) => {
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return false;
+          const previousScenes = useEditorStore.getState().scenes;
+          await get().newProject(name);
+          if (get().error || !get().hasProject || useEditorStore.getState().scenes === previousScenes) return false;
+          set({ busy: true });
+          try {
+            if (template === 'platformer') {
+              const { createPlatformerTemplate } = await import('../project/platformerTemplate');
+              await createPlatformerTemplate();
+            }
+            return true;
+          } catch (error) {
+            set({ error: errorMessage(error), toast: { kind: 'error', message: `Could not create the starter: ${errorMessage(error)}` } });
+            return false;
+          } finally {
+            set({ busy: false });
+          }
+        },
+
         openProject: async () => {
           if (blockProjectLifecycleDuringCollaboration()) return;
           set({ busy: true, error: null });
@@ -553,6 +577,11 @@ export const useProjectStore = create<ProjectState>()(
           try {
             const platform = await getPlatform();
             const project = { ...useEditorStore.getState().exportProject(), name: projectName };
+            if (!platform.isDesktop) {
+              project.assets = (await embedAssets(useEditorStore.getState().assets)).map(({ url: _url, ...asset }) => asset);
+              const missing = project.assets.filter((asset) => asset.unresolved);
+              if (missing.length) throw new Error(`Re-import missing assets before saving: ${missing.map((asset) => asset.name).join(', ')}`);
+            }
             await platform.saveProject(projectDir, project);
             useEditorStore.getState().markClean();
             set({ toast: { kind: 'success', message: projectDir === 'web' ? 'Project downloaded' : 'Project saved' } });
@@ -573,7 +602,13 @@ export const useProjectStore = create<ProjectState>()(
           try {
             const platform = await getPlatform();
             const project = { ...useEditorStore.getState().exportProject(), name };
+            if (!platform.isDesktop) {
+              project.assets = (await embedAssets(useEditorStore.getState().assets)).map(({ url: _url, ...asset }) => asset);
+              const missing = project.assets.filter((asset) => asset.unresolved);
+              if (missing.length) throw new Error(`Re-import missing assets before saving: ${missing.map((asset) => asset.name).join(', ')}`);
+            }
             const opened = await platform.createProject(name, project);
+            if (opened && !platform.isDesktop) await platform.saveProject(opened.dir, project);
             if (!opened) return;
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
             addRecent(opened.dir, opened.name);
@@ -755,6 +790,7 @@ export const useProjectStore = create<ProjectState>()(
           set({ busy: true, error: null });
           try {
             const archive = readPackageFile(await fetchPackage(url));
+            await verifyPackageIntegrity(archive);
             if (archive.pkg.kind !== 'project' || !archive.pkg.content.scenes?.length) {
               throw new Error('That package is a module, not a project template. Install it into an open project instead.');
             }

@@ -1,3 +1,4 @@
+import { CreatorMovementControls } from './MovementSection';
 import { ExternalLink } from 'lucide-react';
 import { findCreatorRole } from '../roles';
 import { findBehaviorPreset, type BehaviorParameter } from '../../project/behaviors';
@@ -92,6 +93,7 @@ export function CreatorGameplaySection({ object }: { object: SceneObject }) {
         {role && <span className="creator-role-summary"><span aria-hidden>{role.icon}</span>{role.name}</span>}
       </div>
 
+      <CreatorMovementControls object={object} />
       {!role ? (
         <p className="creator-empty-copy">Choose a role above to reveal simple game settings.</p>
       ) : (

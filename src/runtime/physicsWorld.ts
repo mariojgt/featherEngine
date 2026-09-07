@@ -1,3 +1,4 @@
+import { characterGroundSettings } from './characterPresets';
 // Headless Rapier physics runtime.
 //
 // Rendering in this engine is fully decoupled from simulation: meshes just read
@@ -1004,7 +1005,7 @@ class PhysicsRuntime {
     const cached = characterSignatureCache.get(object);
     if (cached !== undefined) return cached;
     const { radius, halfHeight } = characterCapsule(object);
-    const sig = `${radius.toFixed(3)}|${halfHeight.toFixed(3)}`;
+    const sig = `${radius.toFixed(3)}|${halfHeight.toFixed(3)}|${JSON.stringify(characterGroundSettings(object.character))}`;
     characterSignatureCache.set(object, sig);
     return sig;
   }
@@ -1027,8 +1028,12 @@ class PhysicsRuntime {
     );
     // offset keeps the capsule from jittering against surfaces; slide + autostep + ground snap.
     const controller = this.world.createCharacterController(0.02);
-    controller.enableAutostep(0.4, 0.2, true);
-    controller.enableSnapToGround(0.4);
+    const ground = characterGroundSettings(object.character);
+    if (ground.stepHeight > 0) controller.enableAutostep(ground.stepHeight, ground.stepMinWidth, true);
+    else controller.disableAutostep();
+    if (ground.groundSnap > 0) controller.enableSnapToGround(ground.groundSnap);
+    if (ground.maxSlopeDegrees !== undefined) controller.setMaxSlopeClimbAngle(ground.maxSlopeDegrees * Math.PI / 180);
+    if (ground.slideSlopeDegrees !== undefined) controller.setMinSlopeSlideAngle(ground.slideSlopeDegrees * Math.PI / 180);
     controller.setApplyImpulsesToDynamicBodies(true);
     controller.setSlideEnabled(true);
     this.charEntries.set(object.id, { body, collider, controller, signature: this.characterSignature(object) });
@@ -1837,10 +1842,11 @@ class PhysicsRuntime {
       const entry = this.charEntries.get(object.id);
       if (!entry) continue;
       const cur = object.transform.position;
-      const prev = prevTransforms.get(object.id);
-      const desired = prev
-        ? { x: cur[0] - prev.position[0], y: cur[1] - prev.position[1], z: cur[2] - prev.position[2] }
-        : { x: 0, y: 0, z: 0 };
+      // Rapier queries the last simulated capsule pose. At >60 Hz, the editor's previous pose
+      // can already contain queued movement. Resolve the entire pending displacement from the
+      // simulated pose, or ground-snap corrections accumulate twice and sink the player.
+      const simulated = entry.body.translation();
+      const desired = { x: cur[0] - simulated.x, y: cur[1] - simulated.y, z: cur[2] - simulated.z };
       // MOVING-PLATFORM RIDING: if the character is standing on a KINEMATIC body (a script-driven
       // elevator/platform), carry the platform's queued per-tick motion (nextTranslation − current)
       // into the desired movement — otherwise the platform slides out from under the pawn. Ground
@@ -1860,15 +1866,20 @@ class PhysicsRuntime {
           if (groundBody && groundBody.isKinematic()) {
             const now = groundBody.translation();
             const next = groundBody.nextTranslation();
-            desired.x += next.x - now.x;
-            desired.y += next.y - now.y;
-            desired.z += next.z - now.z;
+            const platformId = this.handleToId.get(groundHit.collider.handle);
+            const platformObject = platformId ? byId.get(platformId) : undefined;
+            const platformPrevious = platformObject ? prevWorld(platformObject)?.position : undefined;
+            // Only add this render tick's platform motion; earlier queued carry is already in cur.
+            desired.x += next.x - (platformPrevious?.[0] ?? now.x);
+            desired.y += next.y - (platformPrevious?.[1] ?? now.y);
+            desired.z += next.z - (platformPrevious?.[2] ?? now.z);
           }
         }
       }
       // Release snap-to-ground while rising, or jumps get snapped straight back to the floor.
-      if (desired.y > 0.001) entry.controller.disableSnapToGround();
-      else entry.controller.enableSnapToGround(0.3);
+      const snapDistance = object.character.groundSnap === undefined ? 0.3 : characterGroundSettings(object.character).groundSnap;
+      if (desired.y > 0.001 || snapDistance === 0) entry.controller.disableSnapToGround();
+      else entry.controller.enableSnapToGround(snapDistance);
       entry.controller.computeColliderMovement(
         entry.collider,
         desired,
@@ -1877,8 +1888,7 @@ class PhysicsRuntime {
       );
       if (entry.controller.computedGrounded()) grounded.add(object.id);
       const move = entry.controller.computedMovement();
-      const base = prev ? prev.position : cur;
-      entry.body.setNextKinematicTranslation({ x: base[0] + move.x, y: base[1] + move.y, z: base[2] + move.z });
+      entry.body.setNextKinematicTranslation({ x: simulated.x + move.x, y: simulated.y + move.y, z: simulated.z + move.z });
     }
 
     // Raycast vehicles: translate driver input into per-wheel engine force / brake / steering, then let the

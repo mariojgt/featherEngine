@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as compiler from '../../scripting/featherCompiler';
+import { initHistory, clearHistory, undo } from '../../store/history';
 import { blankProject, migrateLoaded } from '../../project/serialize';
 import { graphToFeatherScript } from '../../scripting/featherScript';
 import { selectActiveObjects, useEditorStore } from '../../store/editorStore';
@@ -68,7 +70,7 @@ describe('simple Creator interactions', () => {
     expect(migrated.blueprints.some((item) => item.id === saved.script?.blueprintId)).toBe(true);
   });
 
-  it('configures trigger colliders and refuses to silently disable an auto-input Player', () => {
+  it('configures trigger colliders and retains an auto-input Player when adding a rule', () => {
     const cubeId = useEditorStore.getState().createObjectWithProps('cube', { name: 'Zone' });
     expect(useEditorStore.getState().addSimpleInteraction(cubeId, {
       trigger: { type: 'trigger-enter' },
@@ -80,7 +82,84 @@ describe('simple Creator interactions', () => {
     expect(useEditorStore.getState().addSimpleInteraction(player.objectId!, {
       trigger: { type: 'start' },
       action: { type: 'event', eventName: 'Ready' },
-    })).toMatchObject({ ok: false, error: 'character-auto-runtime' });
-    expect(activeObject(player.objectId!).script).toBeUndefined();
+    })).toMatchObject({ ok: true });
+    expect(activeObject(player.objectId!).script?.enabled).toBe(true);
+    expect(activeObject(player.objectId!).character?.autoInputWithScript).toBe(true);
+  });
+});
+
+
+describe('editable rule ownership and atomic changes', () => {
+  beforeEach(() => { useEditorStore.getState().loadProject(blankProject('Rule transactions')); initHistory(); clearHistory(); });
+  const add = () => {
+    const id = useEditorStore.getState().createObjectWithProps('cube', { name: 'Bonus' });
+    const result = useEditorStore.getState().addSimpleInteraction(id, { trigger: { type: 'timer', seconds: 1 }, action: { type: 'score', value: 5 } });
+    expect(result.ok).toBe(true);
+    return { id, ruleId: result.interaction!.id };
+  };
+  const source = (id: string) => {
+    const state = useEditorStore.getState();
+    const blueprint = state.blueprints.find((b) => b.id === activeObject(id).script?.blueprintId)!;
+    const graph = state.graphs.find((g) => g.id === blueprint.graphId)!;
+    return graphToFeatherScript({ blueprint, graph, variables: state.variables, blueprints: state.blueprints });
+  };
+  it('leaves all project data unchanged when compilation fails', () => {
+    const id = useEditorStore.getState().createObjectWithProps('cube');
+    const before = useEditorStore.getState();
+    const fail = vi.spyOn(compiler, 'compileFeatherScriptToGraph').mockReturnValueOnce({ ok: false, diagnostics: [{ severity: 'error', message: 'Invalid rule', line: 1, column: 1, length: 1 }] });
+    try {
+      expect(before.addSimpleInteraction(id, { trigger: { type: 'trigger-enter' }, action: { type: 'score', value: 2 } })).toMatchObject({ ok: false, error: 'compile-failed' });
+      const after = useEditorStore.getState();
+      for (const key of ['scenes', 'graphs', 'blueprints', 'variables', 'isDirty', 'undoDepth'] as const) expect(after[key]).toBe(before[key]);
+    } finally { fail.mockRestore(); }
+  });
+  it('undo restores the graph, object, and newly created score variable together', () => {
+    const id = useEditorStore.getState().createObjectWithProps('cube');
+    clearHistory();
+    const before = useEditorStore.getState();
+    expect(before.addSimpleInteraction(id, { trigger: { type: 'timer', seconds: 1 }, action: { type: 'score', value: 2 } }).ok).toBe(true);
+    undo();
+    const after = useEditorStore.getState();
+    expect(after.scenes).toBe(before.scenes);
+    expect(after.graphs).toBe(before.graphs);
+    expect(after.variables).toBe(before.variables);
+  });
+  it('edits, disables, enables and deletes only the managed rule', () => {
+    const { id, ruleId } = add();
+    const rule = activeObject(id).creatorInteractions![0];
+    expect(useEditorStore.getState().updateSimpleInteraction(id, ruleId, { ...rule, action: { type: 'score', value: 17 } }).ok).toBe(true);
+    expect(source(id)).toContain('Game.Score + 17');
+    expect(source(id)).not.toContain('Game.Score + 5');
+    expect(useEditorStore.getState().updateSimpleInteraction(id, ruleId, { ...rule, enabled: false }).ok).toBe(true);
+    expect(source(id)).not.toContain('on timer');
+    expect(useEditorStore.getState().updateSimpleInteraction(id, ruleId, { ...rule, enabled: true }).ok).toBe(true);
+    expect(source(id)).toContain('Game.Score + 5');
+    expect(useEditorStore.getState().updateSimpleInteraction(id, ruleId, null).ok).toBe(true);
+    expect(activeObject(id).creatorInteractions).toEqual([]);
+    expect(source(id)).not.toContain('on timer');
+  });
+  it('refuses to overwrite custom graph edits, but can append another managed rule', () => {
+    const { id, ruleId } = add();
+    const blueprintId = activeObject(id).script!.blueprintId;
+    useEditorStore.getState().applyBlueprintFeatherSource(blueprintId, source(id).replace('Game.Score + 5', 'Game.Score + 90'));
+    expect(useEditorStore.getState().updateSimpleInteraction(id, ruleId, null)).toMatchObject({ ok: false, error: 'custom-logic' });
+    expect(source(id)).toContain('Game.Score + 90');
+    expect(useEditorStore.getState().addSimpleInteraction(id, { trigger: { type: 'start' }, action: { type: 'event', eventName: 'Ready' } }).ok).toBe(true);
+    expect(source(id)).toContain('Game.Score + 90');
+    expect(activeObject(id).creatorInteractions![0].managed).toBe(false);
+    expect(source(id)).toContain('fire_event("Ready")');
+  });
+  it('keeps rule ownership editable after save/reopen', () => {
+    const { id, ruleId } = add();
+    const saved = JSON.parse(JSON.stringify(useEditorStore.getState().exportProject()));
+    useEditorStore.getState().loadProject(migrateLoaded(saved));
+    expect(useEditorStore.getState().updateSimpleInteraction(id, ruleId, null).ok).toBe(true);
+  });
+  it('rejects missing assets and nonfinite values without mutating the scene', () => {
+    const id = useEditorStore.getState().createObjectWithProps('cube');
+    const before = useEditorStore.getState();
+    expect(before.addSimpleInteraction(id, { trigger: { type: 'start' }, action: { type: 'play-sound', assetId: 'missing' } }).error).toBe('invalid-rule');
+    expect(before.addSimpleInteraction(id, { trigger: { type: 'timer', seconds: NaN }, action: { type: 'score', value: 1 } }).error).toBe('invalid-rule');
+    expect(useEditorStore.getState().scenes).toBe(before.scenes);
   });
 });

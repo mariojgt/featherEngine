@@ -109,6 +109,7 @@ export const FEATHER_API_ENTRIES: FeatherApiEntry[] = [
   event('event.update', 'on update(dt):', 'on update(dt):\n    ', 'Runs every frame while Play is active.', ['tick', 'frame']),
   event('event.update.timer', 'on update every 1s:', 'on update every 1s:\n    ', 'Runs Update on an interval.', ['timer', 'interval']),
   event('event.key_down', 'on key_down("KeyW"):', 'on key_down("KeyW"):\n    ', 'Runs while a key is pressed.', ['input', 'keyboard']),
+  event('event.key_pressed', 'on key_pressed("KeyP"):', 'on key_pressed("KeyP"):\n    ', 'Runs once per press, including a short tap between frames. Use for pause and other toggles.', ['input', 'keyboard']),
   event('event.key_up', 'on key_up("KeyW"):', 'on key_up("KeyW"):\n    ', 'Runs when a key is released.', ['input', 'keyboard']),
   event('event.custom', 'on event CustomEvent(payload):', 'on event CustomEvent(payload):\n    ', 'Runs when a custom event fires.', ['custom', 'message']),
   event('event.collision_enter', 'on collision_enter(other):', 'on collision_enter(other):\n    ', 'Runs when this object starts touching another collider.', ['physics', 'hit']),

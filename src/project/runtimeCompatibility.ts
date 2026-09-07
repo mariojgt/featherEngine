@@ -6,6 +6,7 @@ export const RUNTIME_CONTRACT_VERSION = '1.1.0';
 export const SUPPORTED_RUNTIME_FEATURES = [
   'multi-scene',
   'blueprints',
+  'keyboard-press-events',
   'featherscript',
   'ui-dom',
   'ui-webgl',
@@ -62,6 +63,7 @@ export function detectRuntimeFeatures(project: NodeForgeProject): RuntimeFeature
   const objects = allObjects(project);
   const nodes = (project.graphs ?? []).flatMap((graph) => graph.nodes ?? []);
   const nodeKinds = new Set(nodes.map((node) => String(node.data.nodeKind ?? '')));
+  if (nodes.some((node) => node.data.nodeKind === 'event.keyDown' && node.data.keyTriggerMode === 'pressed')) features.add('keyboard-press-events');
 
   if (project.scenes.length > 1 || nodeKinds.has('action.loadScene')) features.add('multi-scene');
   if ((project.blueprints?.length ?? 0) > 0 || objects.some((object) => object.script?.enabled)) {

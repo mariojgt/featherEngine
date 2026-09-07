@@ -203,3 +203,47 @@ describe('FeatherEventBus', () => {
     consoleError.mockRestore();
   });
 });
+
+describe('plugin failure boundaries', () => {
+  it('revokes retained capabilities and ignores stale disposers after reactivation', () => {
+    const registry = new ExtensionRegistry(), eventBus = new FeatherEventBus();
+    let api!: FeatherPluginAPI;
+    const plugin = { id: 'test.revoked', name: 'Revoked', version: '1.0.0', activate(value: FeatherPluginAPI) { api = value; } };
+    const stale = activateExtensionPlugin(plugin, { registry, eventBus });
+    const old = api;
+    registry.deactivatePlugin(plugin.id);
+    expect(() => old.commands.register({ id: 'test.revoked.late', title: 'Late', run() {} })).toThrow(/no longer active/);
+    expect(() => old.objects.create({ kind: 'cube' })).toThrow(/no longer active/);
+    expect(registry.getSnapshot().commands).toHaveLength(0);
+    const latest = activateExtensionPlugin(plugin, { registry, eventBus });
+    stale();
+    expect(registry.hasPlugin(plugin.id)).toBe(true);
+    latest();
+  });
+
+  it('revokes failed activations and rejects async activation without leaking registrations', async () => {
+    const registry = new ExtensionRegistry(), eventBus = new FeatherEventBus();
+    let api!: FeatherPluginAPI;
+    expect(() => activateExtensionPlugin({ id: 'test.async', name: 'Async', version: '1.0.0', activate: (value: FeatherPluginAPI) => {
+      api = value;
+      value.commands.register({ id: 'test.async.command', title: 'Command', run() {} });
+      return Promise.resolve();
+    } } as never, { registry, eventBus })).toThrow(/synchronous/);
+    await Promise.resolve();
+    expect(registry.getSnapshot().commands).toHaveLength(0);
+    expect(() => api.events.on('selection:changed', () => {})).toThrow(/no longer active/);
+  });
+
+  it('validates the complete transform before changing any field', () => {
+    const registry = new ExtensionRegistry(), eventBus = new FeatherEventBus();
+    let api!: FeatherPluginAPI;
+    useProjectStore.setState({ hasProject: true });
+    useEditorStore.setState({ isPlaying: false });
+    const dispose = activateExtensionPlugin({ id: 'test.atomic', name: 'Atomic', version: '1.0.0', activate(value) { api = value; } }, { registry, eventBus });
+    const id = api.objects.create({ kind: 'cube', position: [1, 2, 3] });
+    try {
+      expect(() => api.objects.setTransform(id, { position: [8, 9, 10], rotation: [0, NaN, 0] })).toThrow(/finite/);
+      expect(api.objects.get(id)?.transform.position).toEqual([1, 2, 3]);
+    } finally { api.objects.remove(id); dispose(); }
+  });
+});

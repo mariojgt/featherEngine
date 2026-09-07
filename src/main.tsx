@@ -7,6 +7,7 @@ import { initStoreSync } from './sync/storeSync';
 import { startMcpBridge } from './ai/mcpBridge';
 import { startExtensionHost } from './extensions/host';
 import { useEditorStore } from './store/editorStore';
+import { useProjectStore } from './store/projectStore';
 import { usePluginStore } from './store/pluginStore';
 import './styles.css';
 import '@xyflow/react/dist/style.css';
@@ -14,6 +15,7 @@ import '@xyflow/react/dist/style.css';
 // DEV-only handle for the end-to-end suite (scripts/e2e), which drives real Chrome over CDP and
 // needs to set up scenarios the UI can't reach in a few clicks. Never present in a production build.
 if (import.meta.env.DEV) {
+  (window as unknown as { __featherProject: unknown }).__featherProject = new Proxy({}, { get: (_, key: string) => useProjectStore.getState()[key as keyof ReturnType<typeof useProjectStore.getState>] });
   (window as unknown as { __featherStore: unknown }).__featherStore = new Proxy(
     {},
     { get: (_, key: string) => useEditorStore.getState()[key as keyof ReturnType<typeof useEditorStore.getState>] },

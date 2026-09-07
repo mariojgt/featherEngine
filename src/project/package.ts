@@ -1,3 +1,5 @@
+import { evalExpression } from '../ui/expression';
+import { validatePackageStructure } from './packageValidation';
 import {
   PROJECT_VERSION,
   type AnimationAsset,
@@ -5,6 +7,8 @@ import {
   type AssetItem,
   type DataAsset,
   type MaterialDefinition,
+  type ModelSpec,
+  type TreeSpec,
   type NodeForgeNode,
   type ParticleSystemDefinition,
   type Prefab,
@@ -82,6 +86,8 @@ export interface PackageMeta {
 
 /** The transferable slice of a project. Only the entities the seed actually references are included. */
 export interface PackageContent {
+  modelSpecs?: ModelSpec[];
+  treeSpecs?: TreeSpec[];
   prefabs: Prefab[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
@@ -127,12 +133,7 @@ const isPackage = (value: unknown): value is NodeForgePackage =>
 /** Validate + narrow an arbitrary parsed JSON into a NodeForgePackage, or throw a friendly error. */
 export function parsePackage(raw: unknown): NodeForgePackage {
   if (!isPackage(raw)) throw new Error('Not a NodeForge package file (.nfpack).');
-  const pkg = raw as NodeForgePackage;
-  if (!pkg.content || !Array.isArray(pkg.content.prefabs)) {
-    throw new Error('Package is missing content.');
-  }
-  // Normalise here so every consumer downstream sees one of the three current kinds, never the
-  // legacy `module` spelling and never an unknown string from a hand-edited file.
+  const pkg = validatePackageStructure(raw) as NodeForgePackage;
   return { ...pkg, kind: normalizePackageKind(pkg.kind) };
 }
 
@@ -230,6 +231,8 @@ export function collectPackage(
   seeds: PackageSeeds,
 ): { content: PackageContent; assetIds: string[] } {
   const ids = {
+    modelSpec: new Set<string>(),
+    treeSpec: new Set<string>(),
     prefab: new Set<string>(),
     blueprint: new Set<string>(),
     graph: new Set<string>(),
@@ -249,6 +252,8 @@ export function collectPackage(
     if (id) set.add(id);
   };
   const add = {
+    modelSpec: addTo(ids.modelSpec),
+    treeSpec: addTo(ids.treeSpec),
     prefab: addTo(ids.prefab),
     blueprint: addTo(ids.blueprint),
     graph: addTo(ids.graph),
@@ -282,6 +287,8 @@ export function collectPackage(
 
   /** Pull every id referenced by a captured object's components into the buckets. */
   const scanObject = (object: SceneObject) => {
+    add.modelSpec(object.model?.specId);
+    add.treeSpec(object.tree?.specId);
     // A nested prefab INSTANCE inside this prefab pulls its source prefab into the closure too —
     // without this, exporting a prefab-of-prefabs shipped ghosts.
     add.prefab(object.prefabSourceId);
@@ -335,6 +342,8 @@ export function collectPackage(
   while (changed) {
     const before = Object.values(ids).reduce((sum, set) => sum + set.size, 0);
 
+    for (const asset of src.assets.filter((item) => ids.asset.has(item.id))) add.asset(asset.originalAssetId);
+
     for (const scene of (src.scenes ?? []).filter((s) => ids.scene.has(s.id))) {
       for (const object of scene.objects) scanObject(object);
       scanScene(scene);
@@ -374,6 +383,19 @@ export function collectPackage(
     }
     for (const doc of src.uiDocuments.filter((d) => ids.uiDocument.has(d.id))) {
       scanUIElement(doc.root, add.asset);
+      // Bindings and instance parameters reference variables by NAME, independently of graphs.
+      // The evaluator visits both branches and exposes variable reads without executing code.
+      const byName = new Map(src.variables.map((variable) => [variable.name, variable]));
+      const vars = new Proxy(Object.fromEntries(src.variables.map((variable) => [variable.name, variable.defaultValue])), {
+        get(target, key: string) { const variable = byName.get(key); if (variable) add.variable(variable.id); return target[key]; },
+      });
+      const scanBindings = (element: UIElement) => {
+        if (element.valueVariable) add.variable(byName.get(element.valueVariable)?.id);
+        for (const binding of element.bindings) evalExpression(binding.expression, { vars });
+        for (const expression of Object.values(element.componentParams ?? {})) evalExpression(expression, { vars });
+        element.children.forEach(scanBindings);
+      };
+      scanBindings(doc.root);
       add.blueprint(doc.logicBlueprintId);
       // A `component` element instances another document — pull it in, or the shared package
       // arrives with instances pointing at nothing. The fixed-point loop handles nesting.
@@ -387,6 +409,8 @@ export function collectPackage(
   const pick = <T extends { id: string }>(arr: T[], set: Set<string>) => arr.filter((item) => set.has(item.id));
 
   const content: PackageContent = {
+    modelSpecs: pick(src.modelSpecs ?? [], ids.modelSpec),
+    treeSpecs: pick(src.treeSpecs ?? [], ids.treeSpec),
     prefabs: pick(src.prefabs, ids.prefab),
     blueprints: pick(src.blueprints, ids.blueprint),
     graphs: pick(src.graphs, ids.graph),
@@ -465,6 +489,8 @@ export function remapPackageForImport(
 
   // 1. Allocate fresh top-level ids for everything we will actually add.
   const maps = {
+    modelSpec: new Map<string, string>(),
+    treeSpec: new Map<string, string>(),
     prefab: new Map<string, string>(),
     blueprint: new Map<string, string>(),
     graph: new Map<string, string>(),
@@ -521,6 +547,8 @@ export function remapPackageForImport(
     }
   }
 
+  (c.modelSpecs ?? []).forEach((spec) => maps.modelSpec.set(spec.id, newId('model')));
+  (c.treeSpecs ?? []).forEach((spec) => maps.treeSpec.set(spec.id, newId('tree')));
   c.prefabs.forEach((p) => maps.prefab.set(p.id, newId('prefab')));
   c.blueprints.forEach((b) => maps.blueprint.set(b.id, newId('blueprint')));
   c.graphs.forEach((g) => maps.graph.set(g.id, newId('graph')));
@@ -568,7 +596,20 @@ export function remapPackageForImport(
   const rewriteObject = (object: SceneObject): SceneObject => {
     const o = object;
     o.id = remap(maps.object, o.id)!;
+    if (o.model?.specId) o.model.specId = remap(maps.modelSpec, o.model.specId);
+    if (o.tree?.specId) o.tree.specId = remap(maps.treeSpec, o.tree.specId);
     if (o.parentId) o.parentId = remap(maps.object, o.parentId);
+    if (o.creatorAppearanceFor) o.creatorAppearanceFor = remap(maps.object, o.creatorAppearanceFor);
+    if (o.creatorLogic) {
+      o.creatorLogic.baseSource = rewriteSourceIds(o.creatorLogic.baseSource)!;
+      o.creatorLogic.generatedSource = rewriteSourceIds(o.creatorLogic.generatedSource)!;
+    }
+    for (const rule of o.creatorInteractions ?? []) {
+      for (const action of [rule.action, ...(rule.then ?? [])]) {
+        action.assetId = remap(maps.asset, action.assetId);
+        action.animationId = remap(maps.animation, action.animationId);
+      }
+    }
     if (o.prefabSourceId) o.prefabSourceId = remap(maps.prefab, o.prefabSourceId);
     if (o.prefabObjectId) o.prefabObjectId = remap(maps.object, o.prefabObjectId);
     if (o.renderer) {
@@ -762,6 +803,8 @@ export function remapPackageForImport(
     bp.featherSourceLastSyncedVisualHash = undefined;
   }
   c.graphs.forEach(rewriteGraph);
+  for (const spec of c.modelSpecs ?? []) spec.id = remap(maps.modelSpec, spec.id)!;
+  for (const spec of c.treeSpecs ?? []) spec.id = remap(maps.treeSpec, spec.id)!;
   for (const mat of c.materials) {
     mat.id = remap(maps.material, mat.id)!;
     mat.textureAssetId = remap(maps.asset, mat.textureAssetId);
@@ -838,6 +881,7 @@ export function remapPackageForImport(
   const assets: AssetItem[] = importedAssets.map((asset) => ({
     ...asset,
     id: remap(maps.asset, asset.id)!,
+    originalAssetId: asset.originalAssetId ? maps.asset.get(asset.originalAssetId) : undefined,
     path: undefined,
     url: undefined,
     folderId: intoFolder(asset.folderId),

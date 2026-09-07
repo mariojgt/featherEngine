@@ -700,3 +700,12 @@ describe('FeatherScript round-trip: graph -> text -> graph', () => {
     expect(reprinted).toBe(printed);
   });
 });
+
+it('round-trips once-per-press keys separately from legacy held keys', () => {
+  const { first, printed } = roundTrip('blueprint Test\non key_pressed("KeyP"):\n    Game.Score = Game.Score + 1\non key_down("KeyW"):\n    self.move(vec3(0, 0, 1), speed: 4)');
+  const keys = first.graph!.nodes.filter((node) => node.data.nodeKind === 'event.keyDown');
+  expect(keys.find((node) => node.data.keyCode === 'KeyP')?.data.keyTriggerMode).toBe('pressed');
+  expect(keys.find((node) => node.data.keyCode === 'KeyW')?.data.keyTriggerMode).toBeUndefined();
+  expect(printed).toContain('on key_pressed("KeyP"):');
+  expect(printed).toContain('on key_down("KeyW"):');
+});

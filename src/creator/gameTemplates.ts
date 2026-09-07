@@ -14,6 +14,7 @@ export interface CreatorQuickStart {
   description: string;
   icon: string;
   templateSlug?: string;
+  builtInTemplate?: 'platformer';
   gameplayKitId?: import('./gameplayKits').CreatorGameplayKitId;
   comingSoon?: boolean;
 }
@@ -47,6 +48,7 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
     description: 'A stylized sky course with an animated cartoon hero, moving clouds, collectibles and a polished HUD.',
     icon: '🏃',
     templateSlug: 'template-platformer',
+    builtInTemplate: 'platformer',
   },
   {
     id: 'blank',

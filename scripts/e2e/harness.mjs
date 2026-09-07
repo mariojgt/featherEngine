@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { delay, launch } from './cdp.mjs';
 
-export async function openEditor({ baseUrl, query = '', timeoutMs = 60_000, width = 1600, height = 1000 } = {}) {
+export async function openEditor({ baseUrl, query = '', timeoutMs = 60_000, readySelector = '.toolbar', width = 1600, height = 1000 } = {}) {
   const { page, dispose } = await launch({ width, height });
   const url = `${baseUrl}/${query}`;
 
@@ -75,7 +75,16 @@ export async function openEditor({ baseUrl, query = '', timeoutMs = 60_000, widt
 
   /** A real mouse click at the element's centre — synthetic DOM clicks do not drive ReactFlow. */
   const realClick = async (selector, options) => {
-    const box = await boxOf(selector, options);
+    let box, previous, stable = 0;
+    const deadline = Date.now() + 4000;
+    do {
+      box = await boxOf(selector, options);
+      if (box && previous && Math.abs(box.x - previous.x) < 0.5 && Math.abs(box.y - previous.y) < 0.5) stable++;
+      else stable = 0;
+      if (stable >= 3) break;
+      previous = box;
+      await delay(100);
+    } while (Date.now() < deadline);
     assert.ok(box, `Cannot click, no visible/unobstructed element for: ${selector}`);
     const base = { x: box.x, y: box.y, button: 'left', clickCount: 1, buttons: 1 };
     await page.call('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0 });
@@ -158,7 +167,7 @@ export async function openEditor({ baseUrl, query = '', timeoutMs = 60_000, widt
 
   await page.call('Page.navigate', { url });
   // The editor is ready once the toolbar exists; individual specs wait for what they need.
-  await waitFor(`document.querySelector('.toolbar')`, { label: 'editor toolbar' });
+  await waitFor(`document.querySelector(${JSON.stringify(readySelector)})`, { label: readySelector });
 
   return { page, evaluate, waitFor, count, text, boxOf, realClick, pixelStats, overlaps, consoleErrors, dispose, url };
 }

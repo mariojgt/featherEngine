@@ -1,3 +1,4 @@
+import { ModelAppearanceSection } from './ModelAppearanceSection';
 import { Palette } from 'lucide-react';
 import { CREATOR_MATERIAL_LOOKS, findCreatorMaterialPreset } from '../materialLooks';
 import { materialPresetPatch } from '../../three/presets';
@@ -93,6 +94,7 @@ export function CreatorAppearanceSection({ object }: { object: SceneObject }) {
         <Palette size={14} aria-hidden />
       </div>
 
+      <ModelAppearanceSection key={object.id} object={object} />
       <div className="creator-look-grid">
         {CREATOR_MATERIAL_LOOKS.map((look) => (
           <button

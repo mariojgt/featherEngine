@@ -1,3 +1,4 @@
+import { applyReplaceObjectAppearance } from './editor/appearanceActions';
 import type { Edge, OnConnect, OnEdgesChange, OnNodesChange, OnReconnect } from '@xyflow/react';
 import { create } from 'zustand';
 import {
@@ -310,7 +311,7 @@ import {
   applyMakeObjectRole,
 } from './editor/creatorActions';
 import type { CreateRoleObjectOptions, CreatorRoleActionResult } from '../creator/roles';
-import { applyAddSimpleInteraction, type SimpleInteractionActionResult } from './editor/simpleInteractionActions';
+import { applyAddSimpleInteraction, applyUpdateSimpleInteraction, type SimpleInteractionActionResult } from './editor/simpleInteractionActions';
 import type { SimpleInteractionDraft } from '../creator/simpleInteractions';
 import { applyCreateCreatorGameplayKit, type CreatorGameplayKitResult } from './editor/gameplayKitActions';
 import {
@@ -408,6 +409,7 @@ import {
   applyHideUI,
   applyInsertUIComponent,
   applyMoveUIElement,
+  applyReparentUIElement,
   applyOpenUILogic,
   applyRemoveUIElement,
   applyRenameUIDocument,
@@ -1001,6 +1003,7 @@ export interface EditorState {
   createRoleObject: (roleId: string, options?: CreateRoleObjectOptions) => CreatorRoleActionResult;
   /** Compile a beginner interaction into an object-specific, normal editable Blueprint. */
   addSimpleInteraction: (objectId: string, interaction: SimpleInteractionDraft) => SimpleInteractionActionResult;
+  updateSimpleInteraction: (objectId: string, interactionId: string, interaction: SimpleInteractionDraft | null) => SimpleInteractionActionResult;
   /** Add a playable multi-object starter by composing normal Creator/store actions. */
   createCreatorGameplayKit: (kitId: string) => CreatorGameplayKitResult;
   /** Dev/perf utility: batch-spawn N falling dynamic cubes (one set()) to stress the runtime + renderer. */
@@ -1049,6 +1052,7 @@ export interface EditorState {
   updateTransform: (id: string, field: keyof TransformComponent, value: Vector3Tuple) => void;
   updateRenderer: (id: string, patch: Partial<MeshRendererComponent>) => void;
   setObjectModel: (id: string, modelAssetId?: string) => void;
+  replaceObjectAppearance: (objectId: string, assetId: string | null) => { ok: boolean; objectId?: string; error?: string };
   updateTerrain: (id: string, patch: Partial<TerrainComponent>) => void;
   /** Add a tree asset to the project library (copied from an archetype). Returns its id. */
   createTreeSpec: (archetype: TreeArchetype, name?: string) => string;
@@ -1434,6 +1438,7 @@ export interface EditorState {
   addUIPreset: (docId: string, parentId: string | undefined, preset: UIPresetKind, options?: { variableName?: string }) => string;
   /** Reorder an element among its siblings. */
   moveUIElement: (docId: string, elementId: string, dir: 'up' | 'down') => void;
+  reparentUIElement: (docId: string, elementId: string, parentId: string) => void;
   /** Deep-clone an element next to itself (fresh ids). Returns the new element id. */
   duplicateUIElement: (docId: string, elementId: string) => string;
   /** Attach (or replace) a world-space UI document on an object. Seeds offset/scale/billboard defaults. */
@@ -1732,6 +1737,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   makeObjectRole: (objectId, roleId) => applyMakeObjectRole(set, get, objectId, roleId),
   createRoleObject: (roleId, options = {}) => applyCreateRoleObject(set, get, roleId, options),
   addSimpleInteraction: (objectId, interaction) => applyAddSimpleInteraction(set, get, objectId, interaction),
+  updateSimpleInteraction: (objectId, interactionId, interaction) => applyUpdateSimpleInteraction(set, get, objectId, interactionId, interaction),
   createCreatorGameplayKit: (kitId) => applyCreateCreatorGameplayKit(get, kitId),
   spawnStressTest: (count) => applySpawnStressTest(set, count),
   deleteObject: (id) => applyDeleteObject(set, id),
@@ -1758,6 +1764,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateTransform: (id, field, value) => applyUpdateTransform(set, id, field, value),
   updateRenderer: (id, patch) => applyUpdateRenderer(set, id, patch),
   setObjectModel: (id, modelAssetId) => applySetObjectModel(set, id, modelAssetId),
+  replaceObjectAppearance: (objectId, assetId) => applyReplaceObjectAppearance(set, get, objectId, assetId),
   setObjectMaterialSlot: (objectId, slotIndex, materialId) => applySetObjectMaterialSlot(set, objectId, slotIndex, materialId),
   updateTerrain: (id, patch) => applyUpdateTerrain(set, id, patch),
   createTreeSpec: (archetype, name) => applyCreateTreeSpec(set, archetype, name),
@@ -1966,6 +1973,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setUIBinding: (docId, elementId, target, expression) => applySetUIBinding(set, docId, elementId, target, expression),
   addUIPreset: (docId, parentId, preset, options) => applyAddUIPreset(set, get, docId, parentId, preset, options),
   moveUIElement: (docId, elementId, dir) => applyMoveUIElement(set, docId, elementId, dir),
+  reparentUIElement: (docId, elementId, parentId) => applyReparentUIElement(set, docId, elementId, parentId),
   duplicateUIElement: (docId, elementId) => applyDuplicateUIElement(set, get, docId, elementId),
   attachUI: (objectId, documentId) => applyAttachUI(set, objectId, documentId),
   detachUI: (objectId) => applyDetachUI(set, objectId),

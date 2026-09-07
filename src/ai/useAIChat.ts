@@ -92,6 +92,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Read blueprint script';
     case 'set_blueprint_script':
       return 'Wrote blueprint script';
+    case 'add_simple_interaction':
+      return 'Added gameplay rule';
+    case 'update_simple_interaction':
+      return `Updated gameplay rule (${String(input.operation ?? 'edit')})`;
     case 'attach_behavior':
       return `Attached behavior${input.behaviorId ? ` "${String(input.behaviorId)}"` : ''}`;
     case 'set_streaming':
@@ -366,6 +370,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return input.particleSystemId ? 'Attached particle system' : 'Detached particle system';
     case 'set_physics':
       return input.isTrigger ? 'Configured trigger' : 'Configured physics';
+    case 'replace_object_appearance':
+      return 'Replaced model appearance';
+    case 'apply_movement_preset':
+      return 'Applied movement feel';
     case 'apply_physics_preset':
       return `Applied ${String(input.preset ?? '')} physics`;
     case 'create_water_volume':

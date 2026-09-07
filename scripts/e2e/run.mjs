@@ -8,6 +8,10 @@
  * Run against an already-running dev server:  npm run test:e2e
  */
 import assert from 'node:assert/strict';
+import { mkdtemp, readdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { unzipSync } from 'fflate';
 import { spawn } from 'node:child_process';
 import { openEditor } from './harness.mjs';
 import { delay } from './cdp.mjs';
@@ -772,6 +776,8 @@ spec('the graph canvas has no large near-white slab on a dark theme', async () =
   const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=script&theme=nova' });
   try {
     await openScripting(app);
+    await app.realClick('.graph-focus-toggle');
+    await app.waitFor(`document.querySelector('.react-flow__minimap')?.getBoundingClientRect().width > 0`, { label: 'minimap visible in focus mode' });
     await app.waitFor(`document.querySelector('.react-flow__minimap')`, { label: 'minimap present' });
     const canvas = await app.pixelStats('.flow-shell');
     assert.ok(
@@ -905,7 +911,7 @@ spec('the RPG kit\'s id-based layout rules survive installation', async () => {
       if (!hud) return null;
       const kids = [...hud.children];
       // #hud > * { position: absolute } — plus a few regions with their own stronger rule.
-      return { kids: kids.length, positioned: kids.filter((k) => getComputedStyle(k).position !== 'static').length };
+      return { kids: kids.length, positioned: kids.filter((k) => getComputedStyle(k).position === 'absolute').length };
     })()`);
     assert.ok(placed, 'the #hud root should be reachable as .id-hud');
     assert.ok(placed.kids > 4, `expected the HUD regions, got ${placed.kids}`);
@@ -1040,9 +1046,9 @@ spec('each instance of a shared button fires its own event', async () => {
       useEditorStore.setState({ fireCustomEvent: (name) => window.__events.push(name) });
       useEditorStore.getState().setPlaying(true);
     })()`);
-    await app.waitFor(`document.querySelectorAll('.pr-btn').length === 3`, { label: 'menu buttons live in Play' });
+    await app.waitFor(`document.querySelectorAll('.scene-drop-zone .pr-btn').length === 3`, { label: 'menu buttons live in Play' });
     for (const label of ['PLAY', 'PARTY', 'SHOP']) {
-      await app.evaluate(`[...document.querySelectorAll('.pr-btn')].find((b) => b.textContent.trim() === '${label}').click()`);
+      await app.evaluate(`[...document.querySelectorAll('.scene-drop-zone .pr-btn')].find((b) => b.textContent.trim() === '${label}').click()`);
     }
     const events = await app.evaluate(`JSON.stringify(window.__events)`);
     assert.deepEqual(JSON.parse(events), ['startMatch', 'openParty', 'openShop']);
@@ -1676,6 +1682,93 @@ spec('collaboration awareness follows the same scene object and Blueprint node',
   }
 });
 
+spec('widget designer supports responsive composition, real input, nodes and plugin creation', async () => {
+  const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=script', width: 1440, height: 1000 });
+  const downloads = await mkdtemp(join(tmpdir(), 'feather-plugin-starter-'));
+  try {
+    await app.page.call('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
+    await app.evaluate(`(async () => { window.__designerStore = (await import('/src/store/editorStore.ts')).useEditorStore; })()`);
+    await app.waitFor(`window.__designerStore.getState().graphs.some((graph) => graph.nodes.length > 0)`, { label: 'script demo finished loading' });
+    await delay(1200);
+    const ids = await app.evaluate(`(async () => {
+      const { useEditorStore } = await import('/src/store/editorStore.ts');
+      const { blankProject } = await import('/src/project/serialize.ts');
+      const workspace = await import('/src/components/workspacePanels.ts');
+      window.__designerStore = useEditorStore;
+      useEditorStore.getState().setPlaying(false);
+      const id = useEditorStore.getState().createUIFromTemplate('inventory');
+      workspace.ensureWorkspacePanel('ui'); workspace.focusWorkspacePanel('ui');
+      const doc = useEditorStore.getState().uiDocuments.find((item) => item.id === id);
+      return { id, first: doc.root.children[2].children[0].children[0].id, second: doc.root.children[2].children[0].children[1].id, selected: doc.root.children[2].children[1].children[1].id };
+    })()`);
+    await app.waitFor(`document.querySelector('.ui-widget-palette')`, { label: 'widget palette' });
+    await app.realClick('[title="Focus UI designer"]');
+    await app.waitFor(`document.querySelector('.ui-device-artboard')?.getBoundingClientRect().width > 500`, { label: 'focused device preview' });
+    // Hit a source child, then verify the host instance is selected in the hierarchy.
+    await app.realClick(`.ui-device-artboard [data-uiel-id="${ids.first}"] [data-uiel-id]`);
+    assert.equal(await app.evaluate('window.__designerStore.getState().selectedUIElementId'), ids.first);
+    assert.equal(await app.count('.ui-tree .ui-node.selected'), 1);
+    await app.evaluate(`(() => { const node = document.querySelector('[aria-label="Preview device"]'); node.value = '3'; node.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await app.waitFor(`document.querySelector('.ui-device-artboard').style.width === '390px'`);
+    assert.equal(await app.evaluate(`(() => { const node = document.querySelector('.ui-edit-layer > [data-uiel-id]'); return node.scrollWidth <= node.clientWidth + 1; })()`), true, 'phone document must not overflow horizontally');
+    // Return to desktop and save a reviewable screenshot of the workspace.
+    await app.evaluate(`(() => { const node = document.querySelector('[aria-label="Preview device"]'); node.value = '0'; node.dispatchEvent(new Event('change', { bubbles: true })); window.__designerStore.getState().selectUIElement('${ids.id}'); })()`);
+    await delay(300);
+    const shot = await app.page.call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(join(tmpdir(), 'feather-ui-designer.png'), Buffer.from(shot.data, 'base64'));
+    await app.realClick('[title="Focus UI designer"]');
+    await app.evaluate(`(async () => { const workspace = await import('/src/components/workspacePanels.ts'); workspace.maximizeViewportLayout(); window.__designerStore.getState().setPlaying(true); })()`);
+    const live = `.scene-drop-zone [data-uiel-id="${ids.second}"]`;
+    await app.waitFor(`document.querySelector(${JSON.stringify(live)})`);
+    await app.realClick(live);
+    await app.waitFor(`document.querySelector('.scene-drop-zone [data-uiel-id="${ids.selected}"]').textContent === 'Iron sword'`, { label: 'component click runs its Blueprint and updates detail binding' });
+    await app.realClick('.scene-drop-zone input[placeholder="Write a note…"]');
+    await app.page.call('Input.insertText', { text: 'Bring to camp' });
+    await app.waitFor(`document.body.textContent.includes('Note: Bring to camp')`, { label: 'two-way input binding' });
+    await app.evaluate(`(() => { const button = [...document.querySelectorAll('.scene-drop-zone button')].find((item) => item.textContent === 'Close inventory'); button.dataset.testClose = ''; })()`);
+    await app.realClick('[data-test-close]');
+    await app.waitFor(`!document.querySelector('.scene-drop-zone input[placeholder="Write a note…"]')`, { label: 'Hide UI node' });
+    await app.page.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'i', code: 'KeyI', windowsVirtualKeyCode: 73 });
+    await app.page.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'i', code: 'KeyI', windowsVirtualKeyCode: 73 });
+    await app.waitFor(`document.querySelector('.scene-drop-zone input[placeholder="Write a note…"]')`, { label: 'quick I press toggles UI back' });
+    // An anchored drag at half zoom must preserve the anchor and use logical pixel deltas.
+    const dragId = await app.evaluate(`(async () => {
+      const s = window.__designerStore.getState(); s.setPlaying(false);
+      const workspace = await import('/src/components/workspacePanels.ts'); workspace.restoreWorkspaceLayout();
+      workspace.focusWorkspacePanel('ui'); if (!workspace.isWorkspacePanelMaximized('ui')) workspace.toggleWorkspacePanelMaximized('ui');
+      const id = s.createUIDocument('Drag test', 'screen');
+      const child = s.addUIElement(id, undefined, 'text');
+      s.updateUIElement(id, child, { text: 'Drag me', style: { width: '160px', height: '60px' }, anchor: { h: 'left', v: 'top', offsetX: 16, offsetY: 16 } });
+      s.selectUIElement(child); return child;
+    })()`);
+    await app.evaluate(`(() => { const node = document.querySelector('[aria-label="Preview zoom"]'); node.value = '0.5'; node.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await app.waitFor(`document.querySelector('.ui-select-box')?.getBoundingClientRect().width === 80`);
+    const rect = await app.boxOf('.ui-select-box');
+    assert.ok(rect);
+    await app.page.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: rect.x, y: rect.y, button: 'left', buttons: 1, clickCount: 1 });
+    await app.page.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: rect.x + 48, y: rect.y + 24, buttons: 1 });
+    await app.page.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: rect.x + 48, y: rect.y + 24, button: 'left', buttons: 0, clickCount: 1 });
+    await app.waitFor(`window.__designerStore.getState().uiDocuments.find((doc) => doc.root.children.some((item) => item.id === '${dragId}')).root.children[0].anchor.offsetX === 112`, { label: 'drag accounts for zoom and preserves anchor' });
+    // Download the actual plugin starter from the authoring UI and inspect its ZIP contents.
+    await app.evaluate(`(async () => { const workspace = await import('/src/components/workspacePanels.ts'); workspace.toggleWorkspacePanelMaximized('ui'); workspace.ensureWorkspacePanel('store'); workspace.focusWorkspacePanel('store'); })()`);
+    await app.waitFor(`document.querySelector('.plugin-creator summary')`);
+    await app.realClick('.plugin-creator summary');
+    await app.realClick('.plugin-creator > .full-button');
+    let file;
+    for (let i = 0; i < 80; i++) { file = (await readdir(downloads)).find((name) => name.endsWith('.zip')); if (file) break; await delay(100); }
+    assert.ok(file, 'starter ZIP was downloaded');
+    const entries = unzipSync(new Uint8Array(await readFile(join(downloads, file))));
+    assert.ok(entries['src/extensions/userPlugins/studio.my-tools.tsx']);
+    assert.ok(entries['studio.my-tools.nfpack']);
+    assert.ok(entries['README.txt']);
+  } catch (error) {
+    const shot = await app.page.call('Page.captureScreenshot', { format: 'png' });
+    await writeFile(join(tmpdir(), 'feather-ui-failure.png'), Buffer.from(shot.data, 'base64'));
+    const state = await app.evaluate(`(() => { const s = window.__designerStore?.getState(); return { docs: s?.uiDocuments.map((doc) => doc.name), playing: s?.isPlaying, values: s?.runtimeVariableValues, visible: s?.runtimeVisibleUI, text: document.querySelector('.scene-drop-zone')?.textContent?.slice(-1500) }; })()`);
+    throw new Error(error.message + '\n' + JSON.stringify(state));
+  } finally { await app.dispose(); await rm(downloads, { recursive: true, force: true }); }
+});
+
 async function serverUp() {
   try {
     const response = await fetch(BASE_URL, { signal: AbortSignal.timeout(2000) });
@@ -1687,7 +1780,7 @@ async function serverUp() {
 
 async function main() {
   const requested = process.env.E2E_GREP?.trim().toLowerCase();
-  const selectedSpecs = requested ? specs.filter(({ name }) => name.toLowerCase().includes(requested)) : specs;
+  const selectedSpecs = requested ? specs.filter(({ name }) => requested.split('|').some((filter) => name.toLowerCase().includes(filter))) : specs;
   if (!selectedSpecs.length) throw new Error(`No e2e spec matched E2E_GREP=${JSON.stringify(process.env.E2E_GREP)}`);
   let devServer;
   if (!(await serverUp())) {

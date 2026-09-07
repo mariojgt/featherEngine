@@ -14,8 +14,12 @@ export interface SceneObject {
   kind: SceneObjectKind;
   /** Optional Creator Mode role badge. Gameplay still comes from the object's normal components/blueprint. */
   creatorRoleId?: string;
+  creatorAppearanceFor?: string;
+  creatorOriginalRendererEnabled?: boolean;
   /** Beginner-authored rules; runtime execution comes exclusively from the attached compiled Blueprint. */
   creatorInteractions?: SimpleInteraction[];
+  /** Editor ownership checkpoint. Hand-authored graphs stay authoritative over rule cards. */
+  creatorLogic?: { baseSource: string; generatedSource: string };
   parentId?: string;
   transform: TransformComponent;
   renderer?: MeshRendererComponent;

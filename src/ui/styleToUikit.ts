@@ -25,6 +25,11 @@ export interface UikitProps {
   minHeight?: number | `${number}%`;
   maxHeight?: number | `${number}%`;
   flexWrap?: 'no-wrap' | 'wrap';
+  flexGrow?: number;
+  flexShrink?: number;
+  flexBasis?: Size;
+  alignSelf?: 'auto' | 'stretch' | 'flex-start' | 'center' | 'flex-end';
+  overflow?: 'visible' | 'hidden' | 'scroll';
   paddingTop?: number;
   paddingRight?: number;
   paddingBottom?: number;
@@ -160,6 +165,11 @@ export function styleToUikit(style: UIStyle): UikitProps {
     out.flexDirection = 'row';
     out.flexWrap = 'wrap';
   }
+  if (style.flexGrow !== undefined) out.flexGrow = style.flexGrow;
+  if (style.flexShrink !== undefined) out.flexShrink = style.flexShrink;
+  if (style.flexBasis !== undefined) out.flexBasis = parseSize(style.flexBasis);
+  if (style.alignSelf) out.alignSelf = style.alignSelf as UikitProps['alignSelf'];
+  if (style.overflow) out.overflow = style.overflow === 'auto' ? 'scroll' : style.overflow;
   if (style.flexWrap) out.flexWrap = style.flexWrap === 'wrap' ? 'wrap' : 'no-wrap';
   if (style.flexDirection && style.display !== 'grid') out.flexDirection = style.flexDirection;
   if (style.alignItems) out.alignItems = style.alignItems as UikitProps['alignItems'];

@@ -1,3 +1,4 @@
+import { PluginCreator } from './PluginCreator';
 import { useEffect, useMemo } from 'react';
 import { AlertTriangle, Check, Download, Loader2, PackageOpen, Puzzle, RefreshCw, Search, Sparkles, Store, Trash2 } from 'lucide-react';
 import { useMarketplaceStore } from '../store/marketplaceStore';
@@ -207,6 +208,7 @@ export function AssetStorePanel() {
       </div>
 
       <div className="store-body">
+        <PluginCreator />
         {!hasProject && (
           <p className="store-notice">
             <AlertTriangle size={14} aria-hidden />

@@ -63,7 +63,7 @@ export const applyCreateUIFromTemplate = (
   template: UITemplateKind,
   folderId: string | undefined,
 ): string => {
-  const { doc, vars } = makeUITemplate(template);
+  const { doc, vars, components = [], actions = [] } = makeUITemplate(template);
   if (folderId) doc.folderId = folderId;
   set((state) => {
     // Auto-provision (only) the variables this template binds to but the project doesn't have yet,
@@ -80,13 +80,28 @@ export const applyCreateUIFromTemplate = (
         createdAt: Date.now(),
       }));
     return {
-      uiDocuments: [...state.uiDocuments, doc],
+      uiDocuments: [...state.uiDocuments, ...components.map((item) => ({ ...item, folderId })), doc],
       activeUIDocumentId: doc.id,
       selectedUIElementId: doc.root.id,
       variables: [...state.variables, ...created],
       isDirty: true,
     };
   });
+  if (actions.length) {
+    const blueprintId = get().openUILogic(doc.id);
+    actions.forEach((action, index) => {
+      const y = index * 160;
+      const event = get().addGraphNodeToBlueprint(blueprintId, 'Custom Event', 'Events', { eventName: action.eventName }, { x: 40, y });
+      const variable = get().variables.find((item) => item.name === action.variableName);
+      const target = action.variableName && variable
+        ? get().addGraphNodeToBlueprint(blueprintId, 'Set Variable', 'Variables', { variableId: variable.id, valueType: 'string', stringValue: action.value ?? '' }, { x: 320, y })
+        : get().addGraphNodeToBlueprint(blueprintId, 'Hide UI', 'UI', { documentId: doc.id }, { x: 320, y });
+      get().connectGraphNodes(blueprintId, event, target);
+    });
+    const event = get().addGraphNodeToBlueprint(blueprintId, 'Key Down', 'Events', { keyCode: 'KeyI', keyTriggerMode: 'pressed' }, { x: 40, y: actions.length * 160 });
+    const toggle = get().addGraphNodeToBlueprint(blueprintId, 'Toggle UI', 'UI', { documentId: doc.id }, { x: 320, y: actions.length * 160 });
+    get().connectGraphNodes(blueprintId, event, toggle);
+  }
   // Login template: seed a ready-to-run Logic graph so Sign In / Guest actually dismiss the screen.
   if (template === 'login') {
     const blueprintId = get().openUILogic(doc.id);
@@ -208,14 +223,21 @@ export const applyAddUIElement = (
   kind: UIElementKind,
 ): string => {
   const element = makeUIElement(kind);
-  set((state) => ({
-    uiDocuments: state.uiDocuments.map((doc) => {
-      if (doc.id !== docId) return doc;
-      const targetId = parentId ?? doc.root.id;
-      return { ...doc, root: mapUIElement(doc.root, targetId, (el) => ({ ...el, children: [...el.children, element] })) };
-    }),
-    isDirty: true,
-  }));
+  set((state) => {
+    if (!state.uiDocuments.some((doc) => doc.id === docId)) throw new Error('UI document no longer exists.');
+    return {
+      uiDocuments: state.uiDocuments.map((doc) => {
+        if (doc.id !== docId) return doc;
+        const targetId = parentId ?? doc.root.id;
+        const parent = findUIElement(doc.root, targetId);
+        if (!parent || !['panel', 'scroll', 'button', 'text', 'toggle', 'bar'].includes(parent.kind)) {
+          throw new Error('Choose a container in the UI hierarchy before adding a widget.');
+        }
+        return { ...doc, root: mapUIElement(doc.root, targetId, (el) => ({ ...el, children: [...el.children, element] })) };
+      }),
+      isDirty: true,
+    };
+  });
   return element.id;
 };
 
@@ -225,12 +247,18 @@ export const applyUpdateUIElement = (
   elementId: string,
   patch: Partial<Omit<UIElement, 'id' | 'children'>>,
 ): void => {
-  set((state) => ({
-    uiDocuments: state.uiDocuments.map((doc) =>
-      doc.id === docId ? { ...doc, root: mapUIElement(doc.root, elementId, (el) => ({ ...el, ...patch })) } : doc,
-    ),
-    isDirty: true,
-  }));
+  set((state) => {
+    const doc = state.uiDocuments.find((item) => item.id === docId);
+    if (!doc || !findUIElement(doc.root, elementId)) return state;
+    if (patch.componentId && (!state.uiDocuments.some((item) => item.id === patch.componentId)
+      || wouldCreateUICycle(docId, patch.componentId, state.uiDocuments))) return state;
+    return {
+      uiDocuments: state.uiDocuments.map((doc) =>
+        doc.id === docId ? { ...doc, root: mapUIElement(doc.root, elementId, (el) => ({ ...el, ...patch })) } : doc,
+      ),
+      isDirty: true,
+    };
+  });
 };
 
 export const applyRemoveUIElement = (set: SetState, docId: string, elementId: string): void => {
@@ -287,25 +315,33 @@ export const applyExtractUIComponent = (
   // The root IS the document — extracting it would just alias the whole thing.
   if (!subtree || subtree.id === doc.root.id) return null;
 
-  // The component's own root wraps the subtree, so the component can grow siblings later
-  // without every instance having to change shape.
+  // Promote the subtree itself: an extra wrapper duplicates padding and changes flex/grid slots.
+  // Descendant identities survive the move; only the root needs a new source identity.
+  const { position, left, top, ...appearance } = subtree.style;
   const componentRoot: UIElement = {
-    ...makeUIElement('panel', name ?? subtree.name),
-    style: { display: 'flex', flexDirection: 'column' },
-    children: [cloneUIElementFresh(subtree)],
+    ...subtree,
+    id: makeUIElement(subtree.kind).id,
+    onClickEvent: undefined,
+    anchor: undefined,
+    style: appearance,
   };
   const component: UIDocument = {
     ...makeUIDocument(name ?? subtree.name, doc.surface, doc.folderId),
     isComponent: true,
     visibleOnStart: false,
     root: componentRoot,
+    css: doc.css?.split(subtree.id).join(componentRoot.id),
+    renderMode: doc.renderMode,
   };
   // The instance keeps the original's placement (anchor/position) so nothing moves on screen.
   const instance: UIElement = {
     ...makeUIElement('component', name ?? subtree.name),
+    id: subtree.id,
     componentId: component.id,
     className: subtree.className,
-    style: subtree.anchor ? {} : { ...subtree.style },
+    style: { ...subtree.style },
+    css: subtree.css,
+    onClickEvent: subtree.onClickEvent,
     anchor: subtree.anchor,
   };
   set((s) => ({
@@ -330,6 +366,9 @@ export const applyInsertUIComponent = (
   if (docId === componentId || wouldCreateUICycle(docId, componentId, state.uiDocuments)) return null;
   const source = state.uiDocuments.find((d) => d.id === componentId);
   if (!source) return null;
+  const host = state.uiDocuments.find((d) => d.id === docId);
+  const parent = host && findUIElement(host.root, parentId ?? host.root.id);
+  if (!parent || !['panel', 'scroll', 'button', 'text', 'toggle', 'bar'].includes(parent.kind)) return null;
   const instance: UIElement = { ...makeUIElement('component', source.name), componentId };
   set((s) => ({
     uiDocuments: s.uiDocuments.map((doc) => {
@@ -343,6 +382,7 @@ export const applyInsertUIComponent = (
 };
 
 export const applySetUIComponentParam = (set: SetState, docId: string, elementId: string, key: string, value: string): void => {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || ['__proto__', 'constructor', 'prototype'].includes(key)) return;
   set((state) => ({
     uiDocuments: state.uiDocuments.map((doc) =>
       doc.id === docId
@@ -430,6 +470,21 @@ export const applyMoveUIElement = (set: SetState, docId: string, elementId: stri
     }),
     isDirty: true,
   }));
+};
+
+/** Move an existing subtree without changing identities or permitting ancestry cycles. */
+export const applyReparentUIElement = (set: SetState, docId: string, elementId: string, parentId: string): void => {
+  set((state) => {
+    const doc = state.uiDocuments.find((item) => item.id === docId);
+    if (!doc || elementId === doc.root.id) return state;
+    const element = findUIElement(doc.root, elementId);
+    const parent = findUIElement(doc.root, parentId);
+    if (!element || !parent || !['panel', 'scroll'].includes(parent.kind)
+      || findUIElement(element, parentId) || findUIParent(doc.root, elementId)?.id === parentId) return state;
+    const root = mapUIElement(removeUIElementFromTree(doc.root, elementId), parentId,
+      (target) => ({ ...target, children: [...target.children, element] }));
+    return { uiDocuments: state.uiDocuments.map((item) => item.id === docId ? { ...item, root } : item), isDirty: true };
+  });
 };
 
 export const applyDuplicateUIElement = (set: SetState, get: GetState, docId: string, elementId: string): string => {

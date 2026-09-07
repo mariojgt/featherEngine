@@ -70,6 +70,7 @@ export const cloneObjectTreeWithIdMap = (
     const clone = structuredClone(object) as SceneObject;
     clone.id = idMap.get(object.id)!;
     if (clone.parentId) clone.parentId = remap(clone.parentId);
+    if (clone.creatorAppearanceFor) clone.creatorAppearanceFor = remap(clone.creatorAppearanceFor);
     if (clone.attachment?.targetObjectId) {
       clone.attachment = { ...clone.attachment, targetObjectId: remap(clone.attachment.targetObjectId)! };
     }

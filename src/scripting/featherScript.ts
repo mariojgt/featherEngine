@@ -183,7 +183,7 @@ class FeatherScriptPrinter {
         return interval > 0 ? `on update every ${formatNumber(interval)}s:` : 'on update(dt):';
       }
       case 'event.keyDown':
-        return `on key_down(${quote(root.data.keyCode ?? 'KeyW')}):`;
+        return `on ${root.data.keyTriggerMode === 'pressed' ? 'key_pressed' : 'key_down'}(${quote(root.data.keyCode ?? 'KeyW')}):`;
       case 'event.keyUp':
         return `on key_up(${quote(root.data.keyCode ?? 'KeyW')}):`;
       case 'event.custom':

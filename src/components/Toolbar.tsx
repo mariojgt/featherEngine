@@ -1,3 +1,5 @@
+import { createPortal } from 'react-dom';
+import { getPlatform } from '../platform';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Aperture,
@@ -443,28 +445,25 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
 /** Full-screen overlay showing live output while a production build runs. */
 function BuildProgressOverlay() {
   const progress = useProjectStore((state) => state.buildProgress);
-  const clearBuildProgress = useProjectStore((state) => state.clearBuildProgress);
+  const clear = useProjectStore((state) => state.clearBuildProgress);
   if (!progress) return null;
-  return (
+  const title = progress.running ? 'Building your game…' : progress.status === 'failed' ? 'Build needs attention' : progress.status === 'staged' ? 'Build package ready' : 'Export finished';
+  return createPortal(
     <div className="build-overlay">
-      <div className="build-overlay-card">
+      <div className="build-overlay-card" role="dialog" aria-modal="true" aria-label={title}>
         <div className="build-overlay-head">
-          <Rocket size={16} aria-hidden />
-          <strong>Building your game…</strong>
-          <button
-            className="build-overlay-close"
-            title="Hide (the build keeps running)"
-            onClick={clearBuildProgress}
-          >
-            <X size={14} aria-hidden />
-          </button>
+          <Rocket size={16} aria-hidden /><strong>{title}</strong>
+          <button className="build-overlay-close" title={progress.running ? 'Hide (the build keeps running)' : 'Close'} onClick={clear}><X size={14} aria-hidden /></button>
         </div>
-        <p className="build-overlay-hint">
-          Compiling a native app + portable web build. This can take a few minutes the first time.
-        </p>
-        <pre className="build-overlay-log">{progress.lines.slice(-16).join('\n')}</pre>
+        <p className="build-overlay-hint">{progress.running ? 'Building the selected platforms. The first build may take a few minutes.' : progress.status === 'staged' ? 'Next: compile the package, then test the output.' : 'Review the output below. The build report distinguishes completed artifacts from staged packages.'}</p>
+        <pre className="build-overlay-log" aria-live="polite">{progress.lines.slice(-24).join('\n')}</pre>
+        {!progress.running && <div className="build-output-actions">
+          {progress.output && <button className="prefs-primary-button" onClick={() => void getPlatform().then((platform) => platform.revealFile?.(progress.output!)).catch((error: unknown) => useProjectStore.setState({ toast: { kind: 'error', message: String(error) } }))}>Open output folder</button>}
+          {progress.status === 'failed' && <button className="prefs-primary-button" onClick={() => { clear(); void useProjectStore.getState().exportProduction(); }}>Review and retry</button>}
+          <button className="prefs-link-button" onClick={clear}>Done</button>
+        </div>}
       </div>
-    </div>
+    </div>, document.body,
   );
 }
 
@@ -743,7 +742,7 @@ export function Toolbar() {
           data-testid="toolbar-play-button"
         >
           {isPlaying ? <Square size={12} aria-hidden /> : <Play size={12} aria-hidden />}
-          <span>Play</span>
+          <span>{isPlaying ? 'Stop' : 'Play'}</span>
         </button>
         <button
           type="button"
