@@ -180,6 +180,7 @@ try {
     'cloth',
     'cables',
     'cinematics',
+    'lux-lighting',
   ]);
   assert.ok(bundle.project.exportSettings?.profiles?.length, 'canonical fixture is missing export profiles');
   assert.ok(bundle.project.scenes.some((scene) => scene.id === bundle.startSceneId));

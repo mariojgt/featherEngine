@@ -34,7 +34,8 @@
       "water",
       "cloth",
       "cables",
-      "cinematics"
+      "cinematics",
+      "lux-lighting"
     ]
   },
   "project": {
@@ -73,6 +74,7 @@
     "scenes": [
       {
         "id": "scene-smoke",
+        "environment": { "lux": { "enabled": true, "mode": "fixed", "position": [0, 1.5, 0], "radius": 16, "quality": "performance" } },
         "name": "Production Smoke",
         "objects": [
           {

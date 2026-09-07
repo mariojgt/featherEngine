@@ -10,6 +10,7 @@ import type {
   ScriptBlueprint,
 } from '../../types';
 import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../../three/environmentSettings';
+import { resolveLux } from '../../three/lux/settings';
 import { wrapDayCycleTime } from '../../three/dayCycle';
 import { retargetDeletedScene } from '../../project/exportProfiles';
 import { setSaveNamespace } from './objectFactory';
@@ -55,7 +56,9 @@ export const applyUpdateSceneEnvironment = (set: SetState, id: string, patch: Pa
   set((state) => ({
     scenes: state.scenes.map((scene) =>
       scene.id === id
-        ? { ...scene, environment: { ...withSceneEnvironmentDefaults(scene.environment), ...stripUndefined(patch) } }
+        ? { ...scene, environment: { ...withSceneEnvironmentDefaults(scene.environment), ...stripUndefined(patch),
+            ...(patch.lux ? { lux: resolveLux({ ...scene.environment?.lux, ...stripUndefined(patch.lux) }) } : {}),
+          } }
         : scene,
     ),
     ...(patch.dayCycleTime !== undefined && id === state.activeSceneId

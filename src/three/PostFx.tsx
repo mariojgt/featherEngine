@@ -48,7 +48,7 @@ export function PostFx() {
   // Screen-space reflections: glossy floors / wet streets reflect the scene. The heaviest effect
   // here, so Epic-only. Before bloom, so reflected neon/emissive still glows. Temporal resolve keeps
   // it from being noisy; maxRoughness limits it to fairly smooth surfaces (matte stays matte).
-  if (profile.ssr) {
+  if (profile.ssr && (!environment?.lux?.enabled || environment.lux.screenTraces !== false)) {
     children.push(
       <SSR
         key="ssr"

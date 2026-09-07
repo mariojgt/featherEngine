@@ -132,11 +132,30 @@ export type RenderPresetId =
 
 export type SkyMode = 'color' | 'procedural' | 'image';
 
+/** Lux 1.0: a budgeted local radiance cache for WebGL, shared by editor and exported games. */
+export interface LuxSettings {
+  enabled: boolean;
+  quality: 'auto' | 'performance' | 'balanced' | 'cinematic';
+  mode: 'camera' | 'fixed';
+  position: Vector3Tuple;
+  radius: number;
+  indirectIntensity: number;
+  reflections: boolean;
+  reflectionIntensity: number;
+  screenTraces: boolean;
+  updateInterval: number;
+  smoothing: number;
+  /** Change to invalidate the cached lighting immediately. */
+  refreshNonce: number;
+  debug: boolean;
+}
+
 /**
  * Scene-level sky, fog and base lighting. This is the lightweight "world settings" layer:
  * procedural/color sky works without external files, while image mode can use an imported panorama.
  */
 export interface SceneEnvironmentSettings {
+  lux?: Partial<LuxSettings>;
   skyMode: SkyMode;
   /** Fallback / flat sky color. Also clears the renderer behind procedural/image sky domes. */
   backgroundColor: string;

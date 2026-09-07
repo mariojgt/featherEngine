@@ -80,6 +80,7 @@ import { SceneEnvironment } from '../three/SceneEnvironment';
 import { WaterSurface } from '../three/WaterSurface';
 import { WaterEnvCapture } from '../three/WaterEnvCapture';
 import { ReflectionProbeApply, ReflectionProbeCapture } from '../three/ReflectionProbes';
+import { LuxLighting } from '../three/LuxLighting';
 import { UnderwaterOverlay } from '../three/UnderwaterOverlay';
 import { Terrain, TerrainBrushCursor } from '../three/Terrain';
 import { TreeMesh } from '../three/TreeMesh';
@@ -1324,6 +1325,7 @@ function SceneContent({
       <WaterEnvCapture />
       {/* Local reflection probes → nearby reflective materials' envMap (no-op when the scene has no probes). */}
       <ReflectionProbeApply />
+      <LuxLighting />
       {/* Screen tint + murk while the active camera is submerged in a Water Volume (edit + play). */}
       <UnderwaterOverlay />
       {/* WebGL HUD (uikit) for renderMode:'webgl' screen docs — lives in-canvas so PostFx bloom hits it. */}

@@ -5,6 +5,7 @@ import { useStableActiveScene } from '../store/stableSelectors';
 import { withSceneEnvironmentDefaults } from '../three/environmentSettings';
 import type { SceneEnvironmentSettings } from '../types';
 import { LIGHTING_PRESETS, RENDER_PRESETS } from '../three/presets';
+import { LuxSettingsSection } from './LuxSettingsSection';
 
 function audioName(id: string | undefined, assets: Array<{ id: string; name: string }>) {
   if (!id) return 'None';
@@ -67,6 +68,7 @@ export function SceneSettingsBody() {
         </div>
       </section>
 
+      <LuxSettingsSection />
       <section className="inspector-section">
         <h3>Audio</h3>
         <p className="field-hint">Ambient and music are scene-level loops. They start when Play begins and stop when Play ends.</p>

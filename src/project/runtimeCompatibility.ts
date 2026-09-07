@@ -30,6 +30,7 @@ export const SUPPORTED_RUNTIME_FEATURES = [
   'inventory',
   'destruction',
   'reflection-probes',
+  'lux-lighting',
   'persistence',
   'timelines',
   'post-processing',
@@ -60,6 +61,7 @@ const allObjects = (project: NodeForgeProject): SceneObject[] => [
 /** Detect every authored engine subsystem the standalone runtime must carry for this project. */
 export function detectRuntimeFeatures(project: NodeForgeProject): RuntimeFeatureId[] {
   const features = new Set<RuntimeFeatureId>();
+  if (project.scenes.some((scene) => scene.environment?.lux?.enabled)) features.add('lux-lighting');
   const objects = allObjects(project);
   const nodes = (project.graphs ?? []).flatMap((graph) => graph.nodes ?? []);
   const nodeKinds = new Set(nodes.map((node) => String(node.data.nodeKind ?? '')));

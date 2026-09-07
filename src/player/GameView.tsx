@@ -21,6 +21,7 @@ import { autoQualityStep } from '../runtime/autoQuality';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { ReflectionProbeApply, ReflectionProbeCapture } from '../three/ReflectionProbes';
+import { LuxLighting } from '../three/LuxLighting';
 import { useResolvedMaterial, useResolvedMaterialSlots, hasPhysicalLayers } from '../three/resolveMaterial';
 import { useToonMaterial } from '../three/toonMaterial';
 import { WorldUIAnchor } from '../ui/WorldUIAnchor';
@@ -544,6 +545,7 @@ function GameScene() {
 
       {/* Local reflection probes → nearby reflective materials' envMap (no-op when the scene has no probes). */}
       <ReflectionProbeApply />
+      <LuxLighting />
 
       {/* Camera-submersion tint/murk for water volumes. */}
       <UnderwaterOverlay />

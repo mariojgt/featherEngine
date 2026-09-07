@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lux 1.0 rendering acceptance</title>
+<style>body{margin:0;background:#111722;color:#e3e8f2;font:14px system-ui}header{position:absolute;padding:24px;pointer-events:none}h1{font-size:24px;margin:0 0 6px}p{margin:0;color:#9aaac0}canvas{display:block}</style></head>
+<body><header><h1>Lux 1.0</h1><p>Dynamic color bounce · local reflections · bounded capture work</p></header><script type="module">
+import * as THREE from 'three';
+import { LuxCache } from '/src/three/lux/cache.ts';
+import { resolveLux, luxBudget } from '/src/three/lux/settings.ts';
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.setSize(960,640); renderer.setPixelRatio(1); document.body.appendChild(renderer.domElement);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const errors=[]; const sources=[];
+renderer.debug.onShaderError=(gl, program, vertex, fragment)=>{sources.push(gl.getShaderSource(fragment));errors.push([gl.getProgramInfoLog(program),gl.getShaderInfoLog(vertex),gl.getShaderInfoLog(fragment)].join('\n'));};
+const scene=new THREE.Scene(); scene.background=new THREE.Color('#111722');
+const env=new THREE.DataTexture(new Uint8Array([24,24,24,255,24,24,24,255]),2,1);
+env.mapping=THREE.EquirectangularReflectionMapping; env.needsUpdate=true; scene.environment=env;
+const camera=new THREE.PerspectiveCamera(48,960/640,0.1,100); camera.position.set(5,3.5,7); camera.lookAt(0,1,0);
+function box(position,size,color,emissive=false){const mat=new THREE.MeshStandardMaterial({color,roughness:0.85,emissive:emissive?color:0,emissiveIntensity:emissive?2:0});const obj=new THREE.Mesh(new THREE.BoxGeometry(...size),mat);obj.position.set(...position);scene.add(obj);return obj;}
+box([0,-0.12,0],[9,0.2,7],'#d8d8d8'); box([0,1.6,-2.8],[9,3.4,0.15],'#b7b7b7');
+const emitter=box([-3,1.4,0],[0.2,2.8,4],'#ff1608',true);
+const receiver=new THREE.Mesh(new THREE.SphereGeometry(0.7,32,24),new THREE.MeshStandardMaterial({color:'#ffffff',roughness:0.95})); receiver.position.set(0,0.7,0);scene.add(receiver);
+const metal=new THREE.Mesh(new THREE.SphereGeometry(0.7,32,24),new THREE.MeshStandardMaterial({color:'#eeeeee',metalness:1,roughness:0.2}));metal.position.set(1.8,0.7,0);scene.add(metal);
+scene.add(new THREE.AmbientLight('#ffffff',0.04));
+const sun=new THREE.DirectionalLight('#ffffff',0.35);sun.position.set(2,5,4);scene.add(sun);
+let settings=resolveLux({enabled:true,mode:'fixed',position:[0,1.7,1.8],radius:12,quality:'balanced',updateInterval:0.5,smoothing:0.1});
+let cache=null; let last=performance.now(); let elapsed=0; let maxFaces=0;
+const pixel=new Uint8Array(4);const sample=(object)=>{renderer.render(scene,camera);const p=object.clone().project(camera);renderer.getContext().readPixels(Math.round((p.x+1)*480),Math.round((p.y+1)*320),1,1,renderer.getContext().RGBA,renderer.getContext().UNSIGNED_BYTE,pixel);const error=renderer.getContext().getError();if(error)throw new Error('Pixel read failed: '+error);return Array.from(pixel).slice(0,3);};
+window.luxQA={
+  errors, sources, start(ldr=false){cache?.dispose();const has=renderer.extensions.has;try{if(ldr)renderer.extensions.has=(name)=>name==='EXT_color_buffer_float'?false:has.call(renderer.extensions,name);cache=new LuxCache(renderer,scene,'fixture',luxBudget(settings,'High'));}finally{renderer.extensions.has=has;}},
+  stop(){cache?.dispose();cache=null;},
+  color(color){emitter.material.color.set(color);emitter.material.emissive.set(color);},
+  indirect(value){settings.indirectIntensity=value;}, reflections(value){settings.reflections=value;},
+  status(){return cache ? {...cache.status,maxFaces}:null;},
+  pixels(){return {diffuse:sample(new THREE.Vector3(-0.5,0,1.4)),metal:sample(metal.position.clone().add(new THREE.Vector3(-0.45,0,0.52)))};},
+  resources(){return {...renderer.info.memory};},
+  hooks(){return receiver.material.customProgramCacheKey();},
+};
+function tick(now){const dt=(now-last)/1000;last=now;elapsed+=dt;const before=cache?.status.faces??0;cache?.update(camera,settings,elapsed,dt);maxFaces=Math.max(maxFaces,(cache?.status.faces??0)-before);renderer.render(scene,camera);requestAnimationFrame(tick);}
+requestAnimationFrame(tick);
+</script></body></html>

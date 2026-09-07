@@ -151,6 +151,21 @@ const terrainPatchSchema = z.object({
   foliage: terrainFoliagePatchSchema.optional(),
 });
 const environmentPatchSchema = z.object({
+  lux: z.object({
+    enabled: z.boolean().optional(),
+    quality: z.enum(['auto', 'performance', 'balanced', 'cinematic']).optional(),
+    mode: z.enum(['camera', 'fixed']).optional(),
+    position: z.tuple([z.number(), z.number(), z.number()]).optional(),
+    radius: z.number().min(2).max(200).optional(),
+    indirectIntensity: z.number().min(0).max(3).optional(),
+    reflections: z.boolean().optional(),
+    reflectionIntensity: z.number().min(0).max(3).optional(),
+    screenTraces: z.boolean().optional(),
+    updateInterval: z.number().min(0.1).max(10).optional(),
+    smoothing: z.number().min(0).max(2).optional(),
+    refreshNonce: z.number().int().min(0).optional(),
+    debug: z.boolean().optional(),
+  }).optional().describe('Lux 1.0 local dynamic indirect light and reflections. Opt in with enabled:true. Budgeted cubemap/SH cache, not hardware ray tracing. Best in one room; use fixed mode with a position inside it. Low engine quality suspends Lux.'),
   skyMode: z.enum(['color', 'procedural', 'image']).optional(),
   backgroundColor: z.string().optional().describe('Flat/fallback background hex color.'),
   skyTopColor: z.string().optional().describe('Procedural sky zenith hex color.'),

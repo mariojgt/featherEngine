@@ -110,7 +110,7 @@ Blueprints, replace assets, and reuse the systems in your own game.
 | System | Highlights |
 | --- | --- |
 | **Editor workflow** | Dockable and pop-out panels, hierarchy, inspector, transform gizmos, command palette, multiple scenes, undo/redo, autosave recovery, and project folders. |
-| **Rendering and worlds** | Three.js renderer, procedural or image skies, day/night cycles, aerial and volumetric fog, water, terrain, procedural trees, reflection probes, shadows, bloom, color grading, and scalable quality presets. |
+| **Rendering and worlds** | Three.js renderer, Lux 1.0 dynamic local indirect lighting and reflections, procedural or image skies, day/night cycles, aerial and volumetric fog, water, terrain, procedural trees, reflection probes, shadows, bloom, color grading, and scalable quality presets. |
 | **Gameplay and physics** | Rapier rigid bodies, colliders, triggers, collision layers, joints, raycasts, vehicles, characters, ragdolls, cloth, cables, projectiles, damage, explosions, decals, and fracture effects. |
 | **Scripting** | Reusable Blueprint graphs, typed execution/value wires, functions, global and per-instance variables, data tables, save slots, runtime events, and FeatherScript source. |
 | **Assets and animation** | GLB, glTF, FBX, PNG, JPEG, WebP, MP3, and WAV import; skeleton inspection, sockets, bone attachments, animation state machines, 1D and 2D blend spaces, bone-masked animation layers, optional root motion, foot and look-at IK, a live animation debugger, reusable prefabs, LOD, instancing, and optional KTX2 texture compression. |
@@ -330,6 +330,7 @@ verify the workflow end to end. The complete checklist is in
 
 ## Documentation
 
+- [Lux 1.0](docs/LUX.md) — dynamic local lighting, reflections, quality budgets, authoring and limits
 - [Animation System](docs/ANIMATION.md) — animator controllers, blend spaces, animation layers, bone masking, root motion, IK, and the debug readout
 - [Live Collaboration](docs/COLLABORATION.md) — start/join workflow, authority model, security, and limitations
 - [Plugin SDK](docs/PLUGIN_SDK.md) — commands, dockable panels, safe project APIs, and plugin lifecycle
@@ -341,7 +342,7 @@ verify the workflow end to end. The complete checklist is in
 
 ## Project status
 
-Feather Engine is currently at **v0.1.0** and should be treated as an experimental engine:
+Feather Engine is currently at **v0.2.0** and should be treated as an experimental engine:
 
 - Core editing, Play mode, project persistence, tests, and web builds are working.
 - Desktop and mobile packaging depend on the native toolchain for each target.
