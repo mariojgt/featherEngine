@@ -1028,14 +1028,11 @@ async fn asset_route(
 }
 
 fn asset_request_access(state: &RelayState, headers: &HeaderMap) -> Option<AssetAccess> {
-    let Some(credential) = headers
+    let credential = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .filter(|credential| !credential.is_empty() && credential.len() <= 128)
-    else {
-        return None;
-    };
+        .filter(|credential| !credential.is_empty() && credential.len() <= 128)?;
     state.asset_access_for(credential)
 }
 

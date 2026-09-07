@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Feather Engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.thedevrealm.nodeforge",
   "build": {
     "frontendDist": "../dist",
