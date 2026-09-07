@@ -1,4 +1,15 @@
-import type { ModelSpec, ProjectGraph, Scene, ScriptBlueprint, ProjectVariable, MaterialDefinition } from '../types';
+import type {
+  AnimatorController,
+  MaterialDefinition,
+  ModelSpec,
+  ParticleSystemDefinition,
+  ProjectGraph,
+  ProjectVariable,
+  Scene,
+  ScriptBlueprint,
+  TreeSpec,
+  UIDocument,
+} from '../types';
 import { useEditorStore } from './editorStore';
 import { canEditCollaborativeProject, collaborationAccess } from '../collaboration/access';
 
@@ -17,11 +28,22 @@ import { canEditCollaborativeProject, collaborationAccess } from '../collaborati
 
 type HistoryEntry = {
   variables: ProjectVariable[];
-  materials: MaterialDefinition[];
   scenes: Scene[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   modelSpecs: ModelSpec[];
+  /** Project-level content that is AUTHORED in a panel rather than imported: animator controllers,
+   *  materials, particle systems, tree specs and UI documents each have their own editor and each is
+   *  referenced by scene objects. Undo has to move them together with `scenes`, or reverting an edit
+   *  leaves the two halves disagreeing — and an edit to one of them that history did not watch at all
+   *  would make the next undo revert some older, unrelated change instead. Imported assets
+   *  (skeletons, animations, textures) stay out: rolling an import back out from under its references
+   *  is a different problem from undoing an edit. */
+  animatorControllers: AnimatorController[];
+  materials: MaterialDefinition[];
+  particleSystems: ParticleSystemDefinition[];
+  treeSpecs: TreeSpec[];
+  uiDocuments: UIDocument[];
   activeSceneId: string;
   activeBlueprintId: string;
   activeModelSpecId: string;
@@ -71,11 +93,15 @@ export function applyWithoutHistory<T>(apply: () => T): T {
 
 const snapshotFrom = (state: {
   variables: ProjectVariable[];
-  materials: MaterialDefinition[];
   scenes: Scene[];
   blueprints: ScriptBlueprint[];
   graphs: ProjectGraph[];
   modelSpecs: ModelSpec[];
+  animatorControllers: AnimatorController[];
+  materials: MaterialDefinition[];
+  particleSystems: ParticleSystemDefinition[];
+  treeSpecs: TreeSpec[];
+  uiDocuments: UIDocument[];
   activeSceneId: string;
   activeBlueprintId: string;
   activeModelSpecId: string;
@@ -84,11 +110,15 @@ const snapshotFrom = (state: {
   selectedGraphNodeId?: string;
 }): HistoryEntry => ({
   variables: state.variables,
-  materials: state.materials,
   scenes: state.scenes,
   blueprints: state.blueprints,
   graphs: state.graphs,
   modelSpecs: state.modelSpecs,
+  animatorControllers: state.animatorControllers,
+  materials: state.materials,
+  particleSystems: state.particleSystems,
+  treeSpecs: state.treeSpecs,
+  uiDocuments: state.uiDocuments,
   activeSceneId: state.activeSceneId,
   activeBlueprintId: state.activeBlueprintId,
   activeModelSpecId: state.activeModelSpecId,
@@ -214,11 +244,15 @@ const apply = (entry: HistoryEntry) => {
   });
   useEditorStore.setState({
     variables: entry.variables,
-    materials: entry.materials,
     scenes: entry.scenes,
     blueprints,
     graphs: entry.graphs,
     modelSpecs: entry.modelSpecs,
+    animatorControllers: entry.animatorControllers,
+    materials: entry.materials,
+    particleSystems: entry.particleSystems,
+    treeSpecs: entry.treeSpecs,
+    uiDocuments: entry.uiDocuments,
     activeSceneId: entry.activeSceneId,
     activeBlueprintId: entry.activeBlueprintId,
     activeModelSpecId: entry.activeModelSpecId,
@@ -276,8 +310,12 @@ export const initHistory = () => {
     if (
       state.scenes === prev.scenes &&
       state.variables === prev.variables &&
-      state.materials === prev.materials &&
       state.modelSpecs === prev.modelSpecs &&
+      state.animatorControllers === prev.animatorControllers &&
+      state.materials === prev.materials &&
+      state.particleSystems === prev.particleSystems &&
+      state.treeSpecs === prev.treeSpecs &&
+      state.uiDocuments === prev.uiDocuments &&
       !blueprintContentChanged(state.blueprints, prev.blueprints) &&
       !graphContentChanged(state.graphs, prev.graphs)
     ) return;

@@ -58,6 +58,13 @@ describe('Feather extension lifecycle', () => {
         activate(api) {
           api.commands.register({ id: 'test.lifecycle.command', title: 'Test', run: () => undefined });
           api.panels.register({ id: 'test.lifecycle.panel', title: 'Test', render: () => null });
+          api.tools.register({
+            id: 'sculpt',
+            title: 'Sculpt',
+            description: 'Sculpt a part.',
+            inputSchema: { type: 'object' },
+            execute: () => 'sculpted',
+          });
           api.events.on('selection:changed', () => {
             eventCount += 1;
           });
@@ -72,6 +79,8 @@ describe('Feather extension lifecycle', () => {
     expect(registry.getSnapshot().plugins).toHaveLength(1);
     expect(registry.getSnapshot().commands).toHaveLength(1);
     expect(registry.getSnapshot().panels).toHaveLength(1);
+    expect(registry.getSnapshot().tools).toHaveLength(1);
+    expect(registry.getSnapshot().tools[0].qualifiedId).toBe('test.lifecycle.sculpt');
     eventBus.emit('selection:changed', { objectId: 'before' });
     expect(eventCount).toBe(1);
 
@@ -83,6 +92,7 @@ describe('Feather extension lifecycle', () => {
     expect(registry.getSnapshot().plugins).toHaveLength(0);
     expect(registry.getSnapshot().commands).toHaveLength(0);
     expect(registry.getSnapshot().panels).toHaveLength(0);
+    expect(registry.getSnapshot().tools).toHaveLength(0);
   });
 
   it('rolls back registrations when activation throws', () => {
@@ -124,6 +134,57 @@ describe('Feather extension lifecycle', () => {
         { registry, eventBus },
       ),
     ).toThrow(/must start with the plugin namespace/);
+  });
+
+  it('requires bare tool-names and validates tool definitions', () => {
+    const registry = new ExtensionRegistry();
+    const eventBus = new FeatherEventBus();
+    const register = (registerTool: (api: FeatherPluginAPI) => void) =>
+      activateExtensionPlugin(
+        {
+          id: 'test.tools2',
+          name: 'Tool Validation',
+          version: '1.0.0',
+          activate: (api) => registerTool(api),
+        },
+        { registry, eventBus },
+      );
+
+    expect(() =>
+      register((api) =>
+        api.tools.register({
+          id: 'with.dot',
+          title: 'Nope',
+          description: 'dots are forbidden — the engine namespaces',
+          inputSchema: {},
+          execute: () => 'x',
+        }),
+      ),
+    ).toThrow(/bare tool-name/);
+
+    expect(() =>
+      register((api) =>
+        api.tools.register({ id: 'noexecute', title: 'Nope', description: 'missing execute', inputSchema: {} } as never),
+      ),
+    ).toThrow(/description and an execute/);
+
+    const namespaced: FeatherPluginAPI = (() => {
+      let captured!: FeatherPluginAPI;
+      register((api) => {
+        captured = api;
+      });
+      return captured;
+    })();
+    const dispose = namespaced.tools.register({
+      id: 'scrape',
+      title: 'Scrape',
+      description: 'Scrape a surface.',
+      inputSchema: { type: 'object' },
+      execute: () => 'scraped',
+    });
+    expect(registry.getSnapshot().tools[0].qualifiedId).toBe('test.tools2.scrape');
+    dispose();
+    expect(registry.getSnapshot().tools).toHaveLength(0);
   });
 
   it('exposes detached reads and explicit object mutations', () => {

@@ -38,6 +38,10 @@ export function SkidMarks() {
     [],
   );
 
+  // Created imperatively in useMemo, so nothing else frees them when this unmounts (scene switch).
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(() => () => material.dispose(), [material]);
+
   useFrame((_, delta) => {
     const mesh = meshRef.current;
     if (!mesh) return;

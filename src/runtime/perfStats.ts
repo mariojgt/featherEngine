@@ -65,7 +65,56 @@ export interface RenderStats {
   programs: number;
   geometries: number;
   textures: number;
+  /** Lights in the scene graph, and how many of those cast shadows (each one costs a shadow pass). */
+  lights: number;
+  shadowLights: number;
+  /** Meshes flagged castShadow — what each shadow pass has to re-draw. */
+  shadowCasters: number;
+  /** Skinned meshes being posed — the animation cost proxy. */
+  skinned: number;
 }
+
+/** A minimal three-like node, so the scene counter can be tested without building a real scene. */
+export interface CountableNode {
+  isLight?: boolean;
+  isMesh?: boolean;
+  isSkinnedMesh?: boolean;
+  castShadow?: boolean;
+  visible?: boolean;
+  children?: CountableNode[];
+}
+
+/**
+ * Counts the scene costs that `renderer.info` cannot see: lights, shadow-casting lights, shadow-casting
+ * meshes and skinned meshes. These are the numbers that explain a slow frame when the draw-call count
+ * looks fine — every shadow-casting light adds a whole extra pass over every shadow caster.
+ *
+ * Invisible subtrees are skipped, since three does not render them. Traversal is not free, so callers
+ * should sample this at a low rate rather than every frame.
+ */
+export const countSceneStats = (
+  root: CountableNode | undefined,
+): Pick<RenderStats, 'lights' | 'shadowLights' | 'shadowCasters' | 'skinned'> => {
+  let lights = 0;
+  let shadowLights = 0;
+  let shadowCasters = 0;
+  let skinned = 0;
+
+  const walk = (node: CountableNode) => {
+    if (node.visible === false) return;
+    if (node.isLight) {
+      lights += 1;
+      if (node.castShadow) shadowLights += 1;
+    } else if (node.isMesh) {
+      if (node.castShadow) shadowCasters += 1;
+      if (node.isSkinnedMesh) skinned += 1;
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  if (root) walk(root);
+
+  return { lights, shadowLights, shadowCasters, skinned };
+};
 
 export interface SampleStats {
   avg: number;
@@ -111,7 +160,7 @@ const sectionRings: Record<RuntimeSection, Ring> = {
   combat: new Ring(),
   animator: new Ring(),
 };
-const render: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 };
+const render: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0, lights: 0, shadowLights: 0, shadowCasters: 0, skinned: 0 };
 
 let hitch33 = 0;
 let hitch100 = 0;
@@ -171,6 +220,10 @@ export const recordRender = (stats: RenderStats) => {
   render.programs = stats.programs;
   render.geometries = stats.geometries;
   render.textures = stats.textures;
+  render.lights = stats.lights;
+  render.shadowLights = stats.shadowLights;
+  render.shadowCasters = stats.shadowCasters;
+  render.skinned = stats.skinned;
 };
 
 const sample = (ring: Ring): SampleStats => ({

@@ -39,6 +39,7 @@ import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '..
 import { findNavPath } from '../../runtime/navGrid';
 import { sendParticleCommand } from '../../runtime/particleBus';
 import { recordRuntimeSection } from '../../runtime/perfStats';
+import { drainRootMotion, rootMotionSpeed } from '../../runtime/rootMotion';
 import { applyPhysicsMaterialPreset } from '../../runtime/physicsMaterials';
 import { PhysicsContactEvent, VehicleWheelState, getActivePhysics, setModelSpecResolver, startPhysics } from '../../runtime/physicsWorld';
 import { getRagdollRoot, isRagdoll, setRagdoll } from '../../runtime/ragdollState';
@@ -52,9 +53,9 @@ import { createTerrainHeightSampler } from '../../terrain/terrain';
 import { wrapDayCycleTime } from '../../three/dayCycle';
 import { FoliageInteractor, MAX_FOLIAGE_INTERACTORS, updateFoliageInteractors } from '../../three/foliageInteractors';
 import { resolveMaterial } from '../../three/materialResolve';
-import { CharacterControllerComponent, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
+import { CharacterControllerComponent, CompareOperator, GraphValue, GraphValueType, NodeForgeNode, PhysicsComponent, Prefab, QualityLevel, RuntimeScreenFade, RuntimeSoundEvent, Scene, SceneEnvironmentSettings, SceneObject, TransformComponent, Vector3Tuple } from '../../types';
 import { worldToLocalUnderParent, worldTransformOf } from '../../utils/transformHierarchy';
-import { getAnimatorControllerRuntime } from './animatorRuntime';
+import { getAnimatorControllerRuntime, localMoveVector, resolveLayerWeight, stepStateMachine } from './animatorRuntime';
 import { cinematicActionsAt, cinematicCameraAt, cinematicFadeAt, cinematicMaterialsAt, cinematicTextAt, cinematicTimeScaleAt, cinematicTransformsAt, clamp01, mixVec3 } from './cinematics';
 import { RuntimeAnimator, defaultPhysics, defaultWaterVolume, lerpAngle, resolveCharacter, resolveVehicle, withPhysicsDefaults } from './defaults';
 import { cloneGraphValue, coerceGraphValue, defaultValueForType } from './graph';
@@ -625,6 +626,13 @@ export const applyRuntimeTick = (
       const nextSlide: EditorState['runtimeSlide'] = {};
       const nextRollDir: EditorState['runtimeRollDir'] = {};
       const nextMantle: EditorState['runtimeMantle'] = {};
+      /**
+       * The speed each character's input is ASKING for this tick, before acceleration and before root
+       * motion. Feeds the `inputSpeed` animator source, which exists to break the root-motion feedback
+       * loop: a locomotion blend space driven by MEASURED speed while the animation supplies that same
+       * speed settles at a standstill, because idle produces no travel so speed stays zero forever.
+       */
+      const desiredSpeedById: Record<string, number> = {};
       const nextTurnInPlace: Record<string, number> = {};
       const nextCoyote: Record<string, number> = {};
       const nextAttack: Record<string, number> = {};
@@ -4368,9 +4376,24 @@ export const applyRuntimeTick = (
           const sprinting = Boolean(currentKeys[cc.keySprint]);
           const crouching = Boolean(currentKeys[cc.keyCrouch]);
           const crawling = Boolean(cc.keyCrawl && currentKeys[cc.keyCrawl]);
-          const speed =
+          // Speed the input is asking for: the authored move speed with its gait multiplier.
+          const inputSpeed =
             cc.moveSpeed *
-            (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1) *
+            (crawling ? cc.crawlMultiplier ?? 0.4 : crouching ? cc.crouchMultiplier : sprinting ? cc.sprintMultiplier : 1);
+          desiredSpeedById[object.id] = inputSpeed;
+          /**
+           * Root motion `apply`: the animation's own travel replaces the authored speed, so the
+           * character covers exactly the ground the animator authored and the feet cannot slide. Only
+           * this one scalar changes — direction, camera-relative input, the acceleration ramp, facing,
+           * gravity, jumping, mantling and sliding all stay exactly as they were.
+           *
+           * A tick with no render frame between it and the last drains nothing; that is "no reading",
+           * not "speed zero", so the authored speed is kept rather than stopping the character dead.
+           */
+          const rootSample = object.animator?.rootMotion === 'apply' ? drainRootMotion(object.id) : undefined;
+          const rootSpeed = rootSample ? rootMotionSpeed(rootSample) : undefined;
+          const speed =
+            (rootSpeed !== undefined ? rootSpeed : inputSpeed) *
             (1 - 0.6 * landPenalty); // hard landings briefly sap the target speed (landing recovery)
           // Target velocity from the (camera-relative) input direction; 0 when no key is held (→ decelerate to stop).
           let targetX = 0;
@@ -6098,7 +6121,8 @@ export const applyRuntimeTick = (
         if (!controllerId) continue;
         const controller = controllerById.get(controllerId);
         if (!controller || !controller.states.length) continue;
-        const { statesById, paramsById, paramsByName, transitionCandidatesByState } = getAnimatorControllerRuntime(controller);
+        const { statesById, paramsById, paramsByName, transitionCandidatesByState, layerTransitionCandidates } =
+          getAnimatorControllerRuntime(controller);
 
         // A first-person view model (arms/weapon) is pinned to the camera and never moves, and has no
         // character of its own — so its animator sources state from the OWNER pawn (speed, grounded,
@@ -6123,14 +6147,10 @@ export const applyRuntimeTick = (
           const dz = after[2] - before.position[2];
           horizontalSpeed = Math.hypot(dx, dz) / dt;
           verticalSpeed = dy / dt;
-          const h = Math.hypot(dx, dz);
-          if (h > 1e-4) {
-            const facing = sourceObj.transform.rotation[1] - (sourceObj.character?.modelYawOffset ?? 0);
-            const wx = dx / h;
-            const wz = dz / h;
-            moveY = wx * Math.sin(facing) + wz * Math.cos(facing); // forward axis (sin,cos)
-            moveX = wx * Math.cos(facing) - wz * Math.sin(facing); // right axis (cos,−sin)
-          }
+          const facing = sourceObj.transform.rotation[1] - (sourceObj.character?.modelYawOffset ?? 0);
+          // Scaled by speed relative to the character's own move speed, so the blend point travels out
+          // from the origin as it accelerates instead of snapping to the rim (see localMoveVector).
+          ({ moveX, moveY } = localMoveVector(dx, dz, facing, horizontalSpeed, sourceObj.character?.moveSpeed ?? 0));
         }
 
         const prev = state.runtimeAnimators[object.id];
@@ -6142,6 +6162,8 @@ export const applyRuntimeTick = (
         // Auto-source parameters (object/world state → animator), then manual script writes.
         for (const param of controller.parameters) {
           if (param.source === 'speed') params[param.id] = horizontalSpeed;
+          // Desired speed rather than measured — the source to blend on when root motion is applied.
+          else if (param.source === 'inputSpeed') params[param.id] = desiredSpeedById[sourceId] ?? 0;
           else if (param.source === 'verticalSpeed') params[param.id] = verticalSpeed;
           else if (param.source === 'moving') params[param.id] = horizontalSpeed > 0.1;
           else if (param.source === 'crouching') params[param.id] = Boolean(sourceObj.character && currentKeys[sourceObj.character.keyCrouch]);
@@ -6184,33 +6206,45 @@ export const applyRuntimeTick = (
           if (write.trigger) triggered.add(param.id);
         }
 
-        // Current state + how long we've been in it (drives exit-time / one-shot clips like Jump Land).
-        let fromStateId = prev?.stateId ?? controller.defaultStateId ?? controller.states[0].id;
-        if (!statesById.has(fromStateId)) fromStateId = controller.states[0].id;
-        const fromState = statesById.get(fromStateId);
-        const fromAnim = fromState?.animationId ? animationById.get(fromState.animationId) : undefined;
-        const clipDuration = fromAnim ? fromAnim.duration / Math.max(fromState?.speed ?? 1, 0.01) : 0;
-        const timeInState = (prev?.stateId === fromStateId ? prev.time : 0) + dt;
+        // Base state machine. The same evaluator runs every animation layer below, so a layer is not a
+        // special case — it is another instance of these rules.
+        const durationOf = (id: string) => animationById.get(id)?.duration;
+        const compare = (left: number | boolean, right: number | boolean, op: CompareOperator) =>
+          Boolean(compareValues(left as GraphValue, right as GraphValue, op));
+        const baseStep = stepStateMachine({
+          states: controller.states,
+          transitionCandidatesByState,
+          defaultStateId: controller.defaultStateId,
+          prev: prev ? { stateId: prev.stateId, fade: prev.fade, time: prev.time } : undefined,
+          dt,
+          params,
+          paramsById,
+          durationOf,
+          compare,
+        });
+        const nextStateId = baseStep.stateId;
+        const fade = baseStep.fade;
 
-        // Evaluate transitions from the current state (plus "any state" transitions).
-        let nextStateId = fromStateId;
-        let fade = 0;
-        const candidates = transitionCandidatesByState.get(fromStateId) ?? [];
-        for (const transition of candidates) {
-          if (transition.to === fromStateId) continue;
-          if (!statesById.has(transition.to)) continue;
-          // Exit time: wait until the current clip has played far enough before leaving.
-          if (transition.hasExitTime && timeInState < clipDuration * (transition.exitTime ?? 1)) continue;
-          const pass = transition.conditions.every((condition) => {
-            const param = paramsById.get(condition.parameterId);
-            if (!param) return false;
-            return Boolean(compareValues(params[param.id] as GraphValue, condition.value as GraphValue, condition.op));
+        // Animation layers: each runs its own state machine over the SHARED parameters, so one
+        // `isAiming` drives the base and every layer alike. Evaluated after the base so a layer can
+        // react to the same frame's parameter values.
+        let layerSteps: RuntimeAnimator['layers'];
+        for (const layer of controller.layers ?? []) {
+          if (!layer.states.length) continue;
+          const step = stepStateMachine({
+            states: layer.states,
+            transitionCandidatesByState: layerTransitionCandidates.get(layer.id) ?? new Map(),
+            defaultStateId: layer.defaultStateId,
+            prev: prev?.layers?.[layer.id],
+            dt,
+            params,
+            paramsById,
+            durationOf,
+            compare,
           });
-          if (pass) {
-            nextStateId = transition.to;
-            fade = transition.duration;
-            break;
-          }
+          if (!step.stateId) continue;
+          layerSteps ??= {};
+          layerSteps[layer.id] = { ...step, weight: resolveLayerWeight(layer, params) };
         }
 
         // Consume triggers (one-shot) so they don't re-fire next frame.
@@ -6231,7 +6265,7 @@ export const applyRuntimeTick = (
         }
         if (montage && montage.remaining <= 0) montage = undefined;
 
-        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: nextStateId === fromStateId ? timeInState : 0, montage };
+        nextAnimators[object.id] = { stateId: nextStateId, params, fade, time: baseStep.time, montage, layers: layerSteps };
 
         // Death → ragdoll: entering a state named like "death"/"dead"/"die" goes limp automatically.
         const nextStateName = statesById.get(nextStateId)?.name ?? '';

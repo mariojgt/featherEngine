@@ -49,6 +49,19 @@ describe('Local Feather tool routing', () => {
     expect(rankLocalEngineTools('What objects are in my scene?')[0]).toBe('list_scene');
   });
 
+  it('routes pronoun and selection-target edits to the object-mutation surface', () => {
+    expect(rankLocalEngineTools('delete this from my scene')[0]).toBe('delete_object');
+    expect(rankLocalEngineTools('remove the selected object')[0]).toBe('delete_object');
+    expect(rankLocalEngineTools('delete my current selection')[0]).toBe('delete_object');
+    expect(rankLocalEngineTools('get rid of this object')[0]).toBe('delete_object');
+    expect(rankLocalEngineTools('delete the tree I selected')[0]).toBe('delete_object');
+    expect(rankLocalEngineTools('move the selected object up')[0]).toBe('update_transform');
+    expect(rankLocalEngineTools('rename the selected object to Player')[0]).toBe('rename_object');
+    expect(rankLocalEngineTools('duplicate the selected cube')[0]).toBe('duplicate_object');
+    // "get rid of ..." is a real editor imperative, not a read-only question.
+    expect(isLocalActionRequest('get rid of this object')).toBe(true);
+  });
+
   it('only treats clear editor imperatives as action requests', () => {
     expect(isLocalActionRequest('add a cube to the scene')).toBe(true);
     expect(isLocalActionRequest('build me a castle wall')).toBe(true);

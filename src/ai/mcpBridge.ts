@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { COMPACT_ENGINE_GUIDE } from './systemPrompt';
-import { engineTools } from './tools';
+import { getActiveEngineTools } from './tools';
 
 /**
  * MCP bridge — lets external agents (Claude Code, VSCode, Cursor, …) drive this editor.
@@ -33,8 +33,6 @@ type LooseTool = {
   execute?: (input: unknown, options: { toolCallId: string; messages: never[] }) => unknown;
 };
 
-const looseTools = engineTools as unknown as Record<string, LooseTool>;
-
 const isZodSchema = (value: unknown): value is z.ZodType =>
   !!value && typeof (value as z.ZodType).safeParse === 'function';
 
@@ -49,7 +47,8 @@ const MCP_INSTRUCTIONS = COMPACT_ENGINE_GUIDE.replace(
 
 /** name + description + JSON Schema for every engine tool, derived from the zod schemas. */
 function buildToolManifest() {
-  return Object.entries(looseTools)
+  const live = getActiveEngineTools() as unknown as Record<string, LooseTool>;
+  return Object.entries(live)
     .filter(([, def]) => typeof def.execute === 'function')
     .map(([name, def]) => ({
       name,
@@ -61,7 +60,8 @@ function buildToolManifest() {
 }
 
 async function executeCall(message: BridgeCallMessage): Promise<{ ok: boolean; result?: unknown; error?: string }> {
-  const def = looseTools[message.tool];
+  const live = getActiveEngineTools() as unknown as Record<string, LooseTool>;
+  const def = live[message.tool];
   if (!def?.execute) return { ok: false, error: `Unknown tool "${message.tool}"` };
   try {
     let input: unknown = message.input ?? {};

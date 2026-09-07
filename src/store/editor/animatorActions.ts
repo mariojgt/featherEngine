@@ -4,6 +4,7 @@ import type {
   AnimatorComponent,
   AnimatorCondition,
   AnimatorController,
+  AnimatorLayer,
   AnimatorParameter,
   AnimatorState,
   AnimatorTransition,
@@ -199,33 +200,65 @@ export const applyRemoveAnimatorParameter = (set: SetState, controllerId: string
   }));
 };
 
+/**
+ * The base machine and every animation layer expose the same three fields, so one mutator can target
+ * either: pass a `layerId` to edit that layer's machine, or omit it for the controller's own.
+ *
+ * Without this, adding layers would have meant a second copy of all six state/transition mutators,
+ * which is exactly how the two paths drift apart.
+ */
+type StateMachineOwner = {
+  states: AnimatorState[];
+  defaultStateId?: string;
+  transitions: AnimatorTransition[];
+};
+
+const mapMachine = (
+  controller: AnimatorController,
+  layerId: string | undefined,
+  transform: (owner: StateMachineOwner) => Partial<StateMachineOwner>,
+): AnimatorController => {
+  if (!layerId) return { ...controller, ...transform(controller) };
+  return {
+    ...controller,
+    layers: (controller.layers ?? []).map((layer) =>
+      layer.id === layerId ? { ...layer, ...transform(layer) } : layer,
+    ),
+  };
+};
+
+/** The machine a mutator is about to edit, for the reads that happen before the set(). */
+const machineOf = (controller: AnimatorController, layerId?: string): StateMachineOwner | undefined =>
+  layerId ? controller.layers?.find((layer) => layer.id === layerId) : controller;
+
 export const applyAddAnimatorState = (
   set: SetState,
   get: GetState,
   controllerId: string,
   stateInput: { name?: string; animationId?: string; speed?: number; loop?: boolean; position?: { x: number; y: number } } | undefined,
+  layerId?: string,
 ): string | undefined => {
   const controller = get().animatorControllers.find((item) => item.id === controllerId);
   if (!controller) return undefined;
+  if (layerId && !machineOf(controller, layerId)) return undefined;
   const id = makeId('state');
   set((state) => ({
     animatorControllers: state.animatorControllers.map((item) =>
       item.id === controllerId
-        ? {
-            ...item,
+        ? mapMachine(item, layerId, (machine) => ({
             states: [
-              ...item.states,
+              ...machine.states,
               {
                 id,
-                name: stateInput?.name ?? `State ${item.states.length + 1}`,
+                name: stateInput?.name ?? `State ${machine.states.length + 1}`,
                 animationId: stateInput?.animationId,
                 speed: stateInput?.speed ?? 1,
                 loop: stateInput?.loop ?? true,
-                position: stateInput?.position ?? { x: 80, y: 40 + item.states.length * 90 },
+                position: stateInput?.position ?? { x: 80, y: 40 + machine.states.length * 90 },
               },
             ],
-            defaultStateId: item.defaultStateId ?? id,
-          }
+            defaultStateId: machine.defaultStateId ?? id,
+          }))
         : item,
     ),
     isDirty: true,
@@ -238,27 +271,37 @@ export const applyUpdateAnimatorState = (
   controllerId: string,
   stateId: string,
   patch: Partial<Omit<AnimatorState, 'id'>>,
+  layerId?: string,
 ): void => {
   set((state) => ({
     animatorControllers: state.animatorControllers.map((item) =>
       item.id === controllerId
-        ? { ...item, states: item.states.map((s) => (s.id === stateId ? { ...s, ...patch } : s)) }
+        ? mapMachine(item, layerId, (machine) => ({
+            states: machine.states.map((s) => (s.id === stateId ? { ...s, ...patch } : s)),
+          }))
         : item,
     ),
     isDirty: true,
   }));
 };
 
-export const applyRemoveAnimatorState = (set: SetState, controllerId: string, stateId: string): void => {
+export const applyRemoveAnimatorState = (
+  set: SetState,
+  controllerId: string,
+  stateId: string,
+  layerId?: string,
+): void => {
   set((state) => ({
     animatorControllers: state.animatorControllers.map((item) =>
       item.id === controllerId
-        ? {
-            ...item,
-            states: item.states.filter((s) => s.id !== stateId),
-            defaultStateId: item.defaultStateId === stateId ? item.states.find((s) => s.id !== stateId)?.id : item.defaultStateId,
-            transitions: item.transitions.filter((t) => t.from !== stateId && t.to !== stateId),
-          }
+        ? mapMachine(item, layerId, (machine) => ({
+            states: machine.states.filter((s) => s.id !== stateId),
+            defaultStateId:
+              machine.defaultStateId === stateId
+                ? machine.states.find((s) => s.id !== stateId)?.id
+                : machine.defaultStateId,
+            transitions: machine.transitions.filter((t) => t.from !== stateId && t.to !== stateId),
+          }))
         : item,
     ),
     isDirty: true,
@@ -270,20 +313,21 @@ export const applyAddAnimatorTransition = (
   get: GetState,
   controllerId: string,
   transition: { from: string; to: string; conditions?: AnimatorCondition[]; duration?: number; hasExitTime?: boolean; exitTime?: number },
+  layerId?: string,
 ): string | undefined => {
   const controller = get().animatorControllers.find((item) => item.id === controllerId);
   if (!controller) return undefined;
+  if (layerId && !machineOf(controller, layerId)) return undefined;
   const id = makeId('xition');
   set((state) => ({
     animatorControllers: state.animatorControllers.map((item) =>
       item.id === controllerId
-        ? {
-            ...item,
+        ? mapMachine(item, layerId, (machine) => ({
             transitions: [
-              ...item.transitions,
+              ...machine.transitions,
               { id, from: transition.from, to: transition.to, conditions: transition.conditions ?? [], duration: transition.duration ?? 0.2, hasExitTime: transition.hasExitTime, exitTime: transition.exitTime },
             ],
-          }
+          }))
         : item,
     ),
     isDirty: true,
@@ -296,22 +340,95 @@ export const applyUpdateAnimatorTransition = (
   controllerId: string,
   transitionId: string,
   patch: Partial<Omit<AnimatorTransition, 'id'>>,
+  layerId?: string,
 ): void => {
   set((state) => ({
     animatorControllers: state.animatorControllers.map((item) =>
       item.id === controllerId
-        ? { ...item, transitions: item.transitions.map((t) => (t.id === transitionId ? { ...t, ...patch } : t)) }
+        ? mapMachine(item, layerId, (machine) => ({
+            transitions: machine.transitions.map((t) => (t.id === transitionId ? { ...t, ...patch } : t)),
+          }))
         : item,
     ),
     isDirty: true,
   }));
 };
 
-export const applyRemoveAnimatorTransition = (set: SetState, controllerId: string, transitionId: string): void => {
+export const applyRemoveAnimatorTransition = (
+  set: SetState,
+  controllerId: string,
+  transitionId: string,
+  layerId?: string,
+): void => {
   set((state) => ({
     animatorControllers: state.animatorControllers.map((item) =>
       item.id === controllerId
-        ? { ...item, transitions: item.transitions.filter((t) => t.id !== transitionId) }
+        ? mapMachine(item, layerId, (machine) => ({
+            transitions: machine.transitions.filter((t) => t.id !== transitionId),
+          }))
+        : item,
+    ),
+    isDirty: true,
+  }));
+};
+
+// --- Animation layers ---------------------------------------------------------------------------
+
+/** Adds an empty animation layer. Its states are then authored with the layerId-aware mutators above. */
+export const applyAddAnimatorLayer = (
+  set: SetState,
+  get: GetState,
+  controllerId: string,
+  input: { name?: string; maskRootBones?: string[]; weight?: number } | undefined,
+): string | undefined => {
+  const controller = get().animatorControllers.find((item) => item.id === controllerId);
+  if (!controller) return undefined;
+  const id = makeId('layer');
+  set((state) => ({
+    animatorControllers: state.animatorControllers.map((item) =>
+      item.id === controllerId
+        ? {
+            ...item,
+            layers: [
+              ...(item.layers ?? []),
+              {
+                id,
+                name: input?.name ?? `Layer ${(item.layers?.length ?? 0) + 1}`,
+                maskRootBones: input?.maskRootBones ?? [],
+                weight: input?.weight ?? 1,
+                states: [],
+                transitions: [],
+              },
+            ],
+          }
+        : item,
+    ),
+    isDirty: true,
+  }));
+  return id;
+};
+
+export const applyUpdateAnimatorLayer = (
+  set: SetState,
+  controllerId: string,
+  layerId: string,
+  patch: Partial<Omit<AnimatorLayer, 'id'>>,
+): void => {
+  set((state) => ({
+    animatorControllers: state.animatorControllers.map((item) =>
+      item.id === controllerId
+        ? { ...item, layers: (item.layers ?? []).map((layer) => (layer.id === layerId ? { ...layer, ...patch } : layer)) }
+        : item,
+    ),
+    isDirty: true,
+  }));
+};
+
+export const applyRemoveAnimatorLayer = (set: SetState, controllerId: string, layerId: string): void => {
+  set((state) => ({
+    animatorControllers: state.animatorControllers.map((item) =>
+      item.id === controllerId
+        ? { ...item, layers: (item.layers ?? []).filter((layer) => layer.id !== layerId) }
         : item,
     ),
     isDirty: true,

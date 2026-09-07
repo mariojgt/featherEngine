@@ -1,5 +1,6 @@
 import type { FeatherPluginDefinition } from './types';
 import { arborForgePlugin } from './arborForge';
+import { imageTo3dPlugin } from './imageTo3d';
 import { modelForgePlugin } from './modelForge';
 import { pixelArtTreesPlugin } from './pixelArtTrees';
 
@@ -17,6 +18,7 @@ const userPlugins = import.meta.glob<FeatherPluginDefinition>('./userPlugins/*.t
 
 const candidates: readonly FeatherPluginDefinition[] = [
   arborForgePlugin,
+  imageTo3dPlugin,
   modelForgePlugin,
   pixelArtTreesPlugin,
   ...Object.keys(userPlugins).sort().map((path) => userPlugins[path]),

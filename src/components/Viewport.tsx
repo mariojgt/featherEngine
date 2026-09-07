@@ -10,7 +10,7 @@ import { effectiveSelection, selectActiveObjects, useEditorStore } from '../stor
 import { isTransientVfx, nonVfxObjectsSignature, useVfxObjects } from '../store/stableSelectors';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
-import { recordRender, recordRenderTime } from '../runtime/perfStats';
+import { countSceneStats, recordRender, recordRenderTime, type CountableNode } from '../runtime/perfStats';
 import { readTransform } from '../runtime/transformBuffer';
 import { captureViewportScreenshot, setViewportCaptureHandler, setViewportImageHandler } from '../runtime/viewportCaptureBridge';
 import { saveViewportScreenshot } from '../runtime/viewportScreenshot';
@@ -73,7 +73,7 @@ import {
   batchSignature,
   InstancedIdsContext,
 } from '../three/modelInstancing';
-import { qualityProfile } from '../three/quality';
+import { lightShadowMapSize, qualityProfile, SHADOW_NORMAL_BIAS } from '../three/quality';
 import { autoQualityStep, resetAutoQuality } from '../runtime/autoQuality';
 import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
@@ -212,6 +212,9 @@ function Primitive({
   // already carries per-object damage each tick; subscribing to just THIS object's entry keeps the re-render
   // local to the struck object (the value is undefined on no-damage frames, so quiet frames never re-render).
   const damageTick = useEditorStore((state) => (state.isPlaying ? state.runtimeDamageEvents[object.id] : undefined));
+  // Shadow-map resolution for scene lights follows the quality tier (see lightShadowMapSize).
+  // Subscribed as the level string, which changes only when the user switches preset.
+  const lightQuality = useEditorStore((state) => state.renderSettings.quality);
   const [hitFlash, setHitFlash] = useState(false);
   useEffect(() => {
     if (damageTick === undefined) return;
@@ -300,6 +303,8 @@ function Primitive({
           clipSourceUrls={resolvedAnimator.clipSourceUrls}
           clipName={resolvedAnimator.clipName}
           blend={resolvedAnimator.blend}
+          syncPhase={resolvedAnimator.syncPhase}
+          layers={resolvedAnimator.layers}
           speed={resolvedAnimator.speed}
           loop={resolvedAnimator.loop}
           fade={resolvedAnimator.fade}
@@ -394,11 +399,12 @@ function Primitive({
           distance={l.distance}
           decay={2}
           castShadow={l.castShadow}
-          // Bounded shadow map (512²) + bias instead of the three.js default — predictable cost and
-          // no shadow acne. Point lights are the most expensive (cubemap), so keep them small.
-          shadow-mapSize-width={512}
-          shadow-mapSize-height={512}
+          // Bounded shadow map + bias instead of the three.js default — predictable cost and no
+          // shadow acne. Point lights are the most expensive (cubemap), so they get the smallest map.
+          shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'point')}
+          shadow-mapSize-height={lightShadowMapSize(qualityProfile(lightQuality), 'point')}
           shadow-bias={-0.0008}
+          shadow-normalBias={SHADOW_NORMAL_BIAS}
         />
       ) : l?.type === 'spot' ? (
         <spotLight
@@ -406,12 +412,13 @@ function Primitive({
           intensity={l.intensity}
           distance={l.distance}
           angle={l.angle}
-          penumbra={0.45}
+          penumbra={l.penumbra ?? 0.45}
           decay={2}
           castShadow={l.castShadow}
-          shadow-mapSize-width={1024}
-          shadow-mapSize-height={1024}
+          shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'spot')}
+          shadow-mapSize-height={lightShadowMapSize(qualityProfile(lightQuality), 'spot')}
           shadow-bias={-0.0006}
+          shadow-normalBias={SHADOW_NORMAL_BIAS}
         />
       ) : (
         <directionalLight
@@ -421,9 +428,10 @@ function Primitive({
           position={[0, 0, 0]}
           // The sun: a tightly-framed shadow camera keeps a 2048² map sharp over the play area
           // rather than smearing it across an unbounded default frustum.
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
+          shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'directional')}
+          shadow-mapSize-height={lightShadowMapSize(qualityProfile(lightQuality), 'directional')}
           shadow-bias={-0.0004}
+          shadow-normalBias={SHADOW_NORMAL_BIAS}
           shadow-camera-near={0.5}
           shadow-camera-far={120}
           shadow-camera-left={-40}
@@ -1453,6 +1461,7 @@ function ViewportFallback() {
  */
 function RenderStatsProbe() {
   const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
   // Wrap WebGLRenderer.render with a wall-clock accumulator: a frame may render several times
   // (post-fx passes, shadow updates happen inside), so sum all calls between two useFrames. The
   // pre-render useFrame below then publishes the PREVIOUS frame's total — same 1-frame lag as gl.info.
@@ -1475,9 +1484,19 @@ function RenderStatsProbe() {
       (gl as { render: typeof gl.render }).render = original;
     };
   }, [gl]);
+  // Scene counters need a graph walk, which is exactly the "excessive scene traversal" to avoid on a
+  // hot path — so they are resampled about once a second and held between samples. They change on the
+  // timescale of editing a scene, not of a frame, so a stale second is invisible in the readout.
+  const sceneCounts = useRef(countSceneStats(undefined));
+  const nextSceneSampleAt = useRef(0);
   useFrame(() => {
     recordRenderTime(renderAccum.current);
     renderAccum.current = 0;
+    const now = performance.now();
+    if (now >= nextSceneSampleAt.current) {
+      sceneCounts.current = countSceneStats(scene as unknown as CountableNode);
+      nextSceneSampleAt.current = now + 1000;
+    }
     const info = gl.info;
     recordRender({
       calls: callsAccum.current,
@@ -1485,6 +1504,7 @@ function RenderStatsProbe() {
       programs: info.programs?.length ?? 0,
       geometries: info.memory.geometries,
       textures: info.memory.textures,
+      ...sceneCounts.current,
     });
     callsAccum.current = 0;
     trianglesAccum.current = 0;

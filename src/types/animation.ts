@@ -8,6 +8,19 @@ import type { SkeletonSocket } from './environment';
  * `renderer.modelAssetId`. Later phases replace `clip` with a `controllerId` (a reusable
  * Animator Controller state machine) and a `skeletalMeshId` decoupled from the renderer.
  */
+/**
+ * How an animation's own root-bone displacement is used.
+ *
+ * - `disabled` (default): the clip poses the root as authored and nothing is measured. In-place clips,
+ *   which is most of them, are unaffected either way.
+ * - `extract`: the root is pinned back to its rest position each frame so the mesh cannot drift off
+ *   its object origin, and the travelled distance is measured and published — but movement still comes
+ *   from code. Use this to play a root-motion clip on a code-driven character without the two fighting.
+ * - `apply`: as `extract`, and the measured speed replaces the character controller's own move speed,
+ *   so the character travels exactly as far as the animator authored and the feet cannot slide.
+ */
+export type RootMotionMode = 'disabled' | 'extract' | 'apply';
+
 export interface AnimatorComponent {
   enabled: boolean;
   /**
@@ -27,6 +40,15 @@ export interface AnimatorComponent {
   clip?: string;
   /** Playback speed multiplier (1 = authored speed). */
   speed: number;
+  /**
+   * Root motion handling. Off by default, so existing projects are untouched.
+   *
+   * `apply` needs the locomotion blend space driven by the `inputSpeed` parameter source rather than
+   * `speed`: blending on MEASURED speed while the animation supplies that same speed is a feedback
+   * loop, and it settles at a standstill (idle produces no travel, so speed stays zero and the
+   * character never starts). `inputSpeed` is the speed the input is ASKING for, which breaks it.
+   */
+  rootMotion?: RootMotionMode;
   /** Loop the clip, or play once and hold the final frame. */
   loop: boolean;
   /** AIM / LOOK-AT IK: after the clip poses the skeleton, rotate the head (or a chosen bone) to track a
@@ -161,6 +183,10 @@ export type AnimatorParamType = 'float' | 'bool' | 'trigger';
 export type AnimatorParamSource =
   | 'manual'
   | 'speed'
+  /** The speed the input is ASKING for (move speed x gait), before acceleration and before root
+   *  motion. Blend a locomotion space on this rather than `speed` when root motion is applied, or the
+   *  animation supplies the speed that picks the animation and the loop settles at a standstill. */
+  | 'inputSpeed'
   | 'verticalSpeed'
   | 'moving'
   | 'crouching'
@@ -217,6 +243,14 @@ export interface AnimatorState {
   blendParameterId?: string;
   blendParameterIdY?: string;
   blendSamples?: AnimatorBlendSample[];
+  /**
+   * BLEND SPACE PHASE SYNC (Unreal "sync group"): retime the samples so they all complete one cycle
+   * in the same period, keeping their footfalls aligned. Blending clips of different lengths — a 1.0s
+   * walk against a 0.7s run — otherwise drifts them apart within a stride and the character appears to
+   * skate. Leave it off for a blend space whose samples are unrelated motions rather than the same
+   * motion at different speeds. Optional and off by default, so existing blend spaces are unchanged.
+   */
+  syncPhase?: boolean;
 }
 
 /** One sample of a blend space: an animation placed at `value` on the X axis (and `y` on the Y axis for 2D). */
@@ -241,6 +275,38 @@ export interface AnimatorTransition {
   exitTime?: number;
 }
 
+/**
+ * An ANIMATION LAYER: a second state machine that drives only part of the skeleton, on top of the
+ * base one. This is what lets a character run and aim at the same time — the base layer owns the legs
+ * and hips, an upper-body layer owns the spine, arms and head.
+ *
+ * A layer holds its own `states`/`transitions`/`defaultStateId` and runs the identical rules as the
+ * base machine, so everything a base state can do (blend spaces, exit time, any-state transitions) a
+ * layer state can do too. Parameters are SHARED with the controller, so one `isAiming` drives both.
+ *
+ * `maskRootBones` names the bones this layer takes over; each named bone and its whole subtree belong
+ * to the layer, and the base is masked out of exactly those bones. That partitioning is required
+ * rather than cosmetic: three's mixer averages two actions driving the same bone, so without it an
+ * aim pose and a run pose blend into a broken half-of-each. An EMPTY mask means the whole skeleton,
+ * which makes the layer a full-body override.
+ */
+export interface AnimatorLayer {
+  id: string;
+  name: string;
+  /** Bones this layer drives — each named bone plus its descendants. Empty = the whole skeleton. */
+  maskRootBones: string[];
+  /** Static blend weight, 0..1. 0 is off, 1 fully replaces the base pose on the masked bones. */
+  weight: number;
+  /**
+   * Parameter that drives the weight instead of the static value, so a layer can fade in with a
+   * condition (an `isAiming` bool reads as 0 or 1; a float is clamped to 0..1).
+   */
+  weightParameterId?: string;
+  states: AnimatorState[];
+  defaultStateId?: string;
+  transitions: AnimatorTransition[];
+}
+
 /** A reusable animation state machine (Unreal Animation Blueprint / Unity Animator Controller). */
 export interface AnimatorController {
   id: string;
@@ -251,6 +317,11 @@ export interface AnimatorController {
   states: AnimatorState[];
   defaultStateId?: string;
   transitions: AnimatorTransition[];
+  /**
+   * Additive state machines driving masked parts of the skeleton on top of the base states above.
+   * Optional, so controllers authored before layers existed load unchanged.
+   */
+  layers?: AnimatorLayer[];
   folderId?: string;
   createdAt: number;
 }

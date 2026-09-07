@@ -35,7 +35,7 @@ const ZERO_SNAPSHOT: PerfSnapshot = {
     combat: { avg: 0, p95: 0, max: 0, last: 0 },
     animator: { avg: 0, p95: 0, max: 0, last: 0 },
   },
-  render: { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0 },
+  render: { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0, lights: 0, shadowLights: 0, shadowCasters: 0, skinned: 0 },
   hitches: { over33: 0, over100: 0 },
   stalls: [],
 };
@@ -230,6 +230,11 @@ export function PerfOverlay() {
           <Row label="triangles" value={fmtInt(render.triangles)} />
           <Row label="programs" value={String(render.programs)} />
           <Row label="geo / tex" value={`${render.geometries} / ${render.textures}`} />
+          {/* Every shadow-casting light adds a whole extra pass over every shadow caster, so these two
+              numbers multiplied are usually the answer when the draw-call count looks reasonable. */}
+          <Row label="lights (shadow)" value={`${render.lights} (${render.shadowLights})`} />
+          <Row label="shadow casters" value={fmtInt(render.shadowCasters)} />
+          <Row label="skinned meshes" value={fmtInt(render.skinned)} />
           {mem && (
             <Row label="js heap" value={`${fmtMB(mem.used)} / ${fmtMB(mem.limit)} MB`} />
           )}
