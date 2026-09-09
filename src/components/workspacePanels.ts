@@ -122,16 +122,34 @@ export function closeWorkspacePanel(id: string): void {
 }
 
 /**
+ * Sizes of the docked panels captured just before the viewport was maximized.
+ *
+ * Dockview squeezes every other group down to its minimum while one is maximized and does not
+ * put those sizes back on exit, so Play → Stop would otherwise leave the Inspector as a 100px
+ * sliver. Restoring from a size snapshot keeps the panels mounted (a fromJSON round-trip would
+ * recreate the viewport's WebGL canvas).
+ */
+let sizesBeforeMaximize: Array<{ id: string; width: number; height: number }> | null = null;
+
+/**
  * Give the viewport its native Dockview focus mode.
  *
  * This intentionally uses the group maximize API instead of clearing/recreating
- * the dock. Existing panels therefore stay mounted, retain their local state, and
- * the user's underlying split sizes remain untouched.
+ * the dock. Existing panels therefore stay mounted and retain their local state.
  */
 export function maximizeViewportLayout(): boolean {
   if (!ensureWorkspacePanel('viewport')) return false;
-  const panel = apiSingleton?.getPanel('viewport');
-  if (!panel) return false;
+  const api = apiSingleton;
+  const panel = api?.getPanel('viewport');
+  if (!api || !panel) return false;
+  if (!api.hasMaximizedGroup()) {
+    sizesBeforeMaximize = api.panels.map((docked) => ({
+      id: docked.id,
+      width: docked.api.width,
+      height: docked.api.height,
+    }));
+    (globalThis as any).__dockCap = { at: Date.now(), dock: [api.width, api.height], sizes: sizesBeforeMaximize };
+  }
   panel.api.setActive();
   panel.api.maximize();
   return panel.api.isMaximized();
@@ -142,6 +160,29 @@ export function restoreWorkspaceLayout(): boolean {
   const api = apiSingleton;
   if (!api) return false;
   if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
+  const sizes = sizesBeforeMaximize;
+  sizesBeforeMaximize = null;
+  const applySizes = () => {
+    for (const size of sizes ?? []) {
+      if (size.id === 'viewport') continue;
+      const panel = api.getPanel(size.id);
+      if (!panel || (panel.api.width === size.width && panel.api.height === size.height)) continue;
+      panel.api.setSize({ width: size.width, height: size.height });
+    }
+  };
+  applySizes();
+  (globalThis as any).__dockRestore = { at: Date.now(), had: !!sizes, dock: [api.width, api.height] };
+  // Chrome around the dock (the first-game guide strip) is hidden during Play and comes back a
+  // few frames after Stop. That resizes the dock itself, and Dockview spreads the difference over
+  // every group, so hold the snapshot briefly and re-apply it while the surrounding shell settles.
+  if (typeof requestAnimationFrame === 'function') {
+    const until = Date.now() + 500;
+    const settle = () => {
+      applySizes();
+      if (Date.now() < until) requestAnimationFrame(settle);
+    };
+    requestAnimationFrame(settle);
+  }
   ensureWorkspacePanel('viewport');
   return true;
 }

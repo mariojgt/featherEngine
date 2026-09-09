@@ -32,7 +32,7 @@ export const useFirstGameGuide = create<GuideState>()(persist((set) => ({
       }
       return state;
     }
-    return { projects: { ...state.projects, [key]: { completed: [], appearance, interactions, dismissed: false } } };
+    return { projects: { ...state.projects, [key]: { completed: [], appearance, interactions, dismissed: true } } };
   }),
   complete: (key, step) => set((state) => {
     const progress = state.projects[key];

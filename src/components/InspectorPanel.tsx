@@ -1,7 +1,7 @@
-import { ChevronRight, Link2, Palette, Trash2, Unlink } from 'lucide-react';
+import { ChevronRight, Link2, MousePointer2, Palette, RotateCcw, Settings2, Trash2, Unlink } from 'lucide-react';
 import { SceneSettingsBody } from './SceneSettingsPanel';
 import { QUALITY_LEVELS } from '../three/quality';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { defaultCharacter, defaultLight, defaultReflectionProbe, defaultVehicle, selectActiveObjects, useEditorStore } from '../store/editorStore';
@@ -27,14 +27,27 @@ import { CreatorGameplaySection } from '../creator/components/GameplaySection';
 import { CreatorAppearanceSection } from '../creator/components/AppearanceSection';
 import { CreatorInteractionsSection } from '../creator/components/InteractionsSection';
 
+import { AddComponentMenu } from './AddComponentMenu';
+import { objectIcons, objectTypeNames } from './editorIcons';
+
+const InspectorRevealContext = createContext<{ title: string; version: number }>({ title: '', version: 0 });
+
 const axes = ['X', 'Y', 'Z'] as const;
 
-function InspectorSection({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
+function InspectorSection({ title, defaultOpen = title === 'Transform' || title === 'Light', children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
+  const reveal = useContext(InspectorRevealContext);
+  const sectionRef = useRef<HTMLElement>(null);
   const storageKey = `nf.inspector.section.${title}`;
   const [open, setOpen] = useState(() => {
     const saved = localStorage.getItem(storageKey);
     return saved === null ? defaultOpen : saved === '1';
   });
+  useEffect(() => {
+    if (reveal.title !== title) return;
+    setOpen(true);
+    const frame = requestAnimationFrame(() => sectionRef.current?.scrollIntoView({ block: 'nearest' }));
+    return () => cancelAnimationFrame(frame);
+  }, [reveal, title]);
   const toggle = () => {
     setOpen((v) => {
       localStorage.setItem(storageKey, v ? '0' : '1');
@@ -42,7 +55,7 @@ function InspectorSection({ title, defaultOpen = true, children }: { title: stri
     });
   };
   return (
-    <section className={open ? 'inspector-section' : 'inspector-section collapsed'}>
+    <section ref={sectionRef} data-inspector-section={title} className={open ? 'inspector-section' : 'inspector-section collapsed'}>
       <h3
         className="inspector-section-head"
         role="button"
@@ -74,6 +87,7 @@ function NumberInput({
   min,
   max,
   precision = 2,
+  ariaLabel,
 }: {
   value: number;
   onChange: (value: number) => void;
@@ -81,10 +95,12 @@ function NumberInput({
   min?: number;
   max?: number;
   precision?: number;
+  ariaLabel?: string;
 }) {
   return (
     <input
       type="number"
+      aria-label={ariaLabel}
       value={Number.isInteger(value) ? value : Number(value.toFixed(precision))}
       min={min}
       max={max}
@@ -154,12 +170,13 @@ function VectorField({
             type="button"
             className="vector-reset"
             title={`Reset ${label}`}
+            aria-label={`Reset ${label}`}
             onClick={(event) => {
               event.preventDefault();
               onReset();
             }}
           >
-            ↺
+            <RotateCcw size={12} aria-hidden />
           </button>
         )}
       </span>
@@ -170,6 +187,7 @@ function VectorField({
               {axis}
             </em>
             <NumberInput
+              ariaLabel={`${label} ${axis}${rotation ? " (degrees)" : ""}`}
               value={displayValue[index]}
               step={axisStep}
               precision={precision ?? 2}
@@ -851,7 +869,7 @@ function AttachmentSection({ objectId }: { objectId: string }) {
 }
 
 /** World-space UI (a widget anchored over this object) + per-instance variables for `self.*` bindings. */
-function UISection({ objectId }: { objectId: string }) {
+function UISection({ objectId, metadataOnly = false }: { objectId: string; metadataOnly?: boolean }) {
   // Structural subscription: ui/variables edits refresh this section; Play-mode motion doesn't.
   const object = useStableActiveObjects().find((o) => o.id === objectId);
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
@@ -868,7 +886,8 @@ function UISection({ objectId }: { objectId: string }) {
   const variables = object?.variables ?? {};
 
   return (
-    <InspectorSection title="UI (world widget)">
+    <InspectorSection title={metadataOnly ? "Tags & variables" : "World-space UI"}>
+      {!metadataOnly && <>
       {worldDocs.length === 0 ? (
         <p className="field-hint">Create a “world” UI document in the UI panel to anchor a widget (e.g. a health bar) over this object.</p>
       ) : (
@@ -929,6 +948,8 @@ function UISection({ objectId }: { objectId: string }) {
         </>
       )}
 
+      </>}
+      {metadataOnly && <>
       <h3 style={{ marginTop: 10 }}>Tags</h3>
       <p className="field-hint">
         Label this object so a <code>Find Actor By Tag</code> node can locate it (stored as the <code>tags</code> instance variable).
@@ -1016,6 +1037,7 @@ function UISection({ objectId }: { objectId: string }) {
           Add
         </button>
       </div>
+      </>}
     </InspectorSection>
   );
 }
@@ -2932,8 +2954,7 @@ function PhysicsSection({
   const selectedPreset = PHYSICS_MATERIAL_PRESETS.find((preset) => preset.id === (physics.materialPreset ?? 'default'));
   return (
     <InspectorSection title="Physics">
-      <p className="field-hint">Quick object: pick a ready-made setup (also turns physics on).</p>
-      <PhysicsPresetButtons onChange={onChange} />
+      <details className="editor-disclosure"><summary>Physics presets</summary><p className="field-hint">Choose a setup to configure and enable this body.</p><PhysicsPresetButtons onChange={onChange} /></details>
       <label className="field-row">
         <span>Enabled</span>
         <input type="checkbox" checked={physics.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} />
@@ -2941,9 +2962,9 @@ function PhysicsSection({
       <label className="field-row">
         <span>Body</span>
         <select value={physics.bodyType} onChange={(event) => onChange({ bodyType: event.target.value as PhysicsComponent['bodyType'] })}>
-          <option value="fixed">Static (wall / floor)</option>
-          <option value="dynamic">Dynamic (falls / moves)</option>
-          <option value="kinematic">Kinematic (scripted mover)</option>
+          <option value="fixed">Static</option>
+          <option value="dynamic">Dynamic</option>
+          <option value="kinematic">Kinematic</option>
         </select>
       </label>
       <label className="field-row">
@@ -2976,17 +2997,6 @@ function PhysicsSection({
         </>
       )}
       <label className="field-row">
-        <span>Layer</span>
-        <select value={physics.collisionLayer ?? 0} onChange={(event) => onChange({ collisionLayer: Number(event.target.value) })}>
-          {physicsLayers.map((layer) => (
-            <option key={layer} value={layer}>
-              Layer {layer}
-            </option>
-          ))}
-        </select>
-      </label>
-      <LayerMaskField value={physics.collisionMask ?? 0xffff} onChange={(collisionMask) => onChange({ collisionMask })} />
-      <label className="field-row">
         <span>Mass</span>
         <NumberInput value={physics.mass} min={0} step={0.1} onChange={(mass) => onChange({ mass })} />
       </label>
@@ -3010,6 +3020,18 @@ function PhysicsSection({
       {selectedPreset && <p className="field-hint">{selectedPreset.description}</p>}
       <RangeField label="Friction" value={physics.friction} onChange={(friction) => onChange({ friction })} />
       <RangeField label="Bounce" value={physics.restitution ?? 0.05} onChange={(restitution) => onChange({ restitution })} />
+      <details className="editor-disclosure"><summary>Advanced physics</summary>
+      <label className="field-row">
+        <span>Layer</span>
+        <select value={physics.collisionLayer ?? 0} onChange={(event) => onChange({ collisionLayer: Number(event.target.value) })}>
+          {physicsLayers.map((layer) => (
+            <option key={layer} value={layer}>
+              Layer {layer}
+            </option>
+          ))}
+        </select>
+      </label>
+      <LayerMaskField value={physics.collisionMask ?? 0xffff} onChange={(collisionMask) => onChange({ collisionMask })} />
       {physics.bodyType === 'dynamic' && (
         <>
           <label className="field-row">
@@ -3113,6 +3135,7 @@ function PhysicsSection({
       >
         + Add collider shape
       </button>
+      </details>
     </InspectorSection>
   );
 }
@@ -3257,13 +3280,15 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
         node. Needs physics enabled to be hit. {isGrid ? `${fracture.pieces ** 3} pieces.` : 'Change Seed for a different-looking break.'}
       </p>
       <button className="full-button" onClick={() => setObjectFracture(objectId, { enabled: false })}>
-        Not Destructible
+        Disable destructible
       </button>
     </InspectorSection>
   );
 }
 
 export function InspectorPanel() {
+  const [showSceneSettings, setShowSceneSettings] = useState(false);
+  const [reveal, setReveal] = useState({ title: '', version: 0 });
   // Structural subscription to the selected object: a SELECTED moving actor must not re-render the
   // whole Inspector every Play tick (its transform readout freezes during Play; edit mode is live).
   const selectedSig = useEditorStore((state) => {
@@ -3272,6 +3297,9 @@ export function InspectorPanel() {
   });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const object = useMemo(() => useEditorStore.getState().selectedObject(), [selectedSig]);
+  const selectedIds = useEditorStore((state) => state.selectedObjectIds);
+  const isPlaying = useEditorStore((state) => state.isPlaying);
+  useEffect(() => { setReveal({ title: '', version: 0 }); setShowSceneSettings(false); }, [object?.id]);
   const renameObject = useEditorStore((state) => state.renameObject);
   const updateTransform = useEditorStore((state) => state.updateTransform);
   const updateRenderer = useEditorStore((state) => state.updateRenderer);
@@ -3284,7 +3312,6 @@ export function InspectorPanel() {
   const materials = useEditorStore((state) => state.materials);
   const assets = useEditorStore((state) => state.assets);
   const updatePhysics = useEditorStore((state) => state.updatePhysics);
-  const togglePhysics = useEditorStore((state) => state.togglePhysics);
   const updateWater = useEditorStore((state) => state.updateWater);
   const toggleWater = useEditorStore((state) => state.toggleWater);
   const addJoint = useEditorStore((state) => state.addJoint);
@@ -3367,46 +3394,30 @@ export function InspectorPanel() {
   return (
     <aside className="panel inspector-panel">
       <div className="panel-header">
-        <h2>{object ? object.name : 'Scene'}</h2>
-        <span className="panel-header-kind">{object ? object.kind : 'properties'}</span>
+        <h2 title={object?.name}>{object ? object.name : 'Inspector'}</h2>
+        {isPlaying && <span className="panel-header-kind">Preview</span>}
       </div>
 
       {!object ? (
-        // Nothing selected — this is the scene's own property sheet, the way Spline's right panel
-        // falls back to scene settings. No "nothing here" dead end.
         <div className="inspector-content">
-          <SceneSettingsBody />
-          <QualitySection />
-          <RenderSettingsSection />
+          <div className="editor-empty-state inspector-empty">
+            <MousePointer2 size={26} aria-hidden />
+            <strong>No object selected</strong>
+            <p>Select an object in the Hierarchy or Viewport to edit its properties and components.</p>
+            <button type="button" className="full-button" aria-expanded={showSceneSettings} onClick={() => setShowSceneSettings((value) => !value)}><Settings2 size={14} aria-hidden />Scene settings</button>
+          </div>
+          {showSceneSettings && <><SceneSettingsBody /><QualitySection /><RenderSettingsSection /></>}
         </div>
       ) : (
-        <div className="inspector-content">
-          <section className="inspector-section title-section">
-            <input className="name-input" value={object.name} onChange={(event) => renameObject(object.id, event.target.value)} />
-            <span className="kind-label">{object.kind}</span>
+        <InspectorRevealContext.Provider value={reveal}>
+        <div className="inspector-content" key={object.id}>
+          <section className="inspector-section title-section editor-object-identity">
+            <div className="editor-object-type">{(() => { const Icon = objectIcons[object.kind]; return <Icon size={16} aria-hidden />; })()}<span>{objectTypeNames[object.kind]}</span></div>
+            <input aria-label="Object name" className="name-input" value={object.name} onChange={(event) => renameObject(object.id, event.target.value)} />
+            {selectedIds.length > 1 && <p className="field-hint">{selectedIds.length} objects selected · Editing {object.name}</p>}
+            <AddComponentMenu object={object} onConfigure={(title) => setReveal((previous) => ({ title, version: previous.version + 1 }))} />
           </section>
-
-          <MakeItPanel object={object} />
-
-          <CreatorGameplaySection object={object} />
-
-          <CreatorAppearanceSection object={object} />
-
           <InspectorSection title="Transform">
-            <div className="transform-reset-all">
-              <button
-                type="button"
-                className="full-button compact"
-                title="Reset position, rotation, and scale"
-                onClick={() => {
-                  updateTransform(object.id, 'position', [0, 0, 0]);
-                  updateTransform(object.id, 'rotation', [0, 0, 0]);
-                  updateTransform(object.id, 'scale', [1, 1, 1]);
-                }}
-              >
-                Reset transform
-              </button>
-            </div>
             {transformValues.map(({ field, label, value }) => (
               <VectorField
                 key={field}
@@ -3427,31 +3438,46 @@ export function InspectorPanel() {
                 }
               />
             ))}
+            <div className="transform-reset-all">
+              <button
+                type="button"
+                className="full-button compact"
+                title="Reset position, rotation, and scale"
+                onClick={() => {
+                  updateTransform(object.id, 'position', [0, 0, 0]);
+                  updateTransform(object.id, 'rotation', [0, 0, 0]);
+                  updateTransform(object.id, 'scale', [1, 1, 1]);
+                }}
+              >
+                Reset transform
+              </button>
+            </div>
           </InspectorSection>
-
-          <CreatorInteractionsSection object={object} />
-
-          <InspectorSection title="Advanced" defaultOpen={false}>
-            <div className="creator-advanced-body">
 
           {object.kind === 'light' && (
             <LightSection light={object.light} onChange={(patch) => setObjectLight(object.id, patch)} />
           )}
 
+          <CreatorAppearanceSection object={object} />
+          {(object.creatorRoleId || object.character?.enabled) && <CreatorGameplaySection object={object} />}
+          <details className="editor-disclosure"><summary>Gameplay role{object.creatorRoleId ? ' · Configured' : ''}</summary><MakeItPanel object={object} /></details>
+          <CreatorInteractionsSection object={object} />
+          <div className="editor-components-heading"><h3>Components</h3><span>Expand to configure</span></div>
+
+          {(object.reflectionProbe) && (
           <ReflectionProbeSection
             probe={object.reflectionProbe}
             onChange={(patch) => setReflectionProbe(object.id, patch)}
             onRebake={() => rebakeReflectionProbe(object.id)}
             onRemove={() => removeReflectionProbe(object.id)}
           />
+          )}
 
           {object.terrain && (
             <TerrainSection terrain={object.terrain} onChange={(patch) => updateTerrain(object.id, patch)} />
           )}
 
           {object.tree && <TreeSection tree={object.tree} onChange={(patch) => updateTree(object.id, patch)} />}
-
-          <ModelForgeSection object={object} />
 
           {object.renderer && (
             <RendererSection
@@ -3473,7 +3499,7 @@ export function InspectorPanel() {
 
           {object.renderer?.modelAssetId && <InstancedGridSection object={object} materials={materials} />}
 
-          {object.renderer && (
+          {object.renderer && object.animator && (
             <AnimatorSection
               objectId={object.id}
               animator={object.animator}
@@ -3492,56 +3518,39 @@ export function InspectorPanel() {
             />
           )}
 
+          {(object.character) && (
           <CharacterSection
             objectId={object.id}
             character={object.character}
             onToggle={() => toggleCharacterController(object.id)}
             onChange={(patch) => updateCharacterController(object.id, patch)}
           />
+          )}
 
+          {(object.vehicle) && (
           <VehicleSection
             objectId={object.id}
             vehicle={object.vehicle}
             onToggle={() => setVehicleEnabled(object.id)}
             onChange={(patch) => updateVehicle(object.id, patch)}
           />
+          )}
 
-          <AttachmentSection objectId={object.id} />
+          {(object.attachment || reveal.title === 'Attachment (bone socket)') && <AttachmentSection objectId={object.id} />}
 
-          <UISection objectId={object.id} />
+          {(object.ui || reveal.title === 'World-space UI') && <UISection objectId={object.id} />}
 
+          {(object.water) && (
           <WaterSection
             water={object.water}
             onToggle={() => toggleWater(object.id)}
             onChange={(patch) => updateWater(object.id, patch)}
           />
-
-          {object.physics ? (
-            <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />
-          ) : (
-            <InspectorSection title="Physics">
-              <p className="field-hint">Static = an immovable wall/floor with collision (doesn’t fall). Dynamic = simulated (falls, gets pushed).</p>
-              <button
-                className="full-button"
-                onClick={() => {
-                  togglePhysics(object.id);
-                  updatePhysics(object.id, { bodyType: 'fixed' });
-                }}
-              >
-                Add Static Collision
-              </button>
-              <button
-                className="full-button"
-                onClick={() => {
-                  togglePhysics(object.id);
-                  updatePhysics(object.id, { bodyType: 'dynamic' });
-                }}
-              >
-                Add Dynamic Body
-              </button>
-            </InspectorSection>
           )}
 
+          {object.physics && <PhysicsSection physics={object.physics} onChange={(patch) => updatePhysics(object.id, patch)} />}
+
+          {(object.joint) && (
           <JointSection
             joint={object.joint}
             objectId={object.id}
@@ -3550,7 +3559,9 @@ export function InspectorPanel() {
             onChange={(patch) => updateJoint(object.id, patch)}
             onRemove={() => removeJoint(object.id)}
           />
+          )}
 
+          {(object.cloth) && (
           <ClothSection
             cloth={object.cloth}
             modelAssets={modelAssets}
@@ -3558,7 +3569,9 @@ export function InspectorPanel() {
             onChange={(patch) => updateCloth(object.id, patch)}
             onRemove={() => removeCloth(object.id)}
           />
+          )}
 
+          {(object.cable) && (
           <CableSection
             cable={object.cable}
             objectId={object.id}
@@ -3567,14 +3580,15 @@ export function InspectorPanel() {
             onChange={(patch) => updateCable(object.id, patch)}
             onRemove={() => removeCable(object.id)}
           />
+          )}
 
-          {object.renderer && object.kind !== 'terrain' && (
+          {object.renderer && object.kind !== 'terrain' && object.fracture && (
             <FractureSection objectId={object.id} fracture={object.fracture} />
           )}
 
-          <ParticleSection objectId={object.id} particles={object.particles} imageAssets={imageAssets} />
+          {object.particles && <ParticleSection objectId={object.id} particles={object.particles} imageAssets={imageAssets} />}
 
-          <InspectorSection title="Scripts">
+          {object.script && <InspectorSection title="Scripts">
             <label className="field-row">
               <span>Blueprint</span>
               <select
@@ -3622,7 +3636,7 @@ export function InspectorPanel() {
                 </div>
                 <p>Reusable Blueprint instance attached to this object.</p>
                 <div className="script-actions">
-                  <button onClick={() => setActiveBlueprint(object.script!.blueprintId)}>Edit</button>
+                  <button onClick={() => { setActiveBlueprint(object.script!.blueprintId); focusWorkspacePanel('scripting'); }}>Edit script</button>
                   <button onClick={() => detachScript(object.id)}>
                     <Unlink size={14} aria-hidden />
                     Detach
@@ -3630,10 +3644,15 @@ export function InspectorPanel() {
                 </div>
               </div>
             )}
-          </InspectorSection>
-            </div>
-          </InspectorSection>
+          </InspectorSection>}
+          <details className="editor-disclosure"><summary>Advanced object settings</summary>
+            <p className="field-hint">Mesh tools, tags, variables, and attachment setup.</p>
+            <ModelForgeSection object={object} />
+            {!object.attachment && reveal.title !== 'Attachment (bone socket)' && <AttachmentSection objectId={object.id} />}
+            <UISection objectId={object.id} metadataOnly />
+          </details>
         </div>
+        </InspectorRevealContext.Provider>
       )}
     </aside>
   );

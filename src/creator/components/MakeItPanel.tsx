@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, CircleAlert } from 'lucide-react';
+import { roleIcons } from '../../components/editorIcons';
 import { CREATOR_ROLES } from '../roles';
 import { useEditorStore } from '../../store/editorStore';
 import type { SceneObject } from '../../types';
@@ -28,13 +29,14 @@ export function MakeItPanel({ object }: { object: SceneObject }) {
       <div className="creator-section-heading">
         <div>
           <span className="creator-section-kicker">Game role</span>
-          <h3>Make It…</h3>
+          <h3>Choose gameplay role</h3>
         </div>
         {object.creatorRoleId && <span className="creator-current-role">Configured</span>}
       </div>
 
       <div className="creator-role-grid">
         {CREATOR_ROLES.map((role) => {
+          const Icon = roleIcons[role.id];
           const current = object.creatorRoleId === role.id;
           const compatible = !role.compatibleKinds || role.compatibleKinds.includes(object.kind);
           return (
@@ -58,7 +60,7 @@ export function MakeItPanel({ object }: { object: SceneObject }) {
                 });
               }}
             >
-              <span className="creator-role-card-icon" aria-hidden>{role.icon}</span>
+              <span className="creator-role-card-icon" aria-hidden>{Icon && <Icon size={16} aria-hidden />}</span>
               <span>{role.name}</span>
               {current && <small>Current</small>}
             </button>

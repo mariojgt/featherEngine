@@ -10,6 +10,7 @@ import { useEditorStore } from './store/editorStore';
 import { useProjectStore } from './store/projectStore';
 import { usePluginStore } from './store/pluginStore';
 import './styles.css';
+import './editor-ui.css';
 import '@xyflow/react/dist/style.css';
 
 // DEV-only handle for the end-to-end suite (scripts/e2e), which drives real Chrome over CDP and

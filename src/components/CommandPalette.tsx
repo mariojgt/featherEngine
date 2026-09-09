@@ -104,17 +104,17 @@ export function CommandPalette() {
     cmds.push({ id: 'redo', label: 'Redo', group: 'Edit', run: redo });
     cmds.push({ id: 'duplicate', label: 'Duplicate selected object', group: 'Edit', keywords: 'copy clone', run: () => store().duplicateSelectedObject() });
     cmds.push({ id: 'delete', label: 'Delete selected object', group: 'Edit', keywords: 'remove', run: () => store().deleteSelectedObject() });
-    cmds.push({ id: 'add-scene', label: 'Add scene', group: 'Scene', keywords: 'new level', run: () => store().setActiveScene(store().createScene()) });
+    cmds.push({ id: 'add-scene', label: 'New scene', group: 'Scene', keywords: 'new level', run: () => store().setActiveScene(store().createScene()) });
 
     const objectKinds: Array<[SceneObjectKind, string]> = [
       ['empty', 'Empty'], ['cube', 'Cube'], ['sphere', 'Sphere'], ['plane', 'Plane'], ['capsule', 'Capsule'], ['terrain', 'Terrain'], ['light', 'Light'], ['camera', 'Camera'],
     ];
     for (const [kind, label] of objectKinds) {
-      cmds.push({ id: `create-${kind}`, label: `Create ${label}`, group: 'Create', keywords: 'add object new', run: () => store().createObject(kind) });
+      cmds.push({ id: `create-${kind}`, label: `Add ${label}`, group: 'Scene objects', keywords: 'add object new', run: () => store().createObject(kind) });
     }
     cmds.push({
       id: 'create-reflection-probe',
-      label: 'Create Reflection Probe',
+      label: 'Add reflection probe',
       group: 'Create',
       keywords: 'render unreal sphere capture reflections cubemap',
       run: () => {
@@ -124,7 +124,7 @@ export function CommandPalette() {
     });
     cmds.push({
       id: 'create-instanced-grid',
-      label: 'Create 3×3 GPU-Instanced Model Grid',
+      label: 'Add repeated model grid (3 × 3)',
       group: 'Create',
       keywords: 'instance instanced mesh repeated model performance unreal',
       run: () => {

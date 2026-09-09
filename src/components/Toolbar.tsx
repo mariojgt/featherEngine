@@ -1,31 +1,25 @@
+import { ObjectCreationMenu } from './ObjectCreationMenu';
+import { handleEditorMenuKeyDown } from './editorMenuNavigation';
 import { createPortal } from 'react-dom';
 import { getPlatform } from '../platform';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
-  Aperture,
-  Box,
   Boxes,
-  Camera,
   Check,
   ChevronDown,
-  Circle,
   CloudUpload,
   Command,
   Gamepad2,
-  LampDesk,
   Layers,
-  Mountain,
   Package,
   Pause,
   Play,
-  Plus,
   Redo2,
   Rocket,
   Save,
   SkipForward,
   Square,
   Store,
-  TreePine,
   Undo2,
   Users,
   X,
@@ -39,7 +33,6 @@ import { useEditorPrefs } from '../store/editorPrefsStore';
 import { applyCustomLayout, applyWorkspaceLayout, openBuiltInPanel, resetWorkspaceLayout, WORKSPACE_LAYOUTS, WORKSPACE_PANELS } from './Workspace';
 import { PreferencesModal } from './PreferencesModal';
 import { BuildReportDialog } from './BuildReportDialog';
-import type { SceneObjectKind, TreeArchetype } from '../types';
 import { focusWorkspacePanel, openWorkspacePanel, restoreWorkspaceLayout } from './workspacePanels';
 import { askPackageDetails } from '../store/packageDetailsStore';
 import { useExtensionSnapshot } from '../extensions/react';
@@ -48,35 +41,6 @@ import { CollaborationDialog } from './CollaborationDialog';
 import { SteamPublishDialog } from './SteamPublishDialog';
 import { isDesktop as runningInDesktopShell } from '../platform';
 import { resolveCreatorEditorMode, useCreatorEditorModeStore } from '../creator/editorModeStore';
-import { CREATOR_ROLES } from '../creator/roles';
-import { CREATOR_GAMEPLAY_KITS } from '../creator/gameplayKits';
-
-/** Parametric trees aren't a SceneObjectKind (they're a component), so they get their own Add entries. */
-const treeTools: Array<{ archetype: TreeArchetype; label: string }> = [
-  { archetype: 'broadleaf', label: 'Tree — Broadleaf' },
-  { archetype: 'conifer', label: 'Tree — Conifer' },
-  { archetype: 'birch', label: 'Tree — Birch' },
-  { archetype: 'willow', label: 'Tree — Willow' },
-  { archetype: 'palm', label: 'Tree — Palm' },
-  { archetype: 'shrub', label: 'Bush' },
-  { archetype: 'snag', label: 'Dead Tree' },
-];
-
-const worldCreationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
-  { kind: 'terrain', label: 'Terrain', icon: Mountain },
-  { kind: 'light', label: 'Light', icon: LampDesk },
-];
-
-const objectCreationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
-  { kind: 'cube', label: 'Cube', icon: Box },
-  { kind: 'sphere', label: 'Sphere', icon: Circle },
-  { kind: 'plane', label: 'Plane', icon: Square },
-  { kind: 'camera', label: 'Camera', icon: Camera },
-];
-
-const advancedCreationTools: Array<{ kind: SceneObjectKind; label: string; icon: typeof Box }> = [
-  { kind: 'empty', label: 'Empty', icon: Square },
-];
 
 function FileMenu() {
   const [open, setOpen] = useState(false);
@@ -85,6 +49,7 @@ function FileMenu() {
   const openProject = useProjectStore((state) => state.openProject);
   const save = useProjectStore((state) => state.save);
   const saveAs = useProjectStore((state) => state.saveAs);
+  const isPlaying = useEditorStore((state) => state.isPlaying);
   const closeProject = useProjectStore((state) => state.closeProject);
   const projectName = useProjectStore((state) => state.projectName);
 
@@ -103,181 +68,20 @@ function FileMenu() {
 
   return (
     <div className="file-menu" ref={ref}>
-      <button className="file-menu-trigger" onClick={() => setOpen((value) => !value)}>
+      <button className="file-menu-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         File
       </button>
       {open && (
-        <div className="file-menu-popover">
+        <div className="file-menu-popover" role="menu" onKeyDown={handleEditorMenuKeyDown}>
           <button onClick={run(() => void newProject(`Game ${new Date().getFullYear()}`))}>New project…</button>
           <button onClick={run(() => void openProject())}>Open project…</button>
-          <button onClick={run(() => void save())}>Save</button>
+          <hr />
+          <button disabled={isPlaying} title={isPlaying ? 'Stop preview to create a scene' : 'Create and switch to an empty scene'} onClick={run(() => { const editor = useEditorStore.getState(); editor.setActiveScene(editor.createScene()); })}>New scene</button>
+          <hr />
+          <button onClick={run(() => void save())}>Save project <kbd>⌘S</kbd></button>
           <button onClick={run(() => void saveAs(`${projectName} Copy`))}>Save as…</button>
           <hr />
           <button onClick={run(closeProject)}>Close project</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AddMenu() {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const createObject = useEditorStore((state) => state.createObject);
-  const createTree = useEditorStore((state) => state.createTree);
-  const createReflectionProbe = useEditorStore((state) => state.createReflectionProbe);
-  const createInstancedGrid = useEditorStore((state) => state.createInstancedGrid);
-  const createRoleObject = useEditorStore((state) => state.createRoleObject);
-  const createCreatorGameplayKit = useEditorStore((state) => state.createCreatorGameplayKit);
-  const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
-
-  useEffect(() => {
-    const onClick = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener('mousedown', onClick);
-    return () => window.removeEventListener('mousedown', onClick);
-  }, []);
-
-  return (
-    <div className="file-menu" ref={ref}>
-      <button className="file-menu-trigger add-trigger" onClick={() => setOpen((value) => !value)}>
-        <Plus size={14} aria-hidden />
-        <span>Add</span>
-      </button>
-      {open && (
-        <div className="file-menu-popover add-popover">
-          <div className="file-menu-section creator-add-section">Gameplay</div>
-          {CREATOR_ROLES.map((role) => (
-            <button
-              key={role.id}
-              className="creator-add-role"
-              onClick={() => {
-                setOpen(false);
-                const result = createRoleObject(role.id);
-                if (!result.ok) {
-                  useProjectStore.setState({ toast: { kind: 'error', message: `Could not add ${role.name}.` } });
-                  return;
-                }
-                focusWorkspacePanel('inspector');
-              }}
-              title={role.description}
-            >
-              <span className="creator-add-role-icon" aria-hidden>{role.icon}</span>
-              <span className="creator-add-role-copy">
-                <strong>{role.name}</strong>
-                <small>{role.description}</small>
-              </span>
-            </button>
-          ))}
-
-          <details className="creator-add-kits">
-            <summary>+ Add Gameplay Kit</summary>
-            <div>
-              {CREATOR_GAMEPLAY_KITS.map((kit) => (
-                <button
-                  key={kit.id}
-                  title={kit.description}
-                  onClick={() => {
-                    setOpen(false);
-                    const result = createCreatorGameplayKit(kit.id);
-                    useProjectStore.setState({
-                      toast: result.ok
-                        ? { kind: 'success', message: `${kit.name} added.` }
-                        : { kind: 'error', message: `Could not add ${kit.name}.` },
-                    });
-                    focusWorkspacePanel('viewport');
-                  }}
-                >
-                  <span aria-hidden>{kit.icon}</span>
-                  <span><strong>{kit.name}</strong><small>{kit.description}</small></span>
-                </button>
-              ))}
-            </div>
-          </details>
-
-          <div className="file-menu-section creator-add-section">World</div>
-          {worldCreationTools.map(({ kind, label, icon: Icon }) => (
-            <button
-              key={kind}
-              onClick={() => {
-                setOpen(false);
-                createObject(kind);
-              }}
-            >
-              <Icon size={14} aria-hidden />
-              <span>{label}</span>
-            </button>
-          ))}
-          {treeTools.map(({ archetype, label }) => (
-            <button
-              key={archetype}
-              onClick={() => {
-                setOpen(false);
-                createTree(archetype);
-                focusWorkspacePanel('inspector');
-              }}
-            >
-              <TreePine size={14} aria-hidden />
-              <span>{label}</span>
-            </button>
-          ))}
-
-          <div className="file-menu-section creator-add-section">Object</div>
-          {objectCreationTools.map(({ kind, label, icon: Icon }) => (
-            <button
-              key={kind}
-              onClick={() => {
-                setOpen(false);
-                createObject(kind);
-              }}
-            >
-              <Icon size={14} aria-hidden />
-              <span>{label}</span>
-            </button>
-          ))}
-
-          <div className="file-menu-section creator-add-section">Advanced</div>
-          {advancedCreationTools.map(({ kind, label, icon: Icon }) => (
-            <button
-              key={kind}
-              onClick={() => {
-                setOpen(false);
-                createObject(kind);
-              }}
-            >
-              <Icon size={14} aria-hidden />
-              <span>{label}</span>
-            </button>
-          ))}
-          <button
-            onClick={() => {
-              setOpen(false);
-              createReflectionProbe();
-              focusWorkspacePanel('inspector');
-            }}
-          >
-            <Aperture size={14} aria-hidden />
-            <span>Reflection Probe</span>
-          </button>
-          <button
-            disabled={!selectedObjectId}
-            title="Select a safe static imported model first"
-            onClick={() => {
-              const ids = createInstancedGrid(selectedObjectId, { rows: 3, columns: 3 });
-              setOpen(false);
-              if (!ids.length) {
-                useProjectStore.setState({
-                  toast: { kind: 'error', message: 'Select a root-level static imported model with baked materials to create an instanced grid.' },
-                });
-                return;
-              }
-              focusWorkspacePanel('inspector');
-            }}
-          >
-            <Layers size={14} aria-hidden />
-            <span>GPU-Instanced Model Grid</span>
-          </button>
         </div>
       )}
     </div>
@@ -308,20 +112,20 @@ function ExportMenu({ onOpenSteam }: { onOpenSteam: () => void }) {
 
   return (
     <div className="file-menu" ref={ref}>
-      <button className="export-button" disabled={busy} title="Export your game" onClick={() => setOpen((value) => !value)}>
+      <button className="export-button" aria-haspopup="menu" aria-expanded={open} disabled={busy} title="Export your game" onClick={() => setOpen((value) => !value)}>
         <Package size={16} aria-hidden />
         <span>Export</span>
         <ChevronDown size={14} aria-hidden />
       </button>
       {open && (
-        <div className="file-menu-popover add-popover export-popover">
+        <div className="file-menu-popover add-popover export-popover" role="menu" onKeyDown={handleEditorMenuKeyDown}>
           <button onClick={run(exportGame)}>
             <Package size={14} aria-hidden />
-            <span>Game bundle (game.json)</span>
+            <span>Game data bundle…</span>
           </button>
           <button onClick={run(exportProduction)}>
             <Rocket size={14} aria-hidden />
-            <span>Production — web + native app</span>
+            <span>Build game for web / desktop…</span>
           </button>
           <hr />
           <button
@@ -382,11 +186,11 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
 
   return (
     <div className="file-menu" data-menu="view" ref={ref}>
-      <button className="file-menu-trigger" onClick={() => setOpen((value) => !value)}>
+      <button className="file-menu-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         View
       </button>
       {open && (
-        <div className="file-menu-popover">
+        <div className="file-menu-popover" role="menu" onKeyDown={handleEditorMenuKeyDown}>
           <div className="file-menu-section">Layout</div>
           {WORKSPACE_LAYOUTS.map((layout) => (
             <button key={layout.id} onClick={run(() => applyWorkspaceLayout(layout.id))}>
@@ -478,7 +282,6 @@ function SceneSwitcher() {
   );
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
   const setActiveScene = useEditorStore((state) => state.setActiveScene);
-  const createScene = useEditorStore((state) => state.createScene);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const prefabName = useEditorStore((state) =>
@@ -506,7 +309,9 @@ function SceneSwitcher() {
   return (
     <div className="scene-switcher" title={isPlaying ? 'Stop play to switch scenes' : 'Active scene'}>
       <Layers size={14} aria-hidden />
+      <span className="editor-scene-label">Scene</span>
       <select
+        aria-label="Active scene"
         value={activeSceneId}
         disabled={isPlaying}
         onChange={(event) => setActiveScene(event.target.value)}
@@ -519,17 +324,7 @@ function SceneSwitcher() {
             </option>
           ))}
       </select>
-      <button
-        className="icon-button compact"
-        title="Add scene"
-        disabled={isPlaying}
-        onClick={() => {
-          const id = createScene();
-          setActiveScene(id);
-        }}
-      >
-        <Plus size={14} aria-hidden />
-      </button>
+
     </div>
   );
 }
@@ -681,7 +476,15 @@ export function Toolbar() {
   }, [save]);
 
   return (
-    <header className={`toolbar creator-toolbar creator-mode--${editorMode}`}>
+    <header onKeyDown={(event) => {
+      const target = event.target as HTMLElement;
+      const menu = target.closest('.file-menu');
+      if (!menu) return;
+      const trigger = menu.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]');
+      if (event.key === 'Escape' && trigger?.getAttribute('aria-expanded') === 'true') { event.preventDefault(); event.stopPropagation(); trigger.click(); trigger.focus(); }
+      if (event.key === 'ArrowDown' && target === trigger) { event.preventDefault(); if (trigger.getAttribute('aria-expanded') !== 'true') trigger.click(); requestAnimationFrame(() => menu.querySelector<HTMLButtonElement>('.file-menu-popover button:not(:disabled)')?.focus()); }
+    }} className={`toolbar creator-toolbar creator-mode--${editorMode}`}>
+      <div className="editor-main-menu">
       <div className="brand">
         <Gamepad2 size={18} aria-hidden />
         <div>
@@ -690,13 +493,19 @@ export function Toolbar() {
         </div>
       </div>
 
-      <div className="creator-toolbar-authoring">
         <FileMenu />
         <ViewMenu onOpenPrefs={() => setPrefsOpen(true)} />
-        <AddMenu />
+        <div className={isDirty ? 'project-pill dirty' : 'project-pill'} title={projectName}><span>{projectName}</span>{isDirty && <span className="dirty-label">Unsaved</span>}</div>
+        <div className="toolbar-spacer" />
+        <CollaborationToolbarButton open={collaborationOpen} onClick={() => setCollaborationOpen(true)} />
+        <ExportMenu onOpenSteam={() => setSteamPublishOpen(true)} />
+      </div>
+      <div className="editor-main-tools">
+      <div className="creator-toolbar-authoring">
+        <ObjectCreationMenu />
         <button
           className="cmdk-launch"
-          title="Command palette — run any command (⌘K)"
+          title="Search commands (⌘K / Ctrl+K)" aria-label="Search commands"
           onClick={() => window.dispatchEvent(new CustomEvent('nf:open-command-palette'))}
         >
           <Command size={14} aria-hidden />
@@ -705,10 +514,10 @@ export function Toolbar() {
         <SceneSwitcher />
 
         <div className="tool-group" aria-label="History">
-          <button className="icon-button" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>
+          <button className="icon-button" title="Undo (⌘Z / Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={undo}>
             <Undo2 size={16} aria-hidden />
           </button>
-          <button className="icon-button" title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={redo}>
+          <button className="icon-button" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" aria-label="Redo" disabled={!canRedo} onClick={redo}>
             <Redo2 size={16} aria-hidden />
           </button>
         </div>
@@ -729,14 +538,14 @@ export function Toolbar() {
           aria-pressed={editorMode === 'build'}
           onClick={activateBuild}
         >
-          Build
+          Edit
         </button>
         <button
           type="button"
           className={editorMode === 'play' ? 'run-button active play' : 'run-button play'}
           data-creator-mode="play"
           aria-pressed={editorMode === 'play'}
-          title={guestProjectLock ? 'Only the collaboration host can run the shared simulation' : editingPrefab ? 'Close the prefab editor to play' : isPlaying ? 'Stop preview and return to Build' : 'Play preview'}
+          title={guestProjectLock ? 'Only the collaboration host can run the shared simulation' : editingPrefab ? 'Close the prefab editor to play' : isPlaying ? 'Stop preview and return to editing (Esc)' : 'Play scene'}
           disabled={!isPlaying && (editingPrefab || guestProjectLock)}
           onClick={activatePlay}
           data-testid="toolbar-play-button"
@@ -751,7 +560,7 @@ export function Toolbar() {
           aria-pressed={editorMode === 'logic'}
           onClick={activateLogic}
         >
-          Logic
+          Script
         </button>
       </div>
 
@@ -759,7 +568,8 @@ export function Toolbar() {
         <div className="creator-play-tools" aria-label="Play controls">
           <button
             className={isPlayPaused ? 'icon-button active' : 'icon-button'}
-            title="Pause preview (F6)"
+            title={isPlayPaused ? 'Resume preview (F6)' : 'Pause preview (F6)'}
+            aria-pressed={isPlayPaused}
             aria-label={isPlayPaused ? 'Resume preview' : 'Pause preview'}
             onClick={() => setPlayPaused(!isPlayPaused)}
           >
@@ -776,20 +586,6 @@ export function Toolbar() {
       <BuildProgressOverlay />
       <BuildReportDialog />
 
-      <div className={isDirty ? 'project-pill dirty' : 'project-pill'} title={isDirty ? `${projectName} — unsaved changes (⌘S to save)` : projectName}>
-        <span>{projectName}</span>
-        {isDirty && (
-          <>
-            <span className="dirty-dot" />
-            <span className="dirty-label">Unsaved</span>
-          </>
-        )}
-      </div>
-
-      {/* No settings cog: View → Preferences… opens the same modal. */}
-
-      <CollaborationToolbarButton open={collaborationOpen} onClick={() => setCollaborationOpen(true)} />
-
       <div className="tool-group" aria-label="Runtime controls">
         <RuntimeErrorBadge />
         <ProblemsButton />
@@ -803,7 +599,7 @@ export function Toolbar() {
           <Save size={16} aria-hidden />
           <span>Save</span>
         </button>
-        <ExportMenu onOpenSteam={() => setSteamPublishOpen(true)} />
+      </div>
       </div>
 
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />

@@ -1361,6 +1361,7 @@ export function AssetBrowser() {
 
   return (
     <section className="panel asset-panel asset-browser" aria-label="Asset browser" data-testid="asset-browser">
+      <div className="asset-browser-toolbar">
       <div className="asset-browser-actions">
         <button className="asset-browser-button primary" title={`Import assets into ${folderPath(selectedFolderId)}`} disabled={isImporting} onClick={() => triggerImport(selectedFolderId)}>
           <Upload size={14} aria-hidden />
@@ -1374,7 +1375,7 @@ export function AssetBrowser() {
           aria-haspopup="dialog"
           onClick={(event) => togglePopover(event, 'create')}
         >
-          <Plus size={14} aria-hidden /><ChevronDown size={12} aria-hidden />
+          <Plus size={14} aria-hidden /><span>Create resource</span><ChevronDown size={12} aria-hidden />
         </button>
         <button className="icon-button compact asset-browser-more" title="Asset browser options" aria-label="Asset browser options" aria-haspopup="dialog" aria-expanded={popover?.kind === 'options'} onClick={(event) => togglePopover(event, 'options')}>
           <MoreHorizontal size={16} aria-hidden />
@@ -1409,6 +1410,7 @@ export function AssetBrowser() {
         </select>
       </div>
 
+      </div>
       <div className={clsx('asset-body', !showFolders && 'no-folders')}>
         {showFolders && (
           <div className="asset-folders" aria-label="Project folders">

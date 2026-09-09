@@ -95,6 +95,7 @@ export function CreatorAppearanceSection({ object }: { object: SceneObject }) {
       </div>
 
       <ModelAppearanceSection key={object.id} object={object} />
+      <details className="editor-disclosure"><summary>Material presets</summary>
       <div className="creator-look-grid">
         {CREATOR_MATERIAL_LOOKS.map((look) => (
           <button
@@ -110,6 +111,7 @@ export function CreatorAppearanceSection({ object }: { object: SceneObject }) {
         ))}
       </div>
 
+      </details>
       <div className="creator-color-row">
         <span>Color</span>
         <div className="creator-color-swatches">
@@ -126,7 +128,7 @@ export function CreatorAppearanceSection({ object }: { object: SceneObject }) {
           ))}
           <label className="creator-custom-color" title="Choose a custom color">
             <span aria-hidden>＋</span>
-            <input type="color" value={currentColor} onChange={(event) => applyColor(event.target.value)} />
+            <input aria-label="Custom object color" type="color" value={currentColor} onChange={(event) => applyColor(event.target.value)} />
           </label>
         </div>
       </div>
@@ -146,7 +148,7 @@ export function CreatorAppearanceSection({ object }: { object: SceneObject }) {
           focusWorkspacePanel('materials');
         }}
       >
-        Advanced Material Settings
+        Edit material
       </button>
     </section>
   );

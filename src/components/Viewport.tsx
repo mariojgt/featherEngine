@@ -1,6 +1,7 @@
+import { requestAddObject } from './ObjectCreationMenu';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, Grid, Html, PerformanceMonitor, TransformControls } from '@react-three/drei';
-import { ArrowDownToLine, Aperture, Camera, CircleDot, Globe, Magnet, Maximize2, Minimize2, Move3D, Play, Rotate3D, Scaling, Sparkles, Square, View } from 'lucide-react';
+import { ArrowDownToLine, Aperture, Camera, CircleDot, Globe, Magnet, Maximize2, Minimize2, Move3D, Play, Rotate3D, Scaling, Sparkles, View } from 'lucide-react';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -33,7 +34,6 @@ import {
   onWorkspacePanelMaximizedChange,
   restoreWorkspaceLayout,
 } from './workspacePanels';
-import { useCreatorEditorModeStore } from '../creator/editorModeStore';
 import { BoneAttachment } from '../three/BoneAttachment';
 import { useResolvedMaterial, useResolvedMaterialSlots, hasPhysicalLayers } from '../three/resolveMaterial';
 import { useToonMaterial } from '../three/toonMaterial';
@@ -86,11 +86,9 @@ import { Terrain, TerrainBrushCursor } from '../three/Terrain';
 import { TreeMesh } from '../three/TreeMesh';
 import { ModelMesh } from '../three/ModelMesh';
 import { ViewportModelForgeBar } from './ViewportModelForgeBar';
-import { ensureModelForgeEnabled } from '../extensions/openModelForge';
-import { MODEL_STARTERS, QUICK_MODEL_STARTER_IDS } from '../model/modelSpec';
 import { useModelForgeSession } from '../store/modelForgeSessionStore';
 import { highestTerrainWorldHeight } from '../terrain/terrain';
-import type { MaterialOverrides, SceneObject, SceneObjectKind } from '../types';
+import type { MaterialOverrides, SceneObject, } from '../types';
 import { GameView } from '../player/GameView';
 import { RuntimeOverlays } from '../runtime/RuntimeOverlays';
 import { useCollaborationStore, type CollaborationParticipant } from '../store/collaborationStore';
@@ -1582,38 +1580,15 @@ function QuickStartOverlay() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   if (!isEmpty || isPlaying || editingPrefabId) return null;
-  const store = () => useEditorStore.getState();
-  const addGround = () => {
-    const id = store().createObjectWithProps('plane', {
-      name: 'Ground',
-      position: [0, 0, 0],
-      color: '#39414f',
-      physics: { enabled: true, bodyType: 'fixed', collider: 'box' },
-    });
-    store().updateTransform(id, 'scale', [60, 1, 60]);
-    store().selectObject(id);
-  };
-  const addPlayer = () => {
-    const result = store().createRoleObject('player', { position: [0, 1.1, 0], color: '#22e0ff' });
-    if (result.objectId) store().selectObject(result.objectId);
-  };
   return (
     <div className="quickstart-overlay">
       <div className="quickstart-card">
-        <h3>Start your game</h3>
-        <p>Every game starts the same way — or skip ahead with a template or the AI assistant.</p>
+        <h3>Your scene starts here</h3>
+        <p>Add an object, then select it to edit its properties.</p>
         <div className="quickstart-actions">
-          <button onClick={addGround}>＋ Add ground</button>
-          <button
-            onClick={() => {
-              addGround();
-              addPlayer();
-            }}
-          >
-            ＋ Ground + playable character
-          </button>
+          <button onClick={() => requestAddObject()}>Add object</button>
+          <button onClick={() => requestAddObject({ category: 'Scene starters' })}>Browse scene starters</button>
         </div>
-        <small>Tip: open the Agent tab to build whole scenes — try “make a small race track”.</small>
       </div>
     </div>
   );
@@ -1674,8 +1649,6 @@ export function ViewportPanel() {
   const [dpr, setDpr] = useState(1.5);
   const hasWebGL = useMemo(detectWebGL, []);
   const isPlaying = useEditorStore((state) => state.isPlaying);
-  const setPlaying = useEditorStore((state) => state.setPlaying);
-  const setCreatorAuthoringMode = useCreatorEditorModeStore((state) => state.setAuthoringMode);
   const hasSelection = useEditorStore((state) => Boolean(state.selectedObjectId));
   const dropSelectionToSurface = useCallback(() => {
     sceneApiRef.current?.dropToSurface(effectiveSelection(useEditorStore.getState()));
@@ -1960,33 +1933,6 @@ export function ViewportPanel() {
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const [boxRect, setBoxRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
-  type InsertMenuState = { x: number; y: number; worldPos: [number, number, number] };
-  const [insertMenu, setInsertMenu] = useState<InsertMenuState | null>(null);
-
-  // Close the quick-add popover on Esc / click-away, but keep it open when interacting with it.
-  useEffect(() => {
-    if (!insertMenu) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setInsertMenu(null);
-    };
-    const onDown = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('.insert-popover')) return;
-      setInsertMenu(null);
-    };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('mousedown', onDown);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onDown);
-    };
-  }, [insertMenu]);
-
-  useEffect(() => {
-    if (!insertMenu || !isPlaying) return;
-    setInsertMenu(null);
-  }, [insertMenu, isPlaying]);
-
   // Needed by both the insert-at-cursor quick-add and by model drag-and-drop.
   const dropContextRef = useRef<DropContext | null>(null);
   const groundPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
@@ -2025,14 +1971,10 @@ export function ViewportPanel() {
         setTimeout(() => {
           suppressDeselectRef.current = false;
         }, 0);
-      } else if (additive || effectiveSelection(useEditorStore.getState()).length === 0) {
+      } else if (additive) {
         // Shift-click empty space → open a quick-add popover near the cursor.
         const zone = dropZoneRef.current;
         if (zone) {
-          const zr = zone.getBoundingClientRect();
-          const x = e.clientX - zr.left;
-          const y = e.clientY - zr.top;
-
           const ctx = dropContextRef.current;
           let worldPos: [number, number, number] = [0, 0, 0];
           if (ctx) {
@@ -2050,7 +1992,10 @@ export function ViewportPanel() {
             }
           }
 
-          setInsertMenu({ x, y, worldPos });
+          requestAddObject({ position: worldPos, onCreated: (id) => {
+            const object = useEditorStore.getState().activeScene()?.objects.find((item) => item.id === id);
+            if (object?.renderer && object.kind !== 'terrain') sceneApiRef.current?.dropToSurface([id]);
+          } });
         }
       }
       setBoxRect(null);
@@ -2169,38 +2114,6 @@ export function ViewportPanel() {
     [cursorGroundPosition],
   );
 
-  const quickAddFromMenu = (kind: SceneObjectKind) => {
-    const menu = insertMenu;
-    if (!menu) return;
-    const store = useEditorStore.getState();
-
-    const yOffset = kind === 'light' || kind === 'camera' ? 2 : kind === 'empty' ? 0 : 1.5;
-    const position: [number, number, number] = [menu.worldPos[0], menu.worldPos[1] + yOffset, menu.worldPos[2]];
-
-    const id = store.createObjectWithProps(kind, { position });
-    store.selectObject(id);
-
-    if (kind !== 'light' && kind !== 'camera' && kind !== 'empty') {
-      sceneApiRef.current?.dropToSurface([id]);
-    }
-    setInsertMenu(null);
-  };
-
-  const quickAddPrototype = (starterId: string) => {
-    const menu = insertMenu;
-    if (!menu) return;
-    if (!ensureModelForgeEnabled()) return;
-    const store = useEditorStore.getState();
-    const specId = store.createModelSpec(starterId);
-    if (!specId) return;
-    const id = store.createModelFromSpec(specId, { position: menu.worldPos });
-    if (!id) return;
-    store.selectObject(id);
-    useModelForgeSession.getState().setMode('build');
-    useModelForgeSession.getState().setPartId('');
-    setInsertMenu(null);
-  };
-
   const selectedForgeObject = useEditorStore((state) => {
     const id = state.selectedObjectId;
     if (!id || state.isPlaying) return undefined;
@@ -2230,6 +2143,7 @@ export function ViewportPanel() {
                 key={mode}
                 className={transformMode === mode ? 'active' : undefined}
                 title={`${label} tool (${key})`}
+                aria-pressed={transformMode === mode}
                 onClick={() => setTransformMode(mode)}
               >
                 <Icon size={14} aria-hidden />
@@ -2238,6 +2152,76 @@ export function ViewportPanel() {
             );
           })}
         </div>
+        <div className="segmented" aria-label="Gizmo options">
+          <button
+            className={transformSpace === 'local' ? 'active' : undefined}
+            title={`Coordinate space: ${transformSpace} (X to toggle)`}
+            aria-label={`Coordinate space: ${transformSpace}`}
+            onClick={() => setTransformSpace(transformSpace === 'world' ? 'local' : 'world')}
+          >
+            <Globe size={14} aria-hidden /><span>{transformSpace === 'local' ? 'Local' : 'World'}</span>
+          </button>
+          <button
+            className={snapEnabled ? 'active' : undefined}
+            aria-pressed={snapEnabled}
+            title="Snap to grid (hold Ctrl to flip while dragging)"
+            onClick={() => setSnapEnabled(!snapEnabled)}
+          >
+            <Magnet size={14} aria-hidden /><span>{snapEnabled ? 'Snap on' : 'Snap off'}</span>
+          </button>
+
+          {transformMode === 'rotate' ? (
+            <select
+              className="snap-step"
+              value={angleStepDeg}
+              aria-label="Rotation snap (degrees)" title="Rotation snap (degrees)"
+              onChange={(event) => setAngleStepDeg(Number(event.target.value))}
+            >
+              {SNAP_ANGLES.map((step) => (
+                <option key={step} value={step}>
+                  {step}°
+                </option>
+              ))}
+            </select>
+          ) : transformMode === 'scale' ? (
+            <select
+              className="snap-step"
+              value={scaleStep}
+              aria-label="Scale snap increment" title="Scale snap increment"
+              onChange={(event) => setScaleStep(Number(event.target.value))}
+            >
+              {SNAP_SCALES.map((step) => (
+                <option key={step} value={step}>
+                  {step}×
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              className="snap-step"
+              value={snapStep}
+              aria-label="Move snap step (metres)" title="Move snap step (metres)"
+              onChange={(event) => setSnapStep(Number(event.target.value))}
+            >
+              {SNAP_STEPS.map((step) => (
+                <option key={step} value={step}>
+                  {step}m
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            className="ground-selection-button"
+            disabled={!hasSelection}
+            title="Drop selection to surface below (End)"
+            aria-label="Drop selection to surface"
+            onClick={dropSelectionToSurface}
+          >
+            <ArrowDownToLine size={14} aria-hidden />
+            <span>Drop to ground</span>
+          </button>
+        </div>
+        <details className="viewport-options"><summary>View options</summary><div className="viewport-options-menu">
         <div className="segmented" aria-label="Camera preview">
           <button
             className={previewCamera ? 'active' : undefined}
@@ -2256,7 +2240,7 @@ export function ViewportPanel() {
               })
             }
           >
-            <Camera size={14} aria-hidden />
+            <Camera size={14} aria-hidden /><span>Player camera</span>
           </button>
           <button
             className={renderPreviewEnabled ? 'active' : undefined}
@@ -2265,82 +2249,16 @@ export function ViewportPanel() {
             title={renderPreviewEnabled ? 'Render Look preview is on (AO, bloom, color grade, anti-aliasing)' : 'Preview the shipped Render Look while editing'}
             onClick={() => setRenderPreviewEnabled(!renderPreviewEnabled)}
           >
-            <Sparkles size={14} aria-hidden />
+            <Sparkles size={14} aria-hidden /><span>Render preview</span>
           </button>
         </div>
-        <div className="segmented" aria-label="Gizmo options">
-          <button
-            className={transformSpace === 'local' ? 'active' : undefined}
-            title={`Coordinate space: ${transformSpace} (X to toggle)`}
-            onClick={() => setTransformSpace(transformSpace === 'world' ? 'local' : 'world')}
-          >
-            <Globe size={14} aria-hidden />
-          </button>
-          <button
-            className={snapEnabled ? 'active' : undefined}
-            title="Snap to grid (hold Ctrl to flip while dragging)"
-            onClick={() => setSnapEnabled(!snapEnabled)}
-          >
-            <Magnet size={14} aria-hidden />
-          </button>
           <button
             title="Capture viewport screenshot (F12)"
             aria-label="Capture viewport screenshot"
             onClick={() => void captureViewportScreenshot()}
           >
-            <Aperture size={14} aria-hidden />
-          </button>
-          {transformMode === 'rotate' ? (
-            <select
-              className="snap-step"
-              value={angleStepDeg}
-              title="Rotation snap (degrees)"
-              onChange={(event) => setAngleStepDeg(Number(event.target.value))}
-            >
-              {SNAP_ANGLES.map((step) => (
-                <option key={step} value={step}>
-                  {step}°
-                </option>
-              ))}
-            </select>
-          ) : transformMode === 'scale' ? (
-            <select
-              className="snap-step"
-              value={scaleStep}
-              title="Scale snap increment"
-              onChange={(event) => setScaleStep(Number(event.target.value))}
-            >
-              {SNAP_SCALES.map((step) => (
-                <option key={step} value={step}>
-                  {step}×
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select
-              className="snap-step"
-              value={snapStep}
-              title="Move snap step (metres)"
-              onChange={(event) => setSnapStep(Number(event.target.value))}
-            >
-              {SNAP_STEPS.map((step) => (
-                <option key={step} value={step}>
-                  {step}m
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            className="ground-selection-button"
-            disabled={!hasSelection}
-            title="Drop selection to surface below (End)"
-            aria-label="Drop selection to surface"
-            onClick={dropSelectionToSurface}
-          >
-            <ArrowDownToLine size={14} aria-hidden />
-            <span>Ground</span>
-          </button>
-        </div>
+            <Aperture size={14} aria-hidden /><span>Screenshot</span>
+          </button>        </div></details>
         {/* Quality moved to the Inspector's scene view (Quality section) — the dock is for tools
             you use while manipulating objects, not render settings you set once. */}
       </div>
@@ -2354,19 +2272,7 @@ export function ViewportPanel() {
           >
             {viewportMaximized ? <Minimize2 size={14} aria-hidden /> : <Maximize2 size={14} aria-hidden />}
           </button>
-          <button
-            className={isPlaying ? 'viewport-play active' : 'viewport-play'}
-            title={isPlaying ? 'Stop preview — back to Edit Mode' : 'Play preview'}
-            onClick={() => {
-              // Starting or stopping from the canvas follows the same Creator-mode
-              // contract as the main toolbar: a preview always returns to BUILD.
-              setCreatorAuthoringMode('build');
-              setPlaying(!isPlaying);
-            }}
-          >
-            {isPlaying ? <Square size={14} aria-hidden /> : <Play size={14} aria-hidden />}
-            <span>{isPlaying ? 'Stop' : 'Play'}</span>
-          </button>
+
         </>
       )}
       <div
@@ -2451,44 +2357,6 @@ export function ViewportPanel() {
             <span><i className="camera" aria-hidden /> Camera path</span>
             <span><i className="object" aria-hidden /> Object path</span>
             <small>Click a numbered key to edit it · drag the gold handle to move it</small>
-          </div>
-        )}
-        {insertMenu && !isPlaying && !editingPrefabId && (
-          <div
-            className="insert-popover"
-            style={{ left: insertMenu.x, top: insertMenu.y }}
-            role="menu"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="insert-popover-title">Quick add</div>
-            <div className="insert-popover-grid">
-              <button type="button" onClick={() => quickAddFromMenu('cube')}>
-                Cube
-              </button>
-              <button type="button" onClick={() => quickAddFromMenu('sphere')}>
-                Sphere
-              </button>
-              <button type="button" onClick={() => quickAddFromMenu('plane')}>
-                Plane
-              </button>
-              <button type="button" onClick={() => quickAddFromMenu('light')}>
-                Light
-              </button>
-              <button type="button" onClick={() => quickAddFromMenu('camera')}>
-                Camera
-              </button>
-              <button type="button" onClick={() => quickAddFromMenu('empty')}>
-                Empty
-              </button>
-            </div>
-            <div className="insert-popover-title">Prototype prop</div>
-            <div className="insert-popover-grid">
-              {MODEL_STARTERS.filter((starter) => QUICK_MODEL_STARTER_IDS.includes(starter.id)).map((starter) => (
-                <button key={starter.id} type="button" title={starter.tagline} onClick={() => quickAddPrototype(starter.id)}>
-                  {starter.name}
-                </button>
-              ))}
-            </div>
           </div>
         )}
         {selectedForgeObject && !isPlaying && !editingPrefabId && <ViewportModelForgeBar object={selectedForgeObject} />}

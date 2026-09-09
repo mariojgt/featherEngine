@@ -47,8 +47,8 @@ type PanelDir = 'left' | 'right' | 'above' | 'below' | 'within';
 
 /** Sidebar widths for the default shell. The Inspector is wider because it carries labelled
  *  field rows; the object/asset list only needs room for a name and a badge. */
-const SIDEBAR_WIDTH = 300;
-const INSPECTOR_WIDTH = 330;
+const SIDEBAR_WIDTH = 260;
+const INSPECTOR_WIDTH = 340;
 type PanelDef = {
   component: string;
   title: string;
@@ -60,9 +60,9 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   viewport: { component: 'viewport', title: 'Viewport' },
   // Left creator sidebar — Agent is a first-class surface beside Objects and Assets.
   agent: { component: 'agent', title: 'Agent', ref: 'hierarchy', direction: 'within' },
-  hierarchy: { component: 'hierarchy', title: 'Objects', ref: 'viewport', direction: 'left' },
-  project: { component: 'project', title: 'Assets', ref: 'hierarchy', direction: 'within' },
-  store: { component: 'store', title: 'Store', ref: 'hierarchy', direction: 'within' },
+  hierarchy: { component: 'hierarchy', title: 'Hierarchy', ref: 'viewport', direction: 'left' },
+  project: { component: 'project', title: 'Assets', ref: 'viewport', direction: 'below' },
+  store: { component: 'store', title: 'Asset Store', ref: 'project', direction: 'within' },
   // Right: the one contextual property panel.
   inspector: { component: 'inspector', title: 'Inspector', ref: 'viewport', direction: 'right' },
   // Right side = property sheets. These are plain forms, so they read fine in a ~330px column
@@ -86,13 +86,13 @@ const PANEL_DEFS: Record<string, PanelDef> = {
   cinematic: { component: 'cinematic', title: 'Film Mode', ref: 'viewport', direction: 'below' },
   // Kept registered so old saved layouts and pop-out windows still resolve it, but no longer
   // docked by default — the Inspector shows scene settings when nothing is selected.
-  scene: { component: 'scene', title: 'Scene', ref: 'inspector', direction: 'within' },
+  scene: { component: 'scene', title: 'Scene settings', ref: 'inspector', direction: 'within' },
 };
 
 /** Panels the View menu offers, in menu order. Excludes `viewport` (never closable) and `scene`
  *  (folded into the Inspector's no-selection state). */
 export const WORKSPACE_PANELS: Array<{ id: string; title: string }> = [
-  'agent', 'hierarchy', 'project', 'store', 'inspector',
+  'hierarchy', 'project', 'inspector', 'scene', 'agent', 'store',
   'materials', 'terrain', 'trees', 'particles', 'animator', 'ui',
   'scripting', 'cinematic',
 ].map((id) => ({ id, title: PANEL_DEFS[id].title }));
@@ -213,11 +213,13 @@ function buildShell(api: DockviewApi) {
   api.clear();
   api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', renderer: 'always' });
   api.addPanel({ id: 'agent', component: 'agent', title: 'Agent', renderer: 'always', inactive: true, position: { referencePanel: 'viewport', direction: 'left' } });
-  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Objects', position: { referencePanel: 'agent', direction: 'within' } });
-  api.addPanel({ id: 'project', component: 'project', title: 'Assets', position: { referencePanel: 'agent', direction: 'within' } });
-  api.addPanel({ id: 'store', component: 'store', title: 'Store', position: { referencePanel: 'hierarchy', direction: 'within' } });
-  api.getPanel('hierarchy')?.api.setActive();
+  api.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'agent', direction: 'within' } });
   api.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
+  api.addPanel({ id: 'project', component: 'project', title: 'Assets', position: { referencePanel: 'viewport', direction: 'below' } });
+  api.addPanel({ id: 'store', component: 'store', title: 'Asset Store', inactive: true, position: { referencePanel: 'project', direction: 'within' } });
+  api.getPanel('project')?.api.setActive();
+  api.getPanel('project')?.api.setSize({ height: Math.min(260, Math.max(210, Math.round((api.height || 800) * 0.3))) });
+  api.getPanel('hierarchy')?.api.setActive();
   // Dockview splits evenly by default, which left the viewport at a third of the window — the
   // thing you are actually building should dominate, so pin the sidebars to a readable fixed
   // width and let the viewport take the rest.
@@ -354,13 +356,25 @@ export function Workspace() {
       }
     }
     if (!restored) buildDefaultLayout(event.api);
-    else if (ensureAgentPanel(event.api)) {
-      // Persist the one-time additive migration now; native panel focus/maximize
-      // remains transient and does not rebuild this layout.
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ version: LAYOUT_VERSION, layout: event.api.toJSON() }));
+    else {
+      // Maximizing is transient. A layout saved by an older build could still carry it, which
+      // would open the editor with only the viewport visible; drop it so every panel comes back.
+      if (event.api.hasMaximizedGroup()) event.api.exitMaximizedGroup();
+      if (ensureAgentPanel(event.api)) {
+        // Persist the one-time additive migration now; native panel focus/maximize
+        // remains transient and does not rebuild this layout.
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify({ version: LAYOUT_VERSION, layout: event.api.toJSON() }));
+      }
     }
 
+    // Refresh terminology without changing panel IDs or the user's saved geometry.
+    for (const [id, definition] of Object.entries(PANEL_DEFS)) event.api.getPanel(id)?.api.setTitle(definition.title);
+
     event.api.onDidLayoutChange(() => {
+      // Play (and viewport focus mode) maximize the viewport group, and Dockview reports every
+      // hidden panel at its minimum size while that lasts. Saving then would replace the user's
+      // real dock sizes with those placeholder ones, so keep the last real layout instead.
+      if (event.api.hasMaximizedGroup()) return;
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({ version: LAYOUT_VERSION, layout: event.api.toJSON() }));
     });
   }, []);

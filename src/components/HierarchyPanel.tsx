@@ -1,39 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Aperture, Box, Boxes, Camera, ChevronDown, ChevronRight, Circle, FilePlus2, LampDesk, Mountain, Search, Square, Trash2 } from 'lucide-react';
+import { Aperture, Box, Boxes, ChevronDown, ChevronRight, Copy, MoreHorizontal, Pencil, Search, Settings2, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
 import { useThrottledActiveObjects } from '../store/stableSelectors';
 import { useProjectStore } from '../store/projectStore';
 import { focusWorkspacePanel } from './workspacePanels';
 import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './ContextMenu';
-import type { SceneObject, SceneObjectKind } from '../types';
+import type { SceneObject } from '../types';
 import { useCollaborationStore, type CollaborationParticipant } from '../store/collaborationStore';
 import { collaboratorsOnObject } from '../collaboration/presence';
 import { CollaboratorAvatars } from './CollaboratorAvatars';
 import { findCreatorRole } from '../creator/roles';
 import { isPrefabInstanceRoot } from '../store/editor/prefabMerge';
 
-const objectIcon: Record<SceneObjectKind, typeof Box> = {
-  empty: Square,
-  cube: Box,
-  sphere: Circle,
-  capsule: Box,
-  plane: Square,
-  light: LampDesk,
-  camera: Camera,
-  terrain: Mountain,
-};
-
-// Kinds offered in the "Add child" context-menu submenu (flat — ContextMenu has no nesting).
-const childKinds: Array<{ kind: SceneObjectKind; label: string }> = [
-  { kind: 'empty', label: 'Empty' },
-  { kind: 'cube', label: 'Cube' },
-  { kind: 'sphere', label: 'Sphere' },
-  { kind: 'capsule', label: 'Capsule' },
-  { kind: 'terrain', label: 'Terrain' },
-  { kind: 'light', label: 'Light' },
-  { kind: 'camera', label: 'Camera' },
-];
+import { objectIcons, roleIcons } from './editorIcons';
+import { requestAddObject } from './ObjectCreationMenu';
 
 function HierarchyRow({
   object,
@@ -68,10 +49,10 @@ function HierarchyRow({
   const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
   const selectObject = useEditorStore((state) => state.selectObject);
   const toggleSelectObject = useEditorStore((state) => state.toggleSelectObject);
-  const openObjectScript = useEditorStore((state) => state.openObjectScript);
   const setObjectParent = useEditorStore((state) => state.setObjectParent);
-  const Icon = object.reflectionProbe?.enabled ? Aperture : objectIcon[object.kind];
+  const Icon = object.reflectionProbe?.enabled ? Aperture : objectIcons[object.kind];
   const creatorRole = object.creatorRoleId ? findCreatorRole(object.creatorRoleId) : undefined;
+  const RoleIcon = creatorRole ? roleIcons[creatorRole.id] ?? Box : Box;
   const hasChildren = childCount > 0;
   const isInstance = Boolean(object.prefabSourceId);
   // Highlight the whole multi-selection when it's active, otherwise just the single selected object.
@@ -84,7 +65,13 @@ function HierarchyRow({
   }, [renaming]);
 
   return (
-    <button
+    <div
+      role="treeitem"
+      tabIndex={isSelected ? 0 : -1}
+      aria-selected={isSelected}
+      aria-expanded={hasChildren ? !collapsed : undefined}
+      aria-level={depth + 1}
+      data-object-id={object.id}
       className={clsx('hierarchy-row', isSelected && 'selected', collaborators.length > 0 && 'has-collaborator')}
       style={{
         paddingLeft: 8 + depth * 14,
@@ -100,8 +87,8 @@ function HierarchyRow({
         if (renaming) return;
         // Open the object's blueprint (creating + attaching one if it has none)
         // and reveal the Scripting panel.
-        openObjectScript(object.id);
-        focusWorkspacePanel('scripting');
+        selectObject(object.id);
+        window.dispatchEvent(new CustomEvent('nf:focus-selection'));
       }}
       onContextMenu={(event) => onContextMenu(event, object)}
       // Drag a row onto another to nest it under that object (set parent). Drop on the panel
@@ -125,7 +112,7 @@ function HierarchyRow({
           setObjectParent(draggedId, object.id);
         }
       }}
-      title={`${object.name}${creatorRole ? ` · ${creatorRole.name}` : ''}${hasChildren ? ` · ${childCount} child${childCount > 1 ? 'ren' : ''}` : ''}${isInstance ? ' · prefab instance' : ''} — F2 to rename, double-click to edit its script, right-click for options`}
+      title={`${object.name}${creatorRole ? ` · ${creatorRole.name}` : ''}${hasChildren ? ` · ${childCount} child${childCount > 1 ? 'ren' : ''}` : ''}${isInstance ? ' · prefab instance' : ''} — F2 to rename, double-click to frame in the viewport, right-click for options`}
     >
       {hasChildren ? (
         <span
@@ -144,7 +131,7 @@ function HierarchyRow({
       )}
       {isInstance && <Boxes size={14} className="hierarchy-instance-glyph" aria-hidden />}
       {creatorRole ? (
-        <span className="hierarchy-role-icon" title={creatorRole.name} aria-hidden>{creatorRole.icon}</span>
+        <RoleIcon size={14} aria-hidden />
       ) : !isInstance ? (
         <Icon size={14} aria-hidden />
       ) : null}
@@ -152,6 +139,7 @@ function HierarchyRow({
         <input
           ref={renameRef}
           className="hierarchy-rename-input"
+          aria-label="Rename object"
           value={renameDraft}
           spellCheck={false}
           onChange={(event) => onRenameDraftChange(event.target.value)}
@@ -181,10 +169,11 @@ function HierarchyRow({
           {object.name}
         </span>
       )}
+      <button type="button" className="hierarchy-row-menu" aria-label={`Actions for ${object.name}`} title="Object actions" onClick={(event) => onContextMenu(event, object)}><MoreHorizontal size={14} aria-hidden /></button>
       {creatorRole && <small className="hierarchy-role-badge">{creatorRole.name}</small>}
       {hasChildren && collapsed && <small className="hierarchy-count">{childCount}</small>}
       <CollaboratorAvatars participants={collaborators} compact label={`is editing ${object.name}`} />
-    </button>
+    </div>
   );
 }
 
@@ -202,8 +191,6 @@ export function HierarchyPanel() {
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
   const editingPrefabId = useEditorStore((state) => state.editingPrefabId);
   const selectedObjectId = useEditorStore((state) => state.selectedObjectId);
-  const createObject = useEditorStore((state) => state.createObject);
-  const createObjectWithProps = useEditorStore((state) => state.createObjectWithProps);
   const deleteSelectedObject = useEditorStore((state) => state.deleteSelectedObject);
   const deleteObject = useEditorStore((state) => state.deleteObject);
   const selectObject = useEditorStore((state) => state.selectObject);
@@ -276,6 +263,22 @@ export function HierarchyPanel() {
     return rows;
   }, [filterText, filteredObjects, childrenByParent, collapsed]);
 
+  useEffect(() => {
+    const objects = useEditorStore.getState().activeScene()?.objects ?? [];
+    const selected = objects.find((object) => object.id === selectedObjectId);
+    if (!selected) return;
+    setQuery((current) => selected.name.toLowerCase().includes(current.trim().toLowerCase()) ? current : '');
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      const visited = new Set<string>();
+      let parentId = selected.parentId;
+      while (parentId && !visited.has(parentId)) { visited.add(parentId); next.delete(parentId); parentId = objects.find((object) => object.id === parentId)?.parentId; }
+      return next;
+    });
+    const frame = requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(selectedObjectId)}"]`)?.scrollIntoView({ block: 'nearest' }));
+    return () => cancelAnimationFrame(frame);
+  }, [selectedObjectId, activeSceneId]);
+
   const startRename = (object: SceneObject) => {
     setRenamingId(object.id);
     setRenameDraft(object.name);
@@ -294,7 +297,7 @@ export function HierarchyPanel() {
     const id = createPrefabFromObject(object.id);
     useProjectStore.setState({
       toast: id
-        ? { kind: 'success', message: `Saved "${object.name}" as a prefab — find it in the Project browser.` }
+        ? { kind: 'success', message: `Saved "${object.name}" as a prefab — find it in the Assets browser.` }
         : { kind: 'error', message: `Couldn't create a prefab from "${object.name}".` },
     });
   };
@@ -340,26 +343,24 @@ export function HierarchyPanel() {
         ]
       : [];
     const items: ContextMenuEntry[] = [
-      { label: 'Rename', onClick: () => startRename(object) },
-      { label: 'Create Prefab', onClick: () => makePrefab(object) },
+      { label: 'Rename', shortcut: 'F2', onClick: () => startRename(object) },
+      { label: 'Save as prefab…', onClick: () => makePrefab(object) },
       'separator',
       ...instanceEntries,
-      ...childKinds.map<ContextMenuEntry>(({ kind, label }) => ({
-        label: `Add child: ${label}`,
-        onClick: () => createObjectWithProps(kind, { parentId: object.id }),
-      })),
+      { label: 'Add child object…', onClick: () => requestAddObject({ parentId: object.id }) },
+      { label: 'Edit script…', onClick: () => { useEditorStore.getState().openObjectScript(object.id); focusWorkspacePanel('scripting'); } },
       'separator',
-      { label: 'Duplicate', onClick: () => duplicateSelectedObject() },
-      { label: 'Copy', onClick: () => copySelectedObjects() },
-      { label: 'Paste', onClick: () => pasteClipboard() },
+      { label: 'Duplicate', shortcut: '⌘D', onClick: () => duplicateSelectedObject() },
+      { label: 'Copy', shortcut: '⌘C', onClick: () => copySelectedObjects() },
+      { label: 'Paste', shortcut: '⌘V', onClick: () => pasteClipboard() },
       'separator',
       { label: 'Group selection', onClick: () => groupSelectedObjects() },
       ...(isEmptyGroup ? ([{ label: 'Ungroup', onClick: () => ungroupObject(object.id) }] as ContextMenuEntry[]) : []),
       ...(object.parentId
-        ? ([{ label: 'Unparent (move to root)', onClick: () => setObjectParent(object.id, undefined) }] as ContextMenuEntry[])
+        ? ([{ label: 'Move to scene root', onClick: () => setObjectParent(object.id, undefined) }] as ContextMenuEntry[])
         : []),
       'separator',
-      { label: 'Delete', danger: true, onClick: () => deleteObject(object.id) },
+      { label: 'Delete', shortcut: 'Del', danger: true, onClick: () => deleteObject(object.id) },
     ];
     setMenu({ x: event.clientX, y: event.clientY, items });
   };
@@ -380,7 +381,7 @@ export function HierarchyPanel() {
   }, []);
 
   const onListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (renamingId) return;
+    if (renamingId || /^(INPUT|TEXTAREA|SELECT)$/.test((event.target as HTMLElement).tagName)) return;
     if (!visibleRows.length) return;
     const index = Math.max(
       0,
@@ -454,28 +455,25 @@ export function HierarchyPanel() {
 
   return (
     <aside className="panel hierarchy-panel">
-      {/* No title here: the dock tab says "Objects" and the scene-root row below already names the
-          scene (or the prefab being edited, with its own icon). The row is just the actions. */}
-      <div className="panel-header panel-header-actions-only">
+      <div className="panel-header hierarchy-actions">
+        <span className="panel-header-kind">Scene objects</span>
         <div className="panel-actions">
-          <button className="icon-button compact" title="Create empty object" onClick={() => createObject('empty')}>
-            <FilePlus2 size={14} aria-hidden />
-          </button>
-          <button className="icon-button compact danger" title="Delete selected object" onClick={deleteSelectedObject}>
-            <Trash2 size={14} aria-hidden />
-          </button>
+          <button className="icon-button compact" aria-label="Rename selected object" title="Rename selected object (F2)" disabled={!selectedObjectId} onClick={() => { const object = useEditorStore.getState().selectedObject(); if (object) startRename(object); }}><Pencil size={14} aria-hidden /></button>
+          <button className="icon-button compact" aria-label="Duplicate selected objects" title="Duplicate selection (⌘D / Ctrl+D)" disabled={!selectedObjectId} onClick={duplicateSelectedObject}><Copy size={14} aria-hidden /></button>
+          <button className="icon-button compact danger" aria-label="Delete selected objects" title="Delete selection (Delete)" disabled={!selectedObjectId} onClick={deleteSelectedObject}><Trash2 size={14} aria-hidden /></button>
         </div>
       </div>
 
       <label className="search-field hierarchy-search">
         <Search size={14} aria-hidden />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search objects…" spellCheck={false} />
+        <input aria-label="Search scene objects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search objects…" spellCheck={false} />
       </label>
 
       <div className="scene-root">
-        <span className="root-dot" />
+        <Boxes size={14} aria-hidden />
         {editingPrefabId ? <Boxes size={14} aria-hidden /> : null}
-        <strong>{activeSceneName}</strong>
+        <strong title={activeSceneName}>{activeSceneName}</strong>
+        <button type="button" className="icon-button compact" title="Scene settings" aria-label="Scene settings" onClick={() => focusWorkspacePanel('scene')}><Settings2 size={14} aria-hidden /></button>
         <small>{filterText ? `${filteredObjects.length} of ${sceneObjects.length}` : `${sceneObjects.length} objects`}</small>
       </div>
 
@@ -483,6 +481,8 @@ export function HierarchyPanel() {
       <div
         ref={listRef}
         className="hierarchy-list"
+        role="tree"
+        aria-label="Scene hierarchy"
         tabIndex={0}
         onKeyDown={onListKeyDown}
         onDragOver={(event) => {
@@ -523,7 +523,7 @@ export function HierarchyPanel() {
             <div className="empty-state compact">No objects match “{query}”</div>
           )
         ) : (
-          renderRows(undefined, 0)
+          sceneObjects.length ? renderRows(undefined, 0) : <div className="editor-empty-state"><Boxes size={24} aria-hidden /><strong>Your scene is empty</strong><p>Use Add object in the main toolbar to start building.</p></div>
         )}
       </div>
 
