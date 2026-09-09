@@ -1,11 +1,13 @@
 import { packGltfFile } from '../three/modelDocument';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Bone,
   Box,
   Boxes,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   Film,
   Folder,
   GitBranch,
@@ -15,15 +17,18 @@ import {
   List,
   FileArchive,
   Music,
+  MoreHorizontal,
   PanelLeft,
   Palette,
   PackagePlus,
   PersonStanding,
+  Plus,
   Search,
   Sparkles,
   Table2,
   Upload,
   Workflow,
+  X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEditorStore } from '../store/editorStore';
@@ -39,7 +44,8 @@ import { ContextMenu, type ContextMenuEntry, type ContextMenuState } from './Con
 import { SkeletonEditorModal } from './SkeletonEditorModal';
 import { ASSET_DRAG_TYPE, PREFAB_DRAG_TYPE, MATERIAL_DRAG_TYPE, assetDrag, hasDragType, materialDrag, prefabDrag } from './dragShared';
 import { focusWorkspacePanel } from './workspacePanels';
-import type { AnimationAsset, AnimatorController, AssetItem, AssetType, DataAsset, MaterialDefinition, ParticleSystemDefinition, Prefab, ProjectFolder, ScriptBlueprint, SkeletalMeshAsset, SkeletonAsset, UIDocument } from '../types';
+import type { AssetItem, AssetType, ProjectFolder } from '../types';
+import './AssetBrowser.css';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 KB';
@@ -65,7 +71,7 @@ const assetGlyph = (type: AssetType) => (type === 'audio' ? Music : type === 'im
 type DragKind = 'asset' | 'blueprint' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab';
 type DragRef = { items: Array<{ kind: DragKind; id: string }> } | null;
 
-const itemKey = (kind: DragKind, id: string) => `${kind}:${id}`;
+const itemKey = (kind: EntryKind, id: string) => `${kind}:${id}`;
 const parseItemKey = (key: string): { kind: DragKind; id: string } => {
   const idx = key.indexOf(':');
   return { kind: key.slice(0, idx) as DragKind, id: key.slice(idx + 1) };
@@ -74,10 +80,21 @@ const parseItemKey = (key: string): { kind: DragKind; id: string } => {
 // Kinds shown in the content view. Most are draggable; a few (derived from imports) are read-only.
 type EntryKind = DragKind | 'skeleton' | 'skeletalMesh' | 'animation' | 'controller';
 type RenameKind = 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab';
+type TypeFilter = Exclude<EntryKind, 'asset'> | AssetType;
+
+const TYPE_LABELS: Record<TypeFilter, string> = {
+  model: 'Model', image: 'Image', audio: 'Audio', unknown: 'Other file',
+  prefab: 'Prefab', blueprint: 'Blueprint', dataAsset: 'Data asset', material: 'Material',
+  particleSystem: 'Particle system', uiDocument: 'UI document', skeleton: 'Skeleton',
+  skeletalMesh: 'Skeletal mesh', animation: 'Animation', controller: 'Animator controller',
+};
+const entryType = (entry: AssetEntry): TypeFilter => entry.kind === 'asset' ? entry.assetType ?? 'unknown' : entry.kind;
+const entryTypeLabel = (entry: AssetEntry) => TYPE_LABELS[entryType(entry)];
 
 /** A normalised content-browser item — both the tile grid and the list render from this. */
 interface AssetEntry {
   kind: EntryKind;
+  assetType?: AssetType;
   id: string;
   label: string;
   folderId?: string;
@@ -90,9 +107,9 @@ interface AssetEntry {
   title?: string;
   active?: boolean;
   unresolved?: boolean;
-  dragKind?: DragKind; // present → selectable + draggable into folders/viewport
+  dragKind?: DragKind; // present → draggable into folders/viewport
   renameKind?: RenameKind; // present → supports inline rename
-  onOpen?: () => void; // double-click (or single-click for non-draggable read-only items)
+  onOpen?: () => void; // double-click or the explicit Open action
   menu?: ContextMenuEntry[];
 }
 
@@ -200,7 +217,11 @@ export function AssetBrowser() {
   const [dropItemId, setDropItemId] = useState<string | null>(null);
   // Content-browser layout: thumbnail tile grid vs. compact list, and the tile size.
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [tileSize, setTileSize] = useState(84);
+  const [tileSize, setTileSize] = useState(112);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter | 'all'>('all');
+  const [popover, setPopover] = useState<{ kind: 'create' | 'options'; left: number; top?: number; bottom?: number; maxHeight: number } | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const popoverTriggerRef = useRef<HTMLButtonElement | null>(null);
   // Whether the left folder column is shown (hide it to give the tile grid full width).
   const [showFolders, setShowFolders] = useState(true);
   // Highlight when an OS file / dragged item hovers the content pane background.
@@ -210,6 +231,61 @@ export function AssetBrowser() {
   const viewRef = useRef<HTMLDivElement>(null);
   const marqueeBaseRef = useRef<Set<string>>(new Set());
   const marqueeMovedRef = useRef(false);
+
+  const togglePopover = (event: React.MouseEvent<HTMLButtonElement>, kind: 'create' | 'options') => {
+    if (popover?.kind === kind) { setPopover(null); return; }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - 12;
+    const above = rect.top - 12;
+    popoverTriggerRef.current = event.currentTarget;
+    setPopover({
+      kind,
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)),
+      ...(below >= Math.min(360, above) ? { top: rect.bottom + 4 } : { bottom: window.innerHeight - rect.top + 4 }),
+      maxHeight: Math.max(80, Math.min(360, Math.max(below, above))),
+    });
+  };
+
+  useEffect(() => {
+    if (!popover) return;
+    popoverRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const dismiss = (event: Event) => {
+      if (!popoverRef.current?.contains(event.target as Node) && !popoverTriggerRef.current?.contains(event.target as Node)) setPopover(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setPopover(null);
+      popoverTriggerRef.current?.focus();
+    };
+    const close = () => setPopover(null);
+    window.addEventListener('pointerdown', dismiss);
+    window.addEventListener('focusin', dismiss);
+    window.addEventListener('keydown', escape);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('focusin', dismiss);
+      window.removeEventListener('keydown', escape);
+      window.removeEventListener('resize', close);
+    };
+  }, [popover]);
+
+  // Selection always describes the visible results; hidden items must not join a later drag.
+  useEffect(() => {
+    setSelected(new Set());
+    anchorRef.current = null;
+  }, [assetSearch, selectedFolderId, typeFilter]);
+
+  const navigateFolder = (folderId?: string) => {
+    setSelectedFolderId(folderId);
+    setAssetSearch('');
+  };
+
+  const revealCreatedItem = (folderId?: string) => {
+    navigateFolder(folderId);
+    setTypeFilter('all');
+    setPopover(null);
+  };
 
   // Safety net: a file dropped anywhere outside our drop zones would otherwise make the browser
   // navigate to it and discard the project. Swallow those stray drops globally.
@@ -236,10 +312,12 @@ export function AssetBrowser() {
 
   const [importReport, setImportReport] = useState<Array<{ name: string; messages: string[]; error?: string }>>([]);
   const importing = useRef(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   const importFiles = async (files: FileList | File[], folderId?: string) => {
     if (importing.current) return;
     importing.current = true;
+    setIsImporting(true);
     const report: Array<{ name: string; messages: string[]; error?: string }> = [];
     setImportReport([]);
     try {
@@ -379,7 +457,7 @@ export function AssetBrowser() {
     setImportReport(report);
     } catch (error) {
       setImportReport([{ name: 'Import', messages: [], error: error instanceof Error ? error.message : String(error) }]);
-    } finally { importing.current = false; }
+    } finally { importing.current = false; setIsImporting(false); }
   };
 
   const startRename = (kind: 'folder' | 'blueprint' | 'asset' | 'dataAsset' | 'material' | 'particleSystem' | 'uiDocument' | 'prefab', id: string, current: string) => {
@@ -409,24 +487,28 @@ export function AssetBrowser() {
   };
 
   const newFolder = (parentId?: string) => {
+    revealCreatedItem(parentId);
     const id = createFolder('New Folder', parentId);
     if (parentId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== parentId)));
     startRename('folder', id, 'New Folder');
   };
 
   const newBlueprint = (folderId?: string) => {
+    revealCreatedItem(folderId);
     const { blueprintId } = createBlueprintNamed(undefined, undefined, folderId);
     if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
     startRename('blueprint', blueprintId, blueprints.length ? `Blueprint ${blueprints.length + 1}` : 'Blueprint 1');
   };
 
   const newDataAsset = (folderId?: string) => {
+    revealCreatedItem(folderId);
     const id = createDataAsset(undefined, folderId);
     if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
     startRename('dataAsset', id, dataAssets.length ? `Data Asset ${dataAssets.length + 1}` : 'Data Asset 1');
   };
 
   const newMaterial = (folderId?: string) => {
+    revealCreatedItem(folderId);
     const id = createMaterial(undefined, undefined, folderId);
     if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
     startRename('material', id, materials.length ? `Material ${materials.length + 1}` : 'Material 1');
@@ -438,6 +520,7 @@ export function AssetBrowser() {
   };
 
   const newParticleSystem = (folderId?: string) => {
+    revealCreatedItem(folderId);
     const id = createParticleSystem(undefined, 'fire', folderId);
     if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
     startRename('particleSystem', id, particleSystems.length ? `Particle System ${particleSystems.length + 1}` : 'Particle System 1');
@@ -450,6 +533,7 @@ export function AssetBrowser() {
   };
 
   const newUIDocument = (folderId?: string) => {
+    revealCreatedItem(folderId);
     const id = createUIDocument(undefined, 'screen', folderId);
     if (folderId) setCollapsed((prev) => new Set([...prev].filter((value) => value !== folderId)));
     startRename('uiDocument', id, uiDocuments.length ? `UI ${uiDocuments.length + 1}` : 'UI 1');
@@ -496,6 +580,7 @@ export function AssetBrowser() {
   };
 
   const handleDrop = (event: React.DragEvent, folderId?: string) => {
+    event.stopPropagation();
     setDropTarget(null);
     setDropItemId(null);
     setContentDrop(false);
@@ -524,13 +609,10 @@ export function AssetBrowser() {
   };
 
   // Flat list of selectable item keys in on-screen order — used to resolve shift-click ranges.
-  const buildOrderedKeys = (): string[] =>
-    visibleEntries
-      .filter((entry) => entry.dragKind)
-      .map((entry) => itemKey(entry.dragKind!, entry.id));
+  const buildOrderedKeys = (): string[] => visibleEntries.map((entry) => itemKey(entry.kind, entry.id));
 
-  // Click selection: plain = select + run default (open); Ctrl/Cmd = toggle; Shift = range.
-  const handleItemClick = (event: React.MouseEvent, kind: DragKind, id: string, defaultAction?: () => void) => {
+  // Click selection: plain = select; Ctrl/Cmd = toggle; Shift = range.
+  const handleItemClick = (event: React.MouseEvent, kind: EntryKind, id: string) => {
     const key = itemKey(kind, id);
     event.stopPropagation();
     if (event.metaKey || event.ctrlKey) {
@@ -554,14 +636,15 @@ export function AssetBrowser() {
     }
     setSelected(new Set([key]));
     anchorRef.current = key;
-    defaultAction?.();
   };
 
   const handleItemDragStart = (event: React.DragEvent, kind: DragKind, id: string, label: string) => {
     const key = itemKey(kind, id);
     // Drag the whole multi-selection if this item is part of it; otherwise drag just this one.
-    const items =
-      selected.has(key) && selected.size > 1 ? [...selected].map(parseItemKey) : [{ kind, id }];
+    const draggableKeys = new Set(visibleEntries.filter((entry) => entry.dragKind).map((entry) => itemKey(entry.kind, entry.id)));
+    const items = selected.has(key) && selected.size > 1
+      ? [...selected].filter((selectedKey) => draggableKeys.has(selectedKey)).map(parseItemKey)
+      : [{ kind, id }];
     if (!(selected.has(key) && selected.size > 1)) setSelected(new Set([key]));
     dragRef.current = { items };
     assetDrag.id = null;
@@ -670,18 +753,23 @@ export function AssetBrowser() {
     return entries;
   };
 
-  const RenameInput = ({ onCommit }: { onCommit: () => void }) => (
+  const renderRenameInput = () => (
     <input
       className="tree-rename"
+      aria-label="Rename item"
       value={draft}
       autoFocus
+      onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={onCommit}
+      onBlur={commitRename}
       onKeyDown={(event) => {
-        if (event.key === 'Enter') onCommit();
-        if (event.key === 'Escape') setRenaming(null);
+        event.stopPropagation();
+        if (event.key === 'Enter') { event.preventDefault(); commitRename(); }
+        if (event.key === 'Escape') { event.preventDefault(); setRenaming(null); }
       }}
       onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
     />
   );
 
@@ -697,10 +785,10 @@ export function AssetBrowser() {
         label: prefab.name,
         folderId: prefab.folderId,
         Icon: Boxes,
-        accent: '#FBBF77',
+        accent: 'var(--warning)',
         thumbnail: prefab.thumbnail,
         prefabThumb: true,
-        subtitle: `${prefab.objects.length} obj`,
+        subtitle: `${prefab.objects.length} objects`,
         active: editingPrefabId === prefab.id,
         dragKind: 'prefab',
         renameKind: 'prefab',
@@ -736,7 +824,6 @@ export function AssetBrowser() {
         folderId: bp.folderId,
         Icon: GitBranch,
         accent: bp.color,
-        subtitle: 'blueprint',
         active: activeBlueprintId === bp.id,
         dragKind: 'blueprint',
         renameKind: 'blueprint',
@@ -757,7 +844,7 @@ export function AssetBrowser() {
         label: d.name,
         folderId: d.folderId,
         Icon: Table2,
-        accent: '#F0D46A',
+        accent: 'var(--warning)',
         subtitle: `${d.rows.length} rows`,
         dragKind: 'dataAsset',
         renameKind: 'dataAsset',
@@ -778,7 +865,6 @@ export function AssetBrowser() {
         folderId: m.folderId,
         Icon: Palette,
         accent: m.color,
-        subtitle: 'material',
         active: activeMaterialId === m.id,
         dragKind: 'material',
         renameKind: 'material',
@@ -823,7 +909,7 @@ export function AssetBrowser() {
         label: doc.name,
         folderId: doc.folderId,
         Icon: LayoutDashboard,
-        accent: '#7DD3FC',
+        accent: 'var(--accent)',
         subtitle: doc.surface === 'screen' ? 'screen HUD' : 'world UI',
         active: activeUIDocumentId === doc.id,
         dragKind: 'uiDocument',
@@ -846,7 +932,7 @@ export function AssetBrowser() {
         label: controller.name,
         folderId: controller.folderId,
         Icon: Workflow,
-        accent: '#F0ABFC',
+        accent: 'var(--accent)',
         subtitle: `${controller.states.length} states`,
         active: activeAnimatorControllerId === controller.id,
         title: `animator · ${controller.states.length} states`,
@@ -866,7 +952,7 @@ export function AssetBrowser() {
         label: skeleton.name,
         folderId: skeleton.folderId,
         Icon: Bone,
-        accent: '#C4B5FD',
+        accent: 'var(--accent)',
         subtitle: `${skeleton.boneNames.length} bones`,
         title: `skeleton · ${skeleton.boneNames.length} bones · ${skeleton.sockets?.length ?? 0} sockets — open editor`,
         onOpen: () => setEditSkeletonId(skeleton.id),
@@ -879,8 +965,7 @@ export function AssetBrowser() {
         label: mesh.name,
         folderId: mesh.folderId,
         Icon: PersonStanding,
-        accent: '#7DD3FC',
-        subtitle: 'skeletal mesh',
+        accent: 'var(--accent)',
         title: 'skeletal mesh',
       }),
     );
@@ -891,7 +976,7 @@ export function AssetBrowser() {
         label: anim.name,
         folderId: anim.folderId,
         Icon: Film,
-        accent: '#86EFAC',
+        accent: 'var(--success)',
         subtitle: `${anim.duration.toFixed(1)}s${anim.loop ? ' · loop' : ''}`,
         title: `animation · ${anim.duration.toFixed(2)}s${anim.loop ? ' · loops' : ''}`,
       }),
@@ -899,6 +984,7 @@ export function AssetBrowser() {
     assets.forEach((asset) =>
       out.push({
         kind: 'asset',
+        assetType: asset.type,
         id: asset.id,
         label: asset.name,
         folderId: asset.folderId,
@@ -910,8 +996,8 @@ export function AssetBrowser() {
               ? modelThumbnails[asset.id] || undefined // '' (failed) → fall back to the icon
               : undefined,
         // Model previews render asynchronously — flag so the tile shows a shimmer while it generates.
-        modelThumb: asset.type === 'model' && !asset.unresolved && !modelThumbnails[asset.id],
-        subtitle: `${asset.type} · ${formatBytes(asset.size)}`,
+        modelThumb: asset.type === 'model' && !asset.unresolved && !(asset.id in modelThumbnails),
+        subtitle: formatBytes(asset.size),
         unresolved: asset.unresolved,
         dragKind: 'asset',
         renameKind: 'asset',
@@ -959,7 +1045,7 @@ export function AssetBrowser() {
           if (meta) await exportFolderPackage(folder.id, meta);
         })(),
     },
-    { label: 'Rename', onClick: () => startRename('folder', folder.id, folder.name) },
+    { label: 'Rename', onClick: () => { revealCreatedItem(folder.parentId); startRename('folder', folder.id, folder.name); } },
     { label: 'Delete', danger: true, onClick: () => deleteFolder(folder.id) },
   ];
 
@@ -998,7 +1084,7 @@ export function AssetBrowser() {
   // it touches. Starting on a tile is ignored so that the tile's own HTML5 drag (move) takes over.
   const handleMarqueeDown = (event: React.MouseEvent) => {
     if (event.button !== 0) return;
-    if ((event.target as HTMLElement).closest('.asset-tile, .tree-row')) return;
+    if ((event.target as HTMLElement).closest('.asset-tile, .tree-row, button, input')) return;
     const view = viewRef.current;
     if (!view) return;
     const startX = event.clientX;
@@ -1031,14 +1117,20 @@ export function AssetBrowser() {
     window.addEventListener('mouseup', up);
   };
 
-  // Single-click selects draggable items (open on double-click); read-only items open on click.
+  // Selection is consistent for every kind; opening and scene placement are deliberate actions.
   const entryHandlers = (entry: AssetEntry) => ({
     ...(entry.dragKind ? rowDnd(entry.dragKind, entry.id, entry.folderId, entry.label) : {}),
-    onClick: (event: React.MouseEvent) => {
-      if (entry.dragKind) handleItemClick(event, entry.dragKind, entry.id);
-      else {
-        event.stopPropagation();
-        entry.onOpen?.();
+    onClick: (event: React.MouseEvent) => handleItemClick(event, entry.kind, entry.id),
+    onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        event.currentTarget.click();
+      }
+      if (event.key === 'F2' && entry.renameKind) startRename(entry.renameKind, entry.id, entry.label);
+      if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && entry.menu) {
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        setMenu({ x: rect.left, y: rect.bottom, items: entry.menu });
       }
     },
     onDoubleClick: () => entry.onOpen?.(),
@@ -1047,14 +1139,18 @@ export function AssetBrowser() {
 
   // ---- Tile + list renderers ------------------------------------------------
   const renderTile = (entry: AssetEntry) => {
-    const sel = !!entry.dragKind && selected.has(itemKey(entry.dragKind, entry.id));
+    const sel = selected.has(itemKey(entry.kind, entry.id));
     return (
-      <button
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={sel}
+        aria-label={`${entry.label}, ${entryTypeLabel(entry)}${entry.unresolved ? ', missing file' : ''}`}
         key={`${entry.kind}:${entry.id}`}
-        data-key={entry.dragKind ? itemKey(entry.dragKind, entry.id) : undefined}
+        data-key={itemKey(entry.kind, entry.id)}
         className={clsx('asset-tile', sel && 'selected', entry.active && 'active', dropItemId === entry.id && 'drop-into')}
         style={{ width: tileSize }}
-        title={entry.title}
+        title={`${entry.label} · ${entry.title ?? entryTypeLabel(entry)}`}
         {...entryHandlers(entry)}
       >
         <span className="asset-tile-thumb" style={{ height: tileSize - 18 }}>
@@ -1068,21 +1164,27 @@ export function AssetBrowser() {
           )}
         </span>
         <span className="asset-tile-name">
-          {isRenaming(entry) ? <RenameInput onCommit={commitRename} /> : <span className="tree-label">{entry.label}</span>}
+          {isRenaming(entry) ? renderRenameInput() : <span className="tree-label">{entry.label}</span>}
         </span>
-      </button>
+        <span className="asset-entry-type">{entryTypeLabel(entry)}{entry.unresolved && ' · Missing'}</span>
+        {searching && <span className="asset-entry-location" title={folderPath(entry.folderId)}>{folderPath(entry.folderId)}</span>}
+      </div>
     );
   };
 
   const renderRow = (entry: AssetEntry) => {
-    const sel = !!entry.dragKind && selected.has(itemKey(entry.dragKind, entry.id));
+    const sel = selected.has(itemKey(entry.kind, entry.id));
     return (
-      <button
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={sel}
+        aria-label={`${entry.label}, ${entryTypeLabel(entry)}${entry.unresolved ? ', missing file' : ''}`}
         key={`${entry.kind}:${entry.id}`}
-        data-key={entry.dragKind ? itemKey(entry.dragKind, entry.id) : undefined}
+        data-key={itemKey(entry.kind, entry.id)}
         className={clsx('tree-row', sel && 'selected', entry.active && 'active', dropItemId === entry.id && 'drop-into')}
         style={{ paddingLeft: 8 }}
-        title={entry.title}
+        title={`${entry.label} · ${entry.title ?? entryTypeLabel(entry)}`}
         {...entryHandlers(entry)}
       >
         {entry.thumbnail ? (
@@ -1091,14 +1193,14 @@ export function AssetBrowser() {
           <entry.Icon size={14} style={{ color: entry.accent }} className={clsx(entry.unresolved && 'tree-unresolved')} aria-hidden />
         )}
         {isRenaming(entry) ? (
-          <RenameInput onCommit={commitRename} />
+          renderRenameInput()
         ) : (
           <>
-            <span className="tree-label">{entry.label}</span>
-            {entry.subtitle && <span className="tree-sub">{entry.subtitle}</span>}
+            <span className="asset-row-copy"><span className="tree-label">{entry.label}</span>{searching && <span className="asset-entry-location" title={folderPath(entry.folderId)}>{folderPath(entry.folderId)}</span>}</span>
+            <span className="tree-sub">{entryTypeLabel(entry)}{entry.unresolved ? ' · Missing' : entry.subtitle ? ` · ${entry.subtitle}` : ''}</span>
           </>
         )}
-      </button>
+      </div>
     );
   };
 
@@ -1110,46 +1212,58 @@ export function AssetBrowser() {
     return (
       <div key={folder.id}>
         <div
+          role="button"
+          tabIndex={0}
+          aria-label={`Open folder ${folder.name}`}
+          aria-current={selectedFolderId === folder.id ? 'location' : undefined}
           className={clsx('tree-row folder-row', selectedFolderId === folder.id && 'selected', dropTarget === folder.id && 'drop')}
           style={{ paddingLeft: 4 + depth * 12 }}
-          onClick={() => setSelectedFolderId(folder.id)}
+          title={folder.name}
+          onClick={() => navigateFolder(folder.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigateFolder(folder.id); }
+          }}
           {...folderDropProps(folder.id)}
           onContextMenu={(event) => openMenu(event, folderMenu(folder))}
         >
           {kids.length > 0 ? (
-            <span
+            <button
               className="tree-twist"
+              aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${folder.name}`}
+              aria-expanded={!isCollapsed}
+              onKeyDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 toggleCollapse(folder.id);
               }}
             >
               {isCollapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
-            </span>
+            </button>
           ) : (
             <span className="tree-twist" />
           )}
           <Folder size={14} aria-hidden />
-          {renaming?.kind === 'folder' && renaming.id === folder.id ? (
-            <RenameInput onCommit={commitRename} />
-          ) : (
-            <span className="tree-label">{folder.name}</span>
-          )}
+          <span className="tree-label">{folder.name}</span>
         </div>
         {!isCollapsed && kids.map((child) => renderTreeFolder(child, depth + 1))}
       </div>
     );
   };
 
-  // A subfolder shown inside the content grid (double-click to enter).
+  // A subfolder shown inside the content grid (click to enter).
   const renderFolderTile = (folder: ProjectFolder) => (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Open folder ${folder.name}`}
       key={`folder:${folder.id}`}
       className={clsx('asset-tile folder-tile', dropTarget === folder.id && 'drop')}
       style={{ width: tileSize }}
-      title="folder — double-click to open"
-      onClick={() => setSelectedFolderId(folder.id)}
-      onDoubleClick={() => setSelectedFolderId(folder.id)}
+      title={`${folder.name} · Folder · Click to open`}
+      onClick={() => navigateFolder(folder.id)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigateFolder(folder.id); }
+      }}
       {...folderDropProps(folder.id)}
       onContextMenu={(event) => openMenu(event, folderMenu(folder))}
     >
@@ -1158,32 +1272,39 @@ export function AssetBrowser() {
       </span>
       <span className="asset-tile-name">
         {renaming?.kind === 'folder' && renaming.id === folder.id ? (
-          <RenameInput onCommit={commitRename} />
+          renderRenameInput()
         ) : (
           <span className="tree-label">{folder.name}</span>
         )}
       </span>
-    </button>
+      <span className="asset-entry-type">Folder</span>
+    </div>
   );
 
   const renderFolderListRow = (folder: ProjectFolder) => (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Open folder ${folder.name}`}
       key={`folder:${folder.id}`}
       className={clsx('tree-row folder-row', dropTarget === folder.id && 'drop')}
       style={{ paddingLeft: 8 }}
-      title="folder — double-click to open"
-      onClick={() => setSelectedFolderId(folder.id)}
-      onDoubleClick={() => setSelectedFolderId(folder.id)}
+      title={`${folder.name} · Folder · Click to open`}
+      onClick={() => navigateFolder(folder.id)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigateFolder(folder.id); }
+      }}
       {...folderDropProps(folder.id)}
       onContextMenu={(event) => openMenu(event, folderMenu(folder))}
     >
       <Folder size={14} aria-hidden />
       {renaming?.kind === 'folder' && renaming.id === folder.id ? (
-        <RenameInput onCommit={commitRename} />
+        renderRenameInput()
       ) : (
         <span className="tree-label">{folder.name}</span>
       )}
-    </button>
+      <span className="tree-sub">Folder</span>
+    </div>
   );
 
   // ---- Derived view data ----------------------------------------------------
@@ -1191,9 +1312,10 @@ export function AssetBrowser() {
   const searching = search.length > 0;
   const allEntries = buildEntries();
   // Searching flattens across every folder; otherwise we show only the active folder's contents.
-  const visibleEntries = searching
-    ? allEntries.filter((entry) => entry.label.toLowerCase().includes(search))
-    : allEntries.filter((entry) => entry.folderId === selectedFolderId);
+  const visibleEntries = allEntries.filter((entry) =>
+    (searching ? entry.label.toLowerCase().includes(search) : entry.folderId === selectedFolderId)
+    && (typeFilter === 'all' || entryType(entry) === typeFilter),
+  );
   const visibleFolders = searching ? [] : childFolders.get(selectedFolderId) ?? [];
   const breadcrumb: ProjectFolder[] = [];
   {
@@ -1207,48 +1329,60 @@ export function AssetBrowser() {
     }
   }
   const isEmpty = visibleFolders.length === 0 && visibleEntries.length === 0;
+  const folderPath = (folderId?: string) => {
+    const parts: string[] = [];
+    const seen = new Set<string>();
+    while (folderId && !seen.has(folderId)) {
+      seen.add(folderId);
+      const folder = folders.find((item) => item.id === folderId);
+      if (!folder) break;
+      parts.unshift(folder.name);
+      folderId = folder.parentId;
+    }
+    return ['Project', ...parts].join(' / ');
+  };
+  const selectedEntries = visibleEntries.filter((entry) => selected.has(itemKey(entry.kind, entry.id)));
+  const selectedEntry = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
+  const selectionHint = selectedEntry?.unresolved ? 'Missing file. Re-import the source asset.'
+    : selectedEntry?.kind === 'material' ? 'Drag into the viewport to apply to selected objects.'
+    : selectedEntry && (selectedEntry.assetType === 'model' || selectedEntry.kind === 'prefab' || selectedEntry.kind === 'particleSystem') ? 'Drag into the viewport to place in the scene.'
+    : selectedEntry?.onOpen ? 'Open to edit this reusable resource.'
+    : selectedEntry?.dragKind ? 'Drag into a folder to organize this resource.'
+    : selectedEntry ? 'Derived from an imported model.'
+    : `${selectedEntries.length} selected`;
+  const creationActions = [
+    { label: 'Folder', description: 'Organize project assets', Icon: Folder, run: newFolder },
+    { label: 'Blueprint', description: 'Reusable gameplay logic', Icon: GitBranch, run: newBlueprint },
+    { label: 'Material', description: 'Shared surface appearance', Icon: Palette, run: newMaterial },
+    { label: 'Particle system', description: 'Reusable visual effect', Icon: Sparkles, run: newParticleSystem },
+    { label: 'UI document', description: 'Screen or world interface', Icon: LayoutDashboard, run: newUIDocument },
+    { label: 'Data asset', description: 'Reusable table of values', Icon: Table2, run: newDataAsset },
+  ];
 
   return (
-    <section className="panel asset-panel">
-      {/* Title dropped: the dock tab already says "Assets". This row is the toolbar. */}
-      <div className="panel-header panel-header-actions-only">
-        <button
-          className={clsx('icon-button compact', showFolders && 'active')}
-          title="Toggle folders panel"
-          onClick={() => setShowFolders((value) => !value)}
-        >
-          <PanelLeft size={14} aria-hidden />
-        </button>
-        <button
-          className="icon-button compact"
-          title={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
-          onClick={() => setViewMode((mode) => (mode === 'grid' ? 'list' : 'grid'))}
-        >
-          {viewMode === 'grid' ? <List size={14} aria-hidden /> : <LayoutGrid size={14} aria-hidden />}
-        </button>
-        <button className="icon-button compact" title="New folder" onClick={() => newFolder(selectedFolderId)}>
-          <Folder size={14} aria-hidden />
-        </button>
-        <button className="icon-button compact" title="Import assets" onClick={() => triggerImport(selectedFolderId)}>
+    <section className="panel asset-panel asset-browser" aria-label="Asset browser" data-testid="asset-browser">
+      <div className="asset-browser-actions">
+        <button className="asset-browser-button primary" title={`Import assets into ${folderPath(selectedFolderId)}`} disabled={isImporting} onClick={() => triggerImport(selectedFolderId)}>
           <Upload size={14} aria-hidden />
+          {isImporting ? 'Importing…' : 'Import assets'}
         </button>
         <button
-          className={clsx('icon-button compact', compressTextures && 'active')}
-          title={
-            compressTextures
-              ? 'Texture compression ON — imported model textures become GPU-compressed KTX2 (smaller VRAM + download). Click to keep textures lossless.'
-              : 'Texture compression OFF — imported textures stay lossless. Click to compress to KTX2 on import.'
-          }
-          onClick={() => updateRenderSettings({ compressTextures: !compressTextures })}
+          className="asset-browser-button"
+          aria-label="Create resource"
+          title="Create resource"
+          aria-expanded={popover?.kind === 'create'}
+          aria-haspopup="dialog"
+          onClick={(event) => togglePopover(event, 'create')}
         >
-          <FileArchive size={14} aria-hidden />
+          <Plus size={14} aria-hidden /><ChevronDown size={12} aria-hidden />
         </button>
-        <button className="icon-button compact" title="Import package (.nfpack)" onClick={importPackage}>
-          <PackagePlus size={14} aria-hidden />
+        <button className="icon-button compact asset-browser-more" title="Asset browser options" aria-label="Asset browser options" aria-haspopup="dialog" aria-expanded={popover?.kind === 'options'} onClick={(event) => togglePopover(event, 'options')}>
+          <MoreHorizontal size={16} aria-hidden />
         </button>
         <input
           ref={fileInputRef}
           type="file"
+          aria-label="Choose assets to import"
           hidden
           multiple
           accept=".glb,.gltf,.fbx,.bin,.ktx2,.tga,.bmp,.png,.jpg,.jpeg,.webp,.mp3,.wav"
@@ -1259,21 +1393,33 @@ export function AssetBrowser() {
         />
       </div>
 
-      {importReport.length > 0 && <details className="model-import-report" open>
+      {importReport.length > 0 && <details className="model-import-report">
         <summary>Last import · {importReport.filter((item) => !item.error).length} completed · {importReport.filter((item) => item.error).length} failed</summary>
         <div role="status">{importReport.map((item, index) => <article key={index}><strong>{item.name}</strong>{item.error && <p className="ai-error">{item.error}</p>}{item.messages.map((message, i) => <p key={i}>{message}</p>)}</article>)}</div>
       </details>}
-      <label className="search-field">
-        <Search size={14} aria-hidden />
-        <input value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="Search assets" />
-      </label>
+      <div className="asset-browser-filters">
+        <div className="search-field">
+          <Search size={14} aria-hidden />
+          <input aria-label="Search all assets" value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="Search all assets" onKeyDown={(event) => { if (event.key === 'Escape') setAssetSearch(''); }} />
+          {assetSearch && <button className="icon-button compact" aria-label="Clear asset search" title="Clear search" onClick={() => setAssetSearch('')}><X size={12} aria-hidden /></button>}
+        </div>
+        <select className={clsx('asset-type-filter', typeFilter !== 'all' && 'active')} aria-label="Filter assets by type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as TypeFilter | 'all')}>
+          <option value="all">All types</option>
+          {Object.entries(TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </div>
 
       <div className={clsx('asset-body', !showFolders && 'no-folders')}>
         {showFolders && (
-          <div className="asset-folders">
+          <div className="asset-folders" aria-label="Project folders">
             <div
+              role="button"
+              tabIndex={0}
+              aria-label="Open project folder"
+              aria-current={selectedFolderId === undefined ? 'location' : undefined}
               className={clsx('tree-row folder-row root', selectedFolderId === undefined && 'selected', dropTarget === 'root' && 'drop')}
-              onClick={() => setSelectedFolderId(undefined)}
+              onClick={() => navigateFolder(undefined)}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigateFolder(undefined); } }}
               {...folderDropProps(undefined)}
               onContextMenu={(event) => openMenu(event, createMenu(undefined))}
             >
@@ -1287,35 +1433,45 @@ export function AssetBrowser() {
 
         <div className="asset-content">
           <div className="asset-toolbar">
-            <div className="breadcrumb">
-              <button className="crumb" onClick={() => setSelectedFolderId(undefined)}>
+            <button className={clsx('icon-button compact', showFolders && 'active')} title="Toggle folders panel" aria-label="Toggle folders panel" aria-pressed={showFolders} onClick={() => setShowFolders((value) => !value)}><PanelLeft size={14} aria-hidden /></button>
+            <div className="breadcrumb" aria-label={searching ? 'Searching all project folders' : 'Current folder'}>
+              {searching ? <span className="asset-search-scope">All folders</span> : <>
+              <button className="crumb" onClick={() => navigateFolder(undefined)}>
                 Project
               </button>
               {breadcrumb.map((folder) => (
                 <span key={folder.id} className="crumb-part">
                   <ChevronRight size={12} aria-hidden />
-                  <button className="crumb" onClick={() => setSelectedFolderId(folder.id)}>
+                  <button className="crumb" title={folder.name} onClick={() => navigateFolder(folder.id)}>
                     {folder.name}
                   </button>
                 </span>
               ))}
+              </>}
             </div>
+            <span className="asset-result-count" role="status">{visibleEntries.length} {visibleEntries.length === 1 ? 'asset' : 'assets'}</span>
             {viewMode === 'grid' && (
               <input
                 className="tile-size"
                 type="range"
-                min={56}
-                max={132}
+                min={96}
+                max={160}
                 step={4}
                 value={tileSize}
                 title="Thumbnail size"
+                aria-label="Thumbnail size"
                 onChange={(event) => setTileSize(Number(event.target.value))}
               />
             )}
+            <button className="icon-button compact" title={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'} aria-label={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'} onClick={() => setViewMode((mode) => mode === 'grid' ? 'list' : 'grid')}>
+              {viewMode === 'grid' ? <List size={14} aria-hidden /> : <LayoutGrid size={14} aria-hidden />}
+            </button>
           </div>
 
           <div
             ref={viewRef}
+            aria-label="Assets"
+            aria-busy={isImporting}
             className={clsx('asset-view', viewMode === 'grid' ? 'grid' : 'list', contentDrop && 'drop')}
             onMouseDown={handleMarqueeDown}
             onClick={() => {
@@ -1341,7 +1497,9 @@ export function AssetBrowser() {
             {isEmpty ? (
               <div className="empty-state wide">
                 {searching ? <Search size={18} aria-hidden /> : <Upload size={18} aria-hidden />}
-                <span>{searching ? 'No matches' : 'Drop assets here or use Import'}</span>
+                <strong>{searching || typeFilter !== 'all' ? 'No matching assets' : 'This folder is empty'}</strong>
+                <span>{searching ? 'Try another name or asset type.' : typeFilter !== 'all' ? 'Choose another type or clear the filter.' : 'Drop models, images or audio here to import.'}</span>
+                {searching || typeFilter !== 'all' ? <button className="asset-browser-button" onClick={() => { setAssetSearch(''); setTypeFilter('all'); }}>Clear search and filters</button> : <button className="asset-browser-button" disabled={isImporting} onClick={() => triggerImport(selectedFolderId)}><Upload size={14} aria-hidden /> Import assets</button>}
               </div>
             ) : viewMode === 'grid' ? (
               <>
@@ -1372,6 +1530,29 @@ export function AssetBrowser() {
         </div>
       </div>
 
+      {selectedEntries.length > 0 && <div className="asset-selection-bar" aria-label="Asset selection">
+        <div className="asset-selection-copy">
+          {selectedEntry && <strong title={selectedEntry.label}>{selectedEntry.label}<span>{entryTypeLabel(selectedEntry)}{selectedEntry.subtitle ? ` · ${selectedEntry.subtitle}` : ''}</span></strong>}
+          <span>{selectionHint}</span>
+        </div>
+        {selectedEntry?.onOpen && <button className="icon-button compact" title={selectedEntry.kind === 'prefab' ? 'Open prefab' : 'Open editor'} aria-label={selectedEntry.kind === 'prefab' ? 'Open prefab' : 'Open editor'} onClick={selectedEntry.onOpen}><ExternalLink size={15} aria-hidden /></button>}
+        {selectedEntry?.kind === 'prefab' && <button className="asset-browser-button" onClick={() => instantiatePrefab(selectedEntry.id)}><Plus size={13} aria-hidden /> Add to Scene</button>}
+        {selectedEntry?.menu && <button className="icon-button compact" aria-label={`Actions for ${selectedEntry.label}`} title="Asset actions" onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          setMenu({ x: Math.max(8, rect.right - 200), y: Math.max(8, rect.top - selectedEntry.menu!.length * 32), items: selectedEntry.menu! });
+        }}><MoreHorizontal size={15} aria-hidden /></button>}
+      </div>}
+
+      {popover && createPortal(
+        <div ref={popoverRef} className="asset-browser-popover" role="dialog" aria-label={popover.kind === 'create' ? 'Create resource' : 'Asset browser options'} style={{ left: popover.left, top: popover.top, bottom: popover.bottom, maxHeight: popover.maxHeight }}>
+          <div className="asset-popover-heading">{popover.kind === 'create' ? 'Create resource' : 'Import options'}<button className="icon-button compact" aria-label="Close asset browser menu" onClick={() => { setPopover(null); popoverTriggerRef.current?.focus(); }}><X size={14} aria-hidden /></button></div>
+          <p className="asset-popover-context" title={folderPath(selectedFolderId)}>{popover.kind === 'create' ? `Create in ${folderPath(selectedFolderId)}` : 'Applies to future imports'}</p>
+          {popover.kind === 'create' ? creationActions.map(({ label, description, Icon, run }) => <button key={label} className="asset-popover-action" title={description} onClick={() => run(selectedFolderId)}><Icon size={17} aria-hidden /><span><strong>{label}</strong></span></button>) : <>
+            <button className="asset-popover-action" aria-pressed={compressTextures} onClick={() => updateRenderSettings({ compressTextures: !compressTextures })}><FileArchive size={17} aria-hidden /><span><strong>Compress model textures: {compressTextures ? 'On' : 'Off'}</strong><small>{compressTextures ? 'Smaller GPU memory use and downloads' : 'Keep imported textures lossless'}</small></span></button>
+            <button className="asset-popover-action" title="Import package (.nfpack)" onClick={() => { setPopover(null); void importPackage(); }}><PackagePlus size={17} aria-hidden /><span><strong>Import package…</strong><small>Prefabs and resources from a .nfpack file</small></span></button>
+          </>}
+        </div>, document.body,
+      )}
       <ContextMenu state={menu} onClose={() => setMenu(null)} />
       {editSkeletonId && <SkeletonEditorModal skeletonId={editSkeletonId} onClose={() => setEditSkeletonId(undefined)} />}
     </section>
