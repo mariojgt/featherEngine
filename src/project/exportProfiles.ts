@@ -120,6 +120,11 @@ export function parseExportSettings(
         fullscreen: value.window?.fullscreen === true,
       },
       includeDebugOverlay: value.includeDebugOverlay === true,
+      optimization: {
+        geometry: value.optimization?.geometry !== false,
+        textures: value.optimization?.textures === true,
+        streamAssets: value.optimization?.streamAssets !== false,
+      },
     } satisfies ExportProfile;
   });
 

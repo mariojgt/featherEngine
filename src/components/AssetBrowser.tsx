@@ -371,6 +371,17 @@ export function AssetBrowser() {
             console.warn(`Texture compression failed for "${file.name}", importing uncompressed:`, compressError);
           }
         }
+        if (/\.glb$/i.test(file.name)) {
+          try {
+            const { prepareGeometryAsync } = await import('../three/prepareGeometryAsync');
+            const prepared = await prepareGeometryAsync(new Uint8Array(await file.arrayBuffer()), 'desktop');
+            if (prepared.meshes) {
+              file = new File([prepared.bytes], file.name, { type: 'model/gltf-binary' });
+              receipt.messages.push(`Prepared two detail levels for ${prepared.meshes} meshes. Original geometry is retained in this model.`);
+            }
+            receipt.messages.push(...prepared.warnings);
+          } catch (error) { receipt.messages.push(`Detail preparation unavailable: ${error instanceof Error ? error.message : String(error)}. Full geometry retained.`); }
+        }
         const { path, url } = await platform.importAsset(dir, file);
         const assetId = `asset-${crypto.randomUUID()}`;
         items.push({

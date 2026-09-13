@@ -32,7 +32,22 @@ export function meshLodReady(): boolean {
 }
 
 /** uuid → [unused level0, lod1 | null, lod2 | null]. `null` = generation tried and failed (don't retry). */
-const lodCache = new Map<string, (THREE.BufferGeometry | null)[]>();
+const lodCache = new WeakMap<THREE.BufferGeometry, (THREE.BufferGeometry | null)[]>();
+const preparedErrors = new WeakMap<THREE.BufferGeometry, number[]>();
+
+/** Imported prepared levels are shared by all instances and never simplified again during Play. */
+export function registerPreparedLods(source: THREE.BufferGeometry, indices: Uint32Array[], errors: number[]): void {
+  const count = source.getAttribute('position')?.count ?? 0;
+  if (indices.length !== 2 || errors.length !== 2 || errors.some((error) => !Number.isFinite(error) || error < 0)) throw new Error('Invalid prepared mesh levels.');
+  for (const index of indices) if (index.length % 3 || index.some((value) => value >= count)) throw new Error('Prepared mesh indices exceed the source geometry.');
+  const old = lodCache.get(source);
+  old?.slice(1).forEach((geometry) => geometry?.dispose());
+  const levels = indices.map((index) => makeLodGeometry(source, index));
+  lodCache.set(source, [source, ...levels]); preparedErrors.set(source, errors);
+  source.addEventListener('dispose', () => { levels.forEach((geometry) => geometry.dispose()); lodCache.delete(source); preparedErrors.delete(source); });
+}
+
+export const preparedLodErrors = (source: THREE.BufferGeometry): readonly number[] | undefined => preparedErrors.get(source);
 
 /** How many NEW geometries may be simplified before the budget is refilled — caps per-tick cost so a
  *  dense scene spreads generation over several throttled ticks instead of hitching on one frame. */
@@ -46,6 +61,7 @@ export function setLodGenBudget(n: number): void {
  * enough to be worth it. (Skinned/instanced/sky meshes are filtered by the traversal before this.)
  */
 export function isLodCandidate(geometry: THREE.BufferGeometry): boolean {
+  if (Object.values(geometry.morphAttributes).some((attributes) => attributes.length > 0)) return false;
   const index = geometry.getIndex();
   if (!index || index.count < MIN_LOD_INDEX_COUNT) return false;
   if (geometry.groups.length > 1) return false; // multi-material: reindexing would break the group ranges
@@ -75,10 +91,11 @@ function makeLodGeometry(source: THREE.BufferGeometry, newIndex: Uint32Array): T
  */
 export function getLodGeometry(source: THREE.BufferGeometry, level: number): THREE.BufferGeometry | null {
   if (level <= 0) return source;
-  let entry = lodCache.get(source.uuid);
+  let entry = lodCache.get(source);
   if (!entry) {
     entry = [source, undefined as unknown as null, undefined as unknown as null];
-    lodCache.set(source.uuid, entry);
+    lodCache.set(source, entry);
+    source.addEventListener('dispose', () => { entry?.slice(1).forEach((geometry) => geometry?.dispose()); lodCache.delete(source); });
   }
   // Generate this level if we haven't tried yet and the per-tick budget allows it.
   if (entry[level] === undefined && genBudget > 0 && meshLodReady()) {

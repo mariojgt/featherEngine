@@ -27,6 +27,7 @@ import {
 import { getPlatform, isDesktop } from '../platform';
 import type { SteamPublishResult, SteamToolReport } from '../platform/types';
 import { useProjectStore } from '../store/projectStore';
+import { readReleaseHistory, recordRelease, type ReleaseHistoryEntry } from '../project/releaseHistory';
 
 const GLOBAL_SETUP_KEY = 'feather.steam.local-setup.v1';
 const PROJECT_SETUP_PREFIX = 'feather.steam.project.v1.';
@@ -51,6 +52,7 @@ interface StoredProjectSetup {
   appId?: string;
   depotId?: string;
   branch?: string;
+  platformDepots?: Record<string, string>;
 }
 
 interface PreflightItem {
@@ -139,6 +141,8 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
   const projectName = useProjectStore((state) => state.projectName);
   const projectDir = useProjectStore((state) => state.projectDir);
   const lastProductionOutput = useProjectStore((state) => state.lastProductionOutput);
+  const lastBuild = useProjectStore((state) => state.lastProductionBuild);
+  const artifacts = useMemo(() => lastBuild?.artifacts.filter((artifact) => artifact.target !== 'web') ?? [], [lastBuild]);
   const storageKey = useMemo(() => projectKey(projectDir, projectName), [projectDir, projectName]);
 
   const [step, setStep] = useState<Step>(0);
@@ -148,6 +152,9 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
   const [account, setAccount] = useState('');
   const [appId, setAppId] = useState('');
   const [depotId, setDepotId] = useState('');
+  const [platformDepots, setPlatformDepots] = useState<Record<string, string>>({});
+  const [history, setHistory] = useState<ReleaseHistoryEntry[]>([]);
+  const [testingBuild, setTestingBuild] = useState(false);
   const [description, setDescription] = useState('');
   const [branch, setBranch] = useState('internal');
   const [preview, setPreview] = useState(true);
@@ -206,11 +213,16 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
     setHydrated(false);
     setStep(0);
     setSdkPath(restoredSdkPath);
-    setContentRoot(lastProductionOutput ?? '');
+    const builtArtifacts = useProjectStore.getState().lastProductionBuild?.artifacts.filter((artifact) => artifact.target !== 'web') ?? [];
+    setContentRoot(builtArtifacts[0]?.depotRoot ?? lastProductionOutput ?? '');
+    const savedDepots = project.platformDepots && typeof project.platformDepots === 'object' ? project.platformDepots : {};
+    setPlatformDepots(savedDepots);
+    setHistory(readReleaseHistory(storageKey));
     setAccount(typeof global.account === 'string' ? global.account : '');
     setAppId(typeof project.appId === 'string' ? project.appId : '');
-    setDepotId(typeof project.depotId === 'string' ? project.depotId : '');
-    setDescription(`${projectName} build`);
+    setDepotId(savedDepots[builtArtifacts[0]?.target] ?? (typeof project.depotId === 'string' ? project.depotId : ''));
+    const builtProfile = useProjectStore.getState().lastProductionBuild?.profile;
+    setDescription(builtProfile ? `${builtProfile.application.productName} ${builtProfile.application.version} (${builtProfile.application.buildNumber})` : `${projectName} build`);
     setBranch(typeof project.branch === 'string' ? project.branch : 'internal');
     setPreview(true);
     setToolState({ status: 'idle' });
@@ -233,8 +245,8 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
   useEffect(() => {
     if (!open || !hydrated) return;
     storeObject(GLOBAL_SETUP_KEY, { sdkPath, account } satisfies StoredGlobalSetup);
-    storeObject(storageKey, { appId, depotId, branch } satisfies StoredProjectSetup);
-  }, [account, appId, branch, depotId, hydrated, open, sdkPath, storageKey]);
+    storeObject(storageKey, { appId, depotId, branch, platformDepots: { ...platformDepots, ...(artifacts[0] && contentRoot === artifacts[0].depotRoot ? { [artifacts[0].target]: depotId } : {}) } } satisfies StoredProjectSetup);
+  }, [account, appId, branch, depotId, hydrated, open, sdkPath, storageKey, platformDepots, artifacts, contentRoot]);
 
   useEffect(() => {
     if (!logRef.current) return;
@@ -363,7 +375,13 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
   // `open`, so returning before `useMemo` would change the hook order between renders.
   if (!open) return null;
 
-  const canPublish = accountValid && depotValid && toolReady && isDesktop && !isRunning;
+  const linked = Boolean(artifacts[0] && contentRootClean === artifacts[0].depotRoot);
+  const extraArtifacts = linked ? artifacts.slice(1) : [];
+  const extraIds = extraArtifacts.map((artifact) => platformDepots[artifact.target] ?? '');
+  const allIds = [depotId, ...extraIds];
+  const depotMappingValid = extraIds.every(positiveInteger) && new Set(allIds.map(Number)).size === allIds.length;
+  const launchFailed = linked && artifacts.some((artifact) => artifact.launchTest === 'failed');
+  const canPublish = accountValid && depotValid && depotMappingValid && !launchFailed && toolReady && isDesktop && !isRunning && !testingBuild;
 
   const publish = async (event: FormEvent) => {
     event.preventDefault();
@@ -382,6 +400,10 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
     try {
       const platform = await getPlatform();
       if (!platform.publishSteam) throw new Error('Steam publishing is unavailable in this build of Feather desktop.');
+      if (linked && lastProductionOutput && platform.inspectProductionBuild) {
+        const current = await platform.inspectProductionBuild(lastProductionOutput);
+        if (current.artifacts.some((artifact) => artifact.launchTest === 'failed')) throw new Error('A launch check failed. Rebuild or re-test the game before uploading.');
+      }
       setPublishState(preview ? 'running-preview' : 'running-upload');
       const publishResult = await platform.publishSteam(
         {
@@ -390,6 +412,7 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
           account: account.trim(),
           appId: Number(appId.trim()),
           depotId: Number(depotId.trim()),
+          additionalDepots: extraArtifacts.map((artifact) => ({ depotId: Number(platformDepots[artifact.target]), contentRoot: artifact.depotRoot })),
           description: description.trim(),
           branch: branchClean || undefined,
           preview,
@@ -398,9 +421,12 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
       );
       setResult(publishResult);
       setPublishState('success');
+      setHistory(recordRelease(storageKey, { time: Date.now(), appId: publishResult.appId, branch: branchClean, description: description.trim(), localBuildId: linked ? lastBuild?.buildId : undefined, status: publishResult.status, buildId: publishResult.buildId, depotIds: allIds.map(Number) }));
     } catch (error) {
-      setPublishError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setPublishError(message);
       setPublishState('error');
+      setHistory(recordRelease(storageKey, { time: Date.now(), appId: Number(appId), branch: branchClean, description: description.trim(), localBuildId: linked ? lastBuild?.buildId : undefined, status: 'failed', depotIds: allIds.map(Number), error: message }));
     }
   };
 
@@ -433,7 +459,7 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
           <span className="steam-publish-mark" aria-hidden><CloudUpload size={19} /></span>
           <div>
             <h2 id="steam-publish-title">Upload to Steam</h2>
-            <p id="steam-publish-description">Prepare and upload one depot build for {projectName}.</p>
+            <p id="steam-publish-description">Prepare and upload a game build for {projectName}.</p>
           </div>
           <button
             type="button"
@@ -576,16 +602,36 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
                     )}
                   </label>
 
+                  {linked && <div className="steam-publish-notice">
+                    <div><strong>{lastBuild?.profile.application.productName} · {lastBuild?.profile.application.version}</strong>
+                      <p>Game folders selected from build {lastBuild?.buildId.slice(0, 8)}.</p>
+                      {artifacts.map((artifact) => <p key={artifact.target}>{artifact.target}: launch test {artifact.launchTest}</p>)}
+                      <button type="button" disabled={testingBuild || isRunning} onClick={() => void (async () => {
+                        if (!lastProductionOutput) return;
+                        setTestingBuild(true);
+                        try { const platform = await getPlatform(); if (platform.testProductionBuild) useProjectStore.setState({ lastProductionBuild: await platform.testProductionBuild(lastProductionOutput) }); }
+                        catch (error) { setPublishError(String(error)); }
+                        finally { setTestingBuild(false); }
+                      })()}>{testingBuild ? 'Checking launch…' : 'Re-test local game'}</button>
+                    </div>
+                  </div>}
                   <div className="steam-publish-grid">
                     <label className="steam-publish-field">
                       <span>Steam App ID <em>required</em></span>
                       <input value={appId} onChange={(event) => setAppId(event.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="480" />
                     </label>
                     <label className="steam-publish-field">
-                      <span>Depot ID <em>required</em></span>
+                      <span>{linked ? `${artifacts[0].target} Depot ID` : 'Depot ID'} <em>required</em></span>
                       <input value={depotId} onChange={(event) => setDepotId(event.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="481" />
                     </label>
                   </div>
+                  {extraArtifacts.map((artifact) => <label className="steam-publish-field" key={artifact.target}>
+                    <span>{artifact.target} Depot ID <em>required</em></span>
+                    <input aria-label={`${artifact.target} Depot ID`} inputMode="numeric" value={platformDepots[artifact.target] ?? ''} onChange={(event) => setPlatformDepots({ ...platformDepots, [artifact.target]: event.target.value.replace(/\D/g, '') })} />
+                    <small>{artifact.depotRoot}</small>
+                  </label>)}
+                  {!depotMappingValid && <p className="is-error">Enter a different positive Depot ID for each platform.</p>}
+                  {launchFailed && <p className="is-error">A launch check failed. Fix the game and rebuild, or re-test it before uploading.</p>}
 
                   <label className="steam-publish-field">
                     <span>Build description <em>visible in Steamworks</em></span>
@@ -613,6 +659,9 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
 
               {step === 2 && (
                 <section className="steam-publish-panel" aria-labelledby="steam-preflight-heading">
+                  {history.length > 0 && <details><summary>Recent releases ({history.length})</summary>
+                    {history.slice(0, 10).map((entry, index) => <p key={`${entry.time}-${index}`}>{new Date(entry.time).toLocaleString()} · {entry.description} · {entry.status}{entry.buildId ? ` · Steam build ${entry.buildId}` : ''}{entry.branch ? ` · ${entry.branch}` : ''}{entry.error ? ` · ${entry.error}` : ''}</p>)}
+                  </details>}
                   <div className="steam-publish-intro">
                     <span><ShieldCheck size={18} aria-hidden /></span>
                     <div>
@@ -730,7 +779,7 @@ export function SteamPublishDialog({ open, onClose }: { open: boolean; onClose: 
               {step === 2 && (
                 <button type="submit" className="steam-primary-button" disabled={!canPublish}>
                   {isRunning ? <LoaderCircle className="spin" size={14} aria-hidden /> : preview ? <Eye size={14} aria-hidden /> : <CloudUpload size={14} aria-hidden />}
-                  {publishState === 'running-preview' ? 'Previewing…' : publishState === 'running-upload' ? 'Uploading…' : preview ? 'Run preview' : 'Upload build'}
+                  {publishState === 'running-preview' ? 'Previewing…' : publishState === 'running-upload' ? 'Uploading…' : publishState === 'error' ? 'Retry this step' : preview ? 'Run preview' : 'Upload build'}
                 </button>
               )}
             </footer>

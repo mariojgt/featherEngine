@@ -14,6 +14,7 @@ export interface GltfDocument {
   images?: { uri?: string; mimeType?: string }[];
   textures?: unknown[];
   extensionsUsed?: string[];
+  extensionsRequired?: string[];
 }
 
 /** Animation times are ordinary float accessors even when meshes and textures are compressed. */

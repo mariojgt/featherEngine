@@ -338,6 +338,7 @@ verify the workflow end to end. The complete checklist is in
 - [Steam Publishing](docs/STEAM_PUBLISHING.md) — local SteamPipe preview/upload workflow and safeguards
 - [AI Assistant](docs/AI_ASSISTANT.md) — tool architecture, MCP, and the contributor checklist
 - [Physics Worker](docs/PHYSICS_WORKER.md) — off-main-thread physics design and rollout status
+- [Destruction improvements](docs/STICK_HERO_DESTRUCTION.md) — Stick Hero blast pressure, fragment momentum, and bounded debris
 - [Sample game bundle](examples/sample-game.json) — a small serialized project example
 
 ## Project status
@@ -368,3 +369,15 @@ and reproducible examples.
 ## License
 
 Feather Engine is released under the [MIT License](LICENSE).
+
+### Rendering and shipping upgrades
+
+- [Lux 2.0](docs/LUX.md): bounded room lighting, blended reflections and captured-depth wall checks.
+- [Asset preparation](docs/ASSET_PREPARATION.md): prepared mesh LODs, spatial instancing, per-target cached variants and asset files.
+- [Production export](docs/PRODUCTION_EXPORT.md): installed-editor runtime packaging, complete web downloads and automatic local launch checks.
+- [Steam publishing](docs/STEAM_PUBLISHING.md): connected build folders, multiple platform depots and local release history.
+
+**Guided checks and releases:** [Performance Assistant](docs/PERFORMANCE_ASSISTANT.md)
+measures a representative scene and previews reversible quality changes.
+[Build Centre](docs/BUILD_CENTRE.md) brings local builds, GitHub desktop build jobs,
+launch-test reports and artifact collection into the editor.

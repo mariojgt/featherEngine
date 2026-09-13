@@ -670,7 +670,7 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
       };
     case 'action.loadScene':
       return {
-        label: 'Load Scene',
+        label: data.restartScene ? 'Restart Level' : 'Load Scene',
         description:
           'Switches the active Scene during Play (next dungeon floor, level, game-over screen). Project variables persist across the load (score, floor, unlocks); the scene you leave reverts to pristine.',
       };

@@ -1,49 +1,40 @@
 # Production Export
 
-Feather Engine can ship a finished game to **six platforms**:
+The installed desktop editor packages games using the player and native runner shipped with it. Desktop/web exports do not require an engine source checkout, Node, Rust or a compiler.
 
-| Platform | Output | How |
+## Build from the editor
+
+1. Open **Export → Production**, choose platforms, game name and launch scene.
+2. Review project checks. **Prepare geometry** adds reusable mesh LODs. Optional **Compress textures** prepares smaller texture variants. **Stream assets** moves asset bytes into separate files loaded when used. Original project assets stay intact.
+3. Build into an output folder. Each build gets a unique directory, preserving earlier builds.
+4. Feather launches the local native artifact and waits for its start scene to load and render. Review the result, cache hits and largest assets. Other operating systems still need their own launch test.
+5. Choose **Continue to Steam** to use the exact unpacked artifact folders and configure the depots. See [Steam publishing](STEAM_PUBLISHING.md).
+
+| Target | Installed editor output | Requirement |
 | --- | --- | --- |
-| Web | hosted folder + optional zip (`<game>-web/`) | build on any supported OS; serve from a static host |
-| Windows | `.msi` / `.exe` (`<game>-windows/`) | build on Windows, or CI |
-| macOS | `.app` / `.dmg` (`<game>-macos/`) | build on macOS, or CI |
-| Linux | `.AppImage` / `.deb` (`<game>-linux/`) | build on Linux, or CI |
-| Android | debug `.apk` or release `.aab` (`<game>-android/`) | Tauri mobile shell (any OS with the Android SDK/NDK) |
-| iOS | `.ipa` / Xcode project (`<game>-ios/`) | Tauri mobile shell (macOS + Xcode only) |
+| Web | Complete static-host folder; browser editor downloads a complete zip | Included player runtime |
+| Windows | Portable folder with `.exe` and game files | Windows runner pack; system WebView2 |
+| macOS | `.app` inside its depot folder | macOS runner pack and macOS host for ad-hoc signing |
+| Linux | Portable executable and game folder | Linux runner pack; system WebKitGTK dependencies |
+| Android/iOS | Existing source/CI packaging flow | Platform SDK, native build host and signing tools |
 
-Run **`npm run doctor`** at any time for a per-platform readiness report on the current
-machine — it lists exactly what is installed, what is missing, and the command that fixes
-each gap. The desktop editor shows the same report as the platform picker in the export
-dialog.
+The platform picker reports installed runtime availability. **Install platform runtime** accepts a Feather runner pack folder containing `runner.json` and its checksum-verified executable. Editor releases include the host runner; CI publishes additional platform/architecture packs as workflow artifacts. Packs must match the editor's CPU architecture; a pack for a different CPU is not substituted silently. Installing a pack does not install operating-system WebView dependencies.
 
-Games are automatically playable on touch devices: Play mode overlays a virtual
-joystick + look zone + SPRINT/USE/JUMP/FIRE buttons that feed the engine's standard
-input pipes, so existing templates and key bindings work on phones with no per-game work.
+`build-report.json` lives above the game folders. It records the immutable profile, engine source hash, asset preparation, exact depot roots, file checksums and launch results. Rechecking before connected publishing rejects game files changed after packaging. A launch check covers loading and rendering the start scene, not a complete gameplay playthrough.
 
-## Recommended Flow
+Web exports must be served over HTTP(S). Upload the whole folder, including `game-assets`, to a static host. The browser editor can make this zip directly. Other browser-selected platforms download a source build package with instructions.
 
-1. Open the project in the desktop editor.
-2. Click **Export → Production** in the toolbar.
-3. Choose a platform, game name, and launch scene. Advanced settings contain the stable application
-   id, version, build mode, and window size. Missing local tooling shows what is needed; a target
-   requiring another OS produces a staging folder with instructions for that host.
-4. Continue to **Check project**, resolve blocking issues, then build. Pick an output folder in
-   the desktop editor. In the browser, download the build package and follow the displayed CLI command.
-5. Read the retained build result and logs. Test the finished web folder or native package before
-   sharing it. A staged package still needs a build on the indicated host; signing is a separate step.
+Installed macOS exports use an ad-hoc signature for local testing. Public signing/notarization and store onboarding remain separate. The source CLI below can produce installers and use configured signing identities. This is not a hosted cloud build service.
 
-For an existing Steam app, the desktop editor also provides **Export → Upload to Steam…**. It
-previews or uploads one unpacked depot folder with the Steamworks SDK installed locally; it does
-not upload an installer or promote a build to the public branch. See the
-[Steam Publishing guide](STEAM_PUBLISHING.md) for setup, authentication, safeguards, and current
-limitations.
+## Asset and player caches
 
-The chosen profile is saved in the project and snapshotted into the artifact. Its application id
-does not change when the project/display name changes, so game save slots and installed upgrades
-keep the same identity.
+Prepared asset variants are cached by source bytes, preparation version, target preset and settings. Browser/desktop UI builds use IndexedDB; CLI builds use `.feather-cache/assets`. Invalid cache bytes are rebuilt. Build receipts show cache hits, file sizes, triangle counts and warnings. See [Asset preparation](ASSET_PREPARATION.md) for eligibility and limits.
 
-The desktop editor runs builds when it is launched from the source tree and `npm`, Rust,
-and platform build tools are available on PATH.
+`npm run build:player` fingerprints source/configuration inputs and validates every cached runtime file before reuse. `--force` rebuilds it. `--verify-only` rejects stale or edited output; production `--skip-build` uses that check. `npm run build` builds both the reusable player and editor. Engine maintainers run `npm run prepare:runtime` to also compile and package the native host runner before distributing the editor.
+
+## Source/CI exporter
+
+The following commands are the advanced source workflow, including installer and mobile builds. Their toolchain requirements are reported by `npm run doctor`; the installed editor's runtime picker has a different purpose.
 
 ## CLI Commands
 
@@ -57,7 +48,7 @@ npm run ship:native    # web folder + zip + native Tauri app for this OS
 npm run export:android # web + Android release AAB (Tauri mobile; needs SDK/NDK)
 npm run export:ios     # web + iOS build (macOS only; generates the Xcode project)
 npm run ship:fast      # rebuild player without TypeScript checking, then zip
-npm run ship:reuse     # reuse existing dist-player, fastest for content-only re-exports
+npm run ship:reuse     # reuse a verified dist-player; rejects stale source or changed runtime files
 ```
 
 Flags compose: `node scripts/export-production.mjs --native --android --zip` builds this
@@ -143,7 +134,7 @@ The hosted web build runs in modern browsers; the native artifacts are standalon
 
 When the goal is releasing a version of the **editor itself** (not a player game bundle),
 [.github/workflows/release-desktop.yml](../.github/workflows/release-desktop.yml) builds the
-Tauri desktop app for Windows and macOS and attaches the installers to a GitHub Release
+Tauri desktop app for Windows, macOS and Linux and attaches the installers to a GitHub Release
 every time a version tag is pushed:
 
 ```bash
@@ -151,11 +142,12 @@ git tag v0.1.0        # must match src-tauri/tauri.conf.json version
 git push origin v0.1.0
 ```
 
-1. GitHub Actions runs a 3-job matrix, each on its own runner (Tauri cannot cross-compile):
+1. GitHub Actions runs a 4-job matrix, each on its own runner (Tauri cannot cross-compile):
    - `windows-latest` → NSIS installer (`*.exe`) + MSI (`*.msi`)
    - `macos-latest` → `.app` + `.dmg` for **Apple Silicon**
    - `macos-latest` → `.app` + `.dmg` for **Intel** (x86_64 cross-target)
-2. `tauri-action` runs `npm run build` (via `beforeBuildCommand`), then `cargo` builds the
+   - `ubuntu-22.04` → Linux installers
+2. `tauri-action` runs `npm run prepare:runtime` (via `beforeBuildCommand`), then `cargo` builds the
    Rust shell and bundles the installers.
 3. The action creates a **draft** GitHub Release named after the tag with all installers
    attached; review and publish it from the Releases page.
@@ -227,7 +219,3 @@ legacy migration in the assembled player.
 
 The shared code path guarantees engine behavior parity. Pixel output can still vary slightly with
 the browser/WebView, GPU driver, operating system, display scale, and platform audio stack.
-
-## Packaged Editor Caveat
-
-The one-click desktop build shells out to the local source tree, so it expects this repository, `node_modules`, `npm`, Rust, and platform build tools to be available. A standalone installed editor that is not beside the source tree should export `game.json` and use the CLI flow from the source folder.

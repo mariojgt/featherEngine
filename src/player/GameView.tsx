@@ -1,4 +1,5 @@
 import { Canvas, useFrame } from '@react-three/fiber';
+import { PlayerReady } from './PlayerReady';
 import {
   ContactShadows,
   OrbitControls,
@@ -601,6 +602,7 @@ export function GameView() {
       <ShadowLOD />
       <MeshLOD />
       <GameScene />
+      <PlayerReady />
     </Canvas>
   );
 }

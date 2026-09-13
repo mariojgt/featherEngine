@@ -3,7 +3,8 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
 import { qualityProfile } from './quality';
-import { getLodGeometry, isLodCandidate, meshLodReady, setLodGenBudget } from './meshLodCache';
+import { getLodGeometry, isLodCandidate, meshLodReady, preparedLodErrors, setLodGenBudget } from './meshLodCache';
+import { selectPreparedLod } from './lodSelection';
 
 const LOD_CENTER = new THREE.Vector3();
 const LOD_SCALE = new THREE.Vector3();
@@ -29,6 +30,7 @@ const GEN_PER_TICK = 2;
 export function MeshLOD() {
   const scene = useThree((state) => state.scene);
   const camera = useThree((state) => state.camera);
+  const gl = useThree((state) => state.gl);
   const tick = useRef(0);
   const restored = useRef(true);
 
@@ -47,7 +49,7 @@ export function MeshLOD() {
     restored.current = false;
 
     const lodDistance = qualityProfile(editorState.renderSettings.quality).lodDistance;
-    if (lodDistance <= 0 || !meshLodReady()) return;
+    if (!meshLodReady()) return;
 
     tick.current = (tick.current + 1) % 8;
     if (tick.current !== 0) return;
@@ -79,12 +81,16 @@ export function MeshLOD() {
       if (!sphere) return;
       LOD_CENTER.copy(sphere.center).applyMatrix4(mesh.matrixWorld);
       mesh.matrixWorld.decompose(LOD_TMP_POS, LOD_TMP_QUAT, LOD_SCALE);
-      const worldRadius = sphere.radius * Math.max(LOD_SCALE.x, LOD_SCALE.y, LOD_SCALE.z);
+      const worldRadius = sphere.radius * Math.max(Math.abs(LOD_SCALE.x), Math.abs(LOD_SCALE.y), Math.abs(LOD_SCALE.z));
       const distance = LOD_CENTER.distanceTo(camera.position) - worldRadius;
 
-      const level = distance < near ? 0 : distance < far ? 1 : 2;
+      const errors = preparedLodErrors(original);
+      const projectedDiameter = worldRadius * gl.domElement.height * Math.abs(camera.projectionMatrix.elements[5]) /
+        ((camera as THREE.PerspectiveCamera).isPerspectiveCamera ? Math.max(camera.near, distance) : 1);
+      const level = errors ? selectPreparedLod(errors, projectedDiameter, editorState.renderSettings.quality, Number(mesh.userData.nfLodLevel) || 0) :
+        lodDistance <= 0 || distance < near ? 0 : distance < far ? 1 : 2;
       const target = getLodGeometry(original, level);
-      if (target && mesh.geometry !== target) mesh.geometry = target;
+      if (target && mesh.geometry !== target) { mesh.geometry = target; mesh.userData.nfLodLevel = level; }
     });
   });
 

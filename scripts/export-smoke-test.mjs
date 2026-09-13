@@ -113,7 +113,18 @@ function assertAssembledPlayer(output, expectedBundle) {
   assert.ok(bundleSource.startsWith(prefix), 'game-bundle.js did not define the baked game global');
   const baked = JSON.parse(bundleSource.slice(prefix.length).replace(/;\s*$/, ''));
   if (expectedBundle) {
-    assert.deepEqual(baked, expectedBundle, 'assembled player did not bake the requested canonical bundle exactly');
+    const prepared = structuredClone(expectedBundle);
+    prepared.project.assets = prepared.project.assets.map((asset) => {
+      const bytes = Buffer.from(asset.data.slice(asset.data.indexOf(',') + 1), 'base64'), hash = sha256(bytes);
+      const path = `game-assets/${hash}.${asset.name.split('.').pop()}`;
+      assert.deepEqual(readFileSync(resolve(output, path)), bytes, 'streamed asset must retain its original content');
+      const { data, ...metadata } = asset;
+      return { ...metadata, size: bytes.length, hash, delivery: { path, sha256: hash, bytes: bytes.length } };
+    });
+    for (const profile of prepared.project.exportSettings.profiles) profile.optimization ??= { geometry: true, textures: false, streamAssets: true };
+    prepared.runtimeContract.requiredFeatures.push('streamed-assets');
+    assert.deepEqual(baked, prepared, 'asset preparation must preserve the canonical game outside its delivery metadata');
+    assert.equal(buildReport.bundleSha256, sha256(JSON.stringify(baked)), 'report must identify the delivered variant');
   }
 
   return { files, relativeFiles, baked };

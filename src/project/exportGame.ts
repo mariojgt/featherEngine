@@ -169,7 +169,14 @@ export function stripUnusedAssets(bundle: GameBundle, referencedAssetIds: string
 function resolveEmbeddedAssets(project: NodeForgeProject): NodeForgeProject {
   return {
     ...project,
-    assets: project.assets.map((asset) => (asset.data ? { ...asset, url: asset.data } : asset)),
+    assets: project.assets.map((asset) => {
+      if (asset.data) return { ...asset, url: asset.data };
+      if (asset.delivery) {
+        if (!/^game-assets\/[a-f0-9]{64}\.[a-z0-9]{1,8}$/.test(asset.delivery.path) || !/^[a-f0-9]{64}$/.test(asset.delivery.sha256) || !asset.delivery.path.includes(asset.delivery.sha256) || !Number.isSafeInteger(asset.delivery.bytes) || asset.delivery.bytes < 0) throw new Error(`Invalid exported asset path: ${asset.name}`);
+        return { ...asset, url: `./${asset.delivery.path}`, unresolved: false };
+      }
+      return asset;
+    }),
   };
 }
 

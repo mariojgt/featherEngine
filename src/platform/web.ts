@@ -38,6 +38,13 @@ function pickFile(): Promise<File | null> {
  */
 export const webPlatform: Platform = {
   isDesktop: false,
+  async buildProduction(request, onProgress) {
+    if (request.targets.some((target) => target !== 'web')) throw new Error('Use the desktop editor to package native games.');
+    const { buildWebArchive } = await import('../project/browserBuild');
+    const bytes = await buildWebArchive(JSON.parse(request.bundleJson), onProgress);
+    const name = `${request.profile.application.productName.replace(/[^a-zA-Z0-9_-]/g, '-')}-web.zip`;
+    await webPlatform.saveBinary(name, bytes, { mimeType: 'application/zip' }); return name;
+  },
 
   async createProject(name, scaffold) {
     return { dir: WEB_DIR, name, project: { ...scaffold, name } };

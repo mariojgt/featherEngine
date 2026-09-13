@@ -91,6 +91,10 @@ export interface FractureComponent {
   impactThreshold: number;
   /** Make pieces smaller near the impact point and bigger away (radial fracture). */
   focusImpact: boolean;
+  /** Seconds before generated pieces are removed (0.1–120, default 12). */
+  debrisLifetime?: number;
+  /** Carry the source body's linear velocity into its fragments (default true). */
+  inheritVelocity?: boolean;
 }
 
 /** One equippable inventory slot (a weapon/item). An empty `weaponAssetId` is the "unarmed" slot. */

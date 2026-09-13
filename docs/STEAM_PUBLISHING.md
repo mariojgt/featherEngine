@@ -1,9 +1,9 @@
 # Steam Publishing
 
-Feather's desktop editor can preview and upload one existing Steam depot through Valve's local
+Feather's desktop editor can preview and upload an existing Steam app with up to eight depots through Valve's local
 SteamPipe tools. Open **Export → Upload to Steam…** after producing and testing a build.
 
-This first release is an upload assistant, not a replacement for Steamworks onboarding. Your app,
+Steamworks onboarding remains in Steamworks. Your app,
 depot, build account, permissions, store page, pricing, and release checklist must already exist in
 Steamworks.
 
@@ -15,7 +15,7 @@ Steamworks.
 3. Run SteamCMD from the SDK's `tools/ContentBuilder` directory and sign in once with
    `+login <account>`. Complete Steam Guard in that terminal, then quit. Feather reuses SteamCMD's
    local authenticated session; it never asks for or stores a password, API key, or Steam Guard code.
-4. Prepare one **unpacked, depot-ready folder** containing exactly the files players should receive.
+4. Build through the installed editor to obtain **unpacked, depot-ready folders**, or prepare an existing content folder containing exactly the files players should receive.
    Do not choose a zip, DMG, MSI, installer directory, or the broad production-export root unless
    that directory itself is the intended depot content.
 
@@ -25,15 +25,14 @@ upload flow in the [SteamPipe Uploading documentation](https://partner.steamgame
 ## Upload flow
 
 1. Build and test the game with **Export → Production**.
-2. Open **Export → Upload to Steam…**.
+2. Choose **Continue to Steam** after building, or open **Export → Upload to Steam…**. The latest build in this session supplies the native artifact folders and version description.
 3. Select the Steamworks SDK root or `tools/ContentBuilder`, enter the build-account name, and let
    Feather validate SteamCMD.
-4. Select the exact unpacked content folder. Enter the Steam App ID, Depot ID, description, and an
-   optional private beta branch.
+4. Enter the Steam App ID and a distinct Depot ID for each linked platform, description, and optional private beta branch. Platform depot mappings are saved per project. A manually chosen content folder uses one depot.
 5. Keep **Preview only** enabled for the first run. Preview validates the SteamPipe build without
    uploading content.
 6. Review preflight, then run the preview. When it succeeds, turn preview off and upload.
-7. Feather shows sanitized SteamCMD output and the BuildID when SteamCMD reports one. Use
+7. Feather shows sanitized SteamCMD output and the BuildID when SteamCMD reports one. A local history retains the last 20 attempts, their depot IDs and results; failed attempts can be retried with the current settings. Use
    **Open in Steamworks** to inspect the build.
 
 Leaving the branch blank uploads the build without changing which branch is live. A named private
@@ -44,7 +43,8 @@ documentation also notes that `SetLive` cannot set the default branch.
 ## What Feather validates
 
 - SteamCMD exists in a supported ContentBuilder layout and is executable.
-- App ID and Depot ID are valid positive 32-bit identifiers.
+- App ID and all Depot IDs are valid positive 32-bit identifiers, with no repeated depot IDs.
+- Connected artifacts match the build file inventory. Failed launch checks block upload; **Re-test local game** retries the local launch. Other operating systems show **not-run** until tested on their host.
 - The description, account, and branch contain only supported values.
 - The content root exists, is non-empty, is not a filesystem root, and contains no symbolic links.
 - Generated AppBuild and DepotBuild VDF files use an isolated local job directory.
@@ -57,14 +57,12 @@ ID, and branch are stored per local Feather project. Passwords and tokens are ne
 ## Current scope
 
 - Desktop editor only; SteamCMD runs on the local computer.
-- One existing app and one depot per operation.
-- A local, already-prepared depot folder; Feather does not yet transform installer outputs into a
-  Windows Steam depot automatically.
+- One existing app, with up to eight depots in one SteamPipe build.
+- The installed editor builds portable game folders for Steam directly. Existing installer outputs from the source CLI still need an unpacked depot folder.
 - Preview or upload, with optional assignment to a private beta branch.
 - No first-release activation, public/default promotion, store-page editing, pricing, achievements,
   matchmaking, cloud saves, or runtime Steamworks SDK integration.
-- No cancellation, upload queue/history, CI credential flow, multi-depot manifest, or Epic Games
-  Store provider yet.
+- Local attempt history and retry are included. No cancellation, background upload queue, CI credential flow or Epic Games Store provider.
 
 Runtime Steam features are a separate integration from SteamPipe publishing. Adding the Steamworks
 runtime SDK to a game should be treated as its own project, including licensing, platform-specific

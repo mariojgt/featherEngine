@@ -11,6 +11,16 @@
 
 const SAMPLE_CAP = 120; // ~2s of history at 60fps
 
+export interface MeasuredFrame { frameMs: number; tickMs: number; renderMs: number; render: RenderStats }
+let capture: ((frame: MeasuredFrame) => void) | null = null;
+/** A single bounded, opt-in recording. Normal runtime frames allocate nothing here. */
+export function subscribeMeasuredFrames(listener: (frame: MeasuredFrame) => void): () => void {
+  if (capture) throw new Error('A performance measurement is already running.');
+  capture = listener;
+  return () => { if (capture === listener) capture = null; };
+}
+export const isPerformanceCaptureActive = () => capture !== null;
+
 /** Fixed-size circular buffer of f64 samples with cheap avg/max/p95 reads. */
 class Ring {
   private buf = new Float64Array(SAMPLE_CAP);
@@ -177,6 +187,7 @@ export const resetHitches = () => {
 
 /** Called once per rAF from the runtime loop. `frameMs` is wall-clock between frames; `tickMs` is the cost of `tickRuntime`. */
 export const recordFrame = (frameMs: number, tickMs: number) => {
+  if (capture && Number.isFinite(frameMs) && frameMs > 0 && Number.isFinite(tickMs)) capture({ frameMs, tickMs, renderMs: renderRing.last, render: { ...render } });
   frameRing.push(frameMs);
   tickRing.push(tickMs);
   if (frameMs > 100) hitch100 += 1;

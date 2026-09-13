@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync, copyFileSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 
 // `BUILD_TARGET=player vite build` produces the standalone game player into dist-player/.
@@ -20,6 +20,25 @@ function finalizePlayerBuild(): Plugin {
       // game-bundle.js. Keeping the editor catalogs makes every player needlessly huge.
       rmSync(resolve(__dirname, 'dist-player/templates'), { recursive: true, force: true });
       rmSync(resolve(__dirname, 'dist-player/store'), { recursive: true, force: true });
+    },
+  };
+}
+
+/** Distribute the already-built runtime with the editor; export needs no compiler or source tree. */
+function exportRuntime(): Plugin {
+  const zip = resolve(__dirname, 'src-tauri/export-runtime/player.zip');
+  return {
+    name: 'feather-export-runtime',
+    configureServer(server) {
+      server.middlewares.use('/export-runtime/player.zip', (_req, res) => {
+        if (!existsSync(zip)) { res.statusCode = 503; res.end('Build the player runtime with npm run build:player.'); return; }
+        res.setHeader('content-type', 'application/zip'); createReadStream(zip).pipe(res);
+      });
+    },
+    closeBundle() {
+      if (!existsSync(zip)) throw new Error('Missing export runtime. Run npm run build:player before building the editor.');
+      mkdirSync(resolve(__dirname, 'dist/export-runtime'), { recursive: true });
+      copyFileSync(zip, resolve(__dirname, 'dist/export-runtime/player.zip'));
     },
   };
 }
@@ -73,7 +92,7 @@ function templateExportSink(): Plugin {
 
 // Tauri expects a fixed dev server port (see src-tauri/tauri.conf.json devUrl).
 export default defineConfig({
-  plugins: [react(), templateExportSink(), ...(isPlayer ? [finalizePlayerBuild()] : [])],
+  plugins: [react(), templateExportSink(), ...(isPlayer ? [finalizePlayerBuild()] : [exportRuntime()])],
   clearScreen: false,
   // Relative base so a hosted export can live under any URL path and Tauri can use the same build.
   // Browsers block module applications launched directly through file://; see PRODUCTION_EXPORT.md.
@@ -102,6 +121,7 @@ export default defineConfig({
       }
     : { target: 'es2022' },
   server: {
+    watch: { ignored: ['**/dist-player/**', '**/exports/**', '**/src-tauri/target/**', '**/src-tauri/runner/target/**', '**/src-tauri/export-runtime/**', '**/.feather-cache/**'] },
     host: '0.0.0.0',
     // 17420, not Tauri's default 1420 — that collides with any other Tauri app's dev server (and the
     // sibling MomentumCup/MyAge projects). Keep this in sync with src-tauri/tauri.conf.json devUrl.

@@ -9,6 +9,7 @@ export const SUPPORTED_RUNTIME_FEATURES = [
   'keyboard-press-events',
   'featherscript',
   'ui-dom',
+  'ui-button-actions',
   'ui-webgl',
   'world-ui',
   'attachments',
@@ -31,6 +32,8 @@ export const SUPPORTED_RUNTIME_FEATURES = [
   'destruction',
   'reflection-probes',
   'lux-lighting',
+  'lux-rooms',
+  'streamed-assets',
   'persistence',
   'timelines',
   'post-processing',
@@ -61,9 +64,13 @@ const allObjects = (project: NodeForgeProject): SceneObject[] => [
 /** Detect every authored engine subsystem the standalone runtime must carry for this project. */
 export function detectRuntimeFeatures(project: NodeForgeProject): RuntimeFeatureId[] {
   const features = new Set<RuntimeFeatureId>();
+  if (project.assets.some((asset) => asset.delivery)) features.add('streamed-assets');
   if (project.scenes.some((scene) => scene.environment?.lux?.enabled)) features.add('lux-lighting');
+  if (project.scenes.some((scene) => scene.environment?.lux?.enabled && scene.environment.lux.mode === 'rooms')) features.add('lux-rooms');
   const objects = allObjects(project);
+  if ((project.uiDocuments ?? []).some(doc => doc.logicScope === 'project')) features.add('ui-button-actions');
   const nodes = (project.graphs ?? []).flatMap((graph) => graph.nodes ?? []);
+  if (nodes.some(node => node.data.nodeKind === 'action.loadScene' || node.data.restartScene || node.data.hideUIDocumentId)) features.add('ui-button-actions');
   const nodeKinds = new Set(nodes.map((node) => String(node.data.nodeKind ?? '')));
   if (nodes.some((node) => node.data.nodeKind === 'event.keyDown' && node.data.keyTriggerMode === 'pressed')) features.add('keyboard-press-events');
 
@@ -390,6 +397,7 @@ export function validateRuntimeReferences(
     for (const node of graph.nodes ?? []) {
       const data = node.data;
       const label = `Graph "${graph.name}" node "${data.label || data.nodeKind}"`;
+      if (data.hideUIDocumentId && !uiDocuments.has(data.hideUIDocumentId)) errors.push(`${label} references missing screen to close ${data.hideUIDocumentId}.`);
       if (data.documentId && !uiDocuments.has(data.documentId)) errors.push(`${label} references missing UI document ${data.documentId}.`);
       if (data.prefabId && !prefabs.has(data.prefabId)) errors.push(`${label} references missing prefab ${data.prefabId}.`);
       if (data.particleSystemId && !particles.has(data.particleSystemId)) errors.push(`${label} references missing particle system ${data.particleSystemId}.`);

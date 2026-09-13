@@ -18,6 +18,7 @@ export interface ModelGeometry {
 }
 
 const cache = new Map<string, ModelGeometry>();
+const rawKeys = new Set<string>();
 
 // Bumped whenever a new model's geometry arrives. Consumers (physics signatures,
 // the gizmo) watch this so a collider built before the mesh loaded gets rebuilt
@@ -41,7 +42,14 @@ export function getModelGeometry(key: string | undefined): ModelGeometry | undef
 export function registerRawGeometry(key: string, vertices: Float32Array, indices: Uint32Array): void {
   if (!key) return;
   cache.set(key, { vertices, indices });
+  rawKeys.add(key);
   version++;
+}
+
+/** Release runtime-generated geometry without evicting imported model assets. */
+export function removeRawGeometry(key: string): void {
+  if (!rawKeys.delete(key)) return;
+  if (cache.delete(key)) version++;
 }
 
 const reuse = new THREE.Matrix4();

@@ -16,3 +16,15 @@ it('authors partial Lux changes, undoes them, and retains settings and the runti
   useEditorStore.getState().loadProject(JSON.parse(JSON.stringify(project)));
   expect(selectActiveSceneEnvironment(useEditorStore.getState())?.lux).toMatchObject({ enabled: true, radius: 12, indirectIntensity: 1.2 });
 });
+
+it('retains bounded room settings through undo, save and runtime export', () => {
+  const store = useEditorStore.getState(), id = store.activeSceneId;
+  const rooms = [{ id: 'hall', name: 'Hall', center: [0, 2, 0] as [number, number, number], size: [10, 4, 8] as [number, number, number], blendDistance: 0.5 }];
+  store.updateSceneEnvironment(id, { lux: { enabled: true, mode: 'rooms', rooms, roomOcclusion: true } });
+  clearHistory(); separateHistoryAction(); store.updateSceneEnvironment(id, { lux: { rooms: [] } }); undo();
+  expect(selectActiveSceneEnvironment(useEditorStore.getState())?.lux?.rooms).toEqual(rooms);
+  const project = useEditorStore.getState().exportProject();
+  expect(detectRuntimeFeatures(project)).toContain('lux-rooms');
+  useEditorStore.getState().loadProject(JSON.parse(JSON.stringify(project)));
+  expect(selectActiveSceneEnvironment(useEditorStore.getState())?.lux).toMatchObject({ mode: 'rooms', rooms, roomOcclusion: true });
+});

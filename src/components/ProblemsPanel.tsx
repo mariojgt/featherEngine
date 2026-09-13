@@ -1,8 +1,10 @@
+import { scanInteractionProblems } from '../ui/interactionProblems';
+import { revealInteractionProblem } from './interactionNavigation';
 import { useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Bug } from 'lucide-react';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { scanBlueprintGraphProblems } from '../store/editor/graphDiagnostics';
-import type { AssetItem, Prefab, ProjectGraph, ScriptBlueprint, SceneObject, UIDocument, ProjectVariable } from '../types';
+import type { AssetItem, Prefab, ProjectGraph, ScriptBlueprint, SceneObject, UIDocument, ProjectVariable, Scene } from '../types';
 
 export interface Problem {
   severity: 'error' | 'warning' | 'info';
@@ -13,6 +15,8 @@ export interface Problem {
   blueprintId?: string;
   /** Select this graph node once the blueprint is open. */
   nodeId?: string;
+  uiDocumentId?: string;
+  uiElementId?: string;
 }
 
 const SPAWN_KINDS = new Set(['action.spawnObject', 'action.spawnPrefab', 'action.spawnProjectile', 'action.spawnParticleSystem']);
@@ -41,6 +45,7 @@ export function scanProblems(
   variables: ProjectVariable[],
   uiDocuments: UIDocument[],
   prefabs: Prefab[] = [],
+  scenes: Scene[] = [],
 ): Problem[] {
   const problems: Problem[] = [];
   const assetIds = new Set(assets.map((a) => a.id));
@@ -199,6 +204,8 @@ export function scanProblems(
     walk(doc.root);
   }
 
+  problems.push(...scanInteractionProblems(objects, graphs, blueprints, uiDocuments, scenes));
+
   // Errors first, then warnings, then info.
   const order = { error: 0, warning: 1, info: 2 } as const;
   return problems.sort((a, b) => order[a.severity] - order[b.severity]);
@@ -216,6 +223,7 @@ export function ProblemsButton() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   // Gate the volatile subscription during Play so the scan never reruns per-frame.
   const objects = useEditorStore((state) => (state.isPlaying ? null : selectActiveObjects(state)));
+  const scenes = useEditorStore(state => state.isPlaying ? null : state.scenes);
   const graphs = useEditorStore((state) => state.graphs);
   const blueprints = useEditorStore((state) => state.blueprints);
   const assets = useEditorStore((state) => state.assets);
@@ -223,14 +231,12 @@ export function ProblemsButton() {
   const uiDocuments = useEditorStore((state) => state.uiDocuments);
   const prefabs = useEditorStore((state) => state.prefabs);
   const selectObject = useEditorStore((state) => state.selectObject);
-  const setActiveBlueprint = useEditorStore((state) => state.setActiveBlueprint);
-  const selectGraphNode = useEditorStore((state) => state.selectGraphNode);
   const [open, setOpen] = useState(false);
   const frozen = useRef<Problem[]>([]);
 
   const computed = useMemo(
-    () => (objects ? scanProblems(objects, graphs, blueprints, assets, variables, uiDocuments, prefabs) : null),
-    [objects, graphs, blueprints, assets, variables, uiDocuments, prefabs],
+    () => (objects ? scanProblems(objects, graphs, blueprints, assets, variables, uiDocuments, prefabs, scenes ?? []) : null),
+    [objects, graphs, blueprints, assets, variables, uiDocuments, prefabs, scenes],
   );
   if (computed) frozen.current = computed;
   const problems = frozen.current;
@@ -266,8 +272,7 @@ export function ProblemsButton() {
                 className="problems-row"
                 onClick={() => {
                   if (problem.objectId) selectObject(problem.objectId);
-                  if (problem.blueprintId) setActiveBlueprint(problem.blueprintId);
-                  if (problem.nodeId) selectGraphNode(problem.nodeId);
+                  revealInteractionProblem(problem);
                   setOpen(false);
                 }}
               >

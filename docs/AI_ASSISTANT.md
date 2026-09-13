@@ -152,3 +152,17 @@ Notes:
 - The relay binds 127.0.0.1 only — these tools mutate the open project; never expose them to the LAN.
 - If two editor windows connect, the newest wins (the relay drops the older socket).
 - The Tauri CSP allows `ws://127.0.0.1:*`/`ws://localhost:*` in `connect-src` for this bridge.
+
+### Guided performance and cloud builds
+
+`performance_assistant` opens/measures/reads/cancels checks and previews/keeps/restores
+settings by suggestion id. Measurements are fresh CPU/frame-pacing evidence on the
+current computer, not GPU timings or guaranteed improvements.
+`build_centre` opens/configures/checks/prepares/reads the Build Centre. A prepared package
+is an immutable review; the user starts its GitHub upload in the desktop UI. Both tools
+belong to the local router's core group and expose compact state in scene snapshots.
+See [Performance Assistant](PERFORMANCE_ASSISTANT.md) and [Build Centre](BUILD_CENTRE.md).
+
+### UI button actions and repair guidance
+
+Use `set_ui_button_action(documentId, elementId, action)` to configure common menu behavior with ordinary Blueprint nodes. Use `get_interaction_problems` outside Play to inspect missing handlers, stopped click connections and missing UI/level targets. `open_ui_logic` accepts an optional `elementId` to select that button’s handler. The scene snapshot reports `buttonAction` and document `logicScope`; see [UI button actions](UI_BUTTON_ACTIONS.md). Level restart retains project variables.

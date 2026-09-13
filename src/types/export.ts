@@ -40,6 +40,8 @@ export interface ExportProfile {
   window: ExportWindowSettings;
   /** Ship the in-game diagnostics overlay and shortcut in development builds only. */
   includeDebugOverlay: boolean;
+  /** Original authored files are retained; these options affect prepared build copies only. */
+  optimization?: { geometry: boolean; textures: boolean; streamAssets: boolean };
 }
 
 export interface ExportSettings {

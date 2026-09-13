@@ -3,6 +3,11 @@ node_modules/
 
 # Build output
 dist/
+dist-player/.player-cache.json
+src-tauri/export-runtime/
+.feather-cache/
+src-tauri/runner/target/
+src-tauri/runner/gen/schemas/
 exports/
 
 # Vite / TypeScript build artifacts
@@ -17,6 +22,7 @@ yarn-error.log*
 *.log
 
 # Editor / OS
+.feather-terminal/
 .DS_Store
 .vscode/
 .idea/

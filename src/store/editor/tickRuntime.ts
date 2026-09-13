@@ -1,3 +1,4 @@
+import { withProjectUILogic } from '../../runtime/uiLogicControllers';
 import type { StoreApi } from 'zustand';
 import type { EditorState } from '../editorStore';
 import {
@@ -34,6 +35,7 @@ import { isRollInvulnerable, meleeComboDamage } from '../../runtime/combatFeel';
 import { DecalKind, addDecal } from '../../runtime/decalBus';
 import { markExec, takeExecHit } from '../../runtime/execTrace';
 import { pushExplosion } from '../../runtime/explosionBus';
+import { clearFractureDebris, updateFractureDebris } from '../../runtime/fractureDebris';
 import { gamepadInput } from '../../runtime/gamepadInput';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../../runtime/mouseLook';
 import { findNavPath } from '../../runtime/navGrid';
@@ -446,6 +448,7 @@ export const applyRuntimeTick = (
       let pendingCinematicId: string | undefined;
       // A Load Scene node fired this frame → switch the active scene at the end of the tick (project vars carry over).
       let pendingSceneId: string | undefined;
+      let pendingHideUIDocumentId: string | undefined;
       // A Set Quality node fired this frame → apply the new scalability preset at the end of the tick.
       let pendingQuality: QualityLevel | undefined;
       // A Set Time Scale node fired this frame → applied at the end of the tick (next frame runs at the new speed).
@@ -477,7 +480,11 @@ export const applyRuntimeTick = (
       const fractureSource = (src: SceneObject | undefined, id: string, origin?: Vector3Tuple) => {
         if (!src || fracturedIds.has(id) || destroyedIds.has(id)) return false;
         fracturedIds.add(id);
-        for (const chunk of makeFractureChunks(src, origin)) spawned.push(chunk);
+        const worldSource = src.parentId
+          ? { ...src, transform: worldTransformOf(activeObjects.map((object) => object.id === id ? src : object), id) }
+          : src;
+        const velocity = nextVelocities[id] ?? state.runtimeVelocities[id] ?? [0, 0, 0];
+        for (const chunk of makeFractureChunks(worldSource, origin, velocity)) spawned.push(chunk);
         destroyedIds.add(id);
         return true;
       };
@@ -2516,9 +2523,9 @@ export const applyRuntimeTick = (
             // Load Scene: request a switch to another scene (next floor/level/menu). Applied once at the end of
             // the tick; stop this chain now since the world is about to be replaced. Only the first request wins.
             if (node.data.nodeKind === 'action.loadScene') {
-              const sceneId = node.data.targetSceneId;
-              if (sceneId && sceneId !== state.activeSceneId && state.scenes.some((scene) => scene.id === sceneId)) {
-                if (!pendingSceneId) pendingSceneId = sceneId;
+              const sceneId = node.data.restartScene ? state.activeSceneId : node.data.targetSceneId;
+              if (sceneId && state.scenes.some((scene) => scene.id === sceneId)) {
+                if (!pendingSceneId) { pendingSceneId = sceneId; pendingHideUIDocumentId = node.data.hideUIDocumentId; }
               }
               return false;
             }
@@ -4686,6 +4693,15 @@ export const applyRuntimeTick = (
           physicsImpulses[o.id] = [Number(kick[0]), Number(kick[1]), Number(kick[2])];
           kickedChunkIds.add(o.id);
         }
+        const initialVelocity = o.variables?.__initialVelocity;
+        if (Array.isArray(initialVelocity) && initialVelocity.length === 3 && initialVelocity.every(Number.isFinite)) {
+          // New bodies start at rest. Convert inherited velocity to momentum and ADD the burst.
+          // A hard setVelocities command would overwrite the kick later in physics.frame.
+          const mass = Math.max(o.physics?.mass ?? 1, 0.001);
+          const impulse = physicsImpulses[o.id] ?? [0, 0, 0];
+          physicsImpulses[o.id] = initialVelocity.map((value, axis) => Number(value) * mass + impulse[axis]) as Vector3Tuple;
+          kickedChunkIds.add(o.id);
+        }
       }
       // Surface FX: bodies overlapping a water volume this frame (drives splash/ripple on first entry),
       // and the new ripple impacts to feed the water shader. Both also collected from the swim-entry block.
@@ -5905,10 +5921,10 @@ export const applyRuntimeTick = (
       let allObjects = [...resolvedObjects, ...spawned];
       for (const id of destroyedIds) allObjects = deleteWithChildren(allObjects, id);
       // Drop the one-shot fracture kick now it's been applied, so chunks aren't re-kicked every frame.
-      if (kickedChunkIds.size) {
+      if (physics && kickedChunkIds.size) {
         allObjects = allObjects.map((o) => {
           if (!kickedChunkIds.has(o.id)) return o;
-          const { __impulse: _used, ...rest } = o.variables ?? {};
+          const { __impulse: _used, __initialVelocity: _velocity, ...rest } = o.variables ?? {};
           return { ...o, variables: rest };
         });
       }
@@ -6026,6 +6042,7 @@ export const applyRuntimeTick = (
           }
         }
       }
+      allObjects = updateFractureDebris(allObjects, delta);
       const remainingObjectIds = new Set(allObjects.map((object) => object.id));
       const attachedOwnerIds = new Set(allObjects.map((object) => object.attachment?.targetObjectId).filter(Boolean) as string[]);
       const remainingResolvedObjects = resolvedObjects.filter((object) => remainingObjectIds.has(object.id));
@@ -6287,7 +6304,7 @@ export const applyRuntimeTick = (
           const snaps = { ...(state.runtimeSceneSnapshots ?? {}) };
           // First visit to the target this session → capture its pristine objects for later revert.
           if (!snaps[targetScene.id]) snaps[targetScene.id] = structuredClone(targetScene.objects);
-          const freshObjects = structuredClone(snaps[targetScene.id]);
+          const freshObjects = withProjectUILogic(structuredClone(snaps[targetScene.id]), state.uiDocuments, state.blueprints);
           // Revert the scene we're leaving back to the clean state it had when first entered.
           const revertedScenes = state.scenes.map((scene) => {
             if (scene.id === targetScene.id) return { ...scene, objects: freshObjects };
@@ -6296,6 +6313,7 @@ export const applyRuntimeTick = (
           });
           startPhysics();
           clearTransformBuffer();
+          clearFractureDebris();
           resetReplayRecorder(freshObjects); // rebuild the replay slot table for the new scene's objects
           clearPerception();
           resetStartedScriptObjects();
@@ -6379,7 +6397,7 @@ export const applyRuntimeTick = (
             runtimeLog: prints.length ? [...state.runtimeLog, ...prints].slice(-100) : state.runtimeLog,
             runtimeNodeErrors: nodeErrorsSnapshot(),
             runtimeVisibleUI: Object.fromEntries(
-              state.uiDocuments.filter((doc) => doc.surface === 'screen' && doc.visibleOnStart).map((doc) => [doc.id, true]),
+              state.uiDocuments.filter((doc) => doc.surface === 'screen' && doc.visibleOnStart && doc.id !== pendingHideUIDocumentId).map((doc) => [doc.id, true]),
             ),
             runtimeUITextOverrides: {},
             runtimeUIVisibleOverrides: {},

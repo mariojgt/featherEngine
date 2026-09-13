@@ -71,9 +71,9 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
   },
   cinematic: {
     slug: 'template-cinematic',
-    title: 'The Summit',
-    description: 'A cloth-and-wind mountain film set with a full cinematic sequence to play back.',
-    tags: ['template', 'world', 'cinematic', 'film'],
+    title: 'Resonance',
+    description: 'A 32-second kinetic hall film: real domino collisions, wind-driven cloth, Lux lighting, a live reactor fracture and eight cinematic shots. Play, replay and edit every cue.',
+    tags: ['template', 'world', 'cinematic', 'film', 'physics', 'lighting'],
     build: async () => (await import('../project/filmModeTemplate')).createFilmModeTemplate(),
   },
   meadows: {

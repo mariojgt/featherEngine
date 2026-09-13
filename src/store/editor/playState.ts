@@ -1,3 +1,4 @@
+import { withProjectUILogic } from '../../runtime/uiLogicControllers';
 import type { EditorState } from '../editorStore';
 
 import {
@@ -15,6 +16,7 @@ import { clearTransformBuffer } from '../../runtime/transformBuffer';
 import { clearReplayRecorder, resetReplayRecorder } from '../../runtime/replayRecorder';
 import { clearPerception } from '../../runtime/aiPerception';
 import { clearVehicleDents } from '../../runtime/vehicleDamageBus';
+import { clearFractureDebris } from '../../runtime/fractureDebris';
 import { clearExplosions } from '../../runtime/explosionBus';
 import { clearDecals } from '../../runtime/decalBus';
 import { clearFoliageInteractors } from '../../three/foliageInteractors';
@@ -37,7 +39,8 @@ export const applySetPlaying = (
       clearImpactAudioCooldown();
       clearNodeErrors();
       if (isPlaying) {
-        const objects = selectActiveObjects(state);
+        const authoredObjects = selectActiveObjects(state);
+        const objects = withProjectUILogic(authoredObjects, state.uiDocuments, state.blueprints);
         const autoplay = state.scenes.find((scene) => scene.id === state.activeSceneId)?.cinematics?.find((cinematic) => cinematic.autoplay);
         // Spin up a fresh Rapier world to own the simulation for this play session.
         startPhysics();
@@ -64,6 +67,7 @@ export const applySetPlaying = (
         }
         return {
           isPlaying,
+          scenes: objects === authoredObjects ? state.scenes : state.scenes.map(scene => scene.id === state.activeSceneId ? { ...scene, objects } : scene),
           isPlayPaused: false,
           playStepFrames: 0,
           runtimeTime: 0,
@@ -168,8 +172,8 @@ export const applySetPlaying = (
           runtimeStarted: false,
           // Full deep clone so Stop fully resets the scene (restores picked-up/destroyed objects, removes
           // spawned projectiles, reverts transforms/materials/instance variables).
-          playSnapshot: { sceneId: state.activeSceneId, objects: structuredClone(objects) },
-          runtimeSceneSnapshots: { [state.activeSceneId]: structuredClone(objects) },
+          playSnapshot: { sceneId: state.activeSceneId, objects: structuredClone(authoredObjects) },
+          runtimeSceneSnapshots: { [state.activeSceneId]: structuredClone(authoredObjects) },
         };
       }
 
@@ -187,6 +191,7 @@ export const applySetPlaying = (
       // Tear the physics world down so the next play session starts clean.
       stopPhysics();
       clearExplosions();
+      clearFractureDebris();
       clearDecals();
       clearTransformBuffer();
       clearReplayRecorder(); // drop the replay ring + any active clip

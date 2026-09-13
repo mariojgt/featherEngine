@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { getPlatform, isDesktop } from '../platform';
-import type { ExportPlatformsReport } from '../platform/types';
+import type { ExportPlatformsReport, ProductionBuildReport } from '../platform/types';
 import { blankProject } from '../project/serialize';
 import { buildGameBundle, embedAssets, mimeForAsset, stripUnusedAssets, type GameBundle } from '../project/exportGame';
 import { verifyGameBundle, type BundleReport } from '../project/verifyBundle';
@@ -251,6 +251,7 @@ interface ProjectState {
   buildProgress: { running: boolean; lines: string[]; status?: 'complete' | 'failed' | 'staged'; output?: string } | null;
   /** Most recent successful production artifact root in this project session. */
   lastProductionOutput: string | null;
+  lastProductionBuild: ProductionBuildReport | null;
   /** A built+verified bundle waiting for the user's go-ahead in the Build Report dialog. */
   pendingExport: { mode: 'game' | 'production'; bundle: GameBundle; report: BundleReport } | null;
   /** Platform-doctor report for the export dialog's platform picker (desktop only). */
@@ -386,14 +387,14 @@ export const useProjectStore = create<ProjectState>()(
         ];
 
         // Desktop: run the full build right here, streaming progress to the overlay.
-        if (platform.isDesktop && platform.buildProduction) {
+        if (platform.buildProduction && (platform.isDesktop || profile.targets.every((target) => target === 'web'))) {
           // Let the user choose where the finished game is written.
           const destination = platform.pickDirectory
             ? await platform.pickDirectory('Choose where to save your game')
             : undefined;
           // A picker that returns null means the user cancelled — don't build.
           if (destination === null) return;
-          set({ buildProgress: { running: true, lines: [...reportLines, 'Preparing build…'] } });
+          set({ lastProductionBuild: null, lastProductionOutput: null, buildProgress: { running: true, lines: [...reportLines, 'Preparing build…'] } });
           try {
             const outDir = await platform.buildProduction(
               {
@@ -411,10 +412,25 @@ export const useProjectStore = create<ProjectState>()(
                 }));
               },
             );
+            let buildReport: ProductionBuildReport | null = null;
+            if (platform.inspectProductionBuild) {
+              try { buildReport = await platform.inspectProductionBuild(outDir); } catch { /* Legacy mobile exports retain their existing report format. */ }
+            }
+            if (buildReport && platform.testProductionBuild) {
+              set((state) => ({ buildProgress: { running: true, lines: [...(state.buildProgress?.lines ?? []), 'Testing the native launch scene…'] } }));
+              try { buildReport = await platform.testProductionBuild(outDir); }
+              catch (error) {
+                // Retain the packaged output so a failed launch can be inspected and retried.
+                buildReport = { ...buildReport, artifacts: buildReport.artifacts.map((artifact) => ({ ...artifact, launchTest: artifact.target === 'web' ? artifact.launchTest : 'failed' as const })) };
+                set((state) => ({ buildProgress: { running: true, lines: [...(state.buildProgress?.lines ?? []), `Launch check failed: ${errorMessage(error)}`] } }));
+              }
+            }
+            const failedLaunch = buildReport?.artifacts.some((artifact) => artifact.launchTest === 'failed');
             set({
-              buildProgress: { running: false, status: 'complete', output: outDir, lines: [...(get().buildProgress?.lines ?? []), '', `Output: ${outDir}`, 'Review build-report.json for built and staged targets. Test your game before sharing it.'] },
+              buildProgress: { running: false, status: failedLaunch ? 'failed' : 'complete', output: outDir, lines: [...(get().buildProgress?.lines ?? []), '', `Output: ${outDir}`, ...(buildReport?.artifacts.map((artifact) => `${artifact.target}: launch test ${artifact.launchTest}`) ?? []), failedLaunch ? 'The launch check failed. Review the game before uploading.' : platform.isDesktop ? 'Build ready. Continue to Steam to choose the beta branch and depots.' : 'Playable web archive downloaded. Upload its contents to a static web host.'] },
               lastProductionOutput: outDir,
-              toast: { kind: 'success', message: `Production export finished → ${outDir}` },
+              lastProductionBuild: buildReport,
+              toast: { kind: failedLaunch ? 'error' : 'success', message: failedLaunch ? `Build saved, but the launch check failed → ${outDir}` : `Production export finished → ${outDir}` },
             });
           } catch (err) {
             const message = errorMessage(err);
@@ -461,6 +477,7 @@ export const useProjectStore = create<ProjectState>()(
         toast: null,
         buildProgress: null,
         lastProductionOutput: null,
+        lastProductionBuild: null,
         pendingExport: null,
         exportPlatforms: null,
         exportPlatformsError: null,
@@ -489,7 +506,7 @@ export const useProjectStore = create<ProjectState>()(
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // starting fresh discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set({ error: errorMessage(error) });
@@ -528,7 +545,7 @@ export const useProjectStore = create<ProjectState>()(
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // opening a project discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set({ error: errorMessage(error) });
@@ -547,7 +564,7 @@ export const useProjectStore = create<ProjectState>()(
             useEditorStore.getState().loadProject(opened.project);
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // opening a project discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set((state) => ({
@@ -610,7 +627,7 @@ export const useProjectStore = create<ProjectState>()(
             const opened = await platform.createProject(name, project);
             if (opened && !platform.isDesktop) await platform.saveProject(opened.dir, project);
             if (!opened) return;
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null });
+            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
             addRecent(opened.dir, opened.name);
             useEditorStore.getState().markClean();
             set({ toast: { kind: 'success', message: opened.dir === 'web' ? 'Project downloaded' : 'Project saved' } });
@@ -869,7 +886,7 @@ export const useProjectStore = create<ProjectState>()(
         useDemo: () => {
           if (blockProjectLifecycleDuringCollaboration()) return;
           clearRecovery();
-          set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)', lastProductionOutput: null });
+          set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)', lastProductionOutput: null, lastProductionBuild: null });
         },
 
         restoreRecovery: (snapshot) => {
@@ -880,13 +897,13 @@ export const useProjectStore = create<ProjectState>()(
           // now that it's live) — the user still needs to Save it to disk/download.
           useEditorStore.setState({ isDirty: true });
           clearRecovery();
-          set({ hasProject: true, projectDir: snapshot.dir, projectName: snapshot.name, lastProductionOutput: null });
+          set({ hasProject: true, projectDir: snapshot.dir, projectName: snapshot.name, lastProductionOutput: null, lastProductionBuild: null });
         },
 
         closeProject: () => {
           if (blockProjectLifecycleDuringCollaboration()) return;
           clearRecovery();
-          set({ hasProject: false, projectDir: null, projectName: 'Untitled Project', lastProductionOutput: null });
+          set({ hasProject: false, projectDir: null, projectName: 'Untitled Project', lastProductionOutput: null, lastProductionBuild: null });
         },
         clearError: () => set({ error: null }),
       };

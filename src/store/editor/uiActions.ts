@@ -208,11 +208,11 @@ export const applyOpenUILogic = (set: SetState, get: GetState, docId: string): s
   // Ensure something runs the graph: a tiny empty "UI Logic" object carrying this blueprint.
   const objects = selectActiveObjects(get());
   const hasController = objects.some((o) => o.script?.blueprintId === blueprintId);
-  if (!hasController) {
+  if (!hasController && doc.logicScope !== 'project') {
     const objectId = get().createObjectWithProps('empty', { name: `${doc.name} UI Logic` });
     get().attachScript(objectId, blueprintId);
   }
-  get().setActiveBlueprint(blueprintId);
+  if (get().activeBlueprintId !== blueprintId) get().setActiveBlueprint(blueprintId);
   return blueprintId;
 };
 

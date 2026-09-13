@@ -30,7 +30,8 @@ export function Player() {
 
   const start = (raw: unknown) => {
     try {
-      const { project, startSceneId } = readGameBundle(raw);
+      const { project, startSceneId, buildProfile } = readGameBundle(raw);
+      document.title = buildProfile.window.title || buildProfile.application.productName;
       // A bundle's launch scene is an export setting and may intentionally differ from the scene that
       // happened to be active when the project snapshot was saved.
       loadProject(project.activeSceneId === startSceneId ? project : { ...project, activeSceneId: startSceneId });

@@ -37,6 +37,8 @@ export interface ProductionBuildRequest {
   targets: ExportTargetId[];
   outDir?: string;
 }
+export interface ProductionArtifact { target: ExportTargetId; directory: string; depotRoot: string; executable?: string; launchTest: 'not-run' | 'passed' | 'failed' }
+export interface ProductionBuildReport { formatVersion: number; buildId: string; sourceHash: string; profile: ExportProfile; artifacts: ProductionArtifact[]; assetReports: Record<string, import('../project/cookAssets').CookReport> }
 
 /** Readiness of the local Steamworks ContentBuilder toolchain. */
 export interface SteamToolReport {
@@ -52,6 +54,7 @@ export interface SteamPublishRequest {
   account: string;
   appId: number;
   depotId: number;
+  additionalDepots?: Array<{ depotId: number; contentRoot: string }>;
   description: string;
   branch?: string;
   preview: boolean;
@@ -62,6 +65,7 @@ export interface SteamPublishResult {
   status: 'previewed' | 'uploaded' | 'live-beta';
   appId: number;
   depotId: number;
+  depotIds?: number[];
   buildId?: string;
   branch?: string;
 }
@@ -204,6 +208,9 @@ export interface Platform {
    * build right now (and what's missing for the rest). Undefined on web.
    */
   checkExportPlatforms?(): Promise<ExportPlatformsReport>;
+  installRunnerPack?(directory: string): Promise<string>;
+  inspectProductionBuild?(directory: string): Promise<ProductionBuildReport>;
+  testProductionBuild?(directory: string): Promise<ProductionBuildReport>;
   /** Desktop only: locate and validate SteamCMD inside a Steamworks SDK installation. */
   checkSteamTools?(sdkPath: string): Promise<SteamToolReport>;
   /** Desktop only: preview or upload one Steam depot build, streaming native progress output. */
@@ -245,6 +252,8 @@ export interface Platform {
    * check their browser's Downloads folder.
    */
   revealFile?(path: string): Promise<void>;
+  /** Authenticated GitHub builds through the locally installed gh CLI. */
+  cloudBuild?(request: import('../project/cloudBuild').CloudRequest): Promise<import('../project/cloudBuild').CloudReply>;
   /** Desktop only: start the local authenticated WebSocket relay and publish it through ngrok. */
   startCollaboration?(request: StartCollaborationRequest): Promise<StartedCollaborationHost>;
   /** Desktop host only: close the relay/tunnel and disconnect its participants. */

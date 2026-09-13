@@ -16,6 +16,7 @@ import type {
 
 import * as THREE from 'three';
 import { Brush, Evaluator, INTERSECTION } from 'three-bvh-csg';
+import { DEFAULT_DEBRIS_LIFETIME, registerFractureDebris } from '../../runtime/fractureDebris';
 import { withParticleDefaults } from '../../runtime/particlePresets';
 import { registerRawGeometry, getModelGeometry } from '../../runtime/meshGeometryCache';
 import { defaultTerrain } from '../../terrain/terrain';
@@ -375,6 +376,8 @@ export const defaultFracture = (): FractureComponent => ({
   strength: 3,
   impactThreshold: 0,
   focusImpact: true,
+  debrisLifetime: DEFAULT_DEBRIS_LIFETIME,
+  inheritVelocity: true,
 });
 
 /** Deterministic PRNG (mulberry32) so a seed reproduces the same break. */
@@ -394,8 +397,6 @@ interface FractureCell {
   min: number[];
   max: number[];
 }
-
-const clampHalf = (v: number) => Math.max(-0.5, Math.min(0.5, v));
 
 /** Even grid of n³ equal cells. */
 const gridCells = (n: number): FractureCell[] => {
@@ -601,13 +602,10 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
   const color = source.renderer?.color ?? '#9aa3b2';
 
   const src = fractureSourceGeometry(source);
-  const focus =
-    origin && cfg.focusImpact
-      ? ([(origin[0] - px) / (sx || 1), (origin[1] - py) / (sy || 1), (origin[2] - pz) / (sz || 1)] as V3)
-      : undefined;
-  const quat = new THREE.Quaternion().setFromEuler(
-    new THREE.Euler(source.transform.rotation[0], source.transform.rotation[1], source.transform.rotation[2], 'XYZ'),
-  );
+  const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(...source.transform.rotation, 'XYZ'));
+  const focus = origin && cfg.focusImpact
+    ? new THREE.Vector3(origin[0] - px, origin[1] - py, origin[2] - pz).applyQuaternion(quat.clone().invert())
+    : undefined;
 
   const evaluator = new Evaluator();
   evaluator.useGroups = false;
@@ -619,16 +617,19 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
   const out: SceneObject[] = [];
   for (const cell of cells) {
     let resultGeo: THREE.BufferGeometry | null = null;
+    const cellGeo = csgGeometry(cell.vertices, cell.indices);
     try {
-      const cellBrush = new Brush(csgGeometry(cell.vertices, cell.indices));
+      const cellBrush = new Brush(cellGeo);
       cellBrush.updateMatrixWorld();
       const result = evaluator.evaluate(sourceBrush, cellBrush, INTERSECTION);
       resultGeo = result.geometry;
     } catch {
       resultGeo = null;
+    } finally {
+      cellGeo.dispose();
     }
     const pos = resultGeo?.getAttribute('position');
-    if (!resultGeo || !pos || pos.count < 3) continue; // cell fell outside the mesh → no piece
+    if (!resultGeo || !pos || pos.count < 3) { resultGeo?.dispose(); continue; }
     // Chunk geometry (mesh-local) → scale to the object's real size.
     const src3 = pos.array as ArrayLike<number>;
     const vertices = new Float32Array(pos.count * 3);
@@ -644,11 +645,16 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
     const indices = idxAttr ? new Uint32Array(idxAttr.array as ArrayLike<number>) : new Uint32Array(pos.count).map((_, i) => i);
 
     const key = `shard_${source.id}_${shardSeq++}`;
+    // Each body is centred on its own piece, so spins and later blasts act locally.
+    for (let i = 0; i < pos.count; i++) {
+      vertices[i * 3] -= cxx; vertices[i * 3 + 1] -= cyy; vertices[i * 3 + 2] -= czz;
+    }
     registerRawGeometry(key, vertices, indices);
-
-    const fx = focus ? focus[0] * sx : 0;
-    const fy = focus ? focus[1] * sy : 0;
-    const fz = focus ? focus[2] * sz : 0;
+    resultGeo.dispose();
+    const offset = new THREE.Vector3(cxx, cyy, czz).applyQuaternion(quat);
+    const fx = focus?.x ?? 0;
+    const fy = focus?.y ?? 0;
+    const fz = focus?.z ?? 0;
     const dir = new THREE.Vector3(focus ? cxx - fx : cxx, focus ? cyy - fy : cyy, focus ? czz - fz : czz).applyQuaternion(quat);
     const len = dir.length() || 1;
 
@@ -656,7 +662,7 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
       id: makeId('shard'),
       name: `${source.name} Chunk`,
       kind: 'cube',
-      transform: { position: [px, py, pz], rotation: [...source.transform.rotation] as Vector3Tuple, scale: [1, 1, 1] },
+      transform: { position: [px + offset.x, py + offset.y, pz + offset.z], rotation: [...source.transform.rotation] as Vector3Tuple, scale: [1, 1, 1] },
       renderer: {
         ...defaultRenderer('cube', color),
         metalness: source.renderer?.metalness ?? 0.1,
@@ -668,6 +674,7 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
       variables: { __impulse: [(dir.x / len) * kick, (dir.y / len) * kick + kick * 0.4, (dir.z / len) * kick] },
     } as SceneObject);
   }
+  src.geometry.dispose();
   return out;
 };
 
@@ -679,7 +686,7 @@ const makeFractureShards = (source: SceneObject, origin: Vector3Tuple | undefine
  * makes pieces fly outward from it. Each piece carries a one-shot kick in `variables.__impulse`
  * (applied once by tickRuntime). The caller destroys the original.
  */
-export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple): SceneObject[] => {
+const createFractureChunks = (source: SceneObject, origin?: Vector3Tuple): SceneObject[] => {
   const cfg = { ...defaultFracture(), ...source.fracture };
   const base = Math.max(2, Math.min(Math.round(cfg.pieces) || 2, 6));
 
@@ -694,10 +701,10 @@ export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple): 
   const [px, py, pz] = source.transform.position;
   const [sx, sy, sz] = source.transform.scale;
   const color = source.renderer?.color ?? '#9aa3b2';
-  const focus =
-    origin && cfg.focusImpact
-      ? [clampHalf((origin[0] - px) / (sx || 1)), clampHalf((origin[1] - py) / (sy || 1)), clampHalf((origin[2] - pz) / (sz || 1))]
-      : undefined;
+  const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(...source.transform.rotation, 'XYZ'));
+  const focus = origin && cfg.focusImpact
+    ? new THREE.Vector3(origin[0] - px, origin[1] - py, origin[2] - pz).applyQuaternion(quat.clone().invert())
+    : undefined;
 
   return gridCells(base).map((c) => {
     const cx = (c.min[0] + c.max[0]) / 2;
@@ -706,24 +713,36 @@ export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple): 
     const hx = c.max[0] - c.min[0];
     const hy = c.max[1] - c.min[1];
     const hz = c.max[2] - c.min[2];
-    const dirX = focus ? cx - focus[0] : cx;
-    const dirY = focus ? cy - focus[1] : cy;
-    const dirZ = focus ? cz - focus[2] : cz;
-    const len = Math.hypot(dirX, dirY, dirZ) || 1;
+    const offset = new THREE.Vector3(cx * sx, cy * sy, cz * sz).applyQuaternion(quat);
+    const direction = new THREE.Vector3(cx * sx - (focus?.x ?? 0), cy * sy - (focus?.y ?? 0), cz * sz - (focus?.z ?? 0))
+      .applyQuaternion(quat).normalize();
     return {
       id: makeId('chunk'),
       name: `${source.name} Chunk`,
       kind: 'cube',
       transform: {
-        position: [px + cx * sx, py + cy * sy, pz + cz * sz],
-        rotation: [0, 0, 0],
-        scale: [Math.max(hx * sx, 0.04), Math.max(hy * sy, 0.04), Math.max(hz * sz, 0.04)],
+        position: [px + offset.x, py + offset.y, pz + offset.z],
+        rotation: [...source.transform.rotation] as Vector3Tuple,
+        scale: [Math.max(Math.abs(hx * sx), 0.04), Math.max(Math.abs(hy * sy), 0.04), Math.max(Math.abs(hz * sz), 0.04)],
       },
       renderer: { ...defaultRenderer('cube', color), metalness: source.renderer?.metalness ?? 0.1, roughness: source.renderer?.roughness ?? 0.7 },
       physics: { ...defaultPhysics('dynamic', 'box'), enabled: true },
-      variables: { __impulse: [(dirX / len) * kick, (dirY / len) * kick + kick * 0.4, (dirZ / len) * kick] },
+      variables: { __impulse: [direction.x * kick, direction.y * kick + kick * 0.4, direction.z * kick] },
     };
   });
+};
+
+/** Stick Hero-style momentum hand-off and bounded lifetime for generated debris. */
+export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple, velocity: Vector3Tuple = [0, 0, 0]): SceneObject[] => {
+  const chunks = createFractureChunks(source, origin);
+  for (const chunk of chunks) {
+    if (source.fracture?.inheritVelocity !== false && velocity.every(Number.isFinite)) {
+      chunk.variables = { ...chunk.variables, __initialVelocity: [...velocity] as Vector3Tuple };
+      if (Math.hypot(...velocity) >= 10 && chunk.physics) chunk.physics.ccd = true;
+    }
+    registerFractureDebris(chunk, source.fracture?.debrisLifetime);
+  }
+  return chunks;
 };
 
 /** A runtime-spawned emitter that references a particle-system asset (Spawn Particle System node). */

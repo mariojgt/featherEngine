@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useThree } from '@react-three/fiber';
 import { useEditorStore } from '../store/editorStore';
 import { ImpactParticles } from './ImpactParticles';
+import { prewarmPrograms } from './prewarmPrograms';
 
 /**
  * Shader pre-warm: the single biggest source of mid-game HITCHES is three.js compiling a shader
@@ -9,7 +10,7 @@ import { ImpactParticles } from './ImpactParticles';
  * lands as a 50–200ms stall. When Play starts (and again after an auto-quality step, which swaps
  * shader configurations) this:
  *  1. mounts ONE of each runtime effect far below the world, so their materials exist in the scene;
- *  2. calls `gl.compileAsync(scene, camera)` — WebGL parallel shader compilation off the hot path;
+ *  2. starts WebGL parallel shader compilation with a cancellable readiness wait;
  *  3. unmounts the warm-up effects when compilation settles.
  * Net effect: programs are ready BEFORE gameplay needs them, instead of compiling on first impact.
  */
@@ -23,24 +24,22 @@ export function ShaderPrewarm() {
     if (!isPlaying) return;
     let cancelled = false;
     setWarming(true);
-    // React may not commit the newly-mounted warm-up effects before the first RAF under a busy/headless
-    // renderer. Give it one RAF to commit and a second to populate Three's material/program records;
-    // compileAsync otherwise polls a material whose currentProgram is still undefined and throws outside
-    // its Promise (so the catch below cannot intercept it).
+    // Let React commit the warm-up meshes and give Three one frame to populate their program records.
+    // The cancellable wait also handles scene changes or disposal while the driver compiles them.
     let compileRaf = 0;
+    let cancelCompile: (() => void) | undefined;
     const mountRaf = requestAnimationFrame(() => {
       compileRaf = requestAnimationFrame(() => {
-        Promise.resolve(gl.compileAsync(scene, camera))
-          .catch(() => undefined) // compile failures fall back to lazy compilation — never break Play
-          .finally(() => {
-            if (!cancelled) setWarming(false);
-          });
+        cancelCompile = prewarmPrograms(gl, scene, camera, () => {
+          if (!cancelled) setWarming(false);
+        });
       });
     });
     return () => {
       cancelled = true;
       cancelAnimationFrame(mountRaf);
       cancelAnimationFrame(compileRaf);
+      cancelCompile?.();
       setWarming(false);
     };
   }, [isPlaying, quality, gl, scene, camera]);

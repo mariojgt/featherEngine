@@ -81,6 +81,8 @@ export interface AssetSource {
 }
 
 export interface AssetItem {
+  /** A prepared game file, resolved relative to the exported player's index.html. */
+  delivery?: { path: string; sha256: string; bytes: number };
   modelInspection?: import('../three/inspectModel').ModelInspection;
   /** Original model retained when an optimized copy is imported. */
   originalAssetId?: string;
@@ -339,6 +341,8 @@ export interface UIElement {
   bindings: UIBinding[];
   /** Button only — fires this custom runtime event on click (consumed by event.custom nodes). */
   onClickEvent?: string;
+  /** Editable preset ownership. Runtime execution uses its ordinary Blueprint graph. */
+  clickAction?: import('../ui/buttonActions').UIButtonActionBinding;
   /**
    * Interactive kinds (input/toggle/slider/dropdown) read AND write this project variable BY NAME
    * during Play (two-way binding): the control shows the variable's live value and edits push back
@@ -403,6 +407,8 @@ export interface UIDocument {
   visibleOnStart: boolean;
   /** Blueprint holding this UI's behaviour nodes (run by an auto-created "UI Logic" object). */
   logicBlueprintId?: string;
+  /** Project scope adds a transient controller in every played scene. Legacy docs remain scene-scoped. */
+  logicScope?: 'scene' | 'project';
   folderId?: string;
   createdAt: number;
 }

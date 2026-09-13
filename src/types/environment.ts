@@ -132,11 +132,25 @@ export type RenderPresetId =
 
 export type SkyMode = 'color' | 'procedural' | 'image';
 
-/** Lux 1.0: a budgeted local radiance cache for WebGL, shared by editor and exported games. */
+/** A world-space room. Bounds clip its lighting; overlapping rooms blend within their edges. */
+export interface LuxRoom {
+  id: string;
+  name: string;
+  center: Vector3Tuple;
+  size: Vector3Tuple;
+  /** Omit to place the capture automatically at the room centre. */
+  capturePosition?: Vector3Tuple;
+  blendDistance: number;
+}
+
+/** Budgeted local radiance caches for WebGL, shared by editor and exported games. */
 export interface LuxSettings {
   enabled: boolean;
   quality: 'auto' | 'performance' | 'balanced' | 'cinematic';
-  mode: 'camera' | 'fixed';
+  mode: 'camera' | 'fixed' | 'rooms';
+  rooms: LuxRoom[];
+  /** Capture depth as well as radiance to reject lighting behind room geometry. */
+  roomOcclusion: boolean;
   position: Vector3Tuple;
   radius: number;
   indirectIntensity: number;

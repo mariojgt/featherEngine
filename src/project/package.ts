@@ -1,3 +1,4 @@
+import { ownedButtonGraph, buttonGraphSignature, visitUIElements } from '../ui/buttonActions';
 import { evalExpression } from '../ui/expression';
 import { validatePackageStructure } from './packageValidation';
 import {
@@ -170,6 +171,7 @@ function scanGraphNodeRefs(
     add.variable(data.variableId);
     add.dataAsset(data.tableId);
     add.uiDocument(data.documentId);
+    add.uiDocument(data.hideUIDocumentId);
   }
 }
 
@@ -497,6 +499,14 @@ export function remapPackageForImport(
   existingAssets: AssetItem[] = [],
 ): RemapResult {
   const c = structuredClone(pkg.content) as PackageContent;
+  // Private generated click events must not collide when the same UI kit is imported twice.
+  const clickEvents = new Map<string, string>();
+  const ownedButtons = new Set<UIElement>();
+  for (const doc of c.uiDocuments) visitUIElements(doc.root, element => {
+    if (element.onClickEvent?.startsWith('feather.ui.') && !clickEvents.has(element.onClickEvent.toLowerCase())) clickEvents.set(element.onClickEvent.toLowerCase(), `feather.ui.${newId('click')}`);
+    if (ownedButtonGraph(doc, element, c.blueprints, c.graphs)) ownedButtons.add(element);
+  });
+  const remapClickEvent = (name?: string) => name ? clickEvents.get(name.toLowerCase()) ?? name : name;
 
   // 1. Allocate fresh top-level ids for everything we will actually add.
   const maps = {
@@ -721,6 +731,8 @@ export function remapPackageForImport(
       if (d.variableId) d.variableId = remap(maps.variable, d.variableId);
       if (d.tableId) d.tableId = remap(maps.dataAsset, d.tableId);
       if (d.documentId) d.documentId = remap(maps.uiDocument, d.documentId);
+      if (d.hideUIDocumentId) d.hideUIDocumentId = remap(maps.uiDocument, d.hideUIDocumentId);
+      if (d.eventName) d.eventName = remapClickEvent(d.eventName);
       if (d.targetObjectId) d.targetObjectId = remap(maps.object, d.targetObjectId);
       if (d.otherObjectId) d.otherObjectId = remap(maps.object, d.otherObjectId);
       if (d.projectileTemplateId) d.projectileTemplateId = remap(maps.object, d.projectileTemplateId);
@@ -737,6 +749,17 @@ export function remapPackageForImport(
   const rewriteUIElement = (element: UIElement) => {
     element.id = remap(maps.uiElement, element.id) ?? newId('uiel');
     element.assetId = remap(maps.asset, element.assetId);
+    element.onClickEvent = remapClickEvent(element.onClickEvent);
+    if (element.clickAction) {
+      const binding = element.clickAction;
+      if (!ownedButtons.has(element)) element.clickAction = undefined;
+      else {
+        binding.blueprintId = remap(maps.blueprint, binding.blueprintId)!;
+        binding.eventName = remapClickEvent(binding.eventName)!;
+        if ('documentId' in binding.action) binding.action.documentId = remap(maps.uiDocument, binding.action.documentId)!;
+        if (binding.action.kind === 'loadScene') binding.action.sceneId = maps.scene.get(binding.action.sceneId) ?? '';
+      }
+    }
     // Component instances must follow their document to its new id, or the import renders a
     // "Missing component" placeholder where the widget should be.
     element.componentId = remap(maps.uiDocument, element.componentId);
@@ -921,6 +944,12 @@ export function remapPackageForImport(
     url: undefined,
     folderId: intoFolder(asset.folderId),
   }));
+
+  for (const doc of c.uiDocuments) visitUIElements(doc.root, element => {
+    if (!element.clickAction) return;
+    const bp = c.blueprints.find(b => b.id === element.clickAction!.blueprintId), graph = c.graphs.find(g => g.id === bp?.graphId);
+    if (graph) element.clickAction.signature = buttonGraphSignature(graph, element.clickAction.nodeIds);
+  });
 
   // Only emit the skeletons we actually imported (deduped ones reuse an existing rig).
   c.skeletons = importedSkeletons;

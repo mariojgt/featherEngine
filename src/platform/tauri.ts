@@ -298,6 +298,14 @@ export const tauriPlatform: Platform = {
   },
 
   async buildProduction(request, onProgress) {
+    const { cookGameAssets } = await import('../project/cookAssets');
+    const { browserCookServices } = await import('../project/browserBuild');
+    const bundle = JSON.parse(request.bundleJson);
+    const variants: Record<string, string> = {}, assetReports: Record<string, unknown> = {};
+    for (const target of request.targets) {
+      const cooked = await cookGameAssets(bundle, target, browserCookServices(onProgress));
+      variants[target] = JSON.stringify(cooked.bundle); assetReports[target] = cooked.report;
+    }
     const unlisten = await listen<string>('production-build-progress', (event) =>
       onProgress(event.payload),
     );
@@ -307,6 +315,7 @@ export const tauriPlatform: Platform = {
         profileJson: JSON.stringify(request.profile),
         targets: request.targets,
         outDir: request.outDir,
+        variants, assetReports,
       });
     } finally {
       unlisten();
@@ -317,6 +326,18 @@ export const tauriPlatform: Platform = {
     const raw = await invoke<string>('check_export_platforms');
     return JSON.parse(raw);
   },
+  async installRunnerPack(directory) { return invoke<string>('install_runner_pack', { directory }); },
+  async cloudBuild(request) {
+    if (!canUseHostOnlyFeatures()) throw new Error('Only the collaboration host can manage cloud builds.');
+    if (request.action === 'download') {
+      const directory = await open({ title: 'Collect cloud build artifacts', directory: true, multiple: false });
+      if (!directory) return { message: 'Download cancelled.' };
+      return invoke('cloud_build', { request: { ...request, directory } });
+    }
+    return invoke('cloud_build', { request });
+  },
+  async inspectProductionBuild(directory) { return invoke('inspect_production_build', { directory }); },
+  async testProductionBuild(directory) { return invoke('test_production_build', { directory }); },
 
   async checkSteamTools(sdkPath) {
     return invoke<SteamToolReport>('check_steam_tools', { sdkPath });

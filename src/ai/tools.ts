@@ -1,3 +1,8 @@
+import { scanInteractionProblems } from '../ui/interactionProblems';
+import { showUIButtonLogic } from '../components/interactionNavigation';
+import { usePerformanceAssistantStore } from '../store/performanceAssistantStore';
+import { useBuildCentreStore } from '../store/buildCentreStore';
+import { performanceSuggestions } from '../performance/assistant';
 import { CHARACTER_MOVEMENT_PRESETS } from '../runtime/characterPresets';
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
@@ -14,6 +19,8 @@ import { usePluginStore } from '../store/pluginStore';
 import { AVAILABLE_PLUGINS } from '../extensions/availablePlugins';
 import { STYLIZED_TREE_PRESETS } from '../tree/stylizedPresets';
 import { getPlatform } from '../platform';
+import { activeExportProfile, validateExportProfile } from '../project/exportProfiles';
+import { DEFAULT_COOK_OPTIONS } from '../project/cookAssets';
 import { captureViewportScreenshot } from '../runtime/viewportCaptureBridge';
 import type {
   ColliderType,
@@ -154,7 +161,15 @@ const environmentPatchSchema = z.object({
   lux: z.object({
     enabled: z.boolean().optional(),
     quality: z.enum(['auto', 'performance', 'balanced', 'cinematic']).optional(),
-    mode: z.enum(['camera', 'fixed']).optional(),
+    mode: z.enum(['camera', 'fixed', 'rooms']).optional(),
+    rooms: z.array(z.object({
+      id: z.string().min(1).max(100), name: z.string().min(1).max(100),
+      center: z.tuple([z.number(), z.number(), z.number()]),
+      size: z.tuple([z.number().min(0.5).max(200), z.number().min(0.5).max(200), z.number().min(0.5).max(200)]),
+      capturePosition: z.tuple([z.number(), z.number(), z.number()]).optional(),
+      blendDistance: z.number().min(0.01).max(100),
+    })).max(4).optional().describe('World-space room bounds; capture position defaults to the centre. Replace the room list explicitly.'),
+    roomOcclusion: z.boolean().optional(),
     position: z.tuple([z.number(), z.number(), z.number()]).optional(),
     radius: z.number().min(2).max(200).optional(),
     indirectIntensity: z.number().min(0).max(3).optional(),
@@ -165,7 +180,7 @@ const environmentPatchSchema = z.object({
     smoothing: z.number().min(0).max(2).optional(),
     refreshNonce: z.number().int().min(0).optional(),
     debug: z.boolean().optional(),
-  }).optional().describe('Lux 1.0 local dynamic indirect light and reflections. Opt in with enabled:true. Budgeted cubemap/SH cache, not hardware ray tracing. Best in one room; use fixed mode with a position inside it. Low engine quality suspends Lux.'),
+  }).optional().describe('Lux 2.0 dynamic indirect lighting and reflections. Rooms mode supports up to four bounded, blended captures with depth-based wall checks. Position captures in empty space. All rooms share one face per frame. Low engine quality suspends Lux.'),
   skyMode: z.enum(['color', 'procedural', 'image']).optional(),
   backgroundColor: z.string().optional().describe('Flat/fallback background hex color.'),
   skyTopColor: z.string().optional().describe('Procedural sky zenith hex color.'),
@@ -2511,6 +2526,8 @@ const rawEngineTools = {
       strength: z.number().min(0).optional().describe('Burst force on the pieces (default 3).'),
       impactThreshold: z.number().min(0).optional().describe('Hit speed (units/sec) that auto-shatters on contact; 0 = only on death / Fracture node.'),
       focusImpact: z.boolean().optional().describe('Make pieces smaller near the hit point and bigger away (radial).'),
+      debrisLifetime: z.number().min(0.1).max(120).optional().describe('Seconds before debris is removed (default 12). Oldest pieces are recycled above 256 live fracture pieces.'),
+      inheritVelocity: z.boolean().optional().describe('Carry the source body velocity into its fragments (default true).'),
     }),
     execute: async ({ id, ...patch }) => {
       const object = findObject(id);
@@ -3321,11 +3338,11 @@ const rawEngineTools = {
 
   create_film_mode_template: tool({
     description:
-      'Build the Film Mode cinematic template: THE SUMMIT — a self-running 32s cold-dawn opening that doubles as a tour of the cinematic system AND the cloth/wind/volumetric stack, with orchestral music + SFX and a neon FEATHER ENGINE wordmark reveal. Builds a mountain peak above a sea of clouds from plain primitives: a summit plateau + ascending ridge (slab tops match the hero\'s walk keys), a widening mountain mass dropping into cloud-sea dust emitters, distant silhouette peaks for parallax, cracked paving + rubble, and a dark monolith with 5 carved rune glyphs + a full-height core seam (cold cyan emissive, all dark at start). The wind story: THREE ridge flags (left-edge-pinned cloth on poles), TWO hanging summit banners (top-edge-pinned on crossbar frames) and a cape pinned to the hero — every sheet a real ClothComponent with per-cloth wind [0,0,0], so the ONE global scene wind ([2.2,0,5.2] + turbulence 0.55) is the only thing moving them. Volumetric height fog forms the cloud sea and the low dawn sun (elevation 7) drives god-ray in-scattering (quality High). The hero is the bundled UAL rig (idle/walk model children under one Hero empty, swapped by visibility beats; primitive fallback). The 32s autoplay cinematic: a macro rack-focus opening ON RIPPLING CLOTH, a wide establishing push, a follow-rig ascent shot past the streaming flags, an arrival low shot, a crane up the monolith as runes ignite bottom-up (material tracks), a slow keyframed orbit while the core seam pulse-overloads, a tightening push-in — then at t=24 (the music hit) a white-cyan fadeDip flash + the monolith visibility-swaps to 9 keyframed debris shards + explosion/sparks bursts + an expanding shockwave disc + violent shake, and the 51 wordmark strokes fly in from deterministic scattered offsets on per-stroke transform tracks, snap into the logo, and do the per-stroke neon flicker ignition under a settling reveal crane. Imports audio from public/templates/fall/ + monolith/ (fall_music.wav 32s bed whose hit lands on the shatter, wind_rush, portal_approach swell, lightning_crack + awakening_impact shatter, arrival_chime). Film-style text overlay cards ride the ascent; restrained cool grade + 2.39 letterbox with light motion blur/grain/vignette so the scene stays readable. Final fade-out + cinematic_finished event. Returns cinematicId.',
+      'Build RESONANCE, the built-in 32-second cinematic showcase: an editable brass-and-stone kinetic hall, four real wind-driven cloth banners, a heavy ball and 12 Rapier dominoes, three rotating gyroscope rings, Lux local lighting and reflections, atmospheric fog and staged emissive/light cues. Eight camera shots lead into a real 32-piece reactor fracture on the music hit at 24 seconds. A Blueprint slows physics to quarter speed while a reciprocal cinematic timeDilation keeps camera and score in real time. The final frame holds behind an editable Replay film button; R also restarts the entire authored scene. Six optional bundled audio cues, named markers and clearly laid-out Physics & replay cues Blueprint. No external models or baked video. Returns cinematicId. Scrubbing previews cameras/materials; use Play from the start to see the physics and event-driven fracture.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createFilmModeTemplate();
-      return id ? `Created "The Summit" cinematic with cinematicId ${id}. Press Play to watch the 32s mountain-peak opening — cloth banners + cape riding one global wind, dawn god rays, the monolith rune overload, and the t=24 shatter that converges into the wordmark — with synced orchestral music + SFX. Open the Cinematic panel to scrub the beat markers (ascent, runes wake, overload, shatter, reveal), and use Export WebM or Export MP4 (lazy ffmpeg.wasm transcode) to render the sequence to disk.` : `Couldn't build the Film Mode template.`;
+      return id ? `Created "Resonance" with cinematicId ${id}. Press Play for the 32-second kinetic hall film: wind-driven cloth, real domino collisions, Lux lighting and a live reactor fracture at 24 seconds. Replay film or R resets the simulation. Open the Cinematic panel for eight named shots and beat markers; open the Resonance Physics & replay cues Blueprint to edit the event-driven physics. Scrubbing previews the edit; play from the start for the full simulation.` : `Couldn't build the Film Mode template.`;
     },
   }),
 
@@ -5252,13 +5269,44 @@ const rawEngineTools = {
     },
   }),
 
+  set_ui_button_action: tool({
+    description: 'Choose what a UI button does without manual wiring. Creates ordinary editable Blueprint nodes that run in every level. Preserves hand-edited or shared handlers. Stop Play first.',
+    inputSchema: z.object({
+      documentId: z.string(), elementId: z.string(),
+      action: z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('none') }),
+        z.object({ kind: z.literal('customEvent'), eventName: z.string().min(1) }),
+        z.object({ kind: z.literal('loadScene'), sceneId: z.string(), hideCurrent: z.boolean().optional() }),
+        z.object({ kind: z.literal('restartScene') }),
+        z.object({ kind: z.literal('showUI'), documentId: z.string(), hideCurrent: z.boolean().optional() }),
+        z.object({ kind: z.literal('toggleUI'), documentId: z.string(), hideCurrent: z.boolean().optional() }),
+        z.object({ kind: z.literal('hideUI'), documentId: z.string() }),
+        z.object({ kind: z.literal('resumeGame') }),
+        z.object({ kind: z.literal('pauseGame'), documentId: z.string() }),
+      ]),
+    }),
+    execute: async ({ documentId, elementId, action }) => store().setUIButtonAction(documentId, elementId, action),
+  }),
+
+  get_interaction_problems: tool({
+    description: 'Inspect button listeners, stopped click connections, missing screens/elements and level targets. Returns ids for opening the offending button or node. Run outside Play.',
+    inputSchema: z.object({ documentId: z.string().optional(), blueprintId: z.string().optional() }),
+    execute: async ({ documentId, blueprintId }) => {
+      const state = store();
+      if (state.isPlaying) return { error: 'Stop Play to inspect authored interactions.' };
+      return scanInteractionProblems(selectActiveObjects(state), state.graphs, state.blueprints, state.uiDocuments, state.scenes).filter(p => (!documentId || p.uiDocumentId === documentId) && (!blueprintId || p.blueprintId === blueprintId));
+    },
+  }),
+
   open_ui_logic: tool({
-    description:
-      "Get/create the Blueprint that runs a UI document's behavior. Returns blueprintId for add_node/connect_nodes.",
-    inputSchema: z.object({ documentId: z.string() }),
-    execute: async ({ documentId }) => {
-      if (!findUIDocument(documentId)) return `No UI document with id ${documentId}.`;
-      const blueprintId = store().openUILogic(documentId);
+    description: "Open a UI document's Blueprint. With elementId, select the button's click handler and reveal its logic.",
+    inputSchema: z.object({ documentId: z.string(), elementId: z.string().optional() }),
+    execute: async ({ documentId, elementId }) => {
+      const doc = findUIDocument(documentId);
+      if (!doc) return `No UI document with id ${documentId}.`;
+      const element = elementId ? findUIElement(doc.root, elementId) : undefined;
+      if (elementId && !element) return `No UI element with id ${elementId}.`;
+      const blueprintId = showUIButtonLogic(documentId, element?.onClickEvent);
       return `UI logic blueprint is ${blueprintId}. Add nodes to it with add_node using blueprintId ${blueprintId}.`;
     },
   }),
@@ -5853,6 +5901,8 @@ const rawEngineTools = {
       randomInteger: z.boolean().optional().describe('Random: round to a whole number (Max inclusive) for dice/index rolls.'),
       loopCount: z.number().int().optional().describe('For Loop: how many times to fire the Body output. Default 4, capped at 10000.'),
       targetSceneId: z.string().optional().describe('Load Scene: id of the scene to switch to during Play.'),
+      restartScene: z.boolean().optional().describe('Load Scene: reload the CURRENT level; project variables persist.'),
+      hideUIDocumentId: z.string().optional().describe('Load Scene: close this screen after the level loads.'),
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1 to add to the player camera (fades automatically).'),
       explodeRadius: z.number().optional().describe('Explode: blast radius in world units.'),
       explodeForce: z.number().optional().describe('Explode: outward physics impulse that flings nearby dynamic bodies (0 = damage/FX only).'),
@@ -5933,6 +5983,8 @@ const rawEngineTools = {
       randomInteger,
       loopCount,
       targetSceneId,
+      restartScene,
+      hideUIDocumentId,
       projectileSpread,
       shakeAmount,
       explodeRadius,
@@ -6015,6 +6067,8 @@ const rawEngineTools = {
         randomInteger,
         loopCount,
         targetSceneId,
+        restartScene,
+        hideUIDocumentId,
         projectileSpread,
         shakeAmount,
         explodeRadius,
@@ -6138,6 +6192,8 @@ const rawEngineTools = {
       randomInteger: z.boolean().optional().describe('Random: whole-number mode (Max inclusive).'),
       loopCount: z.number().int().optional().describe('For Loop: Body iteration count (capped 10000).'),
       targetSceneId: z.string().optional().describe('Load Scene: scene id to switch to during Play.'),
+      restartScene: z.boolean().optional().describe('Load Scene: reload the CURRENT level; project variables persist.'),
+      hideUIDocumentId: z.string().optional().describe('Load Scene: close this screen after the level loads.'),
       projectileSpread: z.number().optional().describe('Spawn Projectile: firing-cone half-angle in degrees.'),
       shakeAmount: z.number().optional().describe('Camera Shake: trauma 0..1.'),
       explodeRadius: z.number().optional().describe('Explode: blast radius.'),
@@ -6302,6 +6358,35 @@ const rawEngineTools = {
     },
   }),
 
+  performance_assistant: tool({
+    description: 'Open, start, cancel or inspect a guided performance check. measure starts Play, holds automatic quality, warms up 2 seconds, records 10 seconds of fresh frames, then stops Play. Measurements are for this computer; CPU render submission is not GPU time. Preview candidate changes by suggestion id, measure again, then keep or restore. Settings changes only work outside Play.',
+    inputSchema: z.object({ action: z.enum(['open', 'measure', 'status', 'cancel', 'preview', 'keep', 'restore']), targetFps: z.union([z.literal(30), z.literal(60), z.literal(120)]).optional(), suggestionId: z.string().optional() }),
+    execute: async ({ action, targetFps, suggestionId }) => {
+      const assistant = usePerformanceAssistantStore.getState();
+      if (action === 'open') assistant.show();
+      if (action === 'measure') assistant.measure(targetFps);
+      if (action === 'cancel') assistant.cancel();
+      if (action === 'preview') { if (!suggestionId) return 'Pass a suggestionId from the measurement report.'; assistant.previewFix(suggestionId); }
+      if (action === 'keep') assistant.keepFix();
+      if (action === 'restore') assistant.restoreFix();
+      const state = usePerformanceAssistantStore.getState();
+      return JSON.stringify({ recording: state.recording, remaining: state.remaining, report: state.report, suggestions: state.report ? performanceSuggestions(state.report) : [], preview: state.preview, error: state.error });
+    },
+  }),
+  build_centre: tool({
+    description: 'Open Build Centre, configure or check a GitHub repository/engine branch, prepare a reviewed immutable game package, or read cloud build history. The desktop UI lets the user upload the reviewed package, start native builds, retry, cancel, collect artifacts and remove input drafts. This tool does not upload or start remote jobs. Local build uses export_production.',
+    inputSchema: z.object({ action: z.enum(['open', 'configure', 'check', 'prepare', 'status']), repository: z.string().optional(), ref: z.string().optional() }),
+    execute: async ({ action, repository, ref }) => {
+      const centre = useBuildCentreStore.getState();
+      if (action === 'open') centre.show();
+      if (action === 'configure') centre.configure({ repository: repository ?? centre.setup.repository, ref: ref ?? centre.setup.ref });
+      if (action === 'check') await centre.check();
+      if (action === 'prepare') { await centre.prepare(); centre.show(); }
+      const state = useBuildCentreStore.getState();
+      return JSON.stringify({ setup: state.setup, checked: state.checked, busy: state.busy, prepared: state.prepared ? { name: state.prepared.name, bytes: state.prepared.bytes, warnings: state.prepared.warnings, commit: state.prepared.commit } : null, jobs: state.jobs.slice(0, 3), error: state.error });
+    },
+  }),
+
   export_game: tool({
     description:
       'Export the whole project as a standalone game bundle (game.json) that the engine\'s player runtime runs. Downloads the file on web, or prompts for a save location on desktop. Use when the user wants to ship/build/export the final game. Run the standalone player with `npm run build:player`.',
@@ -6314,9 +6399,36 @@ const rawEngineTools = {
     },
   }),
 
+  configure_build_profile: tool({
+    description: 'Update the active saved build profile. Preparation preserves originals and caches platform variants. Texture preparation is opt-in: 4096px desktop, 2048px web, 1024px mobile. Configures a build without launching or publishing it.',
+    inputSchema: z.object({
+      targets: z.array(z.enum(['web', 'windows', 'macos', 'linux', 'android', 'ios'])).min(1).optional(),
+      startSceneId: z.string().optional(), configuration: z.enum(['debug', 'release']).optional(),
+      application: z.object({ productName: z.string().optional(), identifier: z.string().optional(), version: z.string().optional(), buildNumber: z.number().int().positive().optional() }).optional(),
+      optimization: z.object({ geometry: z.boolean().optional(), textures: z.boolean().optional(), streamAssets: z.boolean().optional() }).optional(),
+    }),
+    execute: async ({ targets, startSceneId, configuration, application, optimization }) => {
+      const state = useEditorStore.getState(), current = activeExportProfile(state.exportSettings);
+      const profile = { ...current, ...(targets ? { targets } : {}), ...(startSceneId ? { startSceneId } : {}), ...(configuration ? { configuration } : {}), application: { ...current.application, ...application }, optimization: { ...DEFAULT_COOK_OPTIONS, ...current.optimization, ...optimization } };
+      const errors = validateExportProfile(profile, state.scenes.map((scene) => scene.id));
+      if (errors.length) return `Build profile unchanged: ${errors.join('; ')}`;
+      state.updateExportProfile(profile); return JSON.stringify(profile);
+    },
+  }),
+  get_build_status: tool({
+    description: 'Read build progress and the last packaging report, including exact game folders, launch checks and per-target asset cache/size reports.',
+    inputSchema: z.object({}),
+    execute: async () => { const state = useProjectStore.getState(); return JSON.stringify({ progress: state.buildProgress, output: state.lastProductionOutput, build: state.lastProductionBuild }); },
+  }),
+  open_steam_publisher: tool({
+    description: 'Open Steam publishing with the last native build folders selected. The user maps platforms to depots, reviews launch checks and chooses preview or beta upload. This tool never uploads files or releases a store page.',
+    inputSchema: z.object({}),
+    execute: async () => { window.dispatchEvent(new Event('feather:publish-build')); return 'Steam publishing opened.'; },
+  }),
+
   export_production: tool({
     description:
-      'Export the game to PRODUCTION: opens the Build Report dialog with a PLATFORM PICKER (Web always included + checkboxes for this desktop OS, Android and iOS when their toolchains are installed; the other desktop OSes build via the bundled GitHub Actions workflow "Export Desktop Installers"). The user reviews contents, ticks platforms and confirms; the build then runs with live progress (a few minutes) and writes <slug>-web/, <slug>-native/, <slug>-android/ or <slug>-ios/ into the chosen folder. On web it instead downloads game.json to finish with `npm run export:production` (or export:android / export:ios). Use when the user wants a final shippable/playable build.',
+      'Open the production Build Report. Web exports download a complete playable archive. The installed desktop editor packages Web and native games from prebuilt runtimes, prepares cached assets per target, and runs the local native launch check. Additional desktop runtimes can be installed as runner packs. Mobile installers/signing use the source/CI toolchain. After a desktop build, open_steam_publisher connects its exact game folders to Steam beta publishing. This opens the review dialog; it does not complete a build by itself.',
     inputSchema: z.object({}),
     execute: async () => {
       if (!useProjectStore.getState().hasProject) return 'No project is open to export.';
@@ -6330,7 +6442,7 @@ const rawEngineTools = {
 
   list_export_platforms: tool({
     description:
-      'Report which export platforms this machine can build RIGHT NOW (Web, Windows, macOS, Linux, Android, iOS) and exactly what is missing for the rest (e.g. Android SDK, CocoaPods, Rust mobile targets — each with its install command). Desktop editor only; on the web editor there is no local toolchain to inspect. Use when the user asks "can I export to X?", "why is Android greyed out?", or wants to set up mobile/desktop builds.',
+      'Report installed desktop/Web runtime availability and missing matching platform/CPU runner packs. Source/mobile environments report SDK toolchain setup. Use when the user asks which platforms can be built or why setup is needed.',
     inputSchema: z.object({}),
     execute: async () => {
       const platform = await getPlatform();

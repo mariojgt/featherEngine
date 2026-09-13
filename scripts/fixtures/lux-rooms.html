@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Lux rooms acceptance</title><style>body{margin:0;background:#10141c}canvas{display:block}</style></head><body><script type="module">
+import * as THREE from 'three';
+import { LuxRooms } from '/src/three/lux/rooms.ts';
+import { resolveLux, luxBudget } from '/src/three/lux/settings.ts';
+const renderer = new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});
+renderer.setSize(960,640); renderer.setPixelRatio(1);renderer.toneMapping=THREE.ACESFilmicToneMapping;document.body.appendChild(renderer.domElement);
+const errors=[];renderer.debug.onShaderError=(gl,p,v,f)=>errors.push([gl.getProgramInfoLog(p),gl.getShaderInfoLog(v),gl.getShaderInfoLog(f)].join('\n'));
+const scene=new THREE.Scene();scene.background=new THREE.Color('#10141c');
+const env=new THREE.DataTexture(new Uint8Array([20,20,20,255,20,20,20,255]),2,1);env.mapping=THREE.EquirectangularReflectionMapping;env.needsUpdate=true;scene.environment=env;
+const camera=new THREE.PerspectiveCamera(50,1.5,0.1,100);camera.position.set(0,12,14);camera.lookAt(0,0,0);
+function box(p,s,c,emissive=false){const m=new THREE.MeshStandardMaterial({color:c,roughness:0.95,emissive:emissive?c:0,emissiveIntensity:emissive?2:0});const o=new THREE.Mesh(new THREE.BoxGeometry(...s),m);o.position.set(...p);scene.add(o);return o;}
+box([0,-0.12,0],[15,0.2,12],'#dddddd');
+box([0,1.5,0],[0.2,3,7],'#bbbbbb');
+box([-5.8,1.5,-1],[0.2,3,4],'#ff1004',true);
+const blue=box([5.8,1.5,-1],[0.2,3,4],'#0440ff',true);
+scene.add(new THREE.AmbientLight('#ffffff',0.04));
+const rooms=[{id:'left',name:'Red room',center:[-3,1.5,0],size:[6,5,7],blendDistance:0.2},{id:'right',name:'Blue room',center:[3,1.5,0],size:[6,5,7],blendDistance:0.2}];
+let settings=resolveLux({enabled:true,mode:'rooms',quality:'balanced',rooms,roomOcclusion:true,smoothing:0.1});let cache=null,last=performance.now(),elapsed=0,maxFaces=0;
+const pixel=new Uint8Array(4);
+function sample(x,z){renderer.render(scene,camera);const p=new THREE.Vector3(x,0,z).project(camera);const gl=renderer.getContext();gl.readPixels(Math.round((p.x+1)*480),Math.round((p.y+1)*320),1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);return Array.from(pixel).slice(0,3);}
+window.luxRoomsQA={errors,start(){cache?.dispose();cache=new LuxRooms(renderer,scene,'rooms-fixture',luxBudget(settings,'High'),settings.rooms);},stop(){cache?.dispose();cache=null;},status(){return cache?{...cache.status,maxFaces}:null;},pixels(){return{left:sample(-2,1.5),right:sample(2,1.5),outside:sample(-2,4.5)};},resources(){return{...renderer.info.memory};},occlusion(value){settings.roomOcclusion=value;},wallTest(){blue.visible=false;settings=resolveLux({...settings,rooms:[{id:'whole',name:'Whole area',center:[0,1.5,0],size:[13,5,7],capturePosition:[-3,1.5,0],blendDistance:0.2}]});this.start();}};
+function tick(now){const dt=(now-last)/1000;last=now;elapsed+=dt;const before=cache?.status.faces??0;cache?.update(camera,settings,elapsed,dt);maxFaces=Math.max(maxFaces,(cache?.status.faces??0)-before);renderer.render(scene,camera);requestAnimationFrame(tick);}requestAnimationFrame(tick);
+</script></body></html>

@@ -1,1041 +1,251 @@
 import { getPlatform } from '../platform';
-import { useEditorStore } from '../store/editorStore';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
-import { inspectModel } from '../three/inspectModel';
-import type { AssetItem, CinematicTransformKeyframe, Vector3Tuple } from '../types';
+import type { AssetItem, CinematicAction, NodeForgeNodeData, SceneObjectKind, Vector3Tuple } from '../types';
 
-/**
- * THE SUMMIT — a 32s self-running cinematic on a storm-swept mountain peak above a sea of
- * clouds at cold dawn. A lone hero (the bundled UAL rigged character: idle → walk → idle,
- * swapped by visibility beats) climbs a banner-lined ridge to a dark monolith on the summit.
- * Every banner — and the hero's cape — is a REAL cloth sheet driven by one global scene wind,
- * which is the demo's thesis: one wind value moves the whole world. As the hero arrives, cyan
- * runes wake up the monolith face (material tracks) while dawn god-rays rake the summit
- * (volumetric fog + shafts); the charge overloads and at t=24 the monolith SHATTERS on the
- * music hit (white-cyan flash + debris shards + shockwave + violent shake) — and the falling
- * debris converges upward into the FEATHER ENGINE neon wordmark floating over the clouds.
- *
- * Engine features on display:
- *   - Cloth + global wind: three ridge flags (left-edge pin), two summit banners (top-edge
- *     pin) and a cape pinned to the walking hero, all blowing from the single scene `wind`
- *     vector + turbulence. The opening shot is a macro rack-focus on rippling cloth.
- *   - Volumetric light: raymarched height fog forms the cloud sea below the peak; the low
- *     dawn sun drives in-scattering god rays across the monolith (High preset shafts).
- *   - Material tracks: runes ignite bottom-up as the hero arrives, the core seam pulses
- *     through the overload, and the wordmark does a per-stroke neon flicker ignition.
- *   - The shatter→reveal: at the music hit the monolith swaps to keyframed debris shards
- *     while 51 wordmark strokes fly in from scattered offsets and snap into the logo —
- *     every stroke is one small transform track, all spline-evaluated live.
- *
- * Audio (imported from `public/templates/fall/` + `public/templates/monolith/`):
- *   - fall_music.wav       — 32s orchestral bed (its big hit lands at ~24s = the shatter)
- *   - wind_rush.mp3        — the gust as the ascent begins
- *   - portal_approach.mp3  — the overload swell
- *   - lightning_crack.mp3 + awakening_impact.mp3 — the shatter
- *   - arrival_chime.mp3    — the wordmark ignition
- *
- * The whole scene is plain primitives + cloth + particles + cinematic beats — open the
- * project after Play stops and everything is editable.
+/** RESONANCE: a 32-second, editable kinetic-light installation. No baked movie or mesh downloads.
+ * The timeline directs cameras, decorative rings and light cues. Rapier owns the ball, dominoes
+ * and fractured shell; the visible debris is never keyframed. Four cloth banners share scene wind.
+ * A short quarter-speed physics beat keeps the camera/music on time using a reciprocal timeline
+ * rate. The final frame holds behind a normal UI document with a real Restart Scene action.
  */
+export const RESONANCE_DURATION = 32;
+export const RESONANCE_IMPACT_TIME = 24;
+const CORE: Vector3Tuple = [0, 5.8, -4];
+const CYAN = '#73e3ed';
+const GOLD = '#ffbd72';
 
-const DURATION = 32;
-const FALL_AUDIO_DIR = 'templates/fall';
-const MONOLITH_AUDIO_DIR = 'templates/monolith';
-
-// Layout: the summit plateau tops out at y=40 (world origin region). The hero walks the ridge
-// down +X (from x≈13.5) to the monolith at x≈-3.5. The cloud sea sits at y≈18–28, distant
-// peaks poke through it. The wordmark reveal floats at y≈51, faced toward +X for the crane.
-const PLATEAU_TOP_Y = 40;
-const SHATTER_TIME = 24;
-const MONOLITH_POS: Vector3Tuple = [-3.5, 43.6, 0];
-const LOGO_POS: Vector3Tuple = [-1, 47, 0];
-
-async function importTemplateAudio(dir: string, file: string, mimeType: string, folderId?: string): Promise<AssetItem | undefined> {
-  const existing = useEditorStore.getState().assets.find((a) => a.name === file && a.type === 'audio');
+async function importAudio(dir: string, file: string, folderId: string): Promise<AssetItem | undefined> {
+  const existing = useEditorStore.getState().assets.find(a => a.name === file && a.type === 'audio');
   if (existing) return existing;
   try {
-    const response = await fetch(`${dir}/${file}`);
+    const response = await fetch(`templates/${dir}/${file}`);
     if (!response.ok) return undefined;
     const blob = await response.blob();
-    const platformFile = new File([blob], file, { type: mimeType });
+    const input = new File([blob], file, { type: file.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg' });
     const platform = await getPlatform();
-    const projectDir = useProjectStore.getState().projectDir ?? 'web';
-    const { path, url } = await platform.importAsset(projectDir, platformFile);
-    const assetId = `asset-${crypto.randomUUID()}`;
-    const item: AssetItem = { id: assetId, name: file, type: 'audio', size: platformFile.size, path, url, folderId, createdAt: Date.now() };
+    const { path, url } = await platform.importAsset(useProjectStore.getState().projectDir ?? 'web', input);
+    const item: AssetItem = { id: `asset-${crypto.randomUUID()}`, name: file, type: 'audio', size: input.size, path, url, folderId, createdAt: Date.now() };
     useEditorStore.getState().addAssetItems([item]);
-    return useEditorStore.getState().assets.find((a) => a.id === assetId);
+    return item;
   } catch {
+    // The installation remains playable when an optional bundled sound is unavailable.
     return undefined;
   }
 }
 
-// ============================================================================
-// PIXEL FONT — 5×7 stroke-based letters for the FEATHER ENGINE wordmark.
-// ============================================================================
-type Stroke = readonly [x: number, y: number, w: number, h: number];
-
-const LETTER_STROKES: Record<string, readonly Stroke[]> = {
-  F: [[0,0,1,7], [0,6,5,1], [0,3,4,1]],
-  E: [[0,0,1,7], [0,6,5,1], [0,3,4,1], [0,0,5,1]],
-  A: [[0,0,1,7], [4,0,1,7], [0,6,5,1], [0,3,5,1]],
-  T: [[0,6,5,1], [2,0,1,7]],
-  H: [[0,0,1,7], [4,0,1,7], [1,3,3,1]],
-  R: [[0,0,1,7], [0,6,4,1], [4,4,1,2], [0,3,4,1], [2,2,1,1], [3,1,1,1], [4,0,1,1]],
-  N: [[0,0,1,7], [4,0,1,7], [1,5,1,1], [2,4,1,1], [3,3,1,1]],
-  G: [[1,6,4,1], [1,0,4,1], [0,1,1,5], [4,0,1,4], [3,3,2,1]],
-  I: [[0,6,5,1], [2,0,1,7], [0,0,5,1]],
+type PartOptions = {
+  parentId?: string;
+  rotation?: Vector3Tuple;
+  body?: 'fixed' | 'dynamic';
+  metalness?: number;
+  roughness?: number;
+  glow?: string;
+  intensity?: number;
 };
 
-/** One wordmark stroke cube + the local pose the convergence track must land on. */
-interface WordmarkStroke {
-  id: string;
-  position: Vector3Tuple;
-  scale: Vector3Tuple;
-}
-
-function placeLetter(parentId: string, char: string, anchor: Vector3Tuple, cellSize: number, depth: number, emissive: string, intensity: number, letterIndex: number): WordmarkStroke[] {
+function part(kind: SceneObjectKind, name: string, position: Vector3Tuple, scale: Vector3Tuple, color: string, options: PartOptions = {}): string {
   const store = useEditorStore.getState();
-  const strokes = LETTER_STROKES[char];
-  if (!strokes) return [];
-  const placed: WordmarkStroke[] = [];
-  strokes.forEach((stroke, strokeIndex) => {
-    const [sx, sy, sw, sh] = stroke;
-    const position: Vector3Tuple = [
-      anchor[0] + (sx + sw / 2) * cellSize,
-      anchor[1] + (sy + sh / 2) * cellSize,
-      anchor[2],
-    ];
-    const scale: Vector3Tuple = [sw * cellSize, sh * cellSize, depth];
-    const id = store.createObjectWithProps('cube', {
-      name: `Logo · ${char}${letterIndex}-${strokeIndex}`,
-      position,
-      color: '#02080c',
-      parentId,
-    });
-    store.updateTransform(id, 'scale', scale);
-    store.updateRenderer(id, {
-      metalness: 0.4,
-      roughness: 0.25,
-      materialOverrides: { emissiveColor: emissive, emissiveIntensity: intensity },
-    });
-    placed.push({ id, position, scale });
+  const id = store.createObjectWithProps(kind, {
+    name, position, color, parentId: options.parentId,
+    ...(options.body ? { physics: { enabled: true, bodyType: options.body, collider: kind === 'sphere' ? 'sphere' : 'box', friction: 0.45, restitution: 0.12 } } : {}),
   });
-  return placed;
-}
-
-function placeLine(parentId: string, text: string, baselineY: number, z: number, cellSize: number, depth: number, emissive: string, intensity: number): WordmarkStroke[] {
-  const letterWidth = 5 * cellSize;
-  const gap = 1.2 * cellSize;
-  const totalWidth = text.length * letterWidth + (text.length - 1) * gap;
-  const startX = -totalWidth / 2;
-  const placed: WordmarkStroke[] = [];
-  text.split('').forEach((char, index) => {
-    if (char === ' ') return;
-    const anchor: Vector3Tuple = [startX + index * (letterWidth + gap), baselineY, z];
-    placed.push(...placeLetter(parentId, char, anchor, cellSize, depth, emissive, intensity, index));
+  store.updateTransform(id, 'scale', scale);
+  if (options.rotation) store.updateTransform(id, 'rotation', options.rotation);
+  if (kind !== 'empty' && kind !== 'light' && kind !== 'camera') store.updateRenderer(id, {
+    metalness: options.metalness ?? 0.35, roughness: options.roughness ?? 0.4,
+    ...(options.glow ? { materialOverrides: { emissiveColor: options.glow, emissiveIntensity: options.intensity ?? 2 } } : {}),
   });
-  return placed;
+  return id;
 }
 
-/** Deterministic jitter in [-1, 1] so the mountain reads as natural rock without RNG. */
-const jitter = (seed: number) => Math.sin(seed * 12.9898 + 4.1414) % 1;
-
-/**
- * Fetch + import + rig-split the bundled UAL character (the same Quaternius rig the third-person
- * template uses), reusing it if already imported. Returns the model asset id, or undefined when
- * the bundle is missing (the hero then falls back to a primitive figure).
- */
-async function importHeroCharacter(): Promise<string | undefined> {
-  const state = useEditorStore.getState();
-  const existing = state.assets.find((a) => a.name === 'UAL1.glb' && a.type === 'model');
-  if (existing && state.skeletalMeshes.some((m) => m.sourceAssetId === existing.id)) return existing.id;
-  try {
-    const response = await fetch('templates/UAL1.glb');
-    if (!response.ok) return undefined;
-    const blob = await response.blob();
-    const file = new File([blob], 'UAL1.glb', { type: 'model/gltf-binary' });
-    const platform = await getPlatform();
-    const dir = useProjectStore.getState().projectDir ?? 'web';
-    const { path, url } = await platform.importAsset(dir, file);
-    const assetId = existing?.id ?? `asset-${crypto.randomUUID()}`;
-    if (!existing) {
-      const item: AssetItem = { id: assetId, name: 'UAL1.glb', type: 'model', size: file.size, path, url, createdAt: Date.now() };
-      useEditorStore.getState().addAssetItems([item]);
-    }
-    const inspection = await inspectModel(file);
-    useEditorStore.getState().registerImportedModel({ assetId, assetName: 'UAL1.glb', inspection });
-    return assetId;
-  } catch {
-    return undefined;
-  }
+/** Polygonal circular ribs. Child transforms stay local, so one timeline track can turn a ring. */
+function ring(name: string, position: Vector3Tuple, radius: number, width: number, color: string, rotation: Vector3Tuple, glow?: string): { root: string; segments: string[] } {
+  const root = part('empty', name, position, [1, 1, 1], color, { rotation });
+  const segments = Array.from({ length: 32 }, (_, index) => {
+    const angle = index * Math.PI / 16;
+    return part('cube', `${name} · segment ${index + 1}`, [Math.cos(angle) * radius, Math.sin(angle) * radius, 0],
+      [width, 2 * radius * Math.tan(Math.PI / 32) + 0.025, width], color,
+      { parentId: root, rotation: [0, 0, angle], metalness: 0.7, roughness: 0.25, glow, intensity: 1.6 });
+  });
+  return { root, segments };
 }
-
-/** Ridge ground height under the hero's path (slabs are authored to match this slope). */
-const ridgeGroundY = (x: number) => (x > 5.5 ? PLATEAU_TOP_Y - 1.6 + (13.5 - Math.min(x, 13.5)) * 0.19 : PLATEAU_TOP_Y);
 
 export async function createFilmModeTemplate(): Promise<string | undefined> {
   const store = useEditorStore.getState();
   const scene = store.activeScene();
   if (!scene) return undefined;
-
-  // ============================================================================
-  // AUDIO IMPORT — the fall-kit orchestral bed (its hit lands on the shatter)
-  // plus the monolith kit's crack/impact/swell/chime.
-  // ============================================================================
-  const audioFolder = store.createFolder('The Summit Audio');
-  const musicAsset =
-    (await importTemplateAudio(FALL_AUDIO_DIR, 'fall_music.wav', 'audio/wav', audioFolder)) ??
-    (await importTemplateAudio(MONOLITH_AUDIO_DIR, 'awakening_music.wav', 'audio/wav', audioFolder));
-  const windAsset =
-    (await importTemplateAudio(FALL_AUDIO_DIR, 'wind_rush.mp3', 'audio/mpeg', audioFolder)) ??
-    (await importTemplateAudio(MONOLITH_AUDIO_DIR, 'door_whoosh.mp3', 'audio/mpeg', audioFolder));
-  const crackAsset = await importTemplateAudio(MONOLITH_AUDIO_DIR, 'lightning_crack.mp3', 'audio/mpeg', audioFolder);
-  const boomAsset =
-    (await importTemplateAudio(MONOLITH_AUDIO_DIR, 'awakening_impact.mp3', 'audio/mpeg', audioFolder)) ??
-    (await importTemplateAudio(FALL_AUDIO_DIR, 'water_impact.mp3', 'audio/mpeg', audioFolder));
-  const swellAsset = await importTemplateAudio(MONOLITH_AUDIO_DIR, 'portal_approach.mp3', 'audio/mpeg', audioFolder);
-  const chimeAsset = await importTemplateAudio(MONOLITH_AUDIO_DIR, 'arrival_chime.mp3', 'audio/mpeg', audioFolder);
-
-  // ============================================================================
-  // THE MOUNTAIN — summit plateau, ascending ridge, and the mass falling away
-  // into the cloud sea below.
-  // ============================================================================
-  const rockColors = ['#1b1f2c', '#222636', '#171a26'];
-  const plateauId = store.createObjectWithProps('cube', { name: 'Summit Plateau', position: [-1, PLATEAU_TOP_Y - 1, 0], color: '#1f2330' });
-  store.updateTransform(plateauId, 'scale', [13, 2, 12]);
-  store.updateRenderer(plateauId, { metalness: 0.08, roughness: 0.9 });
-
-  // The ridge the hero ascends — two long slabs whose tops match `ridgeGroundY`.
-  ([
-    { position: [12.8, 36.5, 0] as Vector3Tuple, scale: [7.5, 3.8, 5.5] as Vector3Tuple },
-    { position: [8.3, 37.15, 0.2] as Vector3Tuple, scale: [6.5, 4.1, 5.8] as Vector3Tuple },
-    { position: [5.3, 39.55, 0] as Vector3Tuple, scale: [1.8, 0.9, 4.8] as Vector3Tuple }, // step onto the plateau
-  ]).forEach((spec, index) => {
-    const id = store.createObjectWithProps('cube', { name: `Ridge Slab ${index + 1}`, position: spec.position, color: rockColors[index % 3] });
-    store.updateTransform(id, 'scale', spec.scale);
-    store.updateTransform(id, 'rotation', [0, jitter(index + 31) * 0.04, 0]);
-    store.updateRenderer(id, { metalness: 0.08, roughness: 0.9 });
-  });
-
-  // The mountain mass below the plateau, widening as it drops into the clouds.
-  for (let i = 0; i < 6; i += 1) {
-    const id = store.createObjectWithProps('cube', {
-      name: `Mountain Mass ${i + 1}`,
-      position: [-1 + jitter(i + 3) * 1.4, 36 - i * 5.5, jitter(i + 9) * 1.6],
-      color: rockColors[i % 3],
-    });
-    store.updateTransform(id, 'scale', [14 + i * 3.2, 6.2, 12 + i * 3.4]);
-    store.updateTransform(id, 'rotation', [0, jitter(i + 17) * 0.08, 0]);
-    store.updateRenderer(id, { metalness: 0.06, roughness: 0.92 });
+  for (const id of ['obj-player', 'obj-ground', 'obj-enemy', 'obj-camera']) {
+    if (selectActiveObjects(useEditorStore.getState()).some(o => o.id === id)) store.deleteObject(id);
   }
+  store.renameScene(scene.id, 'Resonance · Kinetic Hall');
 
-  // Distant peaks poking through the cloud sea — silhouettes for parallax.
-  ([
-    { position: [-42, 26, -55] as Vector3Tuple, scale: [18, 32, 16] as Vector3Tuple, yaw: 0.7 },
-    { position: [-66, 21, 22] as Vector3Tuple, scale: [22, 26, 18] as Vector3Tuple, yaw: -0.4 },
-    { position: [36, 19, -70] as Vector3Tuple, scale: [20, 24, 17] as Vector3Tuple, yaw: 1.2 },
-    { position: [56, 23, 46] as Vector3Tuple, scale: [24, 30, 20] as Vector3Tuple, yaw: -0.9 },
-  ]).forEach((spec, index) => {
-    const id = store.createObjectWithProps('cube', { name: `Distant Peak ${index + 1}`, position: spec.position, color: '#11182a' });
-    store.updateTransform(id, 'scale', spec.scale);
-    store.updateTransform(id, 'rotation', [0.05, spec.yaw, jitter(index + 51) * 0.08]);
-    store.updateRenderer(id, { metalness: 0, roughness: 1 });
-  });
-
-  // Cracked paving + rubble so the summit reads as a built, abandoned place.
-  ([
-    { position: [0.6, PLATEAU_TOP_Y + 0.03, 1.4] as Vector3Tuple, scale: [2.6, 0.1, 2.2] as Vector3Tuple, yaw: 0.12 },
-    { position: [-1.8, PLATEAU_TOP_Y + 0.03, -1.6] as Vector3Tuple, scale: [2.2, 0.1, 2.6] as Vector3Tuple, yaw: -0.2 },
-    { position: [-2.6, PLATEAU_TOP_Y + 0.03, 1.9] as Vector3Tuple, scale: [1.8, 0.1, 1.8] as Vector3Tuple, yaw: 0.34 },
-  ]).forEach((spec, index) => {
-    const id = store.createObjectWithProps('cube', { name: `Summit Paving ${index + 1}`, position: spec.position, color: '#262b3c' });
-    store.updateTransform(id, 'scale', spec.scale);
-    store.updateTransform(id, 'rotation', [0, spec.yaw, 0]);
-    store.updateRenderer(id, { metalness: 0.1, roughness: 0.8 });
-  });
-  for (let i = 0; i < 3; i += 1) {
-    const id = store.createObjectWithProps('cube', {
-      name: `Summit Rubble ${i + 1}`,
-      position: [-3.5 + jitter(i + 71) * 2.4, PLATEAU_TOP_Y + 0.18, 1.2 + jitter(i + 77) * 2.2],
-      color: '#1b1f2c',
-    });
-    store.updateTransform(id, 'scale', [0.5 + jitter(i + 81) * 0.2, 0.35, 0.45 + jitter(i + 83) * 0.2]);
-    store.updateTransform(id, 'rotation', [jitter(i + 87) * 0.4, jitter(i + 89) * 1.2, jitter(i + 91) * 0.3]);
-    store.updateRenderer(id, { metalness: 0.08, roughness: 0.9 });
+  // Architecture: pale structural ribs against dark inlaid stone, with an open clerestory.
+  const architecture = part('empty', '01 · Architecture', [0, 0, 0], [1, 1, 1], '#ffffff');
+  const block = (name: string, p: Vector3Tuple, s: Vector3Tuple, color = '#b4bab7', options: PartOptions = {}) =>
+    part('cube', name, p, s, color, { parentId: architecture, ...options });
+  block('Hall foundation · collision floor', [0, -0.55, 0], [26, 1, 34], '#172a32', { body: 'fixed', metalness: 0.65, roughness: 0.24 });
+  for (let x = -10; x <= 10; x += 4) for (let z = -12; z <= 12; z += 4) {
+    block(`Stone inlay ${x}, ${z}`, [x, -0.025, z], [3.94, 0.04, 3.94], (x + z) % 8 === 0 ? '#33444b' : '#293b43', { metalness: 0.5, roughness: 0.28 });
   }
-
-  // ============================================================================
-  // BANNERS & FLAGS — real cloth sheets, all driven by the ONE global scene wind.
-  // Ridge flags pin their pole edge ('left-edge'); summit banners hang from
-  // crossbars ('top-edge'). Per-cloth wind stays [0,0,0] so the global vector is
-  // the only thing moving them — change it live and the whole world answers.
-  // ============================================================================
-  const makeRidgeFlag = (x: number, z: number, index: number) => {
-    const groundY = ridgeGroundY(x);
-    const poleId = store.createObjectWithProps('cube', { name: `Flag Pole ${index + 1}`, position: [x, groundY + 1.5, z], color: '#3a3f52' });
-    store.updateTransform(poleId, 'scale', [0.09, 3.0, 0.09]);
-    store.updateRenderer(poleId, { metalness: 0.5, roughness: 0.5 });
-    const flagId = store.createObjectWithProps('plane', { name: `Ridge Flag ${index + 1}`, position: [x, groundY + 2.4, z + 0.85], color: '#8c2230' });
-    // Yaw -90° maps the sheet's pinned left edge onto the pole and lets the free
-    // end stream along +Z with the prevailing wind.
-    store.updateTransform(flagId, 'rotation', [0, -Math.PI / 2, 0]);
-    store.updateRenderer(flagId, { metalness: 0.05, roughness: 0.9 });
-    store.addCloth(flagId);
-    store.updateCloth(flagId, { enabled: true, sourceMode: 'grid', resolution: 12, width: 1.7, height: 0.95, pinMode: 'left-edge', wind: [0, 0, 0], turbulence: 0.3, collideFloor: false });
-  };
-  makeRidgeFlag(12.5, -2.0, 0);
-  makeRidgeFlag(9.2, 2.0, 1);
-  makeRidgeFlag(6.2, -2.1, 2);
-
-  // Two tall hanging banners flanking the monolith.
-  [-2.7, 2.7].forEach((bz, index) => {
-    [-0.75, 0.75].forEach((dz, postIndex) => {
-      const postId = store.createObjectWithProps('cube', { name: `Banner Post ${index + 1}-${postIndex + 1}`, position: [-3.3, PLATEAU_TOP_Y + 1.6, bz + dz], color: '#3a3f52' });
-      store.updateTransform(postId, 'scale', [0.09, 3.2, 0.09]);
-      store.updateRenderer(postId, { metalness: 0.5, roughness: 0.5 });
-    });
-    const barId = store.createObjectWithProps('cube', { name: `Banner Bar ${index + 1}`, position: [-3.3, PLATEAU_TOP_Y + 3.15, bz], color: '#3a3f52' });
-    store.updateTransform(barId, 'scale', [0.08, 0.08, 1.7]);
-    store.updateRenderer(barId, { metalness: 0.5, roughness: 0.5 });
-    const bannerId = store.createObjectWithProps('plane', { name: `Summit Banner ${index + 1}`, position: [-3.3, PLATEAU_TOP_Y + 2.05, bz], color: '#7a1d2c' });
-    store.updateTransform(bannerId, 'rotation', [0, -Math.PI / 2, 0]); // top edge spans the crossbar (Z)
-    store.updateRenderer(bannerId, { metalness: 0.05, roughness: 0.9 });
-    store.addCloth(bannerId);
-    store.updateCloth(bannerId, { enabled: true, sourceMode: 'grid', resolution: 12, width: 1.2, height: 2.1, pinMode: 'top-edge', wind: [0, 0, 0], turbulence: 0.25, collideFloor: false });
-  });
-
-  // ============================================================================
-  // THE HERO — UAL rig under one empty (a single transform track walks him up the
-  // ridge), idle/walk model children swapped by visibility beats, and a cloth
-  // cape pinned to his shoulders so the wind story rides on him too.
-  // ============================================================================
-  const heroStartX = 13.5;
-  const heroId = store.createObjectWithProps('empty', { name: 'Hero', position: [heroStartX, ridgeGroundY(heroStartX) + 0.9, 0.15] });
-  const heroAssetId = await importHeroCharacter();
-  const heroState = useEditorStore.getState();
-  const heroMesh = heroAssetId ? heroState.skeletalMeshes.find((m) => m.sourceAssetId === heroAssetId) : undefined;
-  const heroClips = heroMesh ? heroState.animations.filter((a) => a.skeletonId === heroMesh.skeletonId) : [];
-  const pickClip = (...patterns: RegExp[]) => {
-    for (const pattern of patterns) {
-      const found = heroClips.find((clip) => pattern.test(clip.name));
-      if (found) return found.id;
+  for (const x of [-10.7, 10.7]) {
+    block(`Side plinth ${x}`, [x, 0.4, 0], [1.8, 0.8, 33], '#54616a');
+    for (const z of [-12, -6, 0, 6, 12]) {
+      block(`Pier ${x}, ${z}`, [x, 5.2, z], [0.8, 9.6, 1.2], '#adb7b8', { metalness: 0.18, roughness: 0.6 });
+      block(`Pier brass foot ${x}, ${z}`, [x, 1.2, z], [0.9, 1, 1.3], '#a17e52', { metalness: 0.8 });
+      block(`Clerestory rib ${x}, ${z}`, [x * 0.57, 10.1, z], [9.7, 0.42, 0.65], '#9caeb0');
+      block(`Warm rib light ${x}, ${z}`, [x * 0.57, 9.86, z + 0.33], [9.2, 0.045, 0.045], GOLD, { glow: GOLD, intensity: 2.3 });
     }
-    return undefined;
-  };
-  const idleClipId = pickClip(/idle_loop/i, /^idle/i, /idle/i);
-  const walkClipId = pickClip(/walk_loop/i, /^walk/i, /walk/i);
-
-  let heroIdleId: string | undefined;
-  let heroWalkId: string | undefined;
-  if (heroAssetId && heroMesh && (idleClipId || walkClipId)) {
-    const makeHeroModel = (name: string, clipId: string | undefined) => {
-      // Local offset puts the rig's feet 0.9 below the empty (the empty rides at the pelvis).
-      const id = store.createObjectWithProps('cube', { name, position: [0, -0.9, 0], parentId: heroId });
-      store.updateTransform(id, 'rotation', [0, -Math.PI / 2, 0]); // rig forward +Z → face -X (toward the monolith)
-      store.setObjectModel(id, heroAssetId);
-      store.toggleAnimator(id);
-      store.updateAnimator(id, { skeletalMeshId: heroMesh.id, animationId: clipId, loop: true, speed: 1 });
-      return id;
-    };
-    heroIdleId = makeHeroModel('Hero · Idle', idleClipId ?? walkClipId);
-    heroWalkId = makeHeroModel('Hero · Walk', walkClipId ?? idleClipId);
-  } else {
-    // Fallback primitive figure (bundle missing / web fetch failed).
-    const bodyId = store.createObjectWithProps('capsule', { name: 'Hero · Body', position: [0, 0, 0], color: '#161018', parentId: heroId });
-    store.updateTransform(bodyId, 'scale', [0.45, 0.55, 0.45]);
-    store.updateRenderer(bodyId, { metalness: 0.2, roughness: 0.6 });
-    const headId = store.createObjectWithProps('sphere', { name: 'Hero · Head', position: [0, 0.66, 0], color: '#1a1216', parentId: heroId });
-    store.updateTransform(headId, 'scale', [0.26, 0.26, 0.26]);
-    store.updateRenderer(headId, { metalness: 0.2, roughness: 0.55 });
   }
-  // The cape: a small top-edge-pinned cloth riding the hero's shoulders. He walks
-  // toward -X, so it trails behind at +X and streams with the global wind.
-  const capeId = store.createObjectWithProps('plane', { name: 'Hero · Cape', position: [0.24, 0.5, 0], color: '#5e1622', parentId: heroId });
-  store.updateTransform(capeId, 'rotation', [0, -Math.PI / 2, 0]);
-  store.updateRenderer(capeId, { metalness: 0.05, roughness: 0.85 });
-  store.addCloth(capeId);
-  store.updateCloth(capeId, { enabled: true, sourceMode: 'grid', resolution: 8, width: 0.55, height: 0.9, pinMode: 'top-edge', wind: [0, 0, 0], turbulence: 0.2, collideFloor: false });
+  for (const x of [-6.8, 6.8]) block(`Cyan floor guide ${x}`, [x, 0.013, 0], [0.05, 0.035, 30], CYAN, { glow: CYAN });
+  block('Rear wall', [0, 6, -14], [25, 12, 0.6], '#526970', { roughness: 0.7 });
+  for (const x of [-8, -4, 0, 4, 8]) block(`Rear fluting ${x}`, [x, 6, -13.6], [0.18, 11.5, 0.15], '#9baead');
+  ring('Oculus · architectural brass surround', [0, 6.2, -12.9], 5.2, 0.4, '#b2905b', [0, 0, 0]);
+  ring('Oculus · warm rim', [0, 6.2, -12.65], 4.8, 0.07, GOLD, [0, 0, 0], GOLD);
+  block('Reactor dais · collision', [0, 0.35, -4], [9, 0.8, 8], '#45565c', { body: 'fixed', metalness: 0.6 });
+  block('Reactor pedestal', [0, 1.15, -4], [3.8, 0.8, 3.8], '#26343d', { body: 'fixed', metalness: 0.8 });
+  for (const x of [-3.6, 3.6]) block(`Dais rim ${x}`, [x, 0.77, -4], [0.06, 0.06, 7], CYAN, { glow: CYAN, intensity: 2.5 });
 
-  // ============================================================================
-  // THE MONOLITH — a dark slab on the summit whose carved runes wake as the hero
-  // arrives, then overload and shatter into the wordmark.
-  // ============================================================================
-  const monolithId = store.createObjectWithProps('cube', { name: 'Monolith', position: MONOLITH_POS, color: '#0e0d14' });
-  store.updateTransform(monolithId, 'scale', [1.5, 7.2, 1.0]);
-  store.updateRenderer(monolithId, { metalness: 0.35, roughness: 0.45 });
-
-  // Runes carved on the +X face (toward the approaching hero): five side glyphs
-  // igniting bottom-up, then the full-height core seam.
-  const runeFaceX = MONOLITH_POS[0] + 0.78;
-  const runeEntries: Array<{ id: string; at: number; peak: number }> = [];
-  ([
-    { y: 41.2, z: 0.28, at: 14.0 },
-    { y: 42.4, z: -0.28, at: 14.8 },
-    { y: 43.8, z: 0.28, at: 15.6 },
-    { y: 45.0, z: -0.28, at: 16.4 },
-    { y: 46.0, z: 0.28, at: 17.0 },
-  ]).forEach((spec, index) => {
-    const id = store.createObjectWithProps('cube', { name: `Monolith Rune ${index + 1}`, position: [runeFaceX, spec.y, spec.z], color: '#0a1018' });
-    store.updateTransform(id, 'scale', [0.06, 0.34, 0.5]);
-    store.updateRenderer(id, { materialOverrides: { emissiveColor: '#8fd8ff', emissiveIntensity: 0 } });
-    runeEntries.push({ id, at: spec.at, peak: 7 });
-  });
-  const seamId = store.createObjectWithProps('cube', { name: 'Monolith Core Seam', position: [runeFaceX, MONOLITH_POS[1], 0], color: '#0a1018' });
-  store.updateTransform(seamId, 'scale', [0.06, 5.8, 0.12]);
-  store.updateRenderer(seamId, { materialOverrides: { emissiveColor: '#8fd8ff', emissiveIntensity: 0 } });
-
-  // Cold rune light + the charge swirl, both hidden until the runes wake.
-  const monolithLightId = store.createObjectWithProps('light', { name: 'Monolith Light', position: [-2.4, 45, 1.4] });
-  store.setObjectLight(monolithLightId, { type: 'point', color: '#8fd8ff', intensity: 13, distance: 24, angle: 0, castShadow: false });
-  const swirlId = store.createObjectWithProps('empty', { name: 'Charge Swirl', position: [MONOLITH_POS[0], 43.5, 0] });
-  store.addParticles(swirlId, 'magic');
-  store.updateParticles(swirlId, { rate: 42, lifetime: 1.8, shapeRadius: 1.3, startColor: '#8fd8ff', endColor: '#2a4eda', startSize: 0.1, endSize: 0.02, startOpacity: 0.85 });
-
-  // Shatter kit — debris shards (keyframed outward), burst emitters, shockwave
-  // ring and a hard cyan flash light. Everything hidden until the exact frame.
-  const shardEntries: Array<{ id: string; from: Vector3Tuple; to: Vector3Tuple; spin: Vector3Tuple }> = [];
-  for (let i = 0; i < 9; i += 1) {
-    const from: Vector3Tuple = [
-      MONOLITH_POS[0] + jitter(i * 3 + 1) * 0.5,
-      MONOLITH_POS[1] + jitter(i * 5 + 2) * 2.6,
-      jitter(i * 7 + 3) * 0.3,
-    ];
-    const angle = (i / 9) * Math.PI * 2;
-    const to: Vector3Tuple = [
-      MONOLITH_POS[0] + Math.cos(angle) * (5.5 + jitter(i + 41) * 1.5),
-      MONOLITH_POS[1] + 3.2 + jitter(i + 43) * 2.2,
-      Math.sin(angle) * (5.5 + jitter(i + 47) * 1.5),
-    ];
-    const id = store.createObjectWithProps('cube', { name: `Monolith Shard ${i + 1}`, position: from, color: '#12131c' });
-    store.updateTransform(id, 'scale', [0.45 + jitter(i + 53) * 0.25, 0.6 + jitter(i + 57) * 0.3, 0.35 + jitter(i + 59) * 0.2]);
-    store.updateRenderer(id, { metalness: 0.35, roughness: 0.45, materialOverrides: { emissiveColor: '#8fd8ff', emissiveIntensity: 1.2 } });
-    shardEntries.push({ id, from, to, spin: [jitter(i + 61) * 3, jitter(i + 63) * 4, jitter(i + 67) * 2.5] });
-  }
-  const burstId = store.createObjectWithProps('empty', { name: 'Shatter Burst', position: [MONOLITH_POS[0], 43.6, 0] });
-  store.addParticles(burstId, 'explosion');
-  store.updateParticles(burstId, { startColor: '#dffaff', endColor: '#3a6cff', startSize: 0.22, endSize: 0.04 });
-  const sparksId = store.createObjectWithProps('empty', { name: 'Shatter Sparks', position: [MONOLITH_POS[0], 43.6, 0] });
-  store.addParticles(sparksId, 'sparks');
-  store.updateParticles(sparksId, { rate: 260, lifetime: 1.4, speed: 8, shapeRadius: 0.7, startColor: '#eafcff', endColor: '#5b8cff', startSize: 0.14, endSize: 0.02 });
-  const shockwaveId = store.createObjectWithProps('sphere', { name: 'Shockwave Ring', position: [MONOLITH_POS[0], PLATEAU_TOP_Y + 0.15, 0], color: '#dffaff' });
-  store.updateTransform(shockwaveId, 'scale', [0.1, 0.05, 0.1]);
-  store.updateRenderer(shockwaveId, { opacity: 0.55, materialOverrides: { emissiveColor: '#dffaff', emissiveIntensity: 0 } });
-  const impactLightId = store.createObjectWithProps('light', { name: 'Shatter Light', position: [-2.6, 45.5, 1] });
-  store.setObjectLight(impactLightId, { type: 'point', color: '#bfe8ff', intensity: 18, distance: 26, angle: 0, castShadow: false });
-
-  // ============================================================================
-  // ATMOSPHERE — the cloud sea below the peak and wind-blown spindrift streaking
-  // across the ridge (particles sell what the volumetric fog implies).
-  // ============================================================================
-  ([
-    { position: [-10, 27, -8] as Vector3Tuple, radius: 38 },
-    { position: [14, 26, 12] as Vector3Tuple, radius: 36 },
-    { position: [0, 18, 0] as Vector3Tuple, radius: 52 },
-  ]).forEach((spec, index) => {
-    const id = store.createObjectWithProps('empty', { name: `Cloud Sea ${index + 1}`, position: spec.position });
-    store.addParticles(id, 'dust');
-    store.updateParticles(id, { rate: 14, lifetime: 5, speed: 0.5, shapeRadius: spec.radius, startColor: '#e8eef8', endColor: '#8fa3c0', startSize: 4.5, endSize: 9, startOpacity: 0.12 });
-  });
-  ([
-    { position: [9, 40.6, 0] as Vector3Tuple },
-    { position: [-1.5, 41.6, 0] as Vector3Tuple },
-  ]).forEach((spec, index) => {
-    const id = store.createObjectWithProps('empty', { name: `Spindrift ${index + 1}`, position: spec.position });
-    store.addParticles(id, 'dust');
-    store.updateParticles(id, { rate: 24, lifetime: 2.0, speed: 5, direction: [0.4, 0.12, 1], shapeRadius: 5.5, startColor: '#dfe9f6', endColor: '#9fb4cc', startSize: 0.12, endSize: 0.4, startOpacity: 0.2 });
-  });
-
-  // ============================================================================
-  // BIRDS — two silhouettes riding the wind around the peak during the ascent.
-  // ============================================================================
-  const birdIds: Array<{ id: string; cx: number; cy: number; cz: number; radius: number; phase: number }> = [];
-  for (let i = 0; i < 2; i += 1) {
-    const id = store.createObjectWithProps('cube', { name: `Bird ${i + 1}`, position: [4, 46 + i * 2.5, 6], color: '#0d0a0c' });
-    store.updateTransform(id, 'scale', [0.6, 0.06, 0.18]);
-    store.updateRenderer(id, { metalness: 0, roughness: 1 });
-    birdIds.push({ id, cx: 0, cy: 46 + i * 2.5, cz: 0, radius: 13 + i * 4, phase: i * 2.4 });
+  // Four real sheets, driven by one authored wind vector (their render transforms are never animated).
+  for (const x of [-8.5, 8.5]) for (const z of [-3, 6]) {
+    block(`Banner crossbar ${x}, ${z}`, [x, 6.3, z], [2.5, 0.08, 0.08], '#b99967', { metalness: 0.8 });
+    const id = part('plane', `Wind banner ${x}, ${z}`, [x, 4.7, z], [1, 1, 1], x < 0 ? '#bf724a' : '#438d98', { metalness: 0.02, roughness: 0.85 });
+    store.addCloth(id);
+    store.updateCloth(id, { enabled: true, sourceMode: 'grid', resolution: 12, width: 2.2, height: 3.2, pinMode: 'top-edge', wind: [0, 0, 0], turbulence: 0.22, collideFloor: false, collideBodies: false });
   }
 
-  // ============================================================================
-  // WORDMARK — FEATHER ENGINE in unlit neon floating over the clouds, faced
-  // toward +X so the reveal crane reads it left-to-right. Hidden until the
-  // shatter, when its strokes fly in from scattered offsets and snap into place.
-  // ============================================================================
-  const logoEmptyId = store.createObjectWithProps('empty', { name: 'Feather Engine Logo', position: LOGO_POS });
-  store.updateTransform(logoEmptyId, 'rotation', [0, Math.PI / 2, 0]);
-  const CELL = 0.2;
-  const LETTER_DEPTH = 0.18;
-  const wordmarkStrokes = [
-    ...placeLine(logoEmptyId, 'FEATHER', 5.4, 0, CELL, LETTER_DEPTH, '#aeeaff', 0),
-    ...placeLine(logoEmptyId, 'ENGINE', 3.6, 0, CELL, LETTER_DEPTH, '#aeeaff', 0),
-  ];
-  const haloIds = [5.4, 3.6].map((baseline, index) => {
-    const id = store.createObjectWithProps('cube', {
-      name: index === 0 ? 'Halo · FEATHER' : 'Halo · ENGINE',
-      position: [0, baseline + (CELL * 7) / 2, -0.22],
-      color: '#0a1424',
-      parentId: logoEmptyId,
-    });
-    store.updateTransform(id, 'scale', [index === 0 ? 10.0 : 8.6, 1.9, 0.08]);
-    store.updateRenderer(id, { opacity: 0.22, materialOverrides: { emissiveColor: '#aeeaff', emissiveIntensity: 0 } });
+  // Act I: a heavy ball strikes a line of independently simulated brass/ceramic dominoes.
+  const ball = part('sphere', 'Impulse ball · real rigid body', [-7.4, 0.85, 6], [1.6, 1.6, 1.6], '#c48d4d', { body: 'dynamic', metalness: 0.85, roughness: 0.2 });
+  store.updatePhysics(ball, { mass: 5, friction: 0.22, restitution: 0.25, linearDamping: 0.04 });
+  for (let i = 0; i < 12; i++) {
+    const id = part('cube', `Domino ${String(i + 1).padStart(2, '0')} · real rigid body`, [-4.8 + i * 0.82, 1.2, 6], [0.28, 2.4, 1.15], i % 3 === 0 ? '#cb995c' : '#a0babd', { body: 'dynamic', metalness: i % 3 === 0 ? 0.8 : 0.3, roughness: 0.3 });
+    store.updatePhysics(id, { mass: 0.75, friction: 0.5, restitution: 0.04, angularDamping: 0.06 });
+  }
+  block('Kinetic lane · front brass edge', [0, 0.055, 7.15], [18, 0.08, 0.07], GOLD, { glow: GOLD, intensity: 1 });
+  block('Kinetic lane · back brass edge', [0, 0.055, 4.85], [18, 0.08, 0.07], GOLD, { glow: GOLD, intensity: 1 });
+
+  // Act II: three nested gyroscope rings frame a suspended, destructible reactor shell.
+  const outer = ring('02 · Gyroscope outer', CORE, 4.05, 0.18, '#b29161', [0.1, 0.15, 0]);
+  const middle = ring('03 · Gyroscope middle', CORE, 3.55, 0.11, CYAN, [0.4, 0.75, 0.2], CYAN);
+  const inner = ring('04 · Gyroscope inner', CORE, 2.95, 0.14, '#78949b', [-0.4, -0.55, 0]);
+  const core = part('cube', 'Reactor shell · live fracture', CORE, [2.4, 3.6, 2.4], '#77959c', { rotation: [0.12, Math.PI / 4, 0], body: 'fixed', metalness: 0.75, roughness: 0.24 });
+  store.setObjectFracture(core, { enabled: true, pattern: 'shatter', pieces: 4, seed: 27, strength: 7, impactThreshold: 0, focusImpact: false, debrisLifetime: 12, inheritVelocity: true });
+  const heart = part('sphere', 'Exposed luminous heart', CORE, [1.1, 1.1, 1.1], CYAN, { glow: CYAN, intensity: 2.5, metalness: 0.45, roughness: 0.15 });
+  const seam = part('cube', 'Shell charge seam', [0, 5.8, -2.23], [0.09, 3.1, 0.09], CYAN, { glow: CYAN, intensity: 0.3 });
+  const lamp = (name: string, position: Vector3Tuple, color: string, intensity: number, distance: number) => {
+    const id = store.createObjectWithProps('light', { name, position });
+    store.setObjectLight(id, { type: 'point', color, intensity, distance, castShadow: false });
     return id;
-  });
-  const logoLightId = store.createObjectWithProps('light', { name: 'Wordmark Light', position: [LOGO_POS[0] + 4.5, 52, 0] });
-  store.setObjectLight(logoLightId, { type: 'point', color: '#aeeaff', intensity: 9, distance: 22, angle: 0, castShadow: false });
+  };
+  lamp('Warm key · kinetic lane', [-4, 5, 8], GOLD, 40, 18);
+  lamp('Cool fill · hall', [7, 7, -1], '#a4dbe8', 45, 24);
+  const chargeLight = lamp('Charge light · staged at 16 seconds', [0, 5.8, -1.8], CYAN, 70, 22);
+  const impactLight = lamp('Release flash · staged at 24 seconds', [0, 5.8, -1], '#e0fcff', 160, 24);
 
-  // ============================================================================
-  // ENVIRONMENT — cold mountain dawn: pale gold horizon under a steel-blue sky,
-  // ONE global wind driving every cloth sheet, and volumetric height fog forming
-  // the cloud sea + god rays off the low sun.
-  // ============================================================================
+  store.applyRenderPreset(scene.id, 'moody-cinematic');
   store.updateSceneEnvironment(scene.id, {
-    skyMode: 'procedural',
-    skyTopColor: '#0e1631',
-    skyHorizonColor: '#ffb46e',
-    skyGroundColor: '#232036',
-    environmentIntensity: 0.65,
-    sunColor: '#ffd9a0',
-    sunIntensity: 1.5,
-    sunElevation: 7,
-    sunAzimuth: 255,
-    fogEnabled: true,
-    fogColor: '#2b3650',
-    fogNear: 50,
-    fogFar: 260,
-    volumetricFogEnabled: true,
-    volumetricFogDensity: 0.055,
-    volumetricFogColor: '#c8d8ee',
-    volumetricFogHeight: 34,
-    volumetricFogFalloff: 0.12,
-    volumetricScattering: 0.65,
-    volumetricSunStrength: 1.7,
-    volumetricMaxDistance: 170,
-    wind: [2.2, 0, 5.2],
-    windTurbulence: 0.55,
+    skyMode: 'procedural', skyTopColor: '#1b384b', skyHorizonColor: '#b5c8cb', skyGroundColor: '#293d49',
+    environmentIntensity: 0.8, sunColor: '#ffe0b2', sunIntensity: 2.2, sunElevation: 32, sunAzimuth: 235,
+    fogEnabled: true, fogColor: '#435d69', fogNear: 30, fogFar: 110,
+    volumetricFogEnabled: true, volumetricFogDensity: 0.01, volumetricFogColor: '#afc5ce',
+    volumetricFogHeight: 0, volumetricFogFalloff: 0.12, volumetricScattering: 0.45, volumetricSunStrength: 0.8, volumetricMaxDistance: 60,
+    gravity: [0, -9.81, 0], wind: [1.6, 0, 2.8], windTurbulence: 0.35,
+    lux: { enabled: true, mode: 'fixed', quality: 'balanced', position: [0, 4, 2], radius: 25, indirectIntensity: 0.5, reflections: true, reflectionIntensity: 0.8, screenTraces: true, updateInterval: 1, smoothing: 0.4 },
   });
-  // Restrained bloom: enough for the rune/wordmark neon to glow without hazing
-  // the whole frame; the cinematic look's own (small) vignette is the only one.
-  store.updateRenderSettings({
-    bloomEnabled: true,
-    bloomIntensity: 0.85,
-    bloomThreshold: 0.6,
-    bloomRadius: 0.7,
-    vignetteEnabled: false,
-    // Showcase template: default to the High scalability preset so volumetric
-    // shafts/shadows/post read well out of the box (autoQuality still steps down).
-    quality: 'High',
+  store.updateRenderSettings({ quality: 'High', autoQuality: true, bloomEnabled: true, bloomIntensity: 0.45, bloomThreshold: 0.85, bloomRadius: 0.55, vignetteEnabled: false });
+
+  const cinematicId = store.createCinematic('Resonance', RESONANCE_DURATION);
+  store.updateCinematic(cinematicId, { autoplay: true, skippable: false, frameRate: 60 });
+  store.setCinematicLook(cinematicId, { letterbox: 2.39, grade: 'teal-orange', gradeIntensity: 0.12, grain: 0.015, vignette: 0.13, motionBlur: 0.03, anamorphic: 0, chromaticAberration: 0, lightLeak: 0, lensDirt: 0 });
+  const beat = (action: Omit<CinematicAction, 'id'>) => store.addCinematicAction(cinematicId, action);
+  const shot = (name: string, start: number, end: number, from: Vector3Tuple, to: Vector3Tuple, target: Vector3Tuple, fov = 48, shake = 0) => beat({
+    type: 'camera', label: name, time: start, duration: end - start, interpolation: 'smooth', shake, shakeFrequency: 12,
+    keyframes: [{ time: start, position: from, lookAt: target, fov, aperture: 0 }, { time: end, position: to, lookAt: target, fov, aperture: 0 }],
   });
+  shot('01 · Wind / tactile opening', 0, 4, [-10, 5.2, 10.5], [-9.8, 4.9, 9.5], [-7.4, 4.7, 5], 48);
+  shot('02 · The hall / establishing dolly', 4, 8, [8.3, 7.5, 18], [6.3, 6.4, 15], [0, 4.3, -3], 57);
+  shot('03 · Transfer / real domino collision', 8, 14, [-5.8, 3.6, 12.4], [5.4, 3.3, 12], [0, 1.2, 6], 57);
+  shot('04 · The machine / low crane', 14, 19, [4.8, 1.6, 6.5], [6, 3.8, 4.5], CORE, 52);
+  shot('05 · Charge / intimate orbit', 19, 24, [5.8, 6.5, 3.3], [-4.5, 7.1, 3.5], CORE, 48);
+  shot('06 · Release / quarter-speed debris', 24, 26, [-5.3, 6.4, 6], [-6.3, 6.9, 7.7], CORE, 59, 0.11);
+  shot('07 · Afterglow / crane out', 26, 29, [-6.3, 6.9, 7.7], [3.6, 8, 13], [0, 4.7, -4], 59);
+  shot('08 · Resonance / final tableau', 29, 32, [3.6, 8, 13], [0, 7.1, 16], [0, 4.7, -4], 57);
+  beat({ type: 'fade', label: 'Open from ink', time: 0, duration: 1.2, fadeFrom: 1, fadeTo: 0, fadeColor: '#09171e' });
+  beat({ type: 'text', label: 'Opening card', time: 1.5, duration: 2.2, text: 'FEATHER ENGINE  /  REAL-TIME STUDY 01', textStyle: 'lowerThird', textColor: '#f4dfc4' });
+  beat({ type: 'text', label: 'Film title', time: 4.6, duration: 2.7, text: 'R E S O N A N C E', textStyle: 'title', textColor: '#eef7f5' });
+  beat({ type: 'text', label: 'Physics chapter', time: 9, duration: 3.5, text: '01 / MOMENTUM     Rigid bodies · real collisions', textStyle: 'lowerThird', textColor: '#f4dfc4' });
+  beat({ type: 'text', label: 'Light chapter', time: 15, duration: 3.2, text: '02 / RADIANCE     Local light · reflections · atmosphere', textStyle: 'lowerThird', textColor: '#c5f4f5' });
+  beat({ type: 'text', label: 'Fracture chapter', time: 24.7, duration: 1.9, text: '03 / RELEASE     Live fracture · quarter-speed physics', textStyle: 'lowerThird', textColor: '#d9f7f5' });
+  beat({ type: 'text', label: 'Closing credit', time: 28.8, duration: 2.4, text: 'FEATHER ENGINE', textStyle: 'title', textColor: '#f2f7ef' });
 
-  // ============================================================================
-  // CINEMATIC — 32s: wind → ascent → arrival → runes wake → overload → shatter
-  // on the music hit → debris converges into the wordmark.
-  // ============================================================================
-  const cinematicId = store.createCinematic('The Summit', DURATION);
-  store.updateCinematic(cinematicId, { autoplay: true, skippable: true, duration: DURATION });
-  // Clean look — the letterbox + a light cool grade carry the "film" feel; lens
-  // artifacts are kept near zero so the image stays sharp and readable.
-  store.setCinematicLook(cinematicId, {
-    letterbox: 2.39,
-    grade: 'cool',
-    gradeIntensity: 0.35,
-    grain: 0.02,
-    vignette: 0.12,
-    motionBlur: 0.08,
-    anamorphic: 0.08,
-    chromaticAberration: 0,
-    lightLeak: 0,
-    lensDirt: 0,
+  for (const [assembly, from, to] of [
+    [outer, [0.1, 0.15, 0], [0.15, 0.3, Math.PI * 0.8]],
+    [middle, [0.4, 0.75, 0.2], [0.8, Math.PI * 1.7, -0.5]],
+    [inner, [-0.4, -0.55, 0], [-0.8, -Math.PI * 1.4, 1.2]],
+  ] as const) beat({ type: 'transform', label: 'Gyroscope / decorative rotation', time: 0, duration: 32, objectId: assembly.root, interpolation: 'linear',
+    transformKeyframes: [{ time: 0, position: CORE, rotation: [...from], scale: [1, 1, 1] }, { time: 32, position: CORE, rotation: [...to], scale: [1, 1, 1] }],
   });
-
-  // Open from black.
-  store.addCinematicAction(cinematicId, {
-    type: 'fade', time: 0, duration: 2.2,
-    label: 'Fade in',
-    fadeFrom: 1, fadeTo: 0, fadeColor: '#06080f',
+  for (const id of [seam, ...middle.segments]) beat({ type: 'material', label: 'Charge / emissive rise', time: 16, duration: 8, objectId: id,
+    materialKeyframes: [{ time: 16, emissiveColor: CYAN, emissiveIntensity: 0.6 }, { time: 21, emissiveColor: CYAN, emissiveIntensity: 2.5 }, { time: 23.6, emissiveColor: '#dbffff', emissiveIntensity: 4.5 }, { time: 24, emissiveColor: '#f2ffff', emissiveIntensity: 7 }],
   });
-
-  // ---- AUDIO BEATS ----
-  if (musicAsset) store.addCinematicAction(cinematicId, { type: 'sound', time: 0, label: 'Music: The Summit', soundId: musicAsset.id });
-  if (windAsset)  store.addCinematicAction(cinematicId, { type: 'sound', time: 2.0, label: 'Wind gust (the ascent)', soundId: windAsset.id });
-  if (swellAsset) store.addCinematicAction(cinematicId, { type: 'sound', time: 18.8, label: 'Swell (overload)', soundId: swellAsset.id });
-  if (crackAsset) store.addCinematicAction(cinematicId, { type: 'sound', time: SHATTER_TIME - 0.05, label: 'Crack (shatter)', soundId: crackAsset.id });
-  if (boomAsset)  store.addCinematicAction(cinematicId, { type: 'sound', time: SHATTER_TIME, label: 'Impact (shatter)', soundId: boomAsset.id });
-  if (chimeAsset) store.addCinematicAction(cinematicId, { type: 'sound', time: 27.0, label: 'Chime: wordmark', soundId: chimeAsset.id });
-
-  // ---- TIMELINE MARKERS ----
-  store.addCinematicMarker(cinematicId, { time: 0,    label: 'Above the clouds', color: '#9fdcff' });
-  store.addCinematicMarker(cinematicId, { time: 2.0,  label: 'The ascent',       color: '#cfe4ff' });
-  store.addCinematicMarker(cinematicId, { time: 10.6, label: 'Arrival',          color: '#ffd9a0' });
-  store.addCinematicMarker(cinematicId, { time: 14,   label: 'The runes wake',   color: '#8fd8ff' });
-  store.addCinematicMarker(cinematicId, { time: 17.6, label: 'Communion',        color: '#aeeaff' });
-  store.addCinematicMarker(cinematicId, { time: 21.6, label: 'Overload',         color: '#5b8cff' });
-  store.addCinematicMarker(cinematicId, { time: SHATTER_TIME, label: 'Shatter',  color: '#eafcff' });
-  store.addCinematicMarker(cinematicId, { time: 26.9, label: 'Reveal',           color: '#aeeaff' });
-
-  // ---- THE ASCENT — one keyframed transform track walks the hero up the ridge ----
-  // ~1.2 m/s to match the walk loop's cadence; y keys ride the slab tops.
-  store.addCinematicAction(cinematicId, {
-    type: 'transform',
-    time: 0,
-    duration: DURATION,
-    label: 'Hero ascent',
-    objectId: heroId,
-    transformKeyframes: [
-      // A held breath at the foot of the ridge (duplicate keys pin the spline flat).
-      { time: 0,    position: [13.5, 39.3, 0.15], rotation: [0, 0, 0], scale: [1, 1, 1] },
-      { time: 2.0,  position: [13.5, 39.3, 0.15], rotation: [0, 0, 0], scale: [1, 1, 1] },
-      { time: 5.5,  position: [9.6, 39.95, 0.08], rotation: [0, 0, 0], scale: [1, 1, 1] },
-      { time: 9.0,  position: [5.8, 40.5, 0],     rotation: [0, 0, 0], scale: [1, 1, 1] },
-      { time: 10.2, position: [4.2, 40.9, 0],     rotation: [0, 0, 0], scale: [1, 1, 1] },
-      // Arrive before the monolith and hold.
-      { time: 12.6, position: [0.8, 40.9, 0],     rotation: [0, 0, 0], scale: [1, 1, 1] },
-      { time: DURATION, position: [0.8, 40.9, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-    ],
-  });
-  // Acting beats: idle → walk → idle at the monolith. A hidden rig is unmounted, so
-  // each clip starts from frame one the moment its rig is revealed.
-  if (heroIdleId && heroWalkId) {
-    const rigSwaps: Array<{ time: number; label: string; show: string; hide: string }> = [
-      { time: 2.0,  label: 'Walk begins',        show: heroWalkId, hide: heroIdleId },
-      { time: 12.6, label: 'Stand at the stone', show: heroIdleId, hide: heroWalkId },
-    ];
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Hero rigs reset', objectId: heroWalkId, visible: false });
-    rigSwaps.forEach(({ time, label, show, hide }) => {
-      store.addCinematicAction(cinematicId, { type: 'visibility', time, label, objectId: show, visible: true });
-      store.addCinematicAction(cinematicId, { type: 'visibility', time, label, objectId: hide, visible: false });
-    });
+  for (const id of middle.segments) beat({ type: 'material', label: 'Afterglow / light settles', time: 24, duration: 5, objectId: id, fromMaterial: { emissiveColor: '#dbffff', emissiveIntensity: 5 }, toMaterial: { emissiveColor: CYAN, emissiveIntensity: 1.2 } });
+  for (const [id, on, off] of [[chargeLight, 16, 27], [impactLight, 24, 24.3]] as const) {
+    beat({ type: 'visibility', label: 'Light cue / initially off', time: 0, objectId: id, visible: false });
+    beat({ type: 'visibility', label: 'Light cue / on', time: on, objectId: id, visible: true });
+    beat({ type: 'visibility', label: 'Light cue / off', time: off, objectId: id, visible: false });
   }
+  beat({ type: 'visibility', label: 'Seam removed with fractured shell', time: 24, objectId: seam, visible: false });
+  beat({ type: 'material', label: 'Heart / afterglow', time: 24, duration: 6, objectId: heart, fromMaterial: { emissiveColor: '#e3ffff', emissiveIntensity: 7 }, toMaterial: { emissiveColor: CYAN, emissiveIntensity: 2.5 } });
+  beat({ type: 'fade', label: 'Release / brief cyan exposure flash', time: 23.98, duration: 0.32, fadeDip: true, fadeFrom: 0, fadeTo: 0.65, fadeColor: '#deffff' });
+  // Cinematic timeDilation only affects the sequence clock. Blueprint Set Time Scale slows the
+  // simulation; its reciprocal here preserves the 32s music/camera edit during the slow-motion shot.
+  beat({ type: 'timeDilation', label: 'Keep camera and score in real time during slow motion', time: 24, duration: 2, timeScale: 4 });
+  beat({ type: 'timeDilation', label: 'Restore camera clock after slow motion', time: 26, timeScale: 1 });
 
-  // ---- CAMERA — nine chained shots ----
-  // Shot 1 · The wind: macro rack-focus on a ridge flag rippling — cloth IS the opening image.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 0,
-    duration: 3.0,
-    label: 'Shot 1 · The wind (macro)',
-    interpolation: 'smooth',
-    shake: 0.05,
-    shakeFrequency: 0.8,
-    keyframes: [
-      { time: 0,   position: [13.9, 40.8, 0.7], lookAt: [12.6, 40.5, -1.1], fov: 34, aperture: 4.5, focusDistance: 2.2 },
-      { time: 3.0, position: [13.6, 40.7, 0.4], lookAt: [12.6, 40.6, -1.1], fov: 34, aperture: 4.5, focusDistance: 2.0 },
-    ],
-  });
-  // Shot 2 · Above the clouds: wide establishing — the peak, the banner ridge, the tiny hero.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 3.0,
-    duration: 3.4,
-    label: 'Shot 2 · Above the clouds (wide)',
-    interpolation: 'smooth',
-    blend: 0.8,
-    shake: 0.04,
-    shakeFrequency: 0.6,
-    keyframes: [
-      { time: 3.0, position: [22, 44.5, 16],   lookAt: [2, 41.5, 0], fov: 36, aperture: 1.6, focusDistance: 26 },
-      { time: 6.4, position: [19.5, 43.8, 14], lookAt: [2, 41.5, 0], fov: 36, aperture: 1.6, focusDistance: 23 },
-    ],
-  });
-  // Shot 3 · The ascent: follow rig tracking alongside the hero past the streaming flags.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 6.4,
-    duration: 4.2,
-    label: 'Shot 3 · The ascent (follow)',
-    followObjectId: heroId,
-    followOffset: [1.8, 0.6, 3.2],
-    lookAtObjectId: heroId,
-    focusObjectId: heroId,
-    aperture: 2.8,
-    fov: 40,
-    blend: 1.0,
-    shake: 0.07,
-    shakeFrequency: 1.0,
-  });
-  // Shot 4 · Arrival: low static past the monolith's shoulder as the hero walks in and stops.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 10.6,
-    duration: 3.2,
-    label: 'Shot 4 · Arrival (low front)',
-    position: [-2.2, 41.6, 2.8],
-    lookAtObjectId: heroId,
-    focusObjectId: heroId,
-    aperture: 2.6,
-    fov: 44,
-    blend: 0.7,
-    shake: 0.05,
-    shakeFrequency: 0.9,
-  });
-  // Shot 5 · The runes wake: crane up the monolith face as the glyphs ignite bottom-up.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 13.8,
-    duration: 3.8,
-    label: 'Shot 5 · The runes wake (crane)',
-    interpolation: 'smooth',
-    blend: 0.8,
-    shake: 0.05,
-    shakeFrequency: 0.8,
-    keyframes: [
-      { time: 13.8, position: [-0.6, 41.0, 2.0], lookAt: [-2.8, 41.6, 0], fov: 40, aperture: 3, focusDistance: 3.2 },
-      { time: 17.6, position: [-0.4, 46.4, 2.4], lookAt: [-2.9, 46.0, 0], fov: 40, aperture: 3, focusDistance: 3.4 },
-    ],
-  });
-  // Shot 6 · Communion: a slow keyframed arc around hero + monolith while the charge builds.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 17.6,
-    duration: 4.0,
-    label: 'Shot 6 · Communion (orbit)',
-    interpolation: 'smooth',
-    blend: 1.0,
-    shake: 0.06,
-    shakeFrequency: 0.9,
-    keyframes: [
-      { time: 17.6, position: [3.8, 42.3, 1.4],  lookAt: [-2.2, 43.4, 0], fov: 38, aperture: 3.4, focusDistance: 6.2 },
-      { time: 19.0, position: [1.3, 42.6, 4.8],  lookAt: [-2.2, 43.5, 0], fov: 38, aperture: 3.4, focusDistance: 5.8 },
-      { time: 20.4, position: [-2.9, 42.9, 5.3], lookAt: [-2.4, 43.6, 0], fov: 38, aperture: 3.4, focusDistance: 5.3 },
-      { time: 21.6, position: [-6.0, 43.1, 3.2], lookAt: [-2.6, 43.7, 0], fov: 38, aperture: 3.4, focusDistance: 4.6 },
-    ],
-  });
-  // Shot 7 · Overload: a tightening push-in on the seam, shake climbing with the swell.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 21.6,
-    duration: 1.6,
-    label: 'Shot 7 · Overload (push-in)',
-    interpolation: 'smooth',
-    blend: 0.5,
-    shake: 0.12,
-    shakeFrequency: 3.5,
-    keyframes: [
-      { time: 21.6, position: [1.6, 42.0, 1.4], lookAt: [-2.9, 43.4, 0], fov: 30, aperture: 3.5, focusDistance: 4.8 },
-      { time: 23.2, position: [0.2, 42.3, 0.7], lookAt: [-2.9, 43.6, 0], fov: 30, aperture: 3.5, focusDistance: 3.6 },
-    ],
-  });
-  // Shot 8a · Shatter framing: locked wide of the summit an instant before the hit...
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 23.2,
-    duration: 0.8,
-    label: 'Shot 8 · Shatter framing',
-    position: [4.2, 41.8, 3.4],
-    lookAt: [-3, 43.2, 0],
-    fov: 46,
-    aperture: 2.4,
-    focusDistance: 8,
-    blend: 0.4,
-    shake: 0.1,
-    shakeFrequency: 2.5,
-  });
-  // ...8b · same framing, violent shake — the cut is invisible, only the shatter lands.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: SHATTER_TIME,
-    duration: 2.6,
-    label: 'Shot 8 · Shatter shake',
-    position: [4.2, 41.8, 3.4],
-    lookAt: [-3, 44.0, 0],
-    fov: 46,
-    aperture: 2.4,
-    focusDistance: 8,
-    shake: 0.3,
-    shakeFrequency: 9,
-  });
-  // Shot 9 · Reveal crane: rise off the summit and settle on the wordmark over the clouds.
-  store.addCinematicAction(cinematicId, {
-    type: 'camera',
-    time: 26.6,
-    duration: DURATION - 26.6,
-    label: 'Shot 9 · Reveal crane',
-    interpolation: 'smooth',
-    blend: 1.8,
-    shake: 0.04,
-    shakeFrequency: 0.6,
-    keyframes: [
-      { time: 26.6, position: [9, 43.5, 5],      lookAt: [-1.5, 46, 0],   fov: 42, aperture: 3, focusDistance: 11 },
-      { time: 29.3, position: [11.5, 49.5, 1.5], lookAt: [-1, 52.0, 0],   fov: 42, aperture: 3, focusDistance: 13 },
-      { time: DURATION, position: [12.3, 50.8, 0], lookAt: [-1, 52.4, 0], fov: 42, aperture: 3, focusDistance: 13.5 },
-    ],
-  });
+  const endScreen = store.createUIDocument('Resonance · Replay', 'screen');
+  store.updateUIDocument(endScreen, { visibleOnStart: false, css: '.resonance-credit { letter-spacing: 2px; } .resonance-replay { cursor: pointer; } .resonance-replay:hover { background: #b7f2ef !important; } .resonance-replay:focus-visible { outline: 3px solid #ffca8a; outline-offset: 4px; }' });
+  const root = useEditorStore.getState().uiDocuments.find(d => d.id === endScreen)!.root.id;
+  // A screen root fills the viewport. Anchor a child card so the final tableau stays visible.
+  store.updateUIElement(endScreen, root, { name: 'Replay screen', style: { padding: '0', background: 'transparent' } });
+  const card = store.addUIElement(endScreen, root, 'panel');
+  store.updateUIElement(endScreen, card, { name: 'Closing card', anchor: { h: 'center', v: 'bottom', offsetX: 0, offsetY: 55 }, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '18px 30px', background: 'rgba(8,23,31,.88)', border: '1px solid rgba(137,216,221,.3)', borderRadius: '4px', color: '#eef8f7', width: '390px', maxWidth: '85vw' } });
+  const caption = store.addUIElement(endScreen, card, 'text');
+  store.updateUIElement(endScreen, caption, { name: 'Installation credit', text: 'RESONANCE  /  Made in Feather', className: 'resonance-credit', style: { fontSize: '14px', textAlign: 'center' } });
+  const replay = store.addUIElement(endScreen, card, 'button');
+  store.updateUIElement(endScreen, replay, { name: 'Replay film', text: 'Replay film', className: 'resonance-replay', style: { padding: '11px 30px', background: '#86d9df', color: '#102b35', fontWeight: '700', borderRadius: '3px' } });
+  store.setUIButtonAction(endScreen, replay, { kind: 'restartScene' });
 
-  // ---- BIRDS — gliding arcs riding the wind during the ascent ----
-  birdIds.forEach(({ id, cx, cy, cz, radius, phase }) => {
-    const keys: CinematicTransformKeyframe[] = [];
-    for (let k = 0; k <= 12; k += 1) {
-      const angle = phase + (k / 12) * Math.PI * 3;
-      keys.push({
-        time: (k / 12) * 14,
-        position: [cx + Math.cos(angle) * radius, cy + Math.sin(angle * 0.7) * 0.9, cz + Math.sin(angle) * radius],
-        rotation: [0, -angle, 0],
-        scale: [0.6, 0.06, 0.18],
-      });
-    }
-    store.addCinematicAction(cinematicId, {
-      type: 'transform', time: 0, duration: 14,
-      label: 'Bird glide',
-      objectId: id,
-      transformKeyframes: keys,
+  const director = part('empty', '05 · Director / open Blueprint to edit cues', CORE, [1, 1, 1], '#ffffff');
+  const { blueprintId } = store.createBlueprintNamed('Resonance · Physics & replay cues', 'Timeline events launch the ball, fracture the shell, slow physics and show Replay. R restarts the entire authored scene.');
+  store.attachScript(director, blueprintId);
+  const chain = (eventName: string, row: number, specs: Array<[string, NodeForgeNodeData['category'], Partial<NodeForgeNodeData>]>) => {
+    let prev = store.addGraphNodeToBlueprint(blueprintId, 'Custom Event', 'Events', { eventName }, { x: 0, y: row * 230 });
+    specs.forEach(([label, category, data], index) => {
+      const node = store.addGraphNodeToBlueprint(blueprintId, label, category, data, { x: (index + 1) * 310, y: row * 230 });
+      store.connectGraphNodes(blueprintId, prev, node, 'exec-out', 'exec-in');
+      prev = node;
     });
-  });
+  };
+  chain('resonance_launch', 0, [['Apply Impulse', 'Physics', { targetObjectId: ball, axis: 'x', amount: 24, space: 'world' }]]);
+  chain('resonance_release', 1, [['Fracture', 'Physics', { targetObjectId: core }], ['Set Time Scale', 'Runtime', { numberValue: 0.25 }]]);
+  chain('resonance_afterglow', 2, [['Set Time Scale', 'Runtime', { numberValue: 1 }]]);
+  chain('resonance_finished', 3, [['Show UI', 'UI', { documentId: endScreen }], ['Set Time Scale', 'Runtime', { numberValue: 0 }]]);
+  const key = store.addGraphNodeToBlueprint(blueprintId, 'Key Down', 'Events', { keyCode: 'KeyR', keyTriggerMode: 'pressed' }, { x: 0, y: 920 });
+  const restart = store.addGraphNodeToBlueprint(blueprintId, 'Load Scene', 'Runtime', { restartScene: true }, { x: 310, y: 920 });
+  store.connectGraphNodes(blueprintId, key, restart, 'exec-out', 'exec-in');
+  for (const [time, eventName] of [[8.15, 'resonance_launch'], [24, 'resonance_release'], [26, 'resonance_afterglow'], [31.7, 'resonance_finished']] as const) beat({ type: 'event', label: eventName.replace(/_/g, ' / '), time, eventName });
+  for (const [time, label, color] of [[0, 'Wind', GOLD], [4, 'Resonance', CYAN], [8.15, 'Impulse → collision', GOLD], [14, 'Radiance', CYAN], [19, 'Charge', CYAN], [24, 'Live fracture / slow physics', '#ffffff'], [26, 'Afterglow', CYAN], [31.7, 'Replay', GOLD]] as const) store.addCinematicMarker(cinematicId, { time, label, color, determinismFence: time === 24 });
 
-  // ---- RUNES WAKE — glyphs flare bottom-up as the hero stands before the stone ----
-  runeEntries.forEach(({ id, at, peak }) => {
-    store.addCinematicAction(cinematicId, {
-      type: 'material',
-      time: at,
-      duration: SHATTER_TIME - at,
-      label: 'Rune ignite',
-      objectId: id,
-      materialKeyframes: [
-        { time: at,        emissiveColor: '#8fd8ff', emissiveIntensity: 0 },
-        { time: at + 0.2,  emissiveColor: '#eafcff', emissiveIntensity: peak },
-        { time: at + 1.2,  emissiveColor: '#8fd8ff', emissiveIntensity: 3.5 },
-        { time: SHATTER_TIME, emissiveColor: '#bfe8ff', emissiveIntensity: 6 },
-      ],
-    });
+  const audioFolder = store.createFolder('Resonance · Score & sound');
+  const audio = await Promise.all([
+    importAudio('fall', 'fall_music.wav', audioFolder), importAudio('fall', 'wind_rush.mp3', audioFolder),
+    importAudio('monolith', 'portal_approach.mp3', audioFolder), importAudio('monolith', 'lightning_crack.mp3', audioFolder),
+    importAudio('monolith', 'awakening_impact.mp3', audioFolder), importAudio('monolith', 'arrival_chime.mp3', audioFolder),
+  ]);
+  audio.forEach((asset, index) => {
+    if (asset) beat({ type: 'sound', label: ['Score / Resonance', 'Wind / opening', 'Charge / swell', 'Release / crack', 'Release / impact', 'Afterglow / chime'][index], time: [0, 0.8, 19, 24, 24, 28][index], soundId: asset.id });
   });
-  // The core seam wakes last, then pulses harder and harder through the overload.
-  store.addCinematicAction(cinematicId, {
-    type: 'material',
-    time: 17.4,
-    duration: SHATTER_TIME - 17.4,
-    label: 'Core seam overload',
-    objectId: seamId,
-    materialKeyframes: [
-      { time: 17.4, emissiveColor: '#8fd8ff', emissiveIntensity: 0 },
-      { time: 17.8, emissiveColor: '#eafcff', emissiveIntensity: 8 },
-      { time: 19.0, emissiveColor: '#8fd8ff', emissiveIntensity: 4 },
-      { time: 20.4, emissiveColor: '#bfe8ff', emissiveIntensity: 7 },
-      { time: 21.6, emissiveColor: '#8fd8ff', emissiveIntensity: 5 },
-      { time: 22.8, emissiveColor: '#eafcff', emissiveIntensity: 10 },
-      { time: SHATTER_TIME, emissiveColor: '#ffffff', emissiveIntensity: 16 },
-    ],
-  });
-  // Rune light + charge swirl appear with the seam; swirl dies with the stone.
-  [monolithLightId, swirlId].forEach((id) => {
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Charge kit off', objectId: id, visible: false });
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 17.5, label: 'Charge kit on', objectId: id, visible: true });
-  });
-  store.addCinematicAction(cinematicId, { type: 'visibility', time: SHATTER_TIME, label: 'Charge swirl off', objectId: swirlId, visible: false });
-
-  // ---- THE SHATTER — at t=24 the monolith swaps to flying debris ----
-  [monolithId, seamId, ...runeEntries.map((r) => r.id)].forEach((id) => {
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: SHATTER_TIME, label: 'Monolith gone', objectId: id, visible: false });
-  });
-  [burstId, sparksId, shockwaveId, impactLightId].forEach((id) => {
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Shatter kit off', objectId: id, visible: false });
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: SHATTER_TIME, label: 'Shatter kit on', objectId: id, visible: true });
-  });
-  store.addCinematicAction(cinematicId, { type: 'visibility', time: 26.8, label: 'Shatter burst off', objectId: burstId, visible: false });
-  store.addCinematicAction(cinematicId, { type: 'visibility', time: 27.5, label: 'Shatter sparks off', objectId: sparksId, visible: false });
-  shardEntries.forEach(({ id, from, to, spin }) => {
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Shard hidden', objectId: id, visible: false });
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: SHATTER_TIME, label: 'Shard flies', objectId: id, visible: true });
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 26.3, label: 'Shard gone', objectId: id, visible: false });
-    store.addCinematicAction(cinematicId, {
-      type: 'transform',
-      time: SHATTER_TIME,
-      duration: 1.7,
-      label: 'Shard blast',
-      objectId: id,
-      transformKeyframes: [
-        { time: SHATTER_TIME,       position: from, rotation: [0, 0, 0], scale: [1, 1, 1] },
-        { time: SHATTER_TIME + 1.7, position: to,   rotation: spin,      scale: [1, 1, 1] },
-      ],
-    });
-  });
-  // Shockwave: a flattened sphere disc racing across the plateau while its glow decays.
-  store.addCinematicAction(cinematicId, {
-    type: 'transform',
-    time: SHATTER_TIME,
-    duration: 2.2,
-    label: 'Shockwave expand',
-    objectId: shockwaveId,
-    transformKeyframes: [
-      { time: SHATTER_TIME,       position: [MONOLITH_POS[0], PLATEAU_TOP_Y + 0.15, 0], rotation: [0, 0, 0], scale: [0.1, 0.05, 0.1] },
-      { time: SHATTER_TIME + 2.2, position: [MONOLITH_POS[0], PLATEAU_TOP_Y + 0.15, 0], rotation: [0, 0, 0], scale: [24, 0.05, 24] },
-    ],
-  });
-  store.addCinematicAction(cinematicId, {
-    type: 'material',
-    time: SHATTER_TIME,
-    duration: 2.2,
-    label: 'Shockwave glow decay',
-    objectId: shockwaveId,
-    materialKeyframes: [
-      { time: SHATTER_TIME,       emissiveColor: '#ffffff', emissiveIntensity: 9 },
-      { time: SHATTER_TIME + 0.4, emissiveColor: '#dffaff', emissiveIntensity: 5 },
-      { time: SHATTER_TIME + 2.2, emissiveColor: '#dffaff', emissiveIntensity: 0 },
-    ],
-  });
-  // White-cyan flash on the hit — a dip so it resolves clean on both sides.
-  store.addCinematicAction(cinematicId, {
-    type: 'fade',
-    time: SHATTER_TIME - 0.05,
-    duration: 0.9,
-    label: 'Shatter flash',
-    fadeDip: true,
-    fadeFrom: 0,
-    fadeTo: 0.9,
-    fadeColor: '#dffaff',
-  });
-
-  // ---- WORDMARK — strokes fly in from scattered offsets and snap into the logo ----
-  // Each stroke is hidden until the shatter, then one small transform track carries it
-  // from a deterministic scatter (below/around, toward the dead monolith) to its final
-  // local pose, staggered so the logo assembles like debris finding its shape.
-  wordmarkStrokes.forEach(({ id, position, scale }, index) => {
-    const scatter: Vector3Tuple = [
-      position[0] + jitter(index * 3 + 1) * 6.5,
-      position[1] - 5.5 + jitter(index * 5 + 2) * 3.5,
-      position[2] + jitter(index * 7 + 3) * 3.0,
-    ];
-    const start = SHATTER_TIME + 0.25 + (index % 9) * 0.045;
-    const end = 26.4 + index * 0.012;
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Stroke hidden', objectId: id, visible: false });
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: start, label: 'Stroke flies in', objectId: id, visible: true });
-    store.addCinematicAction(cinematicId, {
-      type: 'transform',
-      time: start,
-      duration: end - start,
-      label: 'Stroke converge',
-      objectId: id,
-      transformKeyframes: [
-        { time: start, position: scatter,  rotation: [jitter(index + 11) * 2, jitter(index + 13) * 2.5, jitter(index + 19) * 1.8], scale },
-        { time: end,   position: position, rotation: [0, 0, 0], scale },
-      ],
-    });
-  });
-  // Halos + wordmark light stay dark until the strokes have landed.
-  haloIds.forEach((id) => {
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Halo hidden', objectId: id, visible: false });
-    store.addCinematicAction(cinematicId, { type: 'visibility', time: 26.9, label: 'Halo on', objectId: id, visible: true });
-  });
-  store.addCinematicAction(cinematicId, { type: 'visibility', time: 0, label: 'Wordmark light off', objectId: logoLightId, visible: false });
-  store.addCinematicAction(cinematicId, { type: 'visibility', time: 27.0, label: 'Wordmark light on', objectId: logoLightId, visible: true });
-  // The neon flicker ignition — per-stroke desync sells the "real sign" feel.
-  wordmarkStrokes.forEach(({ id }, index) => {
-    const o = (index % 7) * 0.012;
-    store.addCinematicAction(cinematicId, {
-      type: 'material',
-      time: 27.0 + o,
-      duration: 0.55,
-      label: 'Wordmark neon flicker',
-      objectId: id,
-      interpolation: 'hold',
-      materialKeyframes: [
-        { time: 27.00 + o, emissiveColor: '#0a1424', emissiveIntensity: 0  },
-        { time: 27.05 + o, emissiveColor: '#aeeaff', emissiveIntensity: 11 },
-        { time: 27.11 + o, emissiveColor: '#0a1424', emissiveIntensity: 0  },
-        { time: 27.20 + o, emissiveColor: '#aeeaff', emissiveIntensity: 8  },
-        { time: 27.26 + o, emissiveColor: '#0a1424', emissiveIntensity: 0  },
-        { time: 27.36 + o, emissiveColor: '#aeeaff', emissiveIntensity: 5  },
-        { time: 27.42 + o, emissiveColor: '#0a1424', emissiveIntensity: 0  },
-        { time: 27.50 + o, emissiveColor: '#aeeaff', emissiveIntensity: 6  },
-      ],
-    });
-    store.addCinematicAction(cinematicId, {
-      type: 'material',
-      time: 27.55,
-      duration: DURATION - 27.55,
-      label: 'Wordmark neon on',
-      objectId: id,
-      interpolation: 'smooth',
-      materialKeyframes: [
-        { time: 27.55, emissiveColor: '#aeeaff', emissiveIntensity: 6  },
-        { time: 28.20, emissiveColor: '#ffffff', emissiveIntensity: 13 },
-        { time: 29.40, emissiveColor: '#aeeaff', emissiveIntensity: 11 },
-        { time: DURATION, emissiveColor: '#aeeaff', emissiveIntensity: 11 },
-      ],
-    });
-  });
-  haloIds.forEach((id) => {
-    store.addCinematicAction(cinematicId, {
-      type: 'material',
-      time: 27.6,
-      duration: DURATION - 27.6,
-      label: 'Halo neon on',
-      objectId: id,
-      interpolation: 'smooth',
-      materialKeyframes: [
-        { time: 27.6,  emissiveColor: '#aeeaff', emissiveIntensity: 0 },
-        { time: 28.5,  emissiveColor: '#ffffff', emissiveIntensity: 8 },
-        { time: 29.7,  emissiveColor: '#aeeaff', emissiveIntensity: 6 },
-        { time: DURATION, emissiveColor: '#aeeaff', emissiveIntensity: 6 },
-      ],
-    });
-  });
-  // The wordmark drifts a few degrees through the reveal so it reads alive, not pasted on.
-  store.addCinematicAction(cinematicId, {
-    type: 'transform',
-    time: 27,
-    duration: DURATION - 27,
-    label: 'Wordmark drift',
-    objectId: logoEmptyId,
-    transformKeyframes: [
-      { time: 27,       position: LOGO_POS, rotation: [0, Math.PI / 2 - 0.05, 0], scale: [1, 1, 1] },
-      { time: DURATION, position: LOGO_POS, rotation: [0, Math.PI / 2 + 0.05, 0], scale: [1, 1, 1] },
-    ],
-  });
-
-  // ---- TEXT OVERLAYS — film-style cards riding the ascent ----
-  store.addCinematicAction(cinematicId, {
-    type: 'text', time: 1.4, duration: 2.8,
-    label: 'Opening line',
-    text: 'Where the wind never rests',
-    textStyle: 'subtitle',
-    textColor: '#cfe4ff',
-  });
-  store.addCinematicAction(cinematicId, {
-    type: 'text', time: 7.0, duration: 2.8,
-    label: 'Presents card',
-    text: 'FEATHER ENGINE PRESENTS',
-    textStyle: 'title',
-    textColor: '#eef6ff',
-  });
-  store.addCinematicAction(cinematicId, {
-    type: 'text', time: 12.4, duration: 2.6,
-    label: 'Cloth card',
-    text: 'REAL-TIME CLOTH · ONE GLOBAL WIND',
-    textStyle: 'lowerThird',
-    textColor: '#9fdcff',
-  });
-  store.addCinematicAction(cinematicId, {
-    type: 'text', time: 18.6, duration: 2.6,
-    label: 'Light card',
-    text: 'VOLUMETRIC LIGHT · MATERIAL TRACKS',
-    textStyle: 'lowerThird',
-    textColor: '#8fd8ff',
-  });
-  store.addCinematicAction(cinematicId, {
-    type: 'text', time: 28.5, duration: 3.2,
-    label: 'Closing tagline',
-    text: 'Every frame rendered live in your browser',
-    textStyle: 'subtitle',
-    textColor: '#dcefff',
-  });
-
-  // Close to black + final event.
-  store.addCinematicAction(cinematicId, {
-    type: 'fade',
-    time: DURATION - 1.4,
-    duration: 1.4,
-    label: 'Fade out',
-    fadeFrom: 0,
-    fadeTo: 1,
-    fadeColor: '#06080f',
-  });
-  store.addCinematicAction(cinematicId, {
-    type: 'event',
-    time: DURATION - 0.25,
-    label: 'Fire cinematic_finished',
-    eventName: 'cinematic_finished',
-  });
-
   store.setActiveCinematic(cinematicId);
-  store.selectObject(heroId);
+  store.selectObject(director);
   return cinematicId;
 }

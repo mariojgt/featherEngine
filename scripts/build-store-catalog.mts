@@ -1269,7 +1269,14 @@ async function main() {
     if (problems.length) doubled.push(`  ${file}: ${problems.join('; ')}`);
     const slug = name.replace(/\.nfpack$/, '');
     const [from, to, glyph] = TEMPLATE_THUMBNAILS[slug] ?? ['#5B8CFF', '#1B2C63', '\u{1F5FA}'];
-    entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: thumbnail(from, to, glyph) }));
+    let cover = thumbnail(from, to, glyph);
+    if (slug === 'template-cinematic') {
+      // A capture of the shipped scene, produced by scripts/e2e/resonance.mjs. Inline like the
+      // other covers so the catalog remains portable/offline, even when served from another host.
+      const preview = await readFile(join(OUT_DIR, 'previews', 'resonance.png')).catch(() => null);
+      if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
+    }
+    entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }));
     console.log(`  ${file} — ${(raw.byteLength / 1048576).toFixed(1)} MB single file (exported from the editor)`);
   }
 

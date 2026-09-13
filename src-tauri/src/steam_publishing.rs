@@ -30,9 +30,18 @@ pub(crate) struct SteamPublishRequest {
     account: String,
     app_id: u32,
     depot_id: u32,
+    #[serde(default)]
+    additional_depots: Vec<SteamDepot>,
     description: String,
     branch: Option<String>,
     preview: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamDepot {
+    depot_id: u32,
+    content_root: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -49,6 +58,7 @@ pub(crate) struct SteamPublishResult {
     status: SteamPublishStatus,
     app_id: u32,
     depot_id: u32,
+    depot_ids: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,12 +123,19 @@ fn run_steam_publish_impl(
     let branch = validate_request(&request)?;
     let steamcmd = resolve_steamcmd(&request.sdk_path).map_err(|errors| errors.join(" "))?;
     let content_root = validate_content_root(&request.content_root)?;
+    let mut extra_roots = Vec::new();
+    for depot in &request.additional_depots {
+        extra_roots.push((depot.depot_id, validate_content_root(&depot.content_root)?));
+    }
 
     let cache_root = app_cache.join("steam-publishing");
     ensure_safe_directory(&cache_root)?;
     let canonical_cache = std::fs::canonicalize(&cache_root)
         .map_err(|error| format!("Could not open the Steam publishing cache: {error}"))?;
-    if canonical_cache.starts_with(&content_root) || content_root.starts_with(&canonical_cache) {
+    if std::iter::once(&content_root)
+        .chain(extra_roots.iter().map(|(_, root)| root))
+        .any(|root| canonical_cache.starts_with(root) || root.starts_with(&canonical_cache))
+    {
         return Err(
       "Choose a narrower game content folder; it currently contains Feather's Steam publishing cache."
         .into(),
@@ -148,6 +165,12 @@ fn run_steam_publish_impl(
         &depot_vdf_path,
     );
     write_new_file(&depot_vdf_path, depot_vdf.as_bytes())?;
+    for (id, root) in &extra_roots {
+        write_new_file(
+            &job.0.join(format!("depot_{id}.vdf")),
+            render_depot_vdf(*id, root).as_bytes(),
+        )?;
+    }
     write_new_file(&app_vdf_path, app_vdf.as_bytes())?;
 
     let mode = if request.preview { "preview" } else { "upload" };
@@ -254,6 +277,9 @@ fn run_steam_publish_impl(
         status: result_status,
         app_id: request.app_id,
         depot_id: request.depot_id,
+        depot_ids: std::iter::once(request.depot_id)
+            .chain(request.additional_depots.iter().map(|d| d.depot_id))
+            .collect(),
         build_id: observations.build_id.clone(),
         branch,
     })
@@ -277,6 +303,15 @@ fn validate_request(request: &SteamPublishRequest) -> Result<Option<String>, Str
     }
     if request.depot_id == 0 {
         return Err("Steam Depot ID must be greater than zero.".into());
+    }
+    if request.additional_depots.len() > 7 {
+        return Err("A Steam build supports at most eight depots in Feather.".into());
+    }
+    let mut ids = std::collections::HashSet::from([request.depot_id]);
+    for depot in &request.additional_depots {
+        if depot.depot_id == 0 || !ids.insert(depot.depot_id) {
+            return Err("Each platform must have a unique positive Steam Depot ID.".into());
+        }
     }
     validate_account(&request.account)?;
 
@@ -620,6 +655,22 @@ fn render_app_vdf(
     build_output: &Path,
     depot_vdf_path: &Path,
 ) -> String {
+    let extras = request
+        .additional_depots
+        .iter()
+        .map(|depot| {
+            format!(
+                "    \"{}\" \"{}\"\n",
+                depot.depot_id,
+                vdf_path(
+                    &depot_vdf_path
+                        .parent()
+                        .unwrap_or(Path::new("."))
+                        .join(format!("depot_{}.vdf", depot.depot_id))
+                )
+            )
+        })
+        .collect::<String>();
     let set_live = if !request.preview {
         branch
             .map(|branch| format!("  \"SetLive\" \"{}\"\n", vdf_escape(branch)))
@@ -628,7 +679,7 @@ fn render_app_vdf(
         String::new()
     };
     format!(
-    "\"AppBuild\"\n{{\n  \"AppID\" \"{}\"\n  \"Desc\" \"{}\"\n  \"BuildOutput\" \"{}\"\n  \"ContentRoot\" \"{}\"\n  \"Preview\" \"{}\"\n{}  \"Depots\"\n  {{\n    \"{}\" \"{}\"\n  }}\n}}\n",
+    "\"AppBuild\"\n{{\n  \"AppID\" \"{}\"\n  \"Desc\" \"{}\"\n  \"BuildOutput\" \"{}\"\n  \"ContentRoot\" \"{}\"\n  \"Preview\" \"{}\"\n{}  \"Depots\"\n  {{\n    \"{}\" \"{}\"\n{extras}  }}\n}}\n",
     request.app_id,
     vdf_escape(&request.description),
     vdf_path(build_output),
@@ -757,6 +808,7 @@ mod tests {
             account: "build_account".into(),
             app_id: 480,
             depot_id: 481,
+            additional_depots: vec![],
             description: "Release candidate 1".into(),
             branch: Some("private-beta".into()),
             preview: false,
@@ -783,6 +835,7 @@ mod tests {
             status: SteamPublishStatus::LiveBeta,
             app_id: 480,
             depot_id: 481,
+            depot_ids: vec![481],
             build_id: Some("12345".into()),
             branch: Some("private-beta".into()),
         })
@@ -822,6 +875,39 @@ mod tests {
         let depot_vdf = render_depot_vdf(481, Path::new("/game content"));
         assert!(depot_vdf.starts_with("\"DepotBuild\"\n{"));
         assert!(!depot_vdf.contains("DepotBuildConfig"));
+    }
+
+    #[test]
+    fn maps_platform_depots_into_one_build_and_rejects_duplicate_ids() {
+        let mut request = request();
+        request.additional_depots = vec![
+            SteamDepot {
+                depot_id: 482,
+                content_root: "/linux game".into(),
+            },
+            SteamDepot {
+                depot_id: 483,
+                content_root: "/mac game".into(),
+            },
+        ];
+        assert!(validate_request(&request).is_ok());
+        let vdf = render_app_vdf(
+            &request,
+            None,
+            Path::new("/windows game"),
+            Path::new("/cache"),
+            Path::new("/jobs/depot_481.vdf"),
+        );
+        for id in [481, 482, 483] {
+            assert!(vdf.contains(&format!("\"{id}\" \"/jobs/depot_{id}.vdf\"")));
+        }
+        assert!(!vdf.contains("SetLive"));
+        assert!(render_depot_vdf(482, Path::new("/linux game"))
+            .contains("\"ContentRoot\" \"/linux game\""));
+        request.additional_depots[0].depot_id = 481;
+        assert!(validate_request(&request).is_err());
+        request.additional_depots[0].depot_id = 0;
+        assert!(validate_request(&request).is_err());
     }
 
     #[test]

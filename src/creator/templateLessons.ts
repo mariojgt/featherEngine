@@ -9,6 +9,12 @@ export interface TemplateLesson {
 
 /** Shared by the launcher, catalog builder, and learning documentation. */
 export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
+  'template-cinematic': {
+    version: 1, difficulty: 'Beginner', minutes: 10,
+    goal: 'Watch Resonance, then remix its cameras, lighting and real physics cues.',
+    controls: 'Play watches the film · Replay film or R starts again · Stop returns to editing',
+    lessons: ['Open Cinematic and select one of eight named camera shots.', 'Change the global wind to move all four cloth banners.', 'Tune the reactor material or Lux lighting in the scene.', 'Open Physics & replay cues to change the impulse or fracture timing; Play from the start to simulate it.'],
+  },
   'template-platformer': {
     version: 1, difficulty: 'Beginner', minutes: 10,
     goal: 'Collect sun seeds and reach Sunny at the end of the cloud course.',

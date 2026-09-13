@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { luxBudget, luxCoverage, resolveLux } from '../lux/settings';
+import { luxBudget, luxCoverage, luxRoomWeight, resolveLux } from '../lux/settings';
 import { createLuxUniforms, LuxMaterials } from '../lux/materials';
 import { readLuxPixels, renderLuxFace } from '../lux/cache';
 
@@ -30,6 +30,17 @@ describe('Lux rendering contracts', () => {
     expect(luxBudget({ ...settings, quality: 'performance' }, 'Epic')?.resolution).toBe(32);
   });
 
+  it('sanitizes room bounds, limits captures, and clips lighting outside rooms', () => {
+    const lux = resolveLux({ enabled: true, mode: 'rooms', rooms: Array.from({ length: 6 }, () => ({ id: 'same', name: 'Room', center: [0, 2, 0], size: [10, 4, 10], blendDistance: 1, capturePosition: [100, 2, -100] })) });
+    expect(lux.rooms).toHaveLength(4); expect(new Set(lux.rooms.map((room) => room.id)).size).toBe(4);
+    expect(lux.rooms[0].capturePosition).toEqual([4.95, 2, -4.95]);
+    expect(luxRoomWeight([0, 2, 0], lux.rooms[0])).toBe(1);
+    expect(luxRoomWeight([4.5, 2, 0], lux.rooms[0])).toBe(0.5);
+    expect(luxRoomWeight([5, 2, 0], lux.rooms[0])).toBe(0);
+    expect(luxRoomWeight([50, 2, 0], lux.rooms[0])).toBe(0);
+    expect(resolveLux().rooms).toEqual([]);
+  });
+
   it('uses bounded continuous coverage instead of tinting the entire scene', () => {
     expect(luxCoverage(0, 20)).toBe(1);
     expect(luxCoverage(13, 20)).toBe(1);
@@ -54,7 +65,7 @@ describe('Lux rendering contracts', () => {
     expect(custom).toHaveBeenCalledOnce();
     uniforms.luxActive.value = 0.4;
     expect(shader.uniforms.luxActive.value).toBe(0.4);
-    expect(material.customProgramCacheKey()).toBe('wind|lux-1.0');
+    expect(material.customProgramCacheKey()).toBe('wind|lux-2.0');
     expect(shader.fragmentShader).toContain('lux_textureCubeUV');
     expect(shader.fragmentShader).toContain('getLightProbeIrradiance(luxSH');
     const map = new THREE.Texture(); material.envMap = map; material.envMapIntensity = 2;

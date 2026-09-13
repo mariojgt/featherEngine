@@ -71,6 +71,8 @@ const isSimpleQuery = (text: string): boolean =>
 
 /** Human-friendly label for a tool call shown as a chip in the chat. */
 function describeToolCall(toolName: string, input: Record<string, unknown>): string {
+  if (toolName === 'performance_assistant') return `Performance Assistant: ${String(input.action ?? 'open')}`;
+  if (toolName === 'build_centre') return `Build Centre: ${String(input.action ?? 'open')}`;
   switch (toolName) {
     case 'search_engine_tools':
       return `Found actions${input.query ? ` for “${String(input.query).slice(0, 42)}”` : ''}`;
@@ -294,7 +296,7 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'create_first_person_template':
       return 'Built FPS template';
     case 'create_film_mode_template':
-      return 'Built "The Summit" cinematic template';
+      return 'Built "Resonance" cinematic showcase';
     case 'create_timeline_showcase_template':
       return 'Built Timeline Mechanics showcase';
     case 'create_spline_studio_template':
@@ -517,6 +519,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Set ${String(input.key ?? 'variable')}`;
     case 'create_collectible_counter':
       return `Created ${String(input.label ?? input.variableName ?? 'collectible')} pickup`;
+    case 'set_ui_button_action':
+      return 'Configured button action';
+    case 'get_interaction_problems':
+      return 'Checked button and Blueprint connections';
     case 'open_ui_logic':
       return 'Opened UI logic';
     case 'delete_ui_document':
@@ -534,7 +540,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'export_game':
       return 'Exported game';
     case 'export_production':
-      return 'Staged production build';
+      return 'Opened game build';
+    case 'configure_build_profile': return 'Configured game build';
+    case 'get_build_status': return 'Checked game build';
+    case 'open_steam_publisher': return 'Opened Steam publishing';
     case 'list_export_platforms':
       return 'Checked export platforms';
     default:

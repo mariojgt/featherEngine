@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { openEditor } from './harness.mjs';
+const app = await openEditor({ baseUrl: 'http://127.0.0.1:17420', query: '?demo=store', width: 1200, height: 800 });
+app.page.socket.on('message', data => { const message = JSON.parse(data.toString()); if (message.method === 'Runtime.exceptionThrown') console.error(JSON.stringify(message.params)); });
+const mark = async (text, id) => app.evaluate(`(() => { const el = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(text)}); if (!el) throw new Error('Missing button: ' + ${JSON.stringify(text)}); el.dataset.e2e = ${JSON.stringify(id)}; el.scrollIntoView({block:'center'}); })()`);
+try {
+  await app.evaluate(`window.__featherStore.updateRenderSettings({quality:'Low', bloomEnabled:false})`);
+  await app.realClick('[data-menu="view"] > button'); await mark('Performance Assistant…', 'perf'); await app.realClick('[data-e2e="perf"]');
+  await app.waitFor('document.querySelector(\'[aria-label="Performance Assistant"]\')');
+  await mark('Play and measure · 12 seconds', 'measure'); await app.realClick('[data-e2e="measure"]');
+  await app.waitFor('document.querySelector(".performance-recording")');
+  await app.waitFor('document.querySelector(\'[aria-label="Performance Assistant"]\') && !document.querySelector(".performance-recording")', { timeout: 25000 });
+  const content = await app.text('[aria-label="Performance Assistant"]');
+  const error = await app.text('[aria-label="Performance Assistant"] [role="alert"]');
+  if (error) console.log(await app.evaluate(`(async () => ({ frameHistory: (await import('/src/runtime/perfStats.ts')).getFrameHistory(), runtime: window.__featherStore.runtimeTime, playing: window.__featherStore.isPlaying }))()`));
+  assert.equal(error, null, content);
+  assert.ok(await app.count('.workflow-metrics'), content);
+  const samples = Number(/([\d,]+) frames · simulation/.exec(content)?.[1].replace(/,/g, ''));
+  assert.ok(samples >= 20, content);
+  const screenshot = await app.page.call('Page.captureScreenshot', { format: 'png' }); writeFileSync('/tmp/feather-performance-assistant.png', Buffer.from(screenshot.data, 'base64'));
+  await app.realClick('[aria-label="Close Performance Assistant"]');
+  await mark('Export', 'export'); await app.realClick('[data-e2e="export"]'); await mark('Build Centre…', 'build'); await app.realClick('[data-e2e="build"]');
+  await app.waitFor('document.querySelector(\'[aria-label="Build Centre"]\')');
+  assert.ok((await app.text('[aria-label="Build Centre"]')).includes('Review local build'));
+  assert.equal(await app.evaluate('document.querySelector(\'[aria-label="GitHub repository"]\').disabled'), true);
+  const shot = await app.page.call('Page.captureScreenshot', { format: 'png' }); writeFileSync('/tmp/feather-build-centre.png', Buffer.from(shot.data, 'base64'));
+  await mark('Review local build…', 'local'); await app.realClick('[data-e2e="local"]');
+  await app.waitFor('document.querySelector(".report-overlay") || document.querySelector(".build-report-overlay") || [...document.querySelectorAll(\'[role="dialog"]\')].some(el => /Build Report|Build report/.test(el.textContent))');
+  console.log(JSON.stringify({ result: 'passed', frames: samples, screenshots: ['/tmp/feather-performance-assistant.png', '/tmp/feather-build-centre.png'] }));
+} finally { await app.dispose(); }

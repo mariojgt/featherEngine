@@ -106,6 +106,7 @@ export const applyLoadProject = (project: NodeForgeProject): Partial<EditorState
         animations: project.animations ?? [],
         animatorControllers: project.animatorControllers ?? [],
         uiDocuments: project.uiDocuments ?? [],
+        uiEditorMode: 'design',
         blueprints: project.blueprints,
         graphs: normalizedGraphs,
         prefabs,

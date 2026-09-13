@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:17420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run prepare:runtime"
   },
   "app": {
     "windows": [
@@ -31,6 +31,7 @@
     }
   },
   "bundle": {
+    "resources": { "export-runtime/": "export-runtime/" },
     "active": true,
     "targets": "all",
     "icon": [

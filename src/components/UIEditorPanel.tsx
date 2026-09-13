@@ -1,3 +1,4 @@
+import { UIButtonActionFields } from './UIButtonActionFields';
 import { isWorkspacePanelMaximized, onWorkspacePanelMaximizedChange, toggleWorkspacePanelMaximized } from './workspacePanels';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -51,7 +52,6 @@ const TEMPLATE_ICON: Record<UITemplateKind, typeof PanelIcon> = {
   inventory: Blocks,
 };
 
-type Mode = 'design' | 'logic';
 
 const ELEMENT_KINDS: Array<{ kind: UIElementKind; label: string; icon: typeof PanelIcon }> = [
   { kind: 'panel', label: 'Panel', icon: PanelIcon },
@@ -344,12 +344,7 @@ function Properties({ doc, element }: { doc: UIDocument; element: UIElement }) {
           )}
         </>
       )}
-      {element.kind === 'button' && (
-        <label className="node-field">
-          <span>On click → event</span>
-          <input value={element.onClickEvent ?? ''} placeholder="e.g. restart" onChange={(event) => updateUIElement(doc.id, element.id, { onClickEvent: event.target.value || undefined })} />
-        </label>
-      )}
+      {element.kind === 'button' && <UIButtonActionFields doc={doc} element={element} />}
 
       {/* Interactive controls: two-way bind to a variable (reads + writes it during Play). */}
       {valueControl && (
@@ -752,7 +747,8 @@ export function UIEditorPanel() {
   const selectedId = useEditorStore((state) => state.selectedUIElementId);
   const selectUIElement = useEditorStore((state) => state.selectUIElement);
   const [addingUnder, setAddingUnder] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>('design');
+  const mode = useEditorStore(state => state.uiEditorMode);
+  const setMode = useEditorStore(state => state.setUIEditorMode);
   const [widgetSearch, setWidgetSearch] = useState('');
   const [focused, setFocused] = useState(() => isWorkspacePanelMaximized('ui'));
   useEffect(() => onWorkspacePanelMaximizedChange('ui', setFocused), []);

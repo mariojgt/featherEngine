@@ -1,3 +1,4 @@
+import { uiClickCaption } from '../ui/buttonActions';
 import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
 import { useEditorStore } from '../store/editorStore';
 import {
@@ -636,7 +637,9 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
   const valueInputs = valueInputsFor(data.nodeKind);
   const variables = useEditorStore((state) => state.variables);
   const dataAssets = useEditorStore((state) => state.dataAssets);
-  const detail = nodeDetail(data, variables, dataAssets);
+  const clickCaption = useEditorStore(state => uiClickCaption(id, data, state.uiDocuments));
+  const detail = clickCaption ? 'Button clicked' : nodeDetail(data, variables, dataAssets);
+  const label = clickCaption ?? data.label;
   const storeSelected = useEditorStore((state) => state.selectedGraphNodeId === id);
   const activeBlueprintId = useEditorStore((state) => state.activeBlueprintId);
   const collaborationParticipants = useCollaborationStore((state) => state.participants);
@@ -797,7 +800,7 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
         </span>
         <div className="nfn-titles">
           <span className="nfn-kicker">{data.category}</span>
-          <strong className="nfn-label">{data.label}</strong>
+          <strong className="nfn-label">{label}</strong>
         </div>
         <span className="nfn-mode">{nodeMode}</span>
         {/* Breakpoint toggle. Lives in the header rather than as a gutter dot on the node's left

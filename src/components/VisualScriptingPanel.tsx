@@ -1,3 +1,5 @@
+import { uiClickCaption } from '../ui/buttonActions';
+import { nodeInteractionHints } from '../ui/interactionProblems';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Background, Controls, MiniMap, ReactFlow, useReactFlow, type Connection, type Edge, type NodeTypes } from '@xyflow/react';
 import {
@@ -872,10 +874,11 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
     <aside className="graph-inspector" aria-label={`Details for ${node.data.label}`}>
       <div className="graph-inspector-header">
         <span className="eyebrow">Node Inspector</span>
-        <h3>{node.data.label}</h3>
+        <h3>{uiClickCaption(node.id, node.data, uiDocuments) ?? node.data.label}</h3>
       </div>
 
       <div className="node-inspector-body">
+        {nodeInteractionHints(node, uiDocuments, scenes).map(message => <p className="interaction-guidance" role="status" key={message}>{message}</p>)}
         <label className="node-field">
           <span>Kind</span>
           <input value={node.data.nodeKind} readOnly />
@@ -1634,17 +1637,23 @@ export function NodeInspector({ node }: { node?: NodeForgeNode }) {
           <label className="node-field">
             <span>Scene</span>
             <select
-              value={node.data.targetSceneId ?? ''}
-              onChange={(event) => updateGraphNodeData(node.id, { targetSceneId: event.target.value || undefined })}
+              value={node.data.restartScene ? '$current' : node.data.targetSceneId ?? ''}
+              onChange={(event) => updateGraphNodeData(node.id, { restartScene: event.target.value === '$current', targetSceneId: event.target.value === '$current' ? undefined : event.target.value || undefined })}
             >
               <option value="">Select a scene…</option>
+              <option value="$current">Current level (restart)</option>
               {scenes.map((scene) => (
                 <option key={scene.id} value={scene.id}>
                   {scene.name}
                 </option>
               ))}
             </select>
-            <small className="node-hint">Switches scene during Play. Project variables persist; the leaving scene resets.</small>
+            <small className="node-hint">Loads a level during Play. Restart resets the current level. Project variables persist.</small>
+            <span>Close screen after loading</span>
+            <select aria-label="Close screen after loading" value={node.data.hideUIDocumentId ?? ''} onChange={event => updateGraphNodeData(node.id, { hideUIDocumentId: event.target.value || undefined })}>
+              <option value="">None</option>
+              {uiDocuments.filter(d => d.surface === 'screen' && !d.isComponent).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
           </label>
         )}
 

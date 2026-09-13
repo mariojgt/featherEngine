@@ -122,6 +122,18 @@ export function batchSignature(batches: Map<string, SceneObject[]>): string {
   return parts.sort().join('|');
 }
 
+/** Small spatial batches can be culled and select distant detail independently. Membership is
+ * stable for the static decoration eligible for instancing. */
+export function splitInstanceCells(objects: SceneObject[], cellSize = 32): Map<string, SceneObject[]> {
+  const cells = new Map<string, SceneObject[]>();
+  const size = Number.isFinite(cellSize) && cellSize > 0 ? cellSize : 32;
+  for (const object of objects) {
+    const key = object.transform.position.map((value) => Math.floor(value / size)).join(',');
+    const cell = cells.get(key); if (cell) cell.push(object); else cells.set(key, [object]);
+  }
+  return cells;
+}
+
 /** Stable empty batch map reused when instancing is off — avoids allocating a Map every render. */
 export const EMPTY_INSTANCE_BATCHES: Map<string, SceneObject[]> = new Map();
 

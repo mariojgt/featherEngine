@@ -3275,6 +3275,15 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
         <span>Break on impact</span>
         <NumberInput value={fracture.impactThreshold} min={0} step={0.5} onChange={(v) => setObjectFracture(objectId, { impactThreshold: v })} />
       </label>
+      <label className="field-row">
+        <span>Debris lifetime (s)</span>
+        <NumberInput value={fracture.debrisLifetime ?? 12} min={0.1} max={120} step={1} onChange={(debrisLifetime) => setObjectFracture(objectId, { debrisLifetime })} />
+      </label>
+      <label className="field-row">
+        <span>Inherit velocity</span>
+        <input type="checkbox" checked={fracture.inheritVelocity !== false} onChange={(e) => setObjectFracture(objectId, { inheritVelocity: e.target.checked })} />
+      </label>
+      <p className="field-hint">Pieces carry the object's motion and expire after their lifetime. The oldest debris is recycled above 256 live fracture pieces.</p>
       <p className="field-hint">
         Break on impact = hit speed (units/sec) that auto-shatters it; 0 = only when destroyed by damage or a Fracture
         node. Needs physics enabled to be hit. {isGrid ? `${fracture.pieces ** 3} pieces.` : 'Change Seed for a different-looking break.'}

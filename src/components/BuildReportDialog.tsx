@@ -18,6 +18,8 @@ import { isDesktop as runningInDesktopShell } from '../platform';
 import type { ExportPlatformInfo, ExportPlatformsReport } from '../platform/types';
 import type { ExportProfile, ExportTargetId } from '../types';
 import { validateExportProfile } from '../project/exportProfiles';
+import { DEFAULT_COOK_OPTIONS } from '../project/cookAssets';
+import { getPlatform } from '../platform';
 
 /** Single asset above this size gets flagged in the breakdown — it dominates load time. */
 const LARGE_ASSET_BYTES = 8 * 1024 * 1024;
@@ -273,7 +275,11 @@ export function BuildReportDialog() {
                   <label><span>First scene</span><select value={profile.startSceneId} onChange={(event) => setProfile({ ...profile, startSceneId: event.target.value })}>{pending.bundle.project.scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.name}</option>)}</select></label>
                 </div>
                 <PlatformPicker selected={new Set(profile.targets)} onToggle={toggleTarget} platforms={platforms ?? (runningInDesktopShell ? null : STAGED_PLATFORMS)} staged={!runningInDesktopShell} error={platformsError} onRetry={() => void loadExportPlatforms()} />
-                {!runningInDesktopShell && <p>The browser editor downloads a build package. Run its build command from the engine folder to create the playable output.</p>}
+                {!runningInDesktopShell && <p>Web exports download a complete playable archive. Native games can be packaged in the desktop editor.</p>}
+                {runningInDesktopShell && <button className="prefs-link-button" onClick={() => void (async () => {
+                  const platform = await getPlatform(); const directory = await platform.pickDirectory?.('Choose an extracted Feather runner pack');
+                  if (directory && platform.installRunnerPack) { await platform.installRunnerPack(directory); await loadExportPlatforms(); }
+                })().catch((error) => useProjectStore.setState({ toast: { kind: 'error', message: String(error) } }))}>Install platform runtime…</button>}
               </>}
               {isProduction && step === 'check' && <section className="report-section">
                 <h3>{hasErrors || profileErrors.length ? 'Resolve the errors below' : 'Project checks passed'}</h3>
@@ -471,6 +477,13 @@ export function BuildReportDialog() {
                       Include runtime diagnostics
                     </label>
                   </div>
+                  <fieldset className="report-section">
+                    <legend>Prepare game assets</legend>
+                    <p>Each target gets its own cached asset variants. Your original project files are preserved.</p>
+                    {([
+                      ['geometry', 'Prepare mesh detail levels'], ['textures', 'Compress and resize model textures for the target'], ['streamAssets', 'Load assets as needed from separate game files'],
+                    ] as const).map(([key, label]) => <label className="field-row" key={key}><span>{label}</span><input type="checkbox" checked={profile.optimization?.[key] ?? DEFAULT_COOK_OPTIONS[key]} onChange={(event) => setProfile({ ...profile, optimization: { ...DEFAULT_COOK_OPTIONS, ...profile.optimization, [key]: event.target.checked } })} /></label>)}
+                  </fieldset>
                   {profileErrors.length > 0 && (
                     <ul className="report-issues error">
                       {profileErrors.map((error) => (

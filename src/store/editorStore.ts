@@ -1,3 +1,5 @@
+import { applySetUIButtonAction } from './editor/uiButtonActions';
+import type { UIButtonAction } from '../ui/buttonActions';
 import { applyReplaceObjectAppearance } from './editor/appearanceActions';
 import type { Edge, OnConnect, OnEdgesChange, OnNodesChange, OnReconnect } from '@xyflow/react';
 import { create } from 'zustand';
@@ -1418,6 +1420,9 @@ export interface EditorState {
   selectUIElement: (id: string) => void;
   /** Ensure a UI document has a runnable behaviour blueprint (+ "UI Logic" controller object). Returns its id. */
   openUILogic: (docId: string) => string;
+  uiEditorMode: 'design' | 'logic';
+  setUIEditorMode: (mode: 'design' | 'logic') => void;
+  setUIButtonAction: (docId: string, elementId: string, action: UIButtonAction) => { blueprintId?: string; nodeId?: string };
   /** Add a child element under `parentId` (or the doc root when omitted). Returns the new element id. */
   addUIElement: (docId: string, parentId: string | undefined, kind: UIElementKind) => string;
   updateUIElement: (docId: string, elementId: string, patch: Partial<Omit<UIElement, 'id' | 'children'>>) => void;
@@ -1976,6 +1981,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setActiveUIDocument: (id) => applySetActiveUIDocument(set, id),
   selectUIElement: (id) => applySelectUIElement(set, id),
   openUILogic: (docId) => applyOpenUILogic(set, get, docId),
+  uiEditorMode: 'design',
+  setUIEditorMode: (mode) => set({ uiEditorMode: mode }),
+  setUIButtonAction: (docId, elementId, action) => applySetUIButtonAction(set, docId, elementId, action),
   addUIElement: (docId, parentId, kind) => applyAddUIElement(set, docId, parentId, kind),
   updateUIElement: (docId, elementId, patch) => applyUpdateUIElement(set, docId, elementId, patch),
   removeUIElement: (docId, elementId) => applyRemoveUIElement(set, docId, elementId),

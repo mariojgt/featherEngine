@@ -33,7 +33,7 @@ if (!process.argv.includes('--editor-only')) try {
   assert.equal(await evaluate('luxQA.status().maxFaces'),1,'At most one capture face per frame');
   const stats=await evaluate('luxQA.status()');
   await evaluate('luxQA.stop()');await delay(500);
-  assert.ok(!(await evaluate('luxQA.hooks()')).includes('lux-1.0'),'Disabling restores authored material hooks');
+  assert.ok(!(await evaluate('luxQA.hooks()')).includes('lux-2.0'),'Disabling restores authored material hooks');
   const restored=await evaluate('luxQA.pixels()');
   assert.deepEqual(restored.diffuse,baseline.diffuse,'Disabling restores original direct/ambient light exactly');
   const idle=await evaluate('luxQA.resources()');
@@ -52,8 +52,10 @@ else await dispose();
 const app=await openEditor({baseUrl,query:'?demo=store'});
 try {
   await app.evaluate('window.__featherStore.selectObject("")');
+  await app.evaluate('[...document.querySelectorAll("button")].find(button => button.textContent.trim() === "Scene settings")?.setAttribute("data-lux-open-scene", "true")');
+  await app.realClick('[data-lux-open-scene]');
   await app.waitFor('document.querySelector(".lux-settings")');
-  await app.evaluate('document.querySelector(".lux-settings input[type=checkbox]").click()');
+  await app.realClick('.lux-settings input[type=checkbox]');
   await app.waitFor('document.querySelector("[data-lux-status=ready]")',{timeout:90000});
   const settings=await app.evaluate('window.__featherStore.scenes.find(s=>s.id===window.__featherStore.activeSceneId).environment.lux');
   assert.equal(settings.enabled,true);

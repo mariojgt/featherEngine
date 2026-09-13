@@ -1,3 +1,4 @@
+import { usePerformanceAssistantStore } from '../store/performanceAssistantStore';
 import { useEffect, useState } from 'react';
 import { getFrameHistory, getPerfSnapshot, type PerfSnapshot, type RuntimeSection } from '../runtime/perfStats';
 import { getReactProfile, type ReactProfileRow } from '../runtime/reactProfile';
@@ -200,6 +201,7 @@ export function PerfOverlay() {
 
       {expanded && (
         <>
+          <button onClick={() => { setVisible(false); usePerformanceAssistantStore.getState().show(); }}>Open Performance Assistant</button>
           <FrameGraph frames={frames} />
           <Row label="frame" value={`${fmt(frameMs.avg)} / p95 ${fmt(frameMs.p95)}ms`} />
           {/* Smoothness, not speed: dropped 2-frame budgets + outright stalls since Play started. */}

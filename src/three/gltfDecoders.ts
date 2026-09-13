@@ -1,5 +1,6 @@
 import type { WebGLRenderer } from 'three';
-import { KTX2Loader } from 'three-stdlib';
+import { KTX2Loader, type GLTFLoader } from 'three-stdlib';
+import { preparedLodPlugin } from './preparedLodLoader';
 
 /**
  * Compressed-asset DECODE config, shared by every `useGLTF` call site.
@@ -43,8 +44,9 @@ function getKTX2Loader(): KTX2Loader {
  * using `KHR_texture_basisu` decode on the GPU. Pass as the 4th arg to `useGLTF`. A stable reference
  * so it doesn't churn drei's loader setup.
  */
-export function extendGLTFLoader(loader: { setKTX2Loader: (loader: KTX2Loader) => unknown }): void {
+export function extendGLTFLoader(loader: Pick<GLTFLoader, 'setKTX2Loader'> & Partial<Pick<GLTFLoader, 'register'>>): void {
   loader.setKTX2Loader(getKTX2Loader());
+  loader.register?.(preparedLodPlugin);
 }
 
 /**

@@ -278,7 +278,7 @@ const readySnapshotExpression = `(() => {
     webgl,
     heading: document.querySelector('.smoke-heading')?.textContent?.trim() || '',
     script: document.querySelector('.smoke-script-status')?.textContent?.trim() || '',
-    assetData: image?.getAttribute('src')?.startsWith('data:image/svg+xml') || false,
+    assetData: (image?.getAttribute('src')?.startsWith('data:image/svg+xml') || image?.getAttribute('src')?.startsWith('./game-assets/')) || false,
     assetDecoded: Boolean(image?.complete && image?.naturalWidth > 0),
     cinematicText: document.querySelector('.cinematic-text-line')?.textContent?.trim() || '',
     cinematicPosition: document.querySelector('.cinematic-overlay')?.style.position || '',
@@ -444,7 +444,7 @@ async function main() {
     await delay(300);
     assert.deepEqual([...new Set(problems)], [], `Production browser reported failures:\n${[...new Set(problems)].join('\n')}`);
     console.log(
-      `OK: Real-browser player smoke passed (WebGL, embedded asset, physics, Blueprint, HUD, water/cloth/cable, cinematic overlay${legacyDir ? ', migration' : ''}).`,
+      `OK: Real-browser player smoke passed (WebGL, asset delivery, physics, Blueprint, HUD, water/cloth/cable, cinematic overlay${legacyDir ? ', migration' : ''}).`,
     );
   } finally {
     cdp?.close();
@@ -456,6 +456,11 @@ async function main() {
       ]);
       if (chrome.exitCode === null) chrome.kill('SIGKILL');
     }
+    // Chrome helpers can inherit stderr after the browser exits. Release that pipe so a passed
+    // smoke check does not keep the export command alive waiting on an unrelated helper process.
+    chrome?.stdout?.destroy();
+    chrome?.stderr?.destroy();
+    chrome?.unref();
     const serverClosed = closeServer(staticServer);
     staticServer.closeAllConnections?.();
     await serverClosed;

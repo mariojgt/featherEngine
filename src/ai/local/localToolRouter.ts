@@ -25,6 +25,8 @@ const LOCAL_TOOL_RESULT_CHARS = 1200;
 /** Every engine tool belongs to one deterministic capability group. */
 export const LOCAL_TOOL_GROUPS: Record<LocalToolGroup, readonly EngineToolName[]> = {
   core: [
+    'performance_assistant',
+    'build_centre',
     'list_scene',
     'inspect_object',
     'list_scenes',
@@ -233,6 +235,9 @@ export const LOCAL_TOOL_GROUPS: Record<LocalToolGroup, readonly EngineToolName[]
     'export_project_package',
     'export_game',
     'export_production',
+    'configure_build_profile',
+    'get_build_status',
+    'open_steam_publisher',
     'list_export_platforms',
   ],
   ui: [
@@ -258,6 +263,8 @@ export const LOCAL_TOOL_GROUPS: Record<LocalToolGroup, readonly EngineToolName[]
     'add_ui_preset',
     'move_ui_element',
     'duplicate_ui_element',
+    'set_ui_button_action',
+    'get_interaction_problems',
     'open_ui_logic',
     'delete_ui_document',
   ],

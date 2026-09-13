@@ -430,6 +430,10 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
   /** action.loadScene: id of the Scene to switch to during Play — project variables persist across the
    *  load (run state like score/floor), the leaving scene reverts to pristine, and physics rebuilds. */
   targetSceneId?: string;
+  /** Load Scene: reset the current scene to its authored state; project variables persist. */
+  restartScene?: boolean;
+  /** Screen hidden after this level loads (e.g. the Start menu). */
+  hideUIDocumentId?: string;
   /** action.setMovementMode: how the target character moves until changed — 'walking' (normal gravity),
    *  'swimming' (buoyant float; jump=up, crouch=down), 'climbing' (XZ locked, fwd/back = up/down), or
    *  'flying' (no gravity, free 3D; jump=up, crouch=down). Drives the swimming/climbing animator sources. */

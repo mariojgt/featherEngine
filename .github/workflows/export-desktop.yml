@@ -65,6 +65,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Reuse prepared player assets
+        uses: actions/cache@v4
+        with:
+          path: .feather-cache/assets
+          key: assets-${{ runner.os }}-${{ hashFiles('package-lock.json', 'src/three/prepareGeometry.ts', 'src/project/cookAssets.ts', 'scripts/lib/cook-build.mjs') }}-${{ github.run_id }}
+          restore-keys: |
+            assets-${{ runner.os }}-${{ hashFiles('package-lock.json', 'src/three/prepareGeometry.ts', 'src/project/cookAssets.ts', 'scripts/lib/cook-build.mjs') }}-
+
       - name: Fetch game bundle
         if: inputs.bundle_url != ''
         shell: bash

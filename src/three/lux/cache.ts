@@ -8,9 +8,12 @@ export interface LuxStatus {
   state: 'warming' | 'capturing' | 'ready' | 'error';
   captures: number; faces: number; captureMs: number; hdr: boolean; resolution: number;
   position: number[]; error?: string;
+  rooms?: Array<{ id: string; name: string; state: string; captures: number }>;
 }
 const statuses = new Map<string, LuxStatus>();
 export const getLuxStatus = (sceneId: string): LuxStatus | undefined => statuses.get(sceneId);
+export function publishLuxStatus(sceneId: string, status: LuxStatus) { statuses.set(sceneId, status); }
+export function removeLuxStatus(sceneId: string, status: LuxStatus) { if (statuses.get(sceneId) === status) statuses.delete(sceneId); }
 
 /** Three r171 leaves PIXEL_PACK_BUFFER bound while its async fence is pending. Detach it after
  * submission so synchronous pixel readers (picking, screenshots, other effects) keep working. */
@@ -96,6 +99,7 @@ export class LuxCache {
   constructor(
     readonly gl: THREE.WebGLRenderer, readonly scene: THREE.Scene,
     readonly sceneId: string, readonly budget: LuxBudget,
+    readonly owner?: { active: { value: number } },
   ) {
     this.materials = new LuxMaterials(this.uniforms, gl);
     const hdr = gl.extensions.has('EXT_color_buffer_float');
@@ -113,7 +117,8 @@ export class LuxCache {
     statuses.set(sceneId, this.status);
   }
 
-  update(camera: THREE.Camera, settings: LuxSettings, elapsed: number, dt: number) {
+  /** Room orchestration grants only one capture a frame; smoothing continues for every room. */
+  update(camera: THREE.Camera, settings: LuxSettings, elapsed: number, dt: number, allowCapture = true) {
     if (this.disposed || this.status.state === 'error') return;
     const u = this.uniforms;
     u.luxIndirect.value = settings.indirectIntensity;
@@ -128,7 +133,7 @@ export class LuxCache {
     if (this.nonce !== settings.refreshNonce) {
       this.nonce = settings.refreshNonce; this.nextCapture = 0;
     }
-    if (elapsed >= this.nextMaterialScan) {
+    if (!this.owner && elapsed >= this.nextMaterialScan) {
       this.materials.sync(this.scene); this.nextMaterialScan = elapsed + 0.5;
     }
     if (this.ready) {
@@ -136,7 +141,7 @@ export class LuxCache {
       u.luxSH.value.forEach((coefficient, i) => coefficient.lerp(this.desiredSH.coefficients[i], blend));
       u.luxActive.value = Math.min(1, u.luxActive.value + dt * 4);
     }
-    if (this.busy) return; // Do not overwrite any face while asynchronous readback is in flight.
+    if (this.busy || !allowCapture) return; // Do not overwrite a face while readback is in flight.
     this.frame += 1;
     if (this.frame < 3 || this.frame % this.budget.faceStride !== 0) return;
     if (this.face < 0) {
@@ -151,7 +156,7 @@ export class LuxCache {
     try {
       const faceCamera = this.cube.children[this.face] as THREE.PerspectiveCamera;
       faceCamera.layers.mask = camera.layers.mask;
-      renderLuxFace(this.gl, this.scene, faceCamera, this.target, this.face, u.luxActive);
+      renderLuxFace(this.gl, this.scene, faceCamera, this.target, this.face, this.owner?.active ?? u.luxActive);
       this.captureCost += performance.now() - started;
       this.face += 1; this.status.faces += 1;
       if (this.face < 6) return; // Hard budget: at most ONE scene face per animation frame.
@@ -188,6 +193,9 @@ export class LuxCache {
       });
     } catch (error) { this.fail(error); }
   }
+
+  canCapture(elapsed: number) { return !this.disposed && !this.busy && this.status.state !== 'error' && (this.face >= 0 || elapsed >= this.nextCapture); }
+  get capturing() { return this.face >= 0 || this.busy; }
 
   private fail(error: unknown) {
     if (this.disposed) return;

@@ -1,5 +1,7 @@
 mod collaboration;
 mod steam_publishing;
+mod production_runtime;
+mod build_centre;
 
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -661,10 +663,17 @@ async fn run_production_build(
   profile_json: String,
   targets: Vec<String>,
   out_dir: Option<String>,
+  variants: Option<std::collections::HashMap<String, String>>,
+  asset_reports: Option<serde_json::Value>,
 ) -> Result<String, String> {
   tauri::async_runtime::spawn_blocking(move || {
-    let root = find_engine_root()?;
     validate_production_targets(&targets)?;
+    if let Some(variants) = variants {
+      if targets.iter().all(|target| target != "android" && target != "ios") {
+        return production_runtime::build(&app, variants, profile_json, targets, out_dir.ok_or("Choose a build output directory")?, asset_reports.unwrap_or(serde_json::Value::Null));
+      }
+    }
+    let root = find_engine_root()?;
 
     // Stage the exact audited bundle/profile pair. The script validates both again before writing
     // any output, so direct command invocation has the same parity gate as the editor flow.
@@ -747,8 +756,9 @@ async fn run_production_build(
 /// per export platform, whether this machine can build it right now, what is missing (with fix
 /// hints), or whether it should be built on CI. The frontend export dialog renders this.
 #[tauri::command]
-async fn check_export_platforms() -> Result<String, String> {
+async fn check_export_platforms(app: AppHandle) -> Result<String, String> {
   tauri::async_runtime::spawn_blocking(move || {
+    if production_runtime::runtime_root(&app).is_ok() { return production_runtime::platform_report(&app); }
     let root = find_engine_root()?;
     let output = Command::new("node")
       .args(["scripts/platform-doctor.mjs", "--json"])
@@ -816,6 +826,10 @@ pub fn run() {
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
       run_production_build,
+      build_centre::cloud_build,
+      production_runtime::install_runner_pack,
+      production_runtime::inspect_production_build,
+      production_runtime::test_production_build,
       steam_publishing::check_steam_tools,
       steam_publishing::run_steam_publish,
       check_export_platforms,

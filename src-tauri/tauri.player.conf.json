@@ -25,6 +25,7 @@
     }
   },
   "bundle": {
+    "resources": [],
     "active": true,
     "targets": "all"
   }

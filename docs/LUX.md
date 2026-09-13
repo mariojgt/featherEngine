@@ -1,4 +1,4 @@
-# Lux 1.0
+# Lux 2.0
 
 Lux adds dynamic local indirect lighting and reflections to Feather's existing WebGL renderer. Lit surfaces and emissive materials contribute colored light to nearby standard and physical materials. It works in the editor and the standalone player without baking lightmaps or installing another renderer.
 
@@ -10,11 +10,11 @@ The same scene after changing its emissive panel from red to blue. The floor rec
 
 ## Use it
 
-1. Deselect objects to open Scene Settings in the Inspector.
-2. Under **Lux 1.0**, turn on **Enable Lux**. Engine quality must be Medium, High or Epic.
+1. Deselect objects and click **Scene settings** in the Inspector.
+2. Under **Lux 2.0**, turn on **Enable Lux**. Engine quality must be Medium, High or Epic.
 3. Start with **Match engine quality** and **Follow camera**. Lighting appears after the first complete capture and updates continuously.
-4. For a room, choose **Fixed room position**, place the capture in empty space inside the room, and set **Coverage radius** to the room's size. Avoid putting the capture inside a mesh.
-5. Adjust **Indirect light** and **Reflection strength**. **Show coverage** visualizes the capture position and influence sphere. **Refresh lighting** clears and rebuilds the cache.
+4. For interiors, choose **Rooms**, then **Add room**. Set its centre and size to match the walls. Up to four rooms can overlap; their edges blend. The capture starts at the room centre. Turn off **Automatic capture position** to move it into empty space if needed. **Check walls and obstacles** reduces light leaking through interior geometry.
+5. Adjust **Indirect light** and **Reflection strength**. **Show coverage** visualizes room bounds or the camera/fixed influence sphere. **Refresh lighting** clears and rebuilds the caches.
 
 Use white or lightly colored rough surfaces to judge color bounce; use a smooth metallic material to judge reflections. A surface facing away from the source should receive less indirect light. Existing material environment maps and authored reflection probes take priority over Lux reflections.
 
@@ -37,7 +37,7 @@ The global engine quality caps the requested Lux quality. Selecting Cinematic Lu
 | Balanced | 64 × 64 | At most one face per frame | 0.5 seconds |
 | Cinematic | 128 × 128 | At most one face per frame | 0.25 seconds |
 
-Each batch contains six scene renders, followed by asynchronous pixel readback and PMREM filtering. The capture origin remains fixed throughout a batch. Readback must finish before another batch can overwrite the texture. Settings can request a longer update interval. The minimum pause, frame rate and readback latency together determine how quickly lighting responds.
+A radiance batch contains six scene renders, followed by asynchronous pixel readback and PMREM filtering. Rooms with wall checks also capture six depth faces. All rooms share the same scene-render budget in the table, including depth: adding rooms increases refresh latency rather than multiplying work per frame. PMREM filtering is additional work. Each room becomes active only after its initial radiance and depth are ready. The capture origin remains fixed throughout a batch. Readback must finish before another batch can overwrite the texture. Settings can request a longer update interval. The minimum pause, frame rate and readback latency together determine how quickly lighting responds.
 
 The status readout reports completed captures, effective resolution and HDR availability. Its timing is **CPU submission time summed across the batch plus filtering**, not measured GPU time or an FPS promise. Complex geometry, many materials and skinned meshes make each face more expensive. The engine's automatic quality control can reduce the budget during Play.
 
@@ -53,14 +53,16 @@ The existing Epic-quality screen-space reflections remain available through **Sc
 
 ## Scope and limits
 
-Lux 1.0 is a local, single-capture approximation of indirect illumination. It does not implement hardware ray tracing, mesh distance-field tracing, a multi-room surface cache, recursive multi-bounce transport, or Lumen's screen-probe final gather. It does not add screen-space diffuse GI.
+Lux 2.0 uses bounded local captures, spherical harmonics, box-projected reflections, and a shared depth atlas. It does not implement Lumen's hardware/software ray tracing, mesh distance fields, surface cache or recursive multi-bounce transport.
 
-Coverage is a sphere; walls do not clip or occlude its influence. Thin walls, multiple closed rooms and objects near the capture can show light leaking or cubemap parallax errors. Use a modest radius and a fixed position for a room. Fast movement, moving lights and changing emissive objects can briefly show older lighting. Large camera jumps invalidate the previous cache. Custom ShaderMaterial/toon shaders, transparent transport and refraction are outside the diffuse integration; they retain their existing rendering.
+Room bounds prevent contribution outside the volume. Radial depth from each capture reduces spill through opaque interior obstacles; it is an approximation, not a complete visibility solution. Thin walls, concave rooms, objects near the capture and moving geometry can still show leaks, parallax errors or stale light. Place captures in empty space and split complicated interiors into rooms. A four-room limit keeps WebGL shader and texture costs bounded.
+
+Camera/fixed modes retain spherical coverage and do not check walls. Large camera jumps invalidate their previous cache. Custom ShaderMaterial/toon shaders, transparent transport and refraction keep their existing rendering. Prepared LODs improve geometry cost, but Lux still renders scene geometry for captures.
 
 The architectural reference is Epic's combination of cached scene lighting and screen traces. Lux chooses a smaller capture-based implementation that fits Feather's forward WebGL renderer. See [Lumen technical details](https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-technical-details-in-unreal-engine) and [Lumen global illumination and reflections](https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-global-illumination-and-reflections-in-unreal-engine) for the full Unreal system.
 
 ## Verify changes
 
-Run `npm test`, `npm run build`, and `npm run build:player`. With the dev server running, `npm run test:lux` checks real WebGL pixels for emissive color bounce, changing radiance, reflections, capture scheduling, exact lighting restoration, GPU resource cleanup, and the editor controls. Artifacts are written to `exports/lux-acceptance/`.
+Run `npm test`, `npm run build`, and `npm run build:player`. With the dev server running, `npm run test:lux` checks real WebGL pixels for emissive color bounce, changing radiance, reflections, capture scheduling, exact lighting restoration, GPU resource cleanup, the editor controls, separate room colors, bounds, depth occlusion and the shared room budget. Artifacts are written to `exports/lux-acceptance/`.
 
 The standalone fixture at `/scripts/fixtures/lux-lighting.html` provides a reproducible lighting comparison. `npm run test:production` validates the exported player. Renderer changes must rebuild `dist-player` so new exports carry the updated implementation.

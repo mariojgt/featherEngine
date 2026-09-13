@@ -1,0 +1,105 @@
+# feather-build-centre-protocol: 1
+name: Feather Build Centre
+run-name: Feather build ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Build Centre request id
+        required: true
+        type: string
+      bundle_sha256:
+        description: SHA-256 of the reviewed game package
+        required: true
+        type: string
+      engine_sha:
+        description: Reviewed engine commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: feather-build-${{ inputs.request_id }}
+  cancel-in-progress: false
+jobs:
+  build:
+    name: ${{ matrix.target }} build and launch check
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+          - os: macos-latest
+            target: macos
+          - os: ubuntu-22.04
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Validate request
+        shell: bash
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+          ENGINE_SHA: ${{ inputs.engine_sha }}
+        run: |
+          [[ "$REQUEST_ID" =~ ^[a-f0-9]{32}$ ]] || exit 1
+          [[ "$BUNDLE_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          [[ "$ENGINE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.engine_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri/runner
+      - name: Install Linux webview and display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb libgl1-mesa-dri
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .feather-cache/assets
+          key: build-centre-assets-${{ runner.os }}-${{ hashFiles('package-lock.json', 'src/project/cookAssets.ts', 'src/three/prepareGeometry.ts') }}-${{ github.run_id }}
+          restore-keys: build-centre-assets-${{ runner.os }}-${{ hashFiles('package-lock.json', 'src/project/cookAssets.ts', 'src/three/prepareGeometry.ts') }}-
+      - name: Download reviewed game package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+        run: |
+          mkdir -p exports/staging
+          gh release download "feather-build-$REQUEST_ID" --pattern game.json --dir exports/staging
+          node --input-type=module -e 'import {readFileSync} from "node:fs"; import {createHash} from "node:crypto"; const hash=createHash("sha256").update(readFileSync("exports/staging/game.json")).digest("hex"); if(hash!==process.env.BUNDLE_SHA256) throw new Error("Reviewed package checksum mismatch");'
+      - name: Build player and host runtime
+        run: node scripts/prepare-editor-runtime.mjs
+      - name: Launch game
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          if [ "$BUILD_TARGET" = linux ]; then
+            xvfb-run -a node scripts/package-runtime-game.mjs --out "exports/cloud-$BUILD_TARGET"
+          else
+            node scripts/package-runtime-game.mjs --out "exports/cloud-$BUILD_TARGET"
+          fi
+      - name: Collect game and launch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-${{ matrix.target }}-${{ inputs.request_id }}
+          path: exports/cloud-${{ matrix.target }}/*
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,6 +1,7 @@
 import { WebIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS, KHRTextureBasisu } from '@gltf-transform/extensions';
 import { encodeToKTX2 } from 'ktx2-encoder';
+import { readModelDocument } from './modelDocument';
 
 /**
  * Encode-on-import: transcode a GLB's embedded PNG/JPG/WebP textures to GPU-native KTX2
@@ -38,8 +39,15 @@ export interface CompressionResult {
   compressed: boolean;
 }
 
-export async function compressGlbTextures(input: ArrayBuffer): Promise<CompressionResult> {
+export async function compressGlbTextures(input: ArrayBuffer, options: {
+  maxSize?: number;
+  throwOnFailure?: boolean;
+  imageDecoder?: (bytes: Uint8Array) => Promise<{ data: Uint8Array; width: number; height: number }>;
+} = {}): Promise<CompressionResult> {
   const beforeBytes = input.byteLength;
+  // Re-serializing through glTF Transform would renumber the optional LOD accessor references.
+  // Already-prepared imports keep their textures; cooking always compresses before adding LODs.
+  if (readModelDocument(input).extensionsUsed?.includes('FEATHER_mesh_lods')) return { data: new Uint8Array(input), beforeBytes, afterBytes: beforeBytes, textureCount: 0, compressed: false };
   const io = new WebIO().registerExtensions(ALL_EXTENSIONS);
   const doc = await io.readBinary(new Uint8Array(input));
   const root = doc.getRoot();
@@ -54,7 +62,18 @@ export async function compressGlbTextures(input: ArrayBuffer): Promise<Compressi
     root.listMaterials().flatMap((mat) => [mat.getBaseColorTexture(), mat.getEmissiveTexture()].filter(Boolean)),
   );
 
-  const common = { generateMipmap: true, jsUrl: ENCODER_JS_URL, wasmUrl: ENCODER_WASM_URL };
+  const imageDecoder = options.imageDecoder ?? (options.maxSize ? async (bytes: Uint8Array) => {
+    const bitmap = await createImageBitmap(new Blob([bytes]));
+    try {
+      const ratio = Math.min(1, options.maxSize! / Math.max(bitmap.width, bitmap.height));
+      const width = Math.max(1, Math.round(bitmap.width * ratio)), height = Math.max(1, Math.round(bitmap.height * ratio));
+      const canvas = new OffscreenCanvas(width, height), context = canvas.getContext('2d');
+      if (!context) throw new Error('Image resizing is unavailable.');
+      context.drawImage(bitmap, 0, 0, width, height);
+      return { data: new Uint8Array(context.getImageData(0, 0, width, height).data.buffer), width, height };
+    } finally { bitmap.close(); }
+  } : undefined);
+  const common = { generateMipmap: true, jsUrl: ENCODER_JS_URL, wasmUrl: ENCODER_WASM_URL, ...(imageDecoder ? { imageDecoder } : {}) };
   let compressed = false;
   for (const texture of textures) {
     const mime = texture.getMimeType();
@@ -72,6 +91,7 @@ export async function compressGlbTextures(input: ArrayBuffer): Promise<Compressi
       texture.setImage(ktx2).setMimeType('image/ktx2');
       compressed = true;
     } catch (error) {
+      if (options.throwOnFailure) throw error;
       // One bad texture shouldn't fail the whole model — leave it as-is and keep going.
       console.warn(`KTX2 encode failed for texture "${texture.getName() || texture.getURI()}":`, error);
     }

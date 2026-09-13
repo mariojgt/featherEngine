@@ -1,0 +1,48 @@
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const { cloudBuild, desktop } = vi.hoisted(() => ({ cloudBuild: vi.fn(), desktop: { enabled: true } }));
+vi.mock('../../platform', () => ({ get isDesktop() { return desktop.enabled; }, getPlatform: async () => ({ isDesktop: desktop.enabled, cloudBuild }) }));
+import { BuildCentreDialog } from '../BuildCentreDialog';
+import { useBuildCentreStore as centre } from '../../store/buildCentreStore';
+import { useEditorStore } from '../../store/editorStore';
+import { useProjectStore } from '../../store/projectStore';
+import { blankProject } from '../../project/serialize';
+let root: Root, container: HTMLDivElement;
+const button = (name: string) => [...document.querySelectorAll('button')].find(b => b.textContent === name)!;
+beforeEach(() => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  cloudBuild.mockReset(); desktop.enabled = true;
+  useProjectStore.setState({ hasProject: true, projectDir: 'ui-build', projectName: 'UI build', lastProductionBuild: null, lastProductionOutput: null });
+  useEditorStore.getState().loadProject(blankProject('UI build'));
+  centre.setState({ open: true, setup: { repository: 'owner/engine', ref: 'main' }, jobs: [], checked: null, prepared: null, busy: false, error: null, message: null });
+  container = document.createElement('div'); document.body.append(container); root = createRoot(container);
+});
+afterEach(() => { act(() => root.unmount()); container.remove(); delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT; });
+it('shows review before upload and wires collection, retry and cleanup to the exact job', async () => {
+  cloudBuild.mockResolvedValue({ repository: 'owner/engine', private: true, commit: 'a'.repeat(40) });
+  act(() => root.render(<BuildCentreDialog />));
+  await act(async () => { button('Check connection').click(); });
+  await act(async () => { button('Prepare game package').click(); });
+  expect(document.body.textContent).toContain('Review cloud build');
+  expect(document.body.textContent).toContain('snapshot will upload to a draft release');
+  expect(cloudBuild.mock.calls.map(([r]) => r.action)).toEqual(['check']);
+  cloudBuild.mockResolvedValue({ message: 'Build requested' });
+  await act(async () => { button('Upload package and start builds').click(); });
+  const requestId = centre.getState().jobs[0].requestId;
+  cloudBuild.mockResolvedValue({ run: { id: 42, status: 'completed', conclusion: 'success', url: 'https://github.com/owner/engine/actions/runs/42', commit: 'a'.repeat(40), jobs: [{ name: 'macos', status: 'completed', conclusion: 'success', steps: [{ name: 'Launch game', conclusion: 'success' }] }], artifacts: [{ name: 'game-macos', size: 1234, expired: false }] } });
+  await act(async () => { button('Refresh').click(); }); expect(document.body.textContent).toContain('launch check success');
+  cloudBuild.mockResolvedValue({ directory: '/tmp/collected' }); await act(async () => { button('Collect artifacts…').click(); });
+  expect(cloudBuild.mock.calls.at(-1)![0]).toMatchObject({ action: 'download', requestId, runId: 42 });
+  cloudBuild.mockResolvedValue({ message: 'Requested' }); await act(async () => { button('Rebuild same package').click(); });
+  expect(cloudBuild.mock.calls.at(-1)![0].action).toBe('retry');
+  await act(async () => { button('Remove uploaded input package').click(); });
+  expect(centre.getState().jobs[0].cleaned).toBe(true); expect(button('Rebuild same package').disabled).toBe(true);
+});
+it('keeps local web build accessible while explaining desktop-only cloud setup', () => {
+  desktop.enabled = false; act(() => root.render(<BuildCentreDialog />));
+  expect(button('Check connection').disabled).toBe(true);
+  expect(button('Review local build…').disabled).toBe(false);
+  expect(document.body.textContent).toContain('Open this project in Feather desktop');
+  act(() => button('Close Build Centre')?.click());
+});

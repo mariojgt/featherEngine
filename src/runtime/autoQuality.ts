@@ -1,5 +1,6 @@
 import { useEditorStore } from '../store/editorStore';
 import type { QualityLevel } from '../types';
+import { isPerformanceCaptureActive } from './perfStats';
 
 /**
  * Adaptive quality: while the game is playing, sustained low framerate steps the scalability preset
@@ -25,7 +26,7 @@ const declinedLevels = new Set<QualityLevel>();
 export function autoQualityStep(direction: -1 | 1) {
   const state = useEditorStore.getState();
   const settings = state.renderSettings;
-  if (settings.autoQuality === false || !state.isPlaying) return;
+  if (settings.autoQuality === false || !state.isPlaying || isPerformanceCaptureActive()) return;
   const now = performance.now();
   if (now - lastStepAt < 5000) return;
   // Asymmetric hysteresis: recover quality only after the framerate has been healthy for a while.

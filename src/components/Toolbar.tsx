@@ -39,6 +39,10 @@ import { useExtensionSnapshot } from '../extensions/react';
 import { useCollaborationStore } from '../store/collaborationStore';
 import { CollaborationDialog } from './CollaborationDialog';
 import { SteamPublishDialog } from './SteamPublishDialog';
+import { PerformanceAssistantDialog } from './PerformanceAssistantDialog';
+import { BuildCentreDialog } from './BuildCentreDialog';
+import { usePerformanceAssistantStore } from '../store/performanceAssistantStore';
+import { useBuildCentreStore } from '../store/buildCentreStore';
 import { isDesktop as runningInDesktopShell } from '../platform';
 import { resolveCreatorEditorMode, useCreatorEditorModeStore } from '../creator/editorModeStore';
 
@@ -119,6 +123,7 @@ function ExportMenu({ onOpenSteam }: { onOpenSteam: () => void }) {
       </button>
       {open && (
         <div className="file-menu-popover add-popover export-popover" role="menu" onKeyDown={handleEditorMenuKeyDown}>
+          <button onClick={run(() => useBuildCentreStore.getState().show())}><Rocket size={14} aria-hidden /><span>Build Centre…</span></button>
           <button onClick={run(exportGame)}>
             <Package size={14} aria-hidden />
             <span>Game data bundle…</span>
@@ -191,6 +196,8 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
       </button>
       {open && (
         <div className="file-menu-popover" role="menu" onKeyDown={handleEditorMenuKeyDown}>
+          <button onClick={run(() => usePerformanceAssistantStore.getState().show())}>Performance Assistant…</button>
+          <hr />
           <div className="file-menu-section">Layout</div>
           {WORKSPACE_LAYOUTS.map((layout) => (
             <button key={layout.id} onClick={run(() => applyWorkspaceLayout(layout.id))}>
@@ -249,6 +256,7 @@ function ViewMenu({ onOpenPrefs }: { onOpenPrefs: () => void }) {
 /** Full-screen overlay showing live output while a production build runs. */
 function BuildProgressOverlay() {
   const progress = useProjectStore((state) => state.buildProgress);
+  const buildReport = useProjectStore((state) => state.lastProductionBuild);
   const clear = useProjectStore((state) => state.clearBuildProgress);
   if (!progress) return null;
   const title = progress.running ? 'Building your game…' : progress.status === 'failed' ? 'Build needs attention' : progress.status === 'staged' ? 'Build package ready' : 'Export finished';
@@ -261,7 +269,12 @@ function BuildProgressOverlay() {
         </div>
         <p className="build-overlay-hint">{progress.running ? 'Building the selected platforms. The first build may take a few minutes.' : progress.status === 'staged' ? 'Next: compile the package, then test the output.' : 'Review the output below. The build report distinguishes completed artifacts from staged packages.'}</p>
         <pre className="build-overlay-log" aria-live="polite">{progress.lines.slice(-24).join('\n')}</pre>
+        {!progress.running && buildReport && Object.entries(buildReport.assetReports ?? {}).map(([target, report]) => <details key={target} className="build-asset-summary">
+          <summary>{target}: {(report.sourceBytes / 1048576).toFixed(1)} → {(report.outputBytes / 1048576).toFixed(1)} MB · {report.cacheHits} cached assets</summary>
+          <ul>{report.assets.slice(0, 5).map((asset) => <li key={asset.id}>{asset.name}: {(asset.outputBytes / 1048576).toFixed(2)} MB{asset.warnings.length ? ` — ${asset.warnings.join(' ')}` : ''}</li>)}</ul>
+        </details>)}
         {!progress.running && <div className="build-output-actions">
+          {buildReport?.artifacts.some((artifact) => artifact.target !== 'web') && <button className="prefs-primary-button" disabled={buildReport.artifacts.some((artifact) => artifact.launchTest === 'failed')} onClick={() => { clear(); window.dispatchEvent(new Event('feather:publish-build')); }}>Continue to Steam</button>}
           {progress.output && <button className="prefs-primary-button" onClick={() => void getPlatform().then((platform) => platform.revealFile?.(progress.output!)).catch((error: unknown) => useProjectStore.setState({ toast: { kind: 'error', message: String(error) } }))}>Open output folder</button>}
           {progress.status === 'failed' && <button className="prefs-primary-button" onClick={() => { clear(); void useProjectStore.getState().exportProduction(); }}>Review and retry</button>}
           <button className="prefs-link-button" onClick={clear}>Done</button>
@@ -396,6 +409,7 @@ export function Toolbar() {
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [collaborationOpen, setCollaborationOpen] = useState(false);
   const [steamPublishOpen, setSteamPublishOpen] = useState(false);
+  useEffect(() => { const open = () => setSteamPublishOpen(true); window.addEventListener('feather:publish-build', open); return () => window.removeEventListener('feather:publish-build', open); }, []);
   const guestProjectLock = collaborationRole !== null
     && collaborationRole !== 'host'
     && collaborationStatus !== 'idle';
@@ -585,6 +599,8 @@ export function Toolbar() {
 
       <BuildProgressOverlay />
       <BuildReportDialog />
+      <PerformanceAssistantDialog />
+      <BuildCentreDialog />
 
       <div className="tool-group" aria-label="Runtime controls">
         <RuntimeErrorBadge />

@@ -12,6 +12,7 @@
 // Legacy flags remain supported: --native, --android, --ios, --no-web.
 import { execFileSync } from 'node:child_process';
 import { artifactInventory, engineEvidence, sha256 } from './lib/release-evidence.mjs';
+import { cookBuildVariants } from './lib/cook-build.mjs';
 import {
   cpSync,
   existsSync,
@@ -389,13 +390,20 @@ if (needsLocalPlayer) {
   } else if (!existsSync(distPlayer)) {
     fail('--skip-build was set but dist-player/ does not exist. Build it first.');
   } else {
-    console.log('\nReusing existing dist-player/ (--skip-build).');
+    run(process.execPath, [resolve(root, 'scripts/build-player.mjs'), '--verify-only']);
+    console.log('\nReusing verified dist-player/ (--skip-build).');
   }
 } else {
   console.log('\nNo local player build is needed; every selected target is being staged for another runner.');
 }
 
-const bundleJs = `window.__NODEFORGE_GAME__ = ${JSON.stringify(bundle)};\n`;
+const variants = await cookBuildVariants(root, bundle, targets.filter((target) => !targetsToStage.includes(target)));
+const outputTargets = new Map();
+function writeVariantAssets(directory, target) {
+  for (const [path, bytes] of variants.get(target).files) {
+    mkdirSync(dirname(resolve(directory, path)), { recursive: true }); writeFileSync(resolve(directory, path), bytes);
+  }
+}
 const builtTargets = [];
 const stagedTargets = [];
 const outputDirectories = [];
@@ -431,12 +439,14 @@ const buildReport = {
   stagedTargets,
   contents: preflight.report.summary,
   warnings: packagingWarnings,
+  assetPreparation: Object.fromEntries([...variants].map(([target, variant]) => [target, variant.report])),
 };
 
 function writeBuildReport(directory) {
   const credits = bundle.project.assets.filter((asset) => asset.modelInspection?.stats?.copyright).map((asset) => `${asset.name}: ${asset.modelInspection.stats.copyright}`);
   writeFileSync(resolve(directory, 'ASSET-CREDITS.txt'), ['Asset attribution supplied by imported models', '', ...(credits.length ? credits : ['No embedded model copyright metadata was supplied.']), '', 'Review your asset licenses before distributing this game.'].join('\n'));
-  const report = { ...buildReport, artifacts: artifactInventory(directory) };
+  const variant = variants.get(outputTargets.get(directory));
+  const report = { ...buildReport, ...(variant ? { bundleSha256: sha256(JSON.stringify(variant.bundle)), runtimeContract: variant.bundle.runtimeContract } : {}), artifacts: artifactInventory(directory) };
   writeFileSync(resolve(directory, 'build-report.json'), `${JSON.stringify(report, null, 2)}\n`);
 }
 
@@ -446,7 +456,8 @@ if (targets.includes('web')) {
   rmSync(webOut, { recursive: true, force: true });
   mkdirSync(webOut, { recursive: true });
   cpSync(distPlayer, webOut, { recursive: true });
-  writeFileSync(resolve(webOut, 'game-bundle.js'), bundleJs);
+  writeFileSync(resolve(webOut, 'game-bundle.js'), `window.__NODEFORGE_GAME__ = ${JSON.stringify(variants.get('web').bundle)};\n`);
+  writeVariantAssets(webOut, 'web'); outputTargets.set(webOut, 'web');
   const webIndex = resolve(webOut, 'index.html');
   writeFileSync(webIndex, injectBundleScript(readFileSync(webIndex, 'utf8'), gameName));
   writeFileSync(
@@ -481,17 +492,23 @@ for (const target of targetsToStage) {
 }
 
 /** Temporarily bake this exact canonical bundle into the reusable player build. */
-function withBakedBundle(fn) {
+function withBakedBundle(target, fn) {
+  if (existsSync(resolve(distPlayer, 'game-assets'))) throw new Error('Reusable player contains game assets. Run npm run build:player -- --force before exporting.');
   const distIndex = resolve(distPlayer, 'index.html');
   const distBundle = resolve(distPlayer, 'game-bundle.js');
   const indexBefore = readFileSync(distIndex, 'utf8');
   const hadBundle = existsSync(distBundle);
   const bundleBefore = hadBundle ? readFileSync(distBundle, 'utf8') : null;
   try {
-    writeFileSync(distBundle, bundleJs);
+    const variant = variants.get(target);
+    writeFileSync(distBundle, `window.__NODEFORGE_GAME__ = ${JSON.stringify(variant.bundle)};\n`);
+    writeVariantAssets(distPlayer, target);
     writeFileSync(distIndex, injectBundleScript(indexBefore, gameName));
     return fn();
   } finally {
+    for (const path of variants.get(target).files.keys()) rmSync(resolve(distPlayer, path), { force: true });
+    // This is a generated directory reserved for the asset preparation step.
+    rmSync(resolve(distPlayer, 'game-assets'), { recursive: true, force: true });
     writeFileSync(distIndex, indexBefore);
     if (hadBundle) writeFileSync(distBundle, bundleBefore);
     else rmSync(distBundle, { force: true });
@@ -618,7 +635,7 @@ try {
       // Keep Cargo's compiled dependency cache, but remove old installers so a rename/version build can
       // never copy a stale artifact that happens to share this application's stable id.
       rmSync(nativeBundleDir, { recursive: true, force: true });
-      withBakedBundle(() => run(npmCmd, args, { CARGO_TARGET_DIR: nativeTargetDir }));
+      withBakedBundle(nativeTarget, () => run(npmCmd, args, { CARGO_TARGET_DIR: nativeTargetDir }));
 
       const installers = findArtifacts(nativeBundleDir, /\.(dmg|app|msi|exe|AppImage|deb|rpm)$/i);
       if (nativeTarget === 'macos') verifyMacAppSignatures(installers);
@@ -626,6 +643,7 @@ try {
       if (!nativeOut) throw new Error(`No ${nativeTarget} installer was found under ${nativeBundleDir}.`);
       builtTargets.push(nativeTarget);
       outputDirectories.push(nativeOut);
+      outputTargets.set(nativeOut, nativeTarget);
       console.log(`\nOK: ${nativeTarget} app -> ${nativeOut}`);
     } catch (error) {
       recordFailure(nativeTarget, error);
@@ -660,12 +678,13 @@ try {
         if (profile.configuration === 'debug') args.push('--debug', '--apk');
         else args.push('--aab');
         args.push('--config', playerConfig.path);
-        withBakedBundle(() => run(npmCmd, args, androidEnv));
+        withBakedBundle('android', () => run(npmCmd, args, androidEnv));
 
         const packages = findArtifacts(outputs, /\.(apk|aab)$/i);
         const androidOut = copyArtifacts(packages, outRoot, slug, 'android');
         if (!androidOut) throw new Error(`No Android package was found under ${outputs}.`);
         builtTargets.push('android');
+        outputTargets.set(androidOut, 'android');
         outputDirectories.push(androidOut);
         console.log(`\nOK: Android ${profile.configuration === 'debug' ? 'APK' : 'AAB'} -> ${androidOut}`);
       });
@@ -713,12 +732,13 @@ try {
           playerConfig.path,
         ];
         if (profile.configuration === 'debug') args.push('--debug');
-        withBakedBundle(() => run(npmCmd, args));
+        withBakedBundle('ios', () => run(npmCmd, args));
 
         const packages = findArtifacts(resolve(root, 'src-tauri/gen/apple'), /\.ipa$/i);
         const iosOut = copyArtifacts(packages, outRoot, slug, 'ios');
         if (!iosOut) throw new Error('The iOS build completed without producing an IPA.');
         builtTargets.push('ios');
+        outputTargets.set(iosOut, 'ios');
         outputDirectories.push(iosOut);
         console.log(`\nOK: iOS IPA -> ${iosOut}`);
       });
