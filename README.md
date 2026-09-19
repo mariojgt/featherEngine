@@ -376,6 +376,7 @@ Feather Engine is released under the [MIT License](LICENSE).
 - [Asset preparation](docs/ASSET_PREPARATION.md): prepared mesh LODs, spatial instancing, per-target cached variants and asset files.
 - [Production export](docs/PRODUCTION_EXPORT.md): installed-editor runtime packaging, complete web downloads and automatic local launch checks.
 - [Steam publishing](docs/STEAM_PUBLISHING.md): connected build folders, multiple platform depots and local release history.
+- [Releasing](docs/RELEASING.md): tag-driven Windows/macOS/Linux installer builds, and the website download-link update every tag requires.
 
 **Guided checks and releases:** [Performance Assistant](docs/PERFORMANCE_ASSISTANT.md)
 measures a representative scene and previews reversible quality changes.

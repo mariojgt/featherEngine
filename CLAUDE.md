@@ -48,3 +48,23 @@ can use it. A feature isn't done until the AI chat is aware of it. Follow the ch
 
 New visual-scripting node types touch extra files — see the "new node type" section in
 [docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md).
+
+## ⚠️ Releasing: a tag is not done until the website is updated
+
+Pushing a `v*` tag runs [`.github/workflows/release-desktop.yml`](.github/workflows/release-desktop.yml),
+which builds and publishes the Windows, macOS (Apple Silicon + Intel) and Linux
+installers onto a GitHub release. **That is only half of a release.** The download
+links on [feather-engine.com](https://feather-engine.com) live in a sibling repo and
+must be pointed at the new version in the same piece of work:
+
+```bash
+cd ../FeatherEngineWebsite && npm run sync:release && npm run build
+```
+
+That regenerates `src/data/release.json` (tag, asset URLs, sizes) from the GitHub
+API — never hand-edit those values. Treat the website update as part of the release
+task, not a follow-up: do not report a release as finished until it is done.
+
+Before tagging, the version in `package.json`, `src-tauri/tauri.conf.json` and the
+tag itself must all match, or the `verify-version` job fails the run.
+Full checklist: [docs/RELEASING.md](docs/RELEASING.md).

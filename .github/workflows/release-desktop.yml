@@ -1,12 +1,19 @@
-# Build and publish Windows and macOS desktop installers on a new version tag.
+# Build and publish Windows, macOS and Linux desktop installers on a new version tag.
 #
-# Trigger: push a tag matching v* (e.g. `git tag v0.1.1 && git push origin v0.1.1`).
+# Trigger: push a tag matching v* (e.g. `git tag v0.2.1 && git push origin v0.2.1`).
+# See docs/RELEASING.md for the full checklist — including the mandatory website
+# download-link update that follows every tag.
 #
 # Tauri cannot cross-compile, so a matrix builds each OS on its own runner.
 # tauri-action runs the build (frontend via beforeBuildCommand, then cargo),
-# creates a GitHub Release for the tag and attaches the installers:
+# creates a draft GitHub Release for the tag and attaches the installers:
 #   - Windows: NSIS installer (.exe) + MSI
 #   - macOS:   .dmg (+ .app) for both Apple Silicon and Intel
+#   - Linux:   .AppImage, .deb and .rpm
+#
+# The release stays a draft until every matrix leg succeeds; the `publish` job
+# then attaches latest.json and flips it live, so downloaders never see a
+# release that is missing half its platforms.
 name: Release Desktop Installers
 
 on:
@@ -18,7 +25,29 @@ permissions:
   contents: write
 
 jobs:
+  # tauri-action names the release from tauri.conf.json (`v__VERSION__`), not from
+  # the pushed tag. If the two disagree it silently builds a release for a tag
+  # nobody pushed, so fail in seconds rather than 15 minutes into four builds.
+  verify-version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match package.json and tauri.conf.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="${TAG#v}"
+          pkg=$(jq -r .version package.json)
+          conf=$(jq -r .version src-tauri/tauri.conf.json)
+          echo "tag=$expected package.json=$pkg tauri.conf.json=$conf"
+          if [ "$pkg" != "$expected" ] || [ "$conf" != "$expected" ]; then
+            echo "::error::Tag $TAG does not match package.json ($pkg) / tauri.conf.json ($conf). See docs/RELEASING.md."
+            exit 1
+          fi
+
   release:
+    needs: verify-version
     strategy:
       fail-fast: false
       matrix:
@@ -55,11 +84,20 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # The full Tauri v2 Linux prerequisite set. The shorter list that compiles
+      # `cargo check` is not enough to *bundle* an AppImage.
       - name: Install Linux webview dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file patchelf
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v1
@@ -80,3 +118,51 @@ jobs:
           name: runner-${{ matrix.platform }}-${{ matrix.rust_targets || 'host' }}
           path: src-tauri/export-runtime/runners/*/
           if-no-files-found: error
+
+  # Attach a machine-readable manifest, then take the release out of draft.
+  # `latest.json` is the stable contract for anything that needs to resolve the
+  # current build — the website's `npm run sync:release`, docs, in-app checks:
+  #   https://github.com/mariojgt/featherEngine/releases/latest/download/latest.json
+  publish:
+    needs: release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Build latest.json manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Draft assets carry an `untagged-…` download URL, so rewrite every
+          # entry to the permanent /releases/download/<tag>/<name> form that
+          # becomes valid the moment the release is published below.
+          gh api "repos/$REPO/releases/tags/$TAG" > release.json \
+            || gh release view "$TAG" --repo "$REPO" --json tagName,name,publishedAt,body,assets > release.json
+          jq --arg tag "$TAG" --arg repo "$REPO" '{
+            tag: $tag,
+            version: ($tag | ltrimstr("v")),
+            publishedAt: (.published_at // .publishedAt // null),
+            releaseUrl: "https://github.com/\($repo)/releases/tag/\($tag)",
+            assets: [
+              .assets[]
+              | select(.name != "latest.json")
+              | {
+                  name: .name,
+                  size: .size,
+                  url: "https://github.com/\($repo)/releases/download/\($tag)/\(.name)"
+                }
+            ] | sort_by(.name)
+          }' release.json > latest.json
+          cat latest.json
+
+      - name: Attach manifest and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          echo "Published https://github.com/$REPO/releases/tag/$TAG"
