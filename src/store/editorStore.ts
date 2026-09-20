@@ -757,6 +757,8 @@ export interface EditorState {
    *  moment each scene is entered. Lets a Load Scene node revert the scene it leaves and re-seed the scene
    *  it enters from clean authored state; all are restored on Stop. */
   runtimeSceneSnapshots?: Record<string, SceneObject[]>;
+  /** Authored world settings for visited scenes; runtime weather/lighting must not leak into edits or replays. */
+  runtimeEnvironmentSnapshots?: Record<string, SceneEnvironmentSettings | undefined>;
   runtimeVelocities: Record<string, Vector3Tuple>;
   /** Post-step angular velocity (rad/s) per dynamic body — drives the Get Angular Velocity node. */
   runtimeAngularVelocities: Record<string, Vector3Tuple>;

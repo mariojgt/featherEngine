@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Local fog lighting GPU check</title><style>body{margin:0;background:#000}canvas{display:block}</style></head><body><script type="module">
+import * as THREE from 'three';
+import { EffectComposer, RenderPass, EffectPass } from 'postprocessing';
+import { VolumetricFogEffect } from '/src/three/VolumetricFog.tsx';
+import { LocalFogLights } from '/src/three/localFogLights.ts';
+const errors=[],originalError=console.error;
+console.error=(...args)=>{errors.push(args.join(' '));originalError(...args);};
+const renderer=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});
+renderer.setSize(640,420);renderer.setPixelRatio(1);document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color('#03060a');
+const camera=new THREE.PerspectiveCamera(50,640/420,.1,50);camera.position.set(0,2,8);camera.lookAt(0,2,-4);camera.updateMatrixWorld();
+const wall=new THREE.Mesh(new THREE.BoxGeometry(16,12,.1),new THREE.MeshBasicMaterial({color:'#050a10'}));wall.position.set(0,2,-4);scene.add(wall);
+const red=new THREE.PointLight('#ff3419',90,16);red.position.set(-2,2,0);scene.add(red);
+const blue=new THREE.PointLight('#195aff',90,16);blue.position.set(2,2,0);scene.add(blue);
+const fog=new VolumetricFogEffect(),u=fog.uniforms,lights=new LocalFogLights();
+lights.update(scene,camera.position,6);
+u.get('inverseProjection').value.copy(camera.projectionMatrixInverse);u.get('cameraMatrixWorld').value.copy(camera.matrixWorld);u.get('cameraPos').value.copy(camera.position);
+u.get('density').value=.13;u.get('heightFalloff').value=0;u.get('sunStrength').value=0;u.get('scattering').value=.2;u.get('steps').value=64;u.get('maxDistance').value=30;
+u.get('fogColor').value.set('#080c12');u.get('localLightCount').value=lights.count;
+u.get('localLightPosition').value=lights.positions;u.get('localLightColor').value=lights.colors;u.get('localLightDirection').value=lights.directions;u.get('localLightCone').value=lights.cones;
+const fallback=new THREE.DataTexture(new Uint8Array([255,255,255,255]),1,1);fallback.needsUpdate=true;u.get('shadowMap').value=fallback;
+const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));composer.addPass(new EffectPass(camera,fog));
+const render=()=>composer.render(1/60);
+function pixels(){const gl=renderer.getContext(),bytes=new Uint8Array(640*420*4);gl.readPixels(0,0,640,420,gl.RGBA,gl.UNSIGNED_BYTE,bytes);return bytes;}
+function sample(x,y){const bytes=pixels(),colors=[0,0,0];for(let a=-8;a<=8;a++)for(let b=-8;b<=8;b++)for(let c=0;c<3;c++)colors[c]+=bytes[((y+b)*640+x+a)*4+c]/289;return colors;}
+window.fogQA={errors,setStrength(value){u.get('localStrength').value=value;render();return this.samples();},samples(){return {left:sample(220,210),right:sample(420,210)};},pixelGrid(){const all=pixels(),small=[];for(let y=10;y<420;y+=20)for(let x=10;x<640;x+=20)for(let c=0;c<3;c++)small.push(all[(y*640+x)*4+c]);return small;},move(){red.position.x=2;blue.position.x=-2;lights.update(scene,camera.position,6);render();return this.samples();}};
+u.get('localStrength').value=0;render();
+</script></body></html>

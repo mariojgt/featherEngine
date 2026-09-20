@@ -30,9 +30,11 @@ const fragmentShader = /* glsl */ `
       float t = float(i) / float(${SAMPLES});
       float w = 1.0 - abs(t);          // triangular falloff toward the streak ends
       vec2 off = vec2(t * reach, 0.0);
-      vec3 c = texture(inputBuffer, uv + off).rgb;
+      vec3 c = texture(inputBuffer, clamp(uv + off, vec2(0.001), vec2(0.999))).rgb;
       float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
-      streak += c * max(0.0, lum - THRESHOLD) * w;
+      // Extract the bright residual without squaring HDR energy. The old c*(lum-threshold)
+      // turned tiny lamps into opaque white bars even at very low strength.
+      streak += c * (max(0.0, lum - THRESHOLD) / max(lum, 0.0001)) * w;
       total += w;
     }
     streak /= total;

@@ -57,7 +57,16 @@ export const defaultSceneEnvironment = (): SceneEnvironmentSettings => ({
 export function withSceneEnvironmentDefaults(
   environment?: Partial<SceneEnvironmentSettings>,
 ): SceneEnvironmentSettings {
-  return { ...defaultSceneEnvironment(), ...(environment ?? {}) };
+  const result = { ...defaultSceneEnvironment(), ...(environment ?? {}) };
+  result.ambientIntensity = Number.isFinite(result.ambientIntensity) ? THREE.MathUtils.clamp(result.ambientIntensity!, 0, 5) : undefined;
+  result.sunShadowExtent = Number.isFinite(result.sunShadowExtent) ? THREE.MathUtils.clamp(result.sunShadowExtent!, 8, 256) : undefined;
+  for (const key of ['cloudCoverage', 'rainIntensity', 'lightningFlash', 'surfaceWetness', 'puddleCoverage'] as const) {
+    result[key] = Number.isFinite(result[key]) ? THREE.MathUtils.clamp(result[key]!, 0, 1) : 0;
+  }
+  result.cloudSpeed = Number.isFinite(result.cloudSpeed) ? THREE.MathUtils.clamp(result.cloudSpeed!, 0, 5) : 0.35;
+  result.skyLighting = result.skyLighting === 'sky' ? 'sky' : 'studio';
+  result.wetnessFromRain = result.wetnessFromRain === true;
+  return result;
 }
 
 export function sunDirectionFromEnvironment(environment: SceneEnvironmentSettings): THREE.Vector3 {

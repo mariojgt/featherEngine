@@ -18,6 +18,7 @@ import {
   type ProjectFolder,
   type ProjectGraph,
   type ProjectVariable,
+  type RenderSettings,
   type Scene,
   type SceneObject,
   type ScriptBlueprint,
@@ -111,6 +112,8 @@ export interface PackageContent {
   folders?: ProjectFolder[];
   /** Only present for `kind: 'project'` packages. */
   scenes?: Scene[];
+  /** Authored post-processing and quality; applied only when creating a project from this package. */
+  renderSettings?: RenderSettings;
 }
 
 export interface NodeForgePackage {
@@ -210,7 +213,9 @@ export function collectProjectPackage(
   sceneIds?: string[],
 ): { content: PackageContent; assetIds: string[] } {
   const ids = sceneIds ?? (src.scenes ?? []).map((scene) => scene.id);
-  return collectPackage(src, { scenes: ids });
+  const collected = collectPackage(src, { scenes: ids });
+  if (src.renderSettings) collected.content.renderSettings = structuredClone(src.renderSettings);
+  return collected;
 }
 
 /**

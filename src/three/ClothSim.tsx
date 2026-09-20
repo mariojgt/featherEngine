@@ -1,3 +1,4 @@
+import { CLOTH_STEP, consumeClothSteps, type ClothClock } from './clothClock';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
@@ -325,7 +326,11 @@ function ClothBody({ object, topo, selected }: { object: SceneObject; topo: Clot
 
   const positionAttr = useMemo(() => new THREE.BufferAttribute(new Float32Array(topo.renderCount * 3), 3), [topo]);
 
-  useFrame((_, rawDelta) => {
+  const simulationClock = useRef<ClothClock>({ remainder: 0 });
+  useFrame(({ clock }) => {
+    const runtime = useEditorStore.getState();
+    const time = runtime.isPlaying ? runtime.runtimeTime : clock.elapsedTime;
+    const steps = consumeClothSteps(simulationClock.current, time);
     const mesh = meshRef.current;
     const geom = geomRef.current;
     if (!mesh || !geom) return;
@@ -345,105 +350,109 @@ function ClothBody({ object, topo, selected }: { object: SceneObject; topo: Clot
       s.seeded = true;
     }
 
-    const dt = Math.min(Math.max(rawDelta, 1 / 240), 1 / 30);
-    const g = -9.81 * cloth.gravityScale * dt * dt;
-    const damp = 1 - Math.min(Math.max(cloth.damping, 0), 0.95);
-    const sceneWind = env?.wind ?? [0, 0, 0];
-    const wx = cloth.wind[0] + sceneWind[0];
-    const wy = cloth.wind[1] + sceneWind[1];
-    const wz = cloth.wind[2] + sceneWind[2];
-    const wob = Math.max(cloth.turbulence, env?.windTurbulence ?? 0) * 6;
-    const windX = (wx + (Math.random() - 0.5) * wob) * dt * dt;
-    const windY = (wy + (Math.random() - 0.5) * wob) * dt * dt;
-    const windZ = (wz + (Math.random() - 0.5) * wob) * dt * dt;
+    for (let step = 0; step < steps; step++) {
+      const dt = CLOTH_STEP;
+      const gustTime = time - (steps - step - 1) * dt;
+      const g = -9.81 * cloth.gravityScale * dt * dt;
+      const damp = 1 - Math.min(Math.max(cloth.damping, 0), 0.95);
+      const sceneWind = env?.wind ?? [0, 0, 0];
+      const wx = cloth.wind[0] + sceneWind[0];
+      const wy = cloth.wind[1] + sceneWind[1];
+      const wz = cloth.wind[2] + sceneWind[2];
+      const wob = Math.max(cloth.turbulence, env?.windTurbulence ?? 0) * 6;
+      const windX = (wx + Math.sin(gustTime * 2.3 + 1.7) * wob * 0.5) * dt * dt;
+      const windY = (wy + Math.sin(gustTime * 3.1 + 4.2) * wob * 0.5) * dt * dt;
+      const windZ = (wz + Math.sin(gustTime * 1.9 + 0.8) * wob * 0.5) * dt * dt;
 
-    // Pin: anchor pinned particles to the object's CURRENT world transform.
-    for (let i = 0; i < count; i++) {
-      if (!topo.pinned[i]) continue;
-      tmpV.set(topo.rest[i * 3], topo.rest[i * 3 + 1], topo.rest[i * 3 + 2]).applyMatrix4(groupWorld);
-      s.pos[i * 3] = tmpV.x; s.pos[i * 3 + 1] = tmpV.y; s.pos[i * 3 + 2] = tmpV.z;
-      s.prev[i * 3] = tmpV.x; s.prev[i * 3 + 1] = tmpV.y; s.prev[i * 3 + 2] = tmpV.z;
-    }
-
-    // Verlet integrate free particles.
-    for (let i = 0; i < count; i++) {
-      if (topo.pinned[i]) continue;
-      const k = i * 3;
-      for (let a = 0; a < 3; a++) {
-        const cur = s.pos[k + a];
-        const vel = (cur - s.prev[k + a]) * damp;
-        s.prev[k + a] = cur;
-        s.pos[k + a] = cur + vel + (a === 0 ? windX : a === 1 ? g + windY : windZ);
+      // Pin: anchor pinned particles to the object's CURRENT world transform.
+      for (let i = 0; i < count; i++) {
+        if (!topo.pinned[i]) continue;
+        tmpV.set(topo.rest[i * 3], topo.rest[i * 3 + 1], topo.rest[i * 3 + 2]).applyMatrix4(groupWorld);
+        s.pos[i * 3] = tmpV.x; s.pos[i * 3 + 1] = tmpV.y; s.pos[i * 3 + 2] = tmpV.z;
+        s.prev[i * 3] = tmpV.x; s.prev[i * 3 + 1] = tmpV.y; s.prev[i * 3 + 2] = tmpV.z;
       }
-    }
 
-    // Explosion blasts: shove free particles within range outward (a flag billows when a grenade goes off).
-    const blasts = blastsSince(lastBlastId.current);
-    if (blasts.length) {
-      for (const b of blasts) {
-        for (let i = 0; i < count; i++) {
-          if (topo.pinned[i]) continue;
-          const k = i * 3;
-          const dx = s.pos[k] - b.center[0];
-          const dy = s.pos[k + 1] - b.center[1];
-          const dz = s.pos[k + 2] - b.center[2];
-          const d = Math.hypot(dx, dy, dz);
-          if (d > b.radius) continue;
-          const falloff = 1 - d / b.radius;
-          const inv = d > 1e-3 ? 1 / d : 0;
-          // Move position only (not prev) so the shove also adds velocity → the cloth keeps billowing.
-          const push = b.strength * falloff * 0.02;
-          s.pos[k] += dx * inv * push;
-          s.pos[k + 1] += (d > 1e-3 ? dy * inv : 1) * push + push * 0.5;
-          s.pos[k + 2] += dz * inv * push;
+      // Verlet integrate free particles.
+      for (let i = 0; i < count; i++) {
+        if (topo.pinned[i]) continue;
+        const k = i * 3;
+        for (let a = 0; a < 3; a++) {
+          const cur = s.pos[k + a];
+          const vel = (cur - s.prev[k + a]) * damp;
+          s.prev[k + a] = cur;
+          s.pos[k + a] = cur + vel + (a === 0 ? windX : a === 1 ? g + windY : windZ);
         }
       }
-      lastBlastId.current = latestBlastId();
-    }
 
-    // Satisfy distance constraints.
-    const tear = cloth.tearFactor > 0 ? cloth.tearFactor : Infinity;
-    const iterations = Math.min(Math.max(Math.round(cloth.stiffness), 1), 12);
-    for (let iter = 0; iter < iterations; iter++) {
-      for (let c = 0; c < topo.constraints.length; c++) {
-        if (s.broken[c]) continue;
-        const { a, b, rest } = topo.constraints[c];
-        const ka = a * 3;
-        const kb = b * 3;
-        const dx = s.pos[kb] - s.pos[ka];
-        const dy = s.pos[kb + 1] - s.pos[ka + 1];
-        const dz = s.pos[kb + 2] - s.pos[ka + 2];
-        const d = Math.hypot(dx, dy, dz) || 1e-6;
-        if (d > rest * tear) { s.broken[c] = true; continue; }
-        const diff = (d - rest) / d;
-        const pinA = topo.pinned[a];
-        const pinB = topo.pinned[b];
-        const wA = pinA ? 0 : pinB ? 1 : 0.5;
-        const wB = pinB ? 0 : pinA ? 1 : 0.5;
-        const ox = dx * diff;
-        const oy = dy * diff;
-        const oz = dz * diff;
-        s.pos[ka] += ox * wA; s.pos[ka + 1] += oy * wA; s.pos[ka + 2] += oz * wA;
-        s.pos[kb] -= ox * wB; s.pos[kb + 1] -= oy * wB; s.pos[kb + 2] -= oz * wB;
+      // Explosion blasts: shove free particles within range outward (a flag billows when a grenade goes off).
+      const blasts = blastsSince(lastBlastId.current);
+      if (blasts.length) {
+        for (const b of blasts) {
+          for (let i = 0; i < count; i++) {
+            if (topo.pinned[i]) continue;
+            const k = i * 3;
+            const dx = s.pos[k] - b.center[0];
+            const dy = s.pos[k + 1] - b.center[1];
+            const dz = s.pos[k + 2] - b.center[2];
+            const d = Math.hypot(dx, dy, dz);
+            if (d > b.radius) continue;
+            const falloff = 1 - d / b.radius;
+            const inv = d > 1e-3 ? 1 / d : 0;
+            // Move position only (not prev) so the shove also adds velocity → the cloth keeps billowing.
+            const push = b.strength * falloff * 0.02;
+            s.pos[k] += dx * inv * push;
+            s.pos[k + 1] += (d > 1e-3 ? dy * inv : 1) * push + push * 0.5;
+            s.pos[k + 2] += dz * inv * push;
+          }
+        }
+        lastBlastId.current = latestBlastId();
       }
-    }
 
-    // Collisions.
-    const floorY = cloth.floorY;
-    let colliders: ClothCollider[] = [];
-    if (cloth.collideBodies) {
-      const c = tmpV.set(s.pos[0], s.pos[1], s.pos[2]);
-      colliders = gatherColliders(selectActiveObjects(useEditorStore.getState()), object.id, c.clone(), Math.max(cloth.width, cloth.height) + 8);
-    }
-    for (let i = 0; i < count; i++) {
-      if (topo.pinned[i]) continue;
-      const k = i * 3;
-      if (cloth.collideFloor && s.pos[k + 1] < floorY + 0.01) s.pos[k + 1] = floorY + 0.01;
-      if (colliders.length) {
-        tmpV.set(s.pos[k], s.pos[k + 1], s.pos[k + 2]);
-        for (const col of colliders) resolveCollision(tmpV, col, 0.03);
-        s.pos[k] = tmpV.x; s.pos[k + 1] = tmpV.y; s.pos[k + 2] = tmpV.z;
+      // Satisfy distance constraints.
+      const tear = cloth.tearFactor > 0 ? cloth.tearFactor : Infinity;
+      const iterations = Math.min(Math.max(Math.round(cloth.stiffness), 1), 12);
+      for (let iter = 0; iter < iterations; iter++) {
+        for (let c = 0; c < topo.constraints.length; c++) {
+          if (s.broken[c]) continue;
+          const { a, b, rest } = topo.constraints[c];
+          const ka = a * 3;
+          const kb = b * 3;
+          const dx = s.pos[kb] - s.pos[ka];
+          const dy = s.pos[kb + 1] - s.pos[ka + 1];
+          const dz = s.pos[kb + 2] - s.pos[ka + 2];
+          const d = Math.hypot(dx, dy, dz) || 1e-6;
+          if (d > rest * tear) { s.broken[c] = true; continue; }
+          const diff = (d - rest) / d;
+          const pinA = topo.pinned[a];
+          const pinB = topo.pinned[b];
+          const wA = pinA ? 0 : pinB ? 1 : 0.5;
+          const wB = pinB ? 0 : pinA ? 1 : 0.5;
+          const ox = dx * diff;
+          const oy = dy * diff;
+          const oz = dz * diff;
+          s.pos[ka] += ox * wA; s.pos[ka + 1] += oy * wA; s.pos[ka + 2] += oz * wA;
+          s.pos[kb] -= ox * wB; s.pos[kb + 1] -= oy * wB; s.pos[kb + 2] -= oz * wB;
+        }
       }
+
+      // Collisions.
+      const floorY = cloth.floorY;
+      let colliders: ClothCollider[] = [];
+      if (cloth.collideBodies) {
+        const c = tmpV.set(s.pos[0], s.pos[1], s.pos[2]);
+        colliders = gatherColliders(selectActiveObjects(useEditorStore.getState()), object.id, c.clone(), Math.max(cloth.width, cloth.height) + 8);
+      }
+      for (let i = 0; i < count; i++) {
+        if (topo.pinned[i]) continue;
+        const k = i * 3;
+        if (cloth.collideFloor && s.pos[k + 1] < floorY + 0.01) s.pos[k + 1] = floorY + 0.01;
+        if (colliders.length) {
+          tmpV.set(s.pos[k], s.pos[k + 1], s.pos[k + 2]);
+          for (const col of colliders) resolveCollision(tmpV, col, 0.03);
+          s.pos[k] = tmpV.x; s.pos[k + 1] = tmpV.y; s.pos[k + 2] = tmpV.z;
+        }
+      }
+
     }
 
     // Write particle positions to the render vertices (a welded mesh fans one particle out to several).

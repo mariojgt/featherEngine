@@ -83,7 +83,7 @@ function StoreCard({ listing }: { listing: StoreListing }) {
     <article className="store-card">
       <div className="store-card-art">
         {listing.thumbnail ? (
-          <img src={listing.thumbnail} alt="" />
+          <img src={listing.thumbnail} alt="" className={listing.thumbnail.startsWith('data:image/svg') ? undefined : 'store-card-preview'} />
         ) : (
           <PackageOpen size={28} aria-hidden />
         )}

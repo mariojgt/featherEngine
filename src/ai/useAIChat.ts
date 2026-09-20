@@ -297,6 +297,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built FPS template';
     case 'create_film_mode_template':
       return 'Built "Resonance" cinematic showcase';
+    case 'create_last_light_template':
+      return 'Built "Last Light" 70-second film';
+    case 'create_blackthorn_template':
+      return 'Built "Blackthorn Keep" dark fantasy film';
     case 'create_timeline_showcase_template':
       return 'Built Timeline Mechanics showcase';
     case 'create_spline_studio_template':

@@ -121,7 +121,9 @@ export default defineConfig({
       }
     : { target: 'es2022' },
   server: {
-    watch: { ignored: ['**/dist-player/**', '**/exports/**', '**/src-tauri/target/**', '**/src-tauri/runner/target/**', '**/src-tauri/export-runtime/**', '**/.feather-cache/**'] },
+    // A production movie must not be interrupted by HMR or a generated package/build artifact.
+    hmr: process.env.FEATHER_CAPTURE !== '1',
+    watch: process.env.FEATHER_CAPTURE === '1' ? null : { ignored: ['**/dist-player/**', '**/exports/**', '**/src-tauri/target/**', '**/src-tauri/runner/target/**', '**/src-tauri/export-runtime/**', '**/.feather-cache/**'] },
     host: '0.0.0.0',
     // 17420, not Tauri's default 1420 — that collides with any other Tauri app's dev server (and the
     // sibling MomentumCup/MyAge projects). Keep this in sync with src-tauri/tauri.conf.json devUrl.

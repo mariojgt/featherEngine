@@ -1,3 +1,4 @@
+import { SceneLight } from '../three/SceneLight';
 import { requestAddObject } from './ObjectCreationMenu';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, Grid, Html, PerformanceMonitor, TransformControls } from '@react-three/drei';
@@ -73,7 +74,7 @@ import {
   batchSignature,
   InstancedIdsContext,
 } from '../three/modelInstancing';
-import { lightShadowMapSize, qualityProfile, SHADOW_NORMAL_BIAS } from '../three/quality';
+import { qualityProfile } from '../three/quality';
 import { autoQualityStep, resetAutoQuality } from '../runtime/autoQuality';
 import { CinematicOverlay } from './CinematicOverlay';
 import { SceneEnvironment } from '../three/SceneEnvironment';
@@ -211,9 +212,6 @@ function Primitive({
   // already carries per-object damage each tick; subscribing to just THIS object's entry keeps the re-render
   // local to the struck object (the value is undefined on no-damage frames, so quiet frames never re-render).
   const damageTick = useEditorStore((state) => (state.isPlaying ? state.runtimeDamageEvents[object.id] : undefined));
-  // Shadow-map resolution for scene lights follows the quality tier (see lightShadowMapSize).
-  // Subscribed as the level string, which changes only when the user switches preset.
-  const lightQuality = useEditorStore((state) => state.renderSettings.quality);
   const [hitFlash, setHitFlash] = useState(false);
   useEffect(() => {
     if (damageTick === undefined) return;
@@ -390,55 +388,7 @@ function Primitive({
 
   if (object.kind === 'light') {
     const l = object.light;
-    const lightEl =
-      l?.type === 'point' ? (
-        <pointLight
-          color={l.color}
-          intensity={l.intensity}
-          distance={l.distance}
-          decay={2}
-          castShadow={l.castShadow}
-          // Bounded shadow map + bias instead of the three.js default — predictable cost and no
-          // shadow acne. Point lights are the most expensive (cubemap), so they get the smallest map.
-          shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'point')}
-          shadow-mapSize-height={lightShadowMapSize(qualityProfile(lightQuality), 'point')}
-          shadow-bias={-0.0008}
-          shadow-normalBias={SHADOW_NORMAL_BIAS}
-        />
-      ) : l?.type === 'spot' ? (
-        <spotLight
-          color={l.color}
-          intensity={l.intensity}
-          distance={l.distance}
-          angle={l.angle}
-          penumbra={l.penumbra ?? 0.45}
-          decay={2}
-          castShadow={l.castShadow}
-          shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'spot')}
-          shadow-mapSize-height={lightShadowMapSize(qualityProfile(lightQuality), 'spot')}
-          shadow-bias={-0.0006}
-          shadow-normalBias={SHADOW_NORMAL_BIAS}
-        />
-      ) : (
-        <directionalLight
-          color={l?.color ?? '#ffffff'}
-          intensity={l?.intensity ?? 2.4}
-          castShadow={l?.castShadow ?? true}
-          position={[0, 0, 0]}
-          // The sun: a tightly-framed shadow camera keeps a 2048² map sharp over the play area
-          // rather than smearing it across an unbounded default frustum.
-          shadow-mapSize-width={lightShadowMapSize(qualityProfile(lightQuality), 'directional')}
-          shadow-mapSize-height={lightShadowMapSize(qualityProfile(lightQuality), 'directional')}
-          shadow-bias={-0.0004}
-          shadow-normalBias={SHADOW_NORMAL_BIAS}
-          shadow-camera-near={0.5}
-          shadow-camera-far={120}
-          shadow-camera-left={-40}
-          shadow-camera-right={40}
-          shadow-camera-top={40}
-          shadow-camera-bottom={-40}
-        />
-      );
+    const lightEl = <SceneLight light={l} />;
     return (
       <>
         {lightEl}

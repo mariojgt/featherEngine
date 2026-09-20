@@ -1800,6 +1800,7 @@ function LightSection({ light, onChange }: { light: LightComponent | undefined; 
           <option value="point">Point</option>
           <option value="spot">Spot</option>
           <option value="directional">Directional (sun)</option>
+          <option value="rect">Rectangle (area)</option>
         </select>
       </label>
       <label className="field-row">
@@ -1807,10 +1808,10 @@ function LightSection({ light, onChange }: { light: LightComponent | undefined; 
         <input type="color" value={l.color} onChange={(e) => onChange({ color: e.target.value })} />
       </label>
       <label className="field-row">
-        <span>Intensity</span>
+        <span>{l.type === 'rect' ? 'Luminance (nits)' : l.type === 'point' || l.type === 'spot' ? 'Intensity (cd)' : 'Intensity'}</span>
         <input type="number" step={0.5} value={l.intensity} onChange={(e) => onChange({ intensity: Number(e.target.value) })} />
       </label>
-      {l.type !== 'directional' && (
+      {(l.type === 'point' || l.type === 'spot') && (
         <label className="field-row">
           <span>Range</span>
           <input type="number" step={1} value={l.distance} onChange={(e) => onChange({ distance: Number(e.target.value) })} />
@@ -1829,10 +1830,25 @@ function LightSection({ light, onChange }: { light: LightComponent | undefined; 
           onChange={(value) => onChange({ penumbra: value })}
         />
       )}
-      <label className="field-row">
+      {l.type === 'rect' && <>
+        {(['width','height'] as const).map(key => <label className="field-row" key={key}><span>{key === 'width' ? 'Width' : 'Height'}</span><input type="number" min={0.01} step={0.25} value={l[key] ?? 4} onChange={e => onChange({[key]:Number(e.target.value)})} /></label>)}
+        <p className="field-hint">Faces local −Z. Rotate to aim. Broad highlights on PBR surfaces; area lights do not cast shadows.</p>
+      </>}
+      {(l.type === 'spot' || l.type === 'directional') && <label className="field-row"><span>Aim with rotation</span><input type="checkbox" checked={l.useRotation ?? false} onChange={e => onChange({useRotation:e.target.checked})} /></label>}
+      {(l.type === 'point' || l.type === 'spot') && <label className="field-row"><span>Falloff exponent</span><input type="number" min={0} max={4} step={0.1} value={l.decay ?? 2} onChange={e => onChange({decay:Number(e.target.value)})} /></label>}
+      {l.type !== 'rect' && <label className="field-row">
         <span>Cast Shadow</span>
         <input type="checkbox" checked={l.castShadow} onChange={(e) => onChange({ castShadow: e.target.checked })} />
-      </label>
+      </label>}
+      {l.type !== 'rect' && l.castShadow && <details><summary>Shadow tuning</summary>
+        {([
+          ['shadowBias','Depth bias',-0.0004,-0.05,0.05,0.0001],
+          ['shadowNormalBias','Normal bias',0.02,0,2,0.005],
+          ['shadowNear','Near distance',0.5,0.01,100,0.1],
+          ['shadowFar','Far distance',l.type==='directional'?120:500,1,100000,1],
+          ...(l.type==='directional'?[['shadowExtent','Coverage half-width',40,0.1,1000,1] as const]:[]),
+        ] as const).map(([key,label,fallback,min,max,step]) => <label className="field-row" key={key}><span>{label}</span><input type="number" min={min} max={max} step={step} value={l[key] ?? fallback} onChange={e => onChange({[key]:Number(e.target.value)})} /></label>)}
+      </details>}
     </InspectorSection>
   );
 }
@@ -1941,7 +1957,13 @@ function RenderSettingsSection() {
   const update = useEditorStore((state) => state.updateRenderSettings);
   return (
     <InspectorSection title="Post-Processing" defaultOpen={false}>
-      <p className="field-hint">Project-wide bloom + vignette — applies in Play and the exported game. Bloom makes neon/tracers glow.</p>
+      <p className="field-hint">Project-wide contact shading, bloom and vignette. The same settings apply in the editor, Play and exported games.</p>
+      <label className="field-row"><span>Ambient occlusion</span><input type="checkbox" checked={rs.ambientOcclusionEnabled !== false} onChange={e=>update({ambientOcclusionEnabled:e.target.checked})} /></label>
+      {rs.ambientOcclusionEnabled !== false && <>
+        <label className="field-row"><span>AO strength</span><input type="number" min={0} max={5} step={0.1} value={rs.ambientOcclusionIntensity ?? 2.2} onChange={e=>update({ambientOcclusionIntensity:Number(e.target.value)})} /></label>
+        <label className="field-row"><span>AO radius</span><input type="number" min={0.05} max={10} step={0.05} value={rs.ambientOcclusionRadius ?? 1} onChange={e=>update({ambientOcclusionRadius:Number(e.target.value)})} /></label>
+        <p className="field-hint">High/Epic quality. Lower strength and radius help retain detail in dense vegetation.</p>
+      </>}
       <label className="field-row">
         <span>Bloom</span>
         <input type="checkbox" checked={rs.bloomEnabled} onChange={(e) => update({ bloomEnabled: e.target.checked })} />
@@ -3270,6 +3292,10 @@ function FractureSection({ objectId, fracture }: { objectId: string; fracture?: 
       <label className="field-row">
         <span>Burst force</span>
         <NumberInput value={fracture.strength} min={0} step={0.5} onChange={(v) => setObjectFracture(objectId, { strength: v })} />
+      </label>
+      <label className="field-row">
+        <span>Fragment spin (rad/s)</span>
+        <NumberInput value={fracture.angularSpeed ?? 0} min={0} max={20} step={0.25} onChange={(angularSpeed) => setObjectFracture(objectId, { angularSpeed })} />
       </label>
       <label className="field-row">
         <span>Break on impact</span>

@@ -192,6 +192,10 @@ export interface TerrainComponent {
   /** Deterministic seed for height/noise/foliage scatter. */
   seed: number;
   heightScale: number;
+  /** Blend rolling hills into sharp mountain ridges (0..1). Omitted preserves legacy terrain. */
+  ridgeStrength?: number;
+  /** Low-frequency domain warp in world units; breaks up the noise grid without seams. */
+  domainWarp?: number;
   frequency: number;
   octaves: number;
   persistence: number;
@@ -295,4 +299,3 @@ export interface MaterialDefinition extends PhysicalSurfaceProps, ToonSurfacePro
   folderId?: string;
   createdAt: number;
 }
-

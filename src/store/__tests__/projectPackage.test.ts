@@ -154,4 +154,34 @@ describe('kind: project packages', () => {
     expect(useProjectStore.getState().toast?.kind).toBe('error');
     expect(useProjectStore.getState().toast?.message).toContain('module, not a project template');
   });
+
+  it('preserves the authored render look through archive export and Asset Store project creation', async () => {
+    const authored = { ...useEditorStore.getState().renderSettings, quality: 'Epic' as const,
+      autoQuality: false, bloomIntensity: 0.38, bloomThreshold: 0.85,
+      ambientOcclusionEnabled: true, ambientOcclusionIntensity: 0.9,
+      colorGrade: { contrast: 0.16, saturation: -0.02 }, renderPreset: 'moody-cinematic' as const };
+    useEditorStore.setState({ renderSettings: authored });
+    const collected = useEditorStore.getState().buildProjectPackage();
+    expect(collected.content.renderSettings).toEqual(authored);
+    expect(collected.content.renderSettings).not.toBe(authored);
+    const pkg = buildPackage('project', collected.content, [], { id: 'pkg-look', name: 'Authored Look', version: '1.0.0' });
+    const bytes = writePackageArchive(pkg, new Map());
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => bytes.buffer }));
+    expect(await useProjectStore.getState().newProjectFromPackageUrl('store/look.nfpack', 'Look')).toBe(true);
+    expect(useEditorStore.getState().renderSettings).toEqual(authored);
+  });
+
+  it('keeps defaults for legacy projects and leaves the current look unchanged on additive imports', () => {
+    const editor = () => useEditorStore.getState();
+    const defaults = structuredClone(editor().renderSettings);
+    const legacy = editor().buildProjectPackage().content;
+    delete legacy.renderSettings;
+    editor().mergeProjectPackage(legacy, []);
+    expect(editor().renderSettings).toEqual(defaults);
+    editor().mergePackage({ ...legacy, renderSettings: { ...defaults, quality: 'Low', bloomIntensity: 3 } }, []);
+    expect(editor().renderSettings).toEqual(defaults);
+    const id = editor().createObjectWithProps('cube', { name: 'Prop' });
+    const prefabId = editor().createPrefabFromObject(id, 'Prop')!;
+    expect(editor().buildPrefabPackage(prefabId)?.content.renderSettings).toBeUndefined();
+  });
 });

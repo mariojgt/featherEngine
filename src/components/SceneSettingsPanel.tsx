@@ -237,13 +237,14 @@ export function SceneSettingsBody() {
         )}
 
         <label className="field-row">
-          <span><ImageIcon size={14} aria-hidden /> IBL Map</span>
+          <span><ImageIcon size={14} aria-hidden /> Reflection lighting</span>
           <select
-            value={environment.environmentMapAssetId ?? ''}
-            onChange={(event) => updateEnvironment({ environmentMapAssetId: event.target.value || undefined })}
-            title="Image-based lighting: an equirectangular panorama/HDRI drives reflections + ambient light. Studio = built-in light rig."
+            value={environment.environmentMapAssetId || (environment.skyLighting === 'sky' ? '__sky__' : '')}
+            onChange={(event) => updateEnvironment(event.target.value === '__sky__' ? { skyLighting:'sky', skyMode:'procedural', environmentMapAssetId:undefined } : { skyLighting:'studio', environmentMapAssetId:event.target.value || undefined })}
+            title="Choose a studio rig, the live procedural sky, or an imported panorama to light reflective surfaces."
           >
             <option value="">Studio (default)</option>
+            <option value="__sky__">Live sky and weather</option>
             {imageAssets.map((asset) => (
               <option key={asset.id} value={asset.id}>
                 {asset.name}
@@ -279,13 +280,15 @@ export function SceneSettingsBody() {
           </select>
         </label>
         <label className="field-row">
-          <span>Exposure</span>
+          <span>Exposure (stops)</span>
           <input
             type="number"
-            min={0}
-            step={0.05}
-            value={environment.toneMappingExposure ?? 1}
-            onChange={(event) => updateEnvironment({ toneMappingExposure: Math.max(0, num(event.target.value, environment.toneMappingExposure ?? 1)) })}
+            min={-8}
+            max={8}
+            step={0.25}
+            value={Math.round(Math.log2(Math.max(1 / 256, environment.toneMappingExposure ?? 1)) * 100) / 100}
+            onChange={(event) => updateEnvironment({ toneMappingExposure: 2 ** Math.max(-8, Math.min(8, num(event.target.value, 0))) })}
+            title="Exposure compensation: +1 stop doubles brightness; −1 stop halves it."
           />
         </label>
         <label className="field-row">
@@ -398,6 +401,14 @@ export function SceneSettingsBody() {
 
       <section className="inspector-section">
         <h3>Sun & Fog</h3>
+        <label className="field-row" title="Ambient fill independent of reflections. Lower values preserve dramatic shadow contrast.">
+          <span>Ambient fill</span>
+          <input type="number" min={0} max={5} step={0.05} value={environment.ambientIntensity ?? (0.38 + environment.environmentIntensity * 0.24)} onChange={(event) => updateEnvironment({ ambientIntensity: num(event.target.value, 0.5) })} />
+        </label>
+        <label className="field-row" title="Shadow map half-width in world units. Smaller values give sharper detail over a smaller area.">
+          <span>Sun shadow extent</span>
+          <input type="number" min={8} max={256} step={1} value={environment.sunShadowExtent ?? 80} onChange={(event) => updateEnvironment({ sunShadowExtent: num(event.target.value, 80) })} />
+        </label>
         <label className="field-row">
           <span><Sun size={14} aria-hidden /> Sun</span>
           <input type="color" value={environment.sunColor} onChange={(event) => updateEnvironment({ sunColor: event.target.value })} />
@@ -587,12 +598,35 @@ export function SceneSettingsBody() {
                 onChange={(event) => updateEnvironment({ volumetricMaxDistance: num(event.target.value, environment.volumetricMaxDistance ?? 120) })}
               />
             </label>
+            <label className="field-row">
+              <span>Local light scatter</span>
+              <input type="number" min={0} max={4} step={0.1} value={environment.volumetricLocalStrength ?? 0}
+                onChange={event => updateEnvironment({ volumetricLocalStrength: num(event.target.value, environment.volumetricLocalStrength ?? 0) })} />
+            </label>
+            <p className="field-hint">Nearby lights color the mist. Medium uses up to 2 lights, High 4, Epic 6. Local scattering does not cast volumetric shadows.</p>
           </>
         )}
       </section>
 
       <section className="settings-section">
-        <h3><Wind size={14} aria-hidden /> Wind</h3>
+        <h3><Wind size={14} aria-hidden /> Wind & Weather</h3>
+        <p className="field-hint">Clouds use the procedural sky. Rain follows wind; lightning lights the world, sky and rain together. Blueprint cues can change these during Play.</p>
+        {([
+          ['cloudCoverage', 'Cloud cover', 1, 0],
+          ['cloudSpeed', 'Cloud speed', 5, 0.35],
+          ['rainIntensity', 'Rain', 1, 0],
+          ['lightningFlash', 'Lightning flash', 1, 0],
+          ['surfaceWetness', 'Surface wetness', 1, 0],
+          ['puddleCoverage', 'Puddle coverage', 1, 0],
+        ] as const).map(([key, label, max, fallback]) => (
+          <label className="field-row" key={key}>
+            <span>{label}</span>
+            <input type="number" min={0} max={max} step={0.05} value={environment[key] ?? fallback}
+              onChange={event => updateEnvironment({ [key]: Math.max(0, Math.min(max, num(event.target.value, fallback))) })} />
+          </label>
+        ))}
+        <label className="field-row"><span>Rain wets surfaces</span><input type="checkbox" checked={environment.wetnessFromRain ?? false} onChange={event => updateEnvironment({ wetnessFromRain:event.target.checked })} /></label>
+        <p className="field-hint">Wet surfaces darken and become glossy. Puddles collect on upward-facing areas, with rain ripples at High/Epic quality. Automatic wetness accumulates and dries during Play; Surface wetness sets the minimum.</p>
         <p className="field-hint">Global wind drives cloth and pushes dynamic bodies (by their Wind Influence). Set a direction + strength.</p>
         {(['X', 'Y', 'Z'] as const).map((axis, index) => (
           <label className="field-row" key={axis}>

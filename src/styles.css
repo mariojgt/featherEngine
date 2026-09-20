@@ -14253,6 +14253,14 @@ body.is-scrubbing * {
   border-radius: 12px;
 }
 
+/* Actual scene captures use the card's cinematic frame; generated SVG icons keep their inset. */
+.store-card-art img.store-card-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 0;
+}
+
 .store-card-body {
   display: flex;
   flex: 1;

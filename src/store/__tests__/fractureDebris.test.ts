@@ -17,6 +17,22 @@ beforeEach(() => { useEditorStore.getState().setPlaying(false); clearFractureDeb
 afterEach(() => { useEditorStore.getState().setPlaying(false); clearFractureDebris(); });
 
 describe('fracture placement and debris ownership', () => {
+  it('gives grid and Voronoi pieces repeatable, bounded initial spin without changing legacy breaks', () => {
+    const object = source();
+    expect(makeFractureChunks(object)[0].variables?.__initialAngularVelocity).toBeUndefined();
+    for (const pattern of ['uniform', 'chunks'] as const) {
+      object.fracture = { ...object.fracture!, pattern, angularSpeed: 2.5, seed: 71 };
+      const first = makeFractureChunks(object).map(c => c.variables!.__initialAngularVelocity as number[]);
+      const second = makeFractureChunks(object).map(c => c.variables!.__initialAngularVelocity as number[]);
+      expect(first).toEqual(second);
+      first.forEach(v => expect(Math.hypot(...v)).toBeCloseTo(2.5));
+      object.fracture.angularSpeed = 500;
+      makeFractureChunks(object).forEach(c => expect(Math.hypot(...c.variables!.__initialAngularVelocity as number[])).toBeCloseTo(20));
+      object.fracture.angularSpeed = NaN;
+      expect(makeFractureChunks(object)[0].variables?.__initialAngularVelocity).toBeUndefined();
+    }
+  });
+
   it('preserves rotated grid placement and gives every piece the source velocity', () => {
     const object = source();
     const chunks = makeFractureChunks(object, undefined, [8, 2, -3]);

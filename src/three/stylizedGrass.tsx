@@ -1,3 +1,4 @@
+import { useEditorStore } from '../store/editorStore';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -487,7 +488,8 @@ export function StylizedGrass({
 
   useFrame((_, delta) => {
     const u = uniforms.current;
-    u.uTime.value += Math.min(delta, 1 / 20) * (1 + turbulence);
+    const state = useEditorStore.getState();
+    u.uTime.value = state.isPlaying ? state.runtimeTime * (1 + turbulence) : u.uTime.value + Math.min(delta, 1 / 20) * (1 + turbulence);
     u.uWind.value.set(windVec[0], 0, windVec[2]);
     // 0.03 maps a wind magnitude of ~10 to a believable tip lean; windStrength scales it per-terrain.
     u.uWindStrength.value = 0.03 * windStrength;

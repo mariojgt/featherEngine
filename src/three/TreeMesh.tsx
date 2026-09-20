@@ -232,7 +232,8 @@ function updateTreeUniforms(
   camera: THREE.Camera,
   spec: TreeSpec | null,
 ): void {
-  u.uTime.value += Math.min(delta, 1 / 20);
+  const state = useEditorStore.getState();
+  u.uTime.value = state.isPlaying ? state.runtimeTime : u.uTime.value + Math.min(delta, 1 / 20);
   u.uWind.value.set(windVec[0], 0, windVec[2]);
   const windMag = Math.hypot(windVec[0], windVec[2]);
   // Amplitude scales with the tree, not a constant: a 15-unit spruce leans farther than a shrub.

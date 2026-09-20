@@ -145,6 +145,9 @@ export function withTerrainDefaults(terrain?: Partial<TerrainComponent>): Terrai
   }
   const normalized = normalizeTerrainDefaults(terrain);
   if (terrain) terrainDefaultsCache.set(terrain, normalized);
+  // Sampling helpers pass normalized inputs to each other. Treat that immutable result as canonical
+  // instead of repeatedly cloning/sanitizing its potentially large paint and foliage records.
+  terrainDefaultsCache.set(normalized, normalized);
   return normalized;
 }
 
@@ -170,6 +173,8 @@ function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainC
     physicsRadius: clampInt(terrain?.physicsRadius ?? base.physicsRadius, 1, 5),
     seed: Math.trunc(terrain?.seed ?? base.seed),
     heightScale: clamp(terrain?.heightScale ?? base.heightScale, 0, 256),
+    ridgeStrength: Number.isFinite(terrain?.ridgeStrength) ? clamp(terrain!.ridgeStrength!, 0, 1) : 0,
+    domainWarp: Number.isFinite(terrain?.domainWarp) ? clamp(terrain!.domainWarp!, 0, 256) : 0,
     frequency: clamp(terrain?.frequency ?? base.frequency, 0.001, 0.25),
     octaves: clampInt(terrain?.octaves ?? base.octaves, 1, 8),
     persistence: clamp(terrain?.persistence ?? base.persistence, 0.05, 0.95),
@@ -301,13 +306,15 @@ function overrideAt(record: Record<string, number>, ix: number, iz: number): num
   return Number.isFinite(value) ? value : undefined;
 }
 
-// True if the record has no own keys. `Object.keys(record).length === 0` allocated a full
-// key array on EVERY height sample — for a terrain with many sculpt overrides that array build
-// dominated chunk generation (the "multi-minute load freeze"). `for…in` with an early return
-// is O(1) and allocates nothing.
+// Overrides are immutable. Even an early-return for…in can enumerate a dictionary's keys internally
+// in V8, so cache emptiness once per record instead of repeating it for every vertex/normal sample.
+const emptyRecordCache = new WeakMap<Record<string, number>, boolean>();
 function isRecordEmpty(record: Record<string, number>): boolean {
-  for (const _key in record) return false;
-  return true;
+  const cached = emptyRecordCache.get(record);
+  if (cached !== undefined) return cached;
+  const empty = Object.keys(record).length === 0;
+  emptyRecordCache.set(record, empty);
+  return empty;
 }
 
 export function sampleBaseTerrainLocalHeight(input: TerrainComponent | Partial<TerrainComponent>, localX: number, localZ: number): number {
@@ -316,9 +323,14 @@ export function sampleBaseTerrainLocalHeight(input: TerrainComponent | Partial<T
   let amplitude = 1;
   let total = 0;
   let sum = 0;
+  const warp = terrain.domainWarp ?? 0;
+  const ridge = terrain.ridgeStrength ?? 0;
+  const wx = localX + (warp ? (valueNoise2(localX * frequency * 0.45, localZ * frequency * 0.45, terrain.seed + 7919) * 2 - 1) * warp : 0);
+  const wz = localZ + (warp ? (valueNoise2(localX * frequency * 0.45, localZ * frequency * 0.45, terrain.seed + 15401) * 2 - 1) * warp : 0);
   for (let octave = 0; octave < terrain.octaves; octave += 1) {
-    const n = valueNoise2(localX * frequency, localZ * frequency, terrain.seed + octave * 1013) * 2 - 1;
-    sum += n * amplitude;
+    const n = valueNoise2(wx * frequency, wz * frequency, terrain.seed + octave * 1013) * 2 - 1;
+    const ridged = Math.pow(1 - Math.abs(n), 3) * 2 - 1;
+    sum += lerp(n, ridged, ridge) * amplitude;
     total += amplitude;
     amplitude *= terrain.persistence;
     frequency *= terrain.lacunarity;
@@ -373,14 +385,14 @@ export function sampleTerrainMaterialLayerId(
   input: TerrainComponent | Partial<TerrainComponent>,
   localX: number,
   localZ: number,
-  height = sampleTerrainLocalHeight(input, localX, localZ),
-  normalY = sampleTerrainNormal(input, localX, localZ)[1],
+  height?: number,
+  normalY?: number,
 ): string {
   const terrain = withTerrainDefaults(input);
   const { x, z } = terrainEditIndex(terrain, localX, localZ);
   const painted = terrain.paintOverrides[terrainEditKey(x, z)];
   if (painted && terrain.materialLayers.some((layer) => layer.id === painted)) return painted;
-  return autoTerrainMaterialLayerId(terrain, height, normalY);
+  return autoTerrainMaterialLayerId(terrain, height ?? sampleTerrainLocalHeight(terrain, localX, localZ), normalY ?? sampleTerrainNormal(terrain, localX, localZ)[1]);
 }
 
 export function sampleTerrainMaterialLayer(

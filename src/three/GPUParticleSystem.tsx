@@ -255,7 +255,7 @@ export function GPUParticleSystem({ object }: { object: SceneObject }) {
       if (lightRef.current) lightRef.current.intensity = 0;
       return;
     }
-    uTime.current += Math.min(rawDelta, 0.05);
+    uTime.current = playing ? useEditorStore.getState().runtimeTime : uTime.current + Math.min(rawDelta, 0.05);
     const u = material.uniforms;
     u.uTime.value = uTime.current;
     u.uLife.value = Math.max(0.05, cfg.lifetime);

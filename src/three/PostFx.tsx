@@ -1,7 +1,8 @@
 import { EffectComposer, Bloom, Vignette, DepthOfField, N8AO, SMAA, SSR, ChromaticAberration } from '@react-three/postprocessing';
-import { SMAAPreset } from 'postprocessing';
+import { SMAAPreset, EffectComposer as Composer } from 'postprocessing';
 import { Vector2 } from 'three';
-import { useMemo } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+import { useThree } from '@react-three/fiber';
 import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { ColorGrade, resolveGrade } from './ColorGrade';
 import { MotionBlur } from './MotionBlurEffect';
@@ -9,6 +10,11 @@ import { Anamorphic } from './AnamorphicEffect';
 import { LensDirt } from './LensDirtEffect';
 import { VolumetricFog, resolveVolumetric } from './VolumetricFog';
 import { qualityProfile } from './quality';
+import { installReflectionCompatibility } from './reflectionCompatibility';
+
+// The library's SSR factory keys its GPU effect on the props object identity. Cinematic camera
+// updates re-render PostFx every tick; stable scalar props must not rebuild those targets each time.
+const StableSSR = memo(SSR);
 
 /**
  * Project post-processing pass, driven by `renderSettings` and the live cinematic. Bloom makes
@@ -19,6 +25,14 @@ import { qualityProfile } from './quality';
  * nothing when all FX are off.
  */
 export function PostFx() {
+  const gl = useThree((state) => state.gl);
+  const ssrInstance = useRef<{ dispose(): void } | null>(null);
+  const configureSSR = useCallback((effect: unknown) => {
+    // R3F does not dispose primitive objects; release the old effect on quality changes/unmount.
+    if (ssrInstance.current !== effect) ssrInstance.current?.dispose();
+    ssrInstance.current = effect as typeof ssrInstance.current;
+    installReflectionCompatibility(effect, gl);
+  }, [gl]);
   const rs = useEditorStore((state) => state.renderSettings);
   const pose = useEditorStore((state) =>
     state.runtimeCinematicCamera ?? (state.cinematicViewportMode === 'camera' ? state.editorCinematicPreviewCamera : undefined),
@@ -26,6 +40,19 @@ export function PostFx() {
   const look = useEditorStore((state) => state.runtimeCinematicLook ?? state.editorCinematicPreviewLook ?? state.renderSettings.colorGrade);
   const environment = useEditorStore(selectActiveSceneEnvironment);
   const profile = qualityProfile(rs?.quality);
+  const composer = useRef<Composer | null>(null);
+  const samples = useRef(profile.msaa);
+  samples.current = profile.msaa;
+  const configureComposer = useCallback((next: Composer | null) => {
+    if (composer.current !== next) composer.current?.dispose();
+    composer.current = next;
+    if (next) next.multisampling = samples.current;
+  }, []);
+  // The React wrapper recreates its composer when this prop changes, without releasing
+  // the old buffers. The composer's own setter resizes its existing buffers safely.
+  useLayoutEffect(() => {
+    if (composer.current) composer.current.multisampling = profile.msaa;
+  }, [profile.msaa]);
   // Reused offset vector — PostFx re-renders every frame during a cinematic (live pose), so allocating
   // a fresh Vector2 per render was steady churn. The effect reads the vector by reference.
   const chromaOffset = useMemo(() => new Vector2(), []);
@@ -33,12 +60,12 @@ export function PostFx() {
   // Ambient occlusion FIRST so the contact-shadow darkening it adds in crevices/corners is in the
   // color buffer before bloom samples luminance. N8AO is a high-quality, depth+normal SSAO; it's
   // gated to the High/Epic presets (half-resolution on High to keep it cheap, full-res on Epic).
-  if (profile.ssao) {
+  if (profile.ssao && rs?.ambientOcclusionEnabled !== false) {
     children.push(
       <N8AO
         key="ssao"
-        aoRadius={1.0}
-        intensity={2.2}
+        aoRadius={Number.isFinite(rs?.ambientOcclusionRadius) ? Math.max(0.05, Math.min(10, rs.ambientOcclusionRadius!)) : 1}
+        intensity={Number.isFinite(rs?.ambientOcclusionIntensity) ? Math.max(0, Math.min(5, rs.ambientOcclusionIntensity!)) : 2.2}
         distanceFalloff={1}
         quality={profile.msaa >= 4 ? 'high' : 'medium'}
         halfRes={profile.msaa < 4}
@@ -50,15 +77,11 @@ export function PostFx() {
   // it from being noisy; maxRoughness limits it to fairly smooth surfaces (matte stays matte).
   if (profile.ssr && (!environment?.lux?.enabled || environment.lux.screenTraces !== false)) {
     children.push(
-      <SSR
+      <StableSSR
         key="ssr"
-        temporalResolve
+        ref={configureSSR}
         intensity={1}
         maxRoughness={0.4}
-        ENABLE_BLUR
-        blurMix={0.4}
-        maxDepthDifference={10}
-        rayStep={0.5}
       />,
     );
   }
@@ -149,7 +172,7 @@ export function PostFx() {
   // framebuffer + per-frame resolve over the whole screen). 2x keeps edges clean enough while roughly
   // halving that bandwidth vs 4x — a meaningful win on integrated GPUs with little visible quality loss.
   return (
-    <EffectComposer multisampling={profile.msaa}>
+    <EffectComposer ref={configureComposer} multisampling={0}>
       {children}
     </EffectComposer>
   );

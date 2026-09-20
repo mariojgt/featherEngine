@@ -95,6 +95,8 @@ export interface FractureComponent {
   debrisLifetime?: number;
   /** Carry the source body's linear velocity into its fragments (default true). */
   inheritVelocity?: boolean;
+  /** Seeded initial tumble speed in radians/second (0..20, default 0). */
+  angularSpeed?: number;
 }
 
 /** One equippable inventory slot (a weapon/item). An empty `weaponAssetId` is the "unarmed" slot. */

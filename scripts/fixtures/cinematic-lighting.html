@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Feather lighting and weather acceptance</title>
+<style>body{margin:0;background:#10151c;color:#ecf0f5;font:14px system-ui}header{position:absolute;padding:24px;pointer-events:none}h1{margin:0 0 8px;font-size:23px}p{margin:0;color:#b4bfcc}canvas{display:block}</style></head>
+<body><header><h1>Feather · Lighting & Weather</h1><p id="state">Live sky radiance · area lighting · wet PBR surfaces</p></header><script type="module">
+import * as THREE from 'three';
+import {RectAreaLightUniformsLib} from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
+import {SkyRadiance} from '/src/three/skyRadiance.ts';
+import {SurfaceWeatherMaterials,surfaceWeatherUniforms} from '/src/three/surfaceWeatherMaterials.ts';
+import {withSceneEnvironmentDefaults} from '/src/three/environmentSettings.ts';
+RectAreaLightUniformsLib.init();
+const renderer=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});
+renderer.setSize(960,640);renderer.setPixelRatio(1);renderer.toneMapping=THREE.AgXToneMapping;document.body.appendChild(renderer.domElement);
+const errors=[];renderer.debug.onShaderError=(gl,program,vertex,fragment)=>errors.push([gl.getProgramInfoLog(program),gl.getShaderInfoLog(fragment),gl.getShaderSource(fragment)].join('\n'));
+const scene=new THREE.Scene();scene.background=new THREE.Color('#17232e');
+const camera=new THREE.PerspectiveCamera(48,1.5,.1,300);camera.position.set(7,4.5,9);camera.lookAt(0,.4,0);camera.updateMatrixWorld();
+let environment=withSceneEnvironmentDefaults({skyMode:'procedural',skyLighting:'sky',skyTopColor:'#6383ba',skyHorizonColor:'#bdcedd',skyGroundColor:'#111c25',sunIntensity:.4,sunAzimuth:210,sunElevation:30,cloudCoverage:.5,cloudSpeed:0,wind:[0,0,0]});
+const sky=new SkyRadiance(renderer,'High');
+const floor=new THREE.Mesh(new THREE.BoxGeometry(18,.2,18),new THREE.MeshStandardMaterial({color:'#666b70',roughness:.94}));floor.position.y=-.12;scene.add(floor);
+const geometry=new THREE.BoxGeometry(1.8,.22,1.4);
+for(let z=-4;z<=4;z+=1.55)for(let x=-4;x<=4;x+=1.92){const slab=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:(Math.round(x+z)&1)?'#69727a':'#515f6a',roughness:.88}));slab.position.set(x,0,z);scene.add(slab);}
+const metal=new THREE.Mesh(new THREE.SphereGeometry(.9,48,32),new THREE.MeshStandardMaterial({color:'#d5dce2',metalness:1,roughness:.17}));metal.position.set(1.7,1,-1.6);scene.add(metal);
+const stone=new THREE.Mesh(new THREE.BoxGeometry(1.5,2.7,1.5),new THREE.MeshStandardMaterial({color:'#a0a2a5',roughness:.9}));stone.position.set(-1.8,1.4,-1.4);scene.add(stone);
+const lamp=new THREE.RectAreaLight('#ffc981',5,5,3);lamp.position.set(0,4,1);lamp.lookAt(0,0,0);scene.add(lamp);
+const rim=new THREE.RectAreaLight('#8ab6ff',3,6,4);rim.position.set(-4,3,-4);rim.lookAt(0,0,0);scene.add(rim);
+const uniforms=surfaceWeatherUniforms();let surfaces=null;
+let time=0;
+function render(){scene.environment=sky.update(environment,time);scene.environmentIntensity=1;uniforms.featherWeatherTime.value=time;surfaces?.sync(scene);renderer.render(scene,camera);}
+const sample=new Uint8Array(4);
+function at(point){const p=new THREE.Vector3(...point).project(camera);const gl=renderer.getContext();gl.readPixels(Math.round((p.x+1)*480),Math.round((p.y+1)*320),1,1,gl.RGBA,gl.UNSIGNED_BYTE,sample);return [...sample].slice(0,3);}
+window.renderQA={errors,
+  set(values){if('wet' in values){if(!surfaces)surfaces=new SurfaceWeatherMaterials(uniforms,renderer);uniforms.featherWetness.value=values.wet;}if('puddles' in values)uniforms.featherPuddles.value=values.puddles;if('rain' in values)uniforms.featherRain.value=values.rain;if('time' in values)time=values.time;if(values.environment)environment={...environment,...values.environment};if('lamp' in values)lamp.intensity=values.lamp;render();},
+  stopWeather(){surfaces?.dispose();surfaces=null;render();},
+  pixels(){render();const data=[];for(let y=170;y<490;y+=16)for(let x=160;x<800;x+=16){const gl=renderer.getContext();gl.readPixels(x,y,1,1,gl.RGBA,gl.UNSIGNED_BYTE,sample);data.push(...sample.slice(0,3));}return data;},
+  samples(){return {metal:at([1.7,1.1,-.73]),stone:at([-1.2,1.4,-.64]),floor:at([0,.13,1.55])};},
+  status(){return {...sky.status,textures:renderer.info.memory.textures,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles};},
+  repeat(count){for(let i=0;i<count;i++){time+=1;render();}return this.status();},
+};
+render();
+</script></body></html>

@@ -735,7 +735,13 @@ const createFractureChunks = (source: SceneObject, origin?: Vector3Tuple): Scene
 /** Stick Hero-style momentum hand-off and bounded lifetime for generated debris. */
 export const makeFractureChunks = (source: SceneObject, origin?: Vector3Tuple, velocity: Vector3Tuple = [0, 0, 0]): SceneObject[] => {
   const chunks = createFractureChunks(source, origin);
+  const rng = mulberry32(((source.fracture?.seed ?? 1) ^ 0x51f15e) >>> 0);
+  const spin = Number.isFinite(source.fracture?.angularSpeed) ? Math.max(0, Math.min(20, source.fracture!.angularSpeed!)) : 0;
   for (const chunk of chunks) {
+    if (spin > 0) {
+      const axis = new THREE.Vector3(rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1).normalize().multiplyScalar(spin);
+      chunk.variables = { ...chunk.variables, __initialAngularVelocity: [axis.x, axis.y, axis.z] };
+    }
     if (source.fracture?.inheritVelocity !== false && velocity.every(Number.isFinite)) {
       chunk.variables = { ...chunk.variables, __initialVelocity: [...velocity] as Vector3Tuple };
       if (Math.hypot(...velocity) >= 10 && chunk.physics) chunk.physics.ccd = true;

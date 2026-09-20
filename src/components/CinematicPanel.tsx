@@ -2274,11 +2274,11 @@ export function CinematicPanel() {
                     <Flag size={14} aria-hidden />
                     Marker
                   </button>
-                  <button className="full-button" disabled={Boolean(movieStatus)} title="Frame-locked offline render to WebM: each frame is rendered and composited (letterbox/titles/fade baked in) at the sequence frame rate — no dropped frames on a hitch." onClick={recordCinematicMovie}>
+                  <button className="full-button" disabled={Boolean(movieStatus)} title="Record the camera and material preview with titles and fades. Browser capture uses wall-clock timing and excludes live physics/events/audio; use the production cinematic renderer for the complete film." onClick={recordCinematicMovie}>
                     <Download size={14} aria-hidden />
                     {movieStatus && !movieStatus.toLowerCase().includes('mp4') && !movieStatus.toLowerCase().includes('ffmpeg') && !movieStatus.toLowerCase().includes('converting') ? movieStatus : 'Export WebM'}
                   </button>
-                  <button className="full-button" disabled={Boolean(movieStatus)} title="Frame-locked offline render, then transcode WebM → MP4 (H.264/AAC) in-browser via ffmpeg.wasm. First run downloads ~30MB of ffmpeg core from unpkg." onClick={exportCinematicMp4}>
+                  <button className="full-button" disabled={Boolean(movieStatus)} title="Record a silent camera/material preview, then convert to H.264 MP4. Live physics and event cues require the production cinematic renderer. First run downloads ffmpeg from unpkg." onClick={exportCinematicMp4}>
                     <Download size={14} aria-hidden />
                     {movieStatus && (movieStatus.toLowerCase().includes('mp4') || movieStatus.toLowerCase().includes('ffmpeg') || movieStatus.toLowerCase().includes('converting')) ? movieStatus : 'Export MP4'}
                   </button>

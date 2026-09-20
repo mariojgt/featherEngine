@@ -29,7 +29,7 @@ export interface AttachmentComponent {
 
 /** Configurable light on a `kind: 'light'` object. Defaults (no component) render as a directional light. */
 export interface LightComponent {
-  type: 'directional' | 'point' | 'spot';
+  type: 'directional' | 'point' | 'spot' | 'rect';
   color: string;
   intensity: number;
   /** point/spot falloff distance in world units (0 = no falloff limit). */
@@ -43,6 +43,19 @@ export interface LightComponent {
    */
   penumbra?: number;
   castShadow: boolean;
+  /** Rectangular emitter dimensions in metres; faces local -Z. */
+  width?: number;
+  height?: number;
+  /** Point/spot power falloff exponent; 2 is inverse square. */
+  decay?: number;
+  /** Aim spot/directional lights along local -Z. Omitted preserves legacy world-origin targeting. */
+  useRotation?: boolean;
+  shadowBias?: number;
+  shadowNormalBias?: number;
+  shadowNear?: number;
+  shadowFar?: number;
+  /** Directional shadow camera half-width. */
+  shadowExtent?: number;
 }
 
 /**
@@ -77,6 +90,9 @@ export interface ReflectionProbeComponent {
  * editable in the editor; the AI can tune them too. Read by the GameView + editor viewport post-FX pass.
  */
 export interface RenderSettings {
+  ambientOcclusionEnabled?: boolean;
+  ambientOcclusionIntensity?: number;
+  ambientOcclusionRadius?: number;
   bloomEnabled: boolean;
   /** Bloom strength (0–3+). */
   bloomIntensity: number;
@@ -169,6 +185,13 @@ export interface LuxSettings {
  * procedural/color sky works without external files, while image mode can use an imported panorama.
  */
 export interface SceneEnvironmentSettings {
+  /** Procedural sky can also supply filtered ambient radiance and reflections. Legacy default: studio. */
+  skyLighting?: 'studio' | 'sky';
+  /** Non-destructive wet-surface baseline and puddle coverage, both 0..1. */
+  surfaceWetness?: number;
+  puddleCoverage?: number;
+  /** Accumulate water during rain and dry gradually on the simulation clock. Off for legacy scenes. */
+  wetnessFromRain?: boolean;
   lux?: Partial<LuxSettings>;
   skyMode: SkyMode;
   /** Fallback / flat sky color. Also clears the renderer behind procedural/image sky domes. */
@@ -196,6 +219,10 @@ export interface SceneEnvironmentSettings {
   sunColor: string;
   /** Directional sun strength. */
   sunIntensity: number;
+  /** Explicit ambient fill. Omit to retain the legacy environment-dependent fill. */
+  ambientIntensity?: number;
+  /** Half-width of the sun shadow map in world units (8..256); smaller covers less area in finer detail. */
+  sunShadowExtent?: number;
   /** Sun compass angle in degrees. */
   sunAzimuth: number;
   /** Sun height in degrees. */
@@ -261,6 +288,8 @@ export interface SceneEnvironmentSettings {
   volumetricScattering?: number;
   /** Strength of sun in-scattering / light shafts. */
   volumetricSunStrength?: number;
+  /** Local point/spot/area light scattering in fog, 0–4. Bounded by quality; unshadowed. Default 0. */
+  volumetricLocalStrength?: number;
   /** Raymarch far clamp in world units (caps cost + keeps distant fog bounded). */
   volumetricMaxDistance?: number;
   /**
@@ -270,6 +299,14 @@ export interface SceneEnvironmentSettings {
   wind?: Vector3Tuple;
   /** Random gust turbulence layered on the global wind, 0–1. */
   windTurbulence?: number;
+  /** Animated cloud cover in the procedural sky, 0 clear..1 overcast. Omitted = clear. */
+  cloudCoverage?: number;
+  /** Cloud advection speed; global wind sets its direction. */
+  cloudSpeed?: number;
+  /** Camera-local, depth-tested wind-driven rainfall, 0..1. Omitted = dry. */
+  rainIntensity?: number;
+  /** Authored lightning envelope, 0..1. Lights geometry, sky and rain together; no random flashes. */
+  lightningFlash?: number;
   /**
    * World gravity as an acceleration vector (units/s²) for the whole scene. Undefined = Earth,
    * `[0, -9.81, 0]`. Drop the magnitude for Moon/low-g levels, zero it for space, or point it
