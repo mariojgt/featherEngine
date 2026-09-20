@@ -1,0 +1,48 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Fog beam convergence</title><style>body{margin:0;background:#000}canvas{display:block}</style></head><body><script type="module">
+import * as THREE from 'three';
+import { EffectComposer, RenderPass, EffectPass } from 'postprocessing';
+import { VolumetricFogEffect } from '/src/three/VolumetricFog.tsx';
+import { LocalFogLights } from '/src/three/localFogLights.ts';
+const errors=[],originalError=console.error;
+console.error=(...args)=>{errors.push(args.join(' '));originalError(...args);};
+const width=480,height=320,renderer=new THREE.WebGLRenderer({preserveDrawingBuffer:true});renderer.setSize(width,height);document.body.append(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0);
+const camera=new THREE.PerspectiveCamera(48,width/height,.1,200);camera.position.set(0,2,8);camera.lookAt(0,2,-4);camera.updateMatrixWorld();
+const wall=new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshBasicMaterial({color:0}));wall.position.z=-100;scene.add(wall);
+const spot=new THREE.SpotLight('#c4e8ff',400,12,.085,.7);spot.position.set(0,5,-4);spot.target.position.set(0,0,-4);scene.add(spot,spot.target);
+const blocker=new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshBasicMaterial({color:0}));blocker.position.z=4;blocker.visible=false;scene.add(blocker);
+const lights=new LocalFogLights(),fog=new VolumetricFogEffect(),reference=new VolumetricFogEffect();
+// Independently over-sample the same physical integral for a GPU convergence check.
+reference.setFragmentShader(reference.getFragmentShader().replace('i < 64','i < 1024').replace('#define VF_LOCAL_SAMPLES 24','#define VF_LOCAL_SAMPLES 512').replace('steps >= 40 ? 24 : (steps >= 24 ? 16 : 12)','512'));
+const fallback=new THREE.DataTexture(new Uint8Array([255,255,255,255]),1,1);fallback.needsUpdate=true;
+for(const effect of [fog,reference]){const u=effect.uniforms;u.get('density').value=.035;u.get('heightStart').value=1;u.get('heightFalloff').value=.15;u.get('sunStrength').value=0;u.get('scattering').value=.2;u.get('maxDistance').value=145;u.get('fogColor').value.set(0);u.get('localStrength').value=2;u.get('shadowMap').value=fallback;}
+const composer=new EffectComposer(renderer),normalPass=new EffectPass(camera,fog),referencePass=new EffectPass(camera,reference);composer.addPass(new RenderPass(scene,camera));composer.addPass(normalPass);composer.addPass(referencePass);
+function render(effect,steps){lights.update(scene,camera.position,6);const u=effect.uniforms;u.get('steps').value=steps;u.get('inverseProjection').value.copy(camera.projectionMatrixInverse);u.get('cameraMatrixWorld').value.copy(camera.matrixWorld);u.get('cameraPos').value.copy(camera.position);u.get('localLightCount').value=lights.count;u.get('localLightPosition').value=lights.positions;u.get('localLightColor').value=lights.colors;u.get('localLightDirection').value=lights.directions;u.get('localLightCone').value=lights.cones;normalPass.enabled=effect===fog;referencePass.enabled=effect===reference;normalPass.renderToScreen=effect===fog;referencePass.renderToScreen=effect===reference;composer.render(1/60);const gl=renderer.getContext(),bytes=new Uint8Array(width*height*4);gl.readPixels(0,0,width,height,gl.RGBA,gl.UNSIGNED_BYTE,bytes);return bytes;}
+function measure(steps){const ref=render(reference,1024),actual=render(fog,steps);let sum=0,count=0,peak=0,signal=0,noise=0;for(let y=20;y<height-20;y++)for(let x=10;x<width-10;x++){const i=(y*width+x)*4;peak=Math.max(peak,actual[i+2]);if(ref[i+2]>8){count++;signal+=actual[i+2];sum+=Math.abs(actual[i+2]-ref[i+2]);noise+=Math.abs(actual[i+2]-(actual[i-4+2]+actual[i+4+2]+actual[i-width*4+2]+actual[i+width*4+2])/4);}}return{steps,meanAbsoluteError:sum/count,neighborResidual:noise/count,mean:signal/count,peak,pixels:count};}
+// Exercise the production shader helpers against independent numerical integration and Three's
+// actual GPU shadow encoder. Pixel comparisons include the renderer's real color conversion.
+const probe=new VolumetricFogEffect(),control=new VolumetricFogEffect();
+const helpers=fog.getFragmentShader().split('  void mainImage(')[0];
+for(const effect of [probe,control])effect.uniforms.set('qaExpected',new THREE.Uniform(0));
+const main=expression=>`uniform float qaExpected; void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) { outputColor=vec4(vec3(${expression}),1.0); }`;
+control.setFragmentShader(helpers+main('qaExpected'));
+const probePass=new EffectPass(camera,probe),controlPass=new EffectPass(camera,control);composer.addPass(probePass);composer.addPass(controlPass);probePass.enabled=false;controlPass.enabled=false;
+function probePixels(pass){for(const p of [normalPass,referencePass,probePass,controlPass]){p.enabled=p===pass;p.renderToScreen=p===pass;}composer.render(1/60);const gl=renderer.getContext(),v=new Uint8Array(4);gl.readPixels(240,160,1,1,gl.RGBA,gl.UNSIGNED_BYTE,v);return v[0];}
+function analyticChecks(){
+ const result=[],u=probe.uniforms;probe.setFragmentShader(helpers+main('vfOpticalDepth(normalize(sunDirection),maxDistance) / 5.0'));
+ for(const [y,dy,falloff,distance] of [[-2,.2,.15,80],[12,-.4,.2,70],[9,0,.3,80],[9,.00001,.3,80],[-3,-.4,.2,50],[9,.4,0,80]]){
+  const ray=new THREE.Vector3(.2,dy,-1).normalize(),n=100000,step=distance/n;let expected=0;
+  for(let i=0;i<n;i++)expected+=.035*Math.exp(-Math.max(0,y+ray.y*(i+.5)*step)*falloff)*step;
+  u.get('cameraPos').value.set(0,y,0);u.get('heightStart').value=0;u.get('heightFalloff').value=falloff;u.get('density').value=.035;u.get('sunDirection').value.copy(ray);u.get('maxDistance').value=distance;
+  control.uniforms.get('qaExpected').value=expected/5;
+  const actual=probePixels(probePass),reference=probePixels(controlPass);result.push({kind:'height',y,dy,falloff,actual,reference,error:Math.abs(actual-reference)});
+ }
+ const target=new THREE.WebGLRenderTarget(1,1),encodeScene=new THREE.Scene(),encodeCamera=new THREE.Camera();
+ const material=new THREE.ShaderMaterial({uniforms:{testDepth:{value:0}},vertexShader:'void main(){gl_Position=vec4(position.xy,0.,1.);}',fragmentShader:'#include <packing>\nuniform float testDepth; void main(){gl_FragColor=packDepthToRGBA(testDepth);}'});
+ encodeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),material));
+ probe.setFragmentShader(helpers+main('vfUnpackDepth(texture2D(shadowMap,vec2(0.5)))'));u.get('shadowMap').value=target.texture;
+ for(const depth of [0,.1,.251,.5783,.91,1]){material.uniforms.testDepth.value=depth;renderer.setRenderTarget(target);renderer.render(encodeScene,encodeCamera);renderer.setRenderTarget(null);control.uniforms.get('qaExpected').value=depth;const actual=probePixels(probePass),reference=probePixels(controlPass);result.push({kind:'shadowDepth',depth,actual,reference,error:Math.abs(actual-reference)});}
+ target.dispose();material.dispose();encodeScene.children[0].geometry.dispose();return result;
+}
+window.beamQA={errors,measure,analyticChecks,move(x){camera.position.x=x;camera.lookAt(0,2,-4);camera.updateMatrixWorld();return measure(40);},occlude(){blocker.visible=true;const a=render(fog,40);blocker.visible=false;return a.reduce((max,value,i)=>i%4===2?Math.max(max,value):max,0);},align(){spot.position.set(0,2,3);spot.target.position.set(0,2,-20);return measure(40);},hemisphere(){spot.angle=Math.PI/2;return measure(40);},reverse(){spot.target.position.set(0,2,8);return measure(40);}};render(fog,40);
+</script></body></html>

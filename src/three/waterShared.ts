@@ -7,7 +7,7 @@ import * as THREE from 'three';
  *   pass can hide them while it re-renders the scene into its reflection/refraction targets (otherwise the
  *   water would reflect/refract itself, or recurse).
  * - `waterCapture` is the latest captured textures + matrices. WaterSurface copies these into its material
- *   uniforms each frame. A one-frame staleness is fine (reflections lag imperceptibly).
+ *   uniforms immediately before drawing, after capture and camera updates for this frame.
  */
 export const waterMeshRegistry = new Set<THREE.Object3D>();
 
@@ -19,6 +19,7 @@ export function registerWaterMesh(mesh: THREE.Object3D): () => void {
 }
 
 export const waterCapture = {
+  planeY: 0,
   /** Planar reflection of the scene (rendered from a mirror camera). */
   reflection: null as THREE.Texture | null,
   /** Bias * projection * view of the mirror camera, for projective sampling of `reflection`. */

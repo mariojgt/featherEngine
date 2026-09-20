@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Reflection hit and camera cut regression</title><style>body{margin:0;background:black}canvas{display:block}</style></head><body><script type="module">
+import * as THREE from 'three';
+import { EffectComposer, RenderPass, EffectPass } from 'postprocessing';
+import { SSREffect } from '/node_modules/@react-three/postprocessing/dist/effects/SSR/screen-space-reflections.js';
+import { installReflectionCompatibility } from '/src/three/reflectionCompatibility.ts';
+const errors=[], originalError=console.error;
+console.error=(...args)=>{errors.push(args.join(' '));originalError(...args);};
+const renderer=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});renderer.setSize(640,420);renderer.setPixelRatio(1);document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color('#020204');
+const camera=new THREE.PerspectiveCamera(55,640/420,.1,100);camera.position.set(0,3,7);camera.lookAt(0,1,0);camera.updateMatrixWorld();
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(30,30),new THREE.MeshStandardMaterial({color:'#08090a',metalness:.85,roughness:.08}));ground.rotation.x=-Math.PI/2;scene.add(ground);
+const sign=new THREE.Mesh(new THREE.PlaneGeometry(2,1.4),new THREE.MeshStandardMaterial({color:'#000000',emissive:'#ff0088',emissiveIntensity:2,roughness:.6}));sign.position.set(-1,2,-2);scene.add(sign);
+const ssr=new SSREffect(scene,camera,{width:640,height:420,maxRoughness:.4});installReflectionCompatibility(ssr,renderer);
+const composer=new EffectComposer(renderer,{frameBufferType:THREE.HalfFloatType});composer.addPass(new RenderPass(scene,camera));composer.addPass(new EffectPass(camera,ssr));
+function render(){composer.render(1/60);}
+function pixels(target){const p=new Uint16Array(target.width*target.height*4);renderer.readRenderTargetPixels(target,0,0,target.width,target.height,p);return Float32Array.from(p,THREE.DataUtils.fromHalfFloat);}
+function peakNearReflection(){const p=new THREE.Vector3(-.6,0,1.6).project(camera),x=Math.round((p.x*.5+.5)*640),y=Math.round((p.y*.5+.5)*420),data=pixels(ssr.reflectionsPass.renderTarget);let peak=0;for(let dy=-24;dy<=24;dy++)for(let dx=-24;dx<=24;dx++)peak=Math.max(peak,data[((y+dy)*640+x+dx)*4]??0);return {peak,x,y};}
+for(let i=0;i<4;i++)render();
+window.reflectionQA={errors,lighting(){for(let i=0;i<150;i++)render();sign.material.emissive.set('#00ff33');for(let i=0;i<90;i++)render();const p=pixels(ssr.temporalResolvePass.renderTarget);let red=0,green=0;for(let i=0;i<p.length;i+=4){red+=p[i];green+=p[i+1];}return {red,green};},settings(){return {missedRays:ssr.missedRays,stretchDefine:'missedRays' in ssr.reflectionsPass.fullscreenMaterial.defines,steps:ssr.steps,depth:ssr.maxDepthDifference,depthNearest:ssr.reflectionsPass.depthTexture.minFilter===THREE.NearestFilter,...peakNearReflection()};},cut(){camera.position.set(6,3,10);camera.lookAt(0,1,-2);camera.updateMatrixWorld();render();const raw=pixels(ssr.reflectionsPass.renderTarget),resolved=pixels(ssr.temporalResolvePass.renderTarget);let difference=0,finite=true;for(let i=0;i<raw.length;i++){if(i%4===3)continue;finite&&=Number.isFinite(raw[i])&&Number.isFinite(resolved[i]);difference=Math.max(difference,Math.abs(raw[i]-resolved[i]));}return {history:ssr.temporalResolvePass.fullscreenMaterial.uniforms.featherHistoryValid.value,difference,finite};},dolly(){camera.position.x+=.02;camera.lookAt(0,1,-2);render();return ssr.temporalResolvePass.fullscreenMaterial.uniforms.featherHistoryValid.value;}};
+</script></body></html>

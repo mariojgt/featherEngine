@@ -1208,7 +1208,7 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
     version: pkg.meta.version,
     kind: pkg.kind,
     tags: pkg.meta.tags ?? [],
-    license: pkg.meta.license ?? 'CC0-1.0',
+    license: pkg.meta.license ?? (['template-last-light', 'template-blackthorn', 'template-neon-afterlight'].includes(slug) ? 'MIT' : 'CC0-1.0'),
     priceCents: 0,
     thumbnail: thumbnail ?? pkg.meta.thumbnail,
     sizeBytes: installFootprint(archiveBytes),
@@ -1296,10 +1296,10 @@ async function main() {
     const slug = name.replace(/\.nfpack$/, '');
     const [from, to, glyph] = TEMPLATE_THUMBNAILS[slug] ?? ['#5B8CFF', '#1B2C63', '\u{1F5FA}'];
     let cover = thumbnail(from, to, glyph);
-    if (slug === 'template-cinematic') {
+    if (['template-cinematic', 'template-last-light', 'template-blackthorn', 'template-neon-afterlight'].includes(slug)) {
       // A capture of the shipped scene, produced by scripts/e2e/resonance.mjs. Inline like the
       // other covers so the catalog remains portable/offline, even when served from another host.
-      const preview = await readFile(join(OUT_DIR, 'previews', 'resonance.png')).catch(() => null);
+      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-neon-afterlight' ? 'neon-afterlight.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : slug === 'template-last-light' ? 'last-light.png' : 'resonance.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
     entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }));

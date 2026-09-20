@@ -1,3 +1,4 @@
+import { SceneLight } from '../three/SceneLight';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PlayerReady } from './PlayerReady';
 import { TitanWorld } from '../titan/TitanWorld';
@@ -56,6 +57,8 @@ import { ModelMesh } from '../three/ModelMesh';
 import { ClothSim } from '../three/ClothSim';
 import { CableSim } from '../three/CableSim';
 import { WaterSurface } from '../three/WaterSurface';
+import { CinematicCaptureDriver } from '../three/CinematicCaptureDriver';
+import { isCinematicCaptureEnabled } from '../runtime/cinematicCapture';
 import { WaterEnvCapture } from '../three/WaterEnvCapture';
 import { UnderwaterOverlay } from '../three/UnderwaterOverlay';
 import { FragmentMesh } from '../three/FragmentMesh';
@@ -184,12 +187,7 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
   // the standalone player matches the editor. Hook is unconditional (before any early return below).
   const toonMaterial = useToonMaterial(resolved, builtinBaseTexture ?? null);
 
-  if (object.kind === 'light') {
-    const l = object.light;
-    if (l?.type === 'point') return <pointLight color={l.color} intensity={l.intensity} distance={l.distance} decay={2} castShadow={l.castShadow} />;
-    if (l?.type === 'spot') return <spotLight color={l.color} intensity={l.intensity} distance={l.distance} angle={l.angle} penumbra={0.45} decay={2} castShadow={l.castShadow} />;
-    return <directionalLight color={l?.color ?? '#ffffff'} intensity={l?.intensity ?? 2.4} castShadow={l?.castShadow ?? true} position={[0, 0, 0]} />;
-  }
+  if (object.kind === 'light') return <SceneLight light={object.light} />;
 
   // Cameras and empties are invisible scaffolding at runtime.
   if (object.kind === 'camera' || object.kind === 'empty' || !renderer || !renderer.enabled) {
@@ -573,6 +571,7 @@ function GameScene() {
 }
 
 export function GameView() {
+  const capture = isCinematicCaptureEnabled();
   // Adaptive resolution. The exported game runs full-window/fullscreen, which on a Retina display
   // is up to ~4x the fragments of the editor's small docked viewport — the usual cause of FPS drops
   // after export. Start at a capped DPR and let PerformanceMonitor lower it when the frame rate dips,
@@ -585,7 +584,8 @@ export function GameView() {
     <Canvas
       className="game-canvas"
       shadows={qProfile.shadows}
-      dpr={Math.min(dpr, qProfile.dpr)}
+      dpr={capture ? 1 : Math.min(dpr, qProfile.dpr)}
+      frameloop={capture ? 'demand' : 'always'}
       gl={{ powerPreference: 'high-performance' }}
       performance={{ min: 0.5 }}
       camera={{ position: [6, 4.2, 7], fov: 50 }}
@@ -594,7 +594,7 @@ export function GameView() {
           target (~0.1s stall), and at any sustained load that sits on the monitor's boundary the
           old setDpr(1)/setDpr(1.5) pair flapped — a periodic mid-game hitch that only appeared
           above a certain speed/scene load. autoQualityStep has its own hysteresis + session latch. */}
-      <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => autoQualityStep(1)} />
+      {capture ? <CinematicCaptureDriver /> : <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => autoQualityStep(1)} />}
       <CompressedTextureSupport />
       <ToneMapping />
       <AudioListenerSync />

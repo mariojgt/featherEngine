@@ -466,6 +466,10 @@ export function ModelAsset({
  * per-object one — diverging here would make instanced decor the wrong size.
  */
 export function normalizeModelScale(root: THREE.Object3D): THREE.Object3D {
+  // Architectural GLBs can legitimately be larger than 20 metres. A scene-level glTF extras flag
+  // preserves their authored units in render, instancing and the registered collision geometry.
+  // Unmarked legacy imports retain the existing FBX-scale repair heuristic.
+  if (root.userData.featherPreserveScale === true) return root;
   root.updateWorldMatrix(true, true);
   const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);

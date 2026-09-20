@@ -379,6 +379,9 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
    *  overwrites the same field on the live scene (sky colors, fog, sun, environmentIntensity) — undefined
    *  fields are left alone. Use it to crossfade atmospheres on a trigger (day → toxic green → dawn). */
   envPatch?: Partial<{
+    ambientIntensity: number;
+    volumetricLocalStrength: number;
+    sunShadowExtent: number;
     skyTopColor: string;
     skyHorizonColor: string;
     skyGroundColor: string;
@@ -394,6 +397,14 @@ export interface NodeForgeNodeData extends Record<string, unknown> {
     /** Global wind force [x,y,z] — drives cloth + wind-affected dynamic bodies. Change it live to gust/storm. */
     wind: Vector3Tuple;
     windTurbulence: number;
+    cloudCoverage: number;
+    skyLighting: 'studio' | 'sky';
+    surfaceWetness: number;
+    puddleCoverage: number;
+    wetnessFromRain: boolean;
+    cloudSpeed: number;
+    rainIntensity: number;
+    lightningFlash: number;
     dayCycleEnabled: boolean;
     dayCycleDuration: number;
     dayCycleTime: number;

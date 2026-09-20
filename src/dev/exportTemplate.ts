@@ -24,6 +24,9 @@ type TemplateKey =
   | 'driving'
   | 'sim-racing'
   | 'cinematic'
+  | 'last-light'
+  | 'blackthorn'
+  | 'neon-afterlight'
   | 'meadows'
   | 'cube-realm'
   | 'platformer'
@@ -34,12 +37,21 @@ type TemplateKey =
 interface TemplateDef {
   slug: string;
   title: string;
+  version?: string;
   description: string;
   tags: string[];
   build: () => Promise<unknown>;
 }
 
 const TEMPLATES: Record<TemplateKey, TemplateDef> = {
+  'neon-afterlight': {
+    slug: 'template-neon-afterlight',
+    title: 'Neon Afterlight',
+    version: '1.1.0',
+    description: 'A complete 70-second cyberpunk film in a rain-soaked city canyon. Neon signage, wet-street and water reflections, local-light volumetric fog, steam, live sparks, falling water and a moving searchlight drone. Includes all original city models, PBR maps, ten editable shots, weather Blueprint and synth soundtrack. Play; R replays.',
+    tags: ['template', 'world', 'cinematic', 'film', 'cyberpunk', 'neon', 'reflections', 'weather', 'lighting', 'particles'],
+    build: async () => (await import('../project/neonAfterlightTemplate')).createNeonAfterlightTemplate(),
+  },
   'third-person': {
     slug: 'template-third-person',
     title: 'Third Person Starter',
@@ -75,6 +87,20 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     description: 'A 32-second kinetic hall film: real domino collisions, wind-driven cloth, Lux lighting, a live reactor fracture and eight cinematic shots. Play, replay and edit every cue.',
     tags: ['template', 'world', 'cinematic', 'film', 'physics', 'lighting'],
     build: async () => (await import('../project/filmModeTemplate')).createFilmModeTemplate(),
+  },
+  'last-light': {
+    slug: 'template-last-light',
+    title: 'Last Light',
+    description: 'A 70-second film in a drowned mountain observatory. Ten camera shots, ridged landscapes, warm and cool lighting, water, wind-driven cloth, live tumbling fracture and an original score. Every shot and cue is editable; press R to replay.',
+    tags: ['template', 'world', 'cinematic', 'film', 'landscape', 'lighting', 'destruction'],
+    build: async () => (await import('../project/lastLightTemplate')).createLastLightTemplate(),
+  },
+  blackthorn: {
+    slug: 'template-blackthorn',
+    title: 'Blackthorn Keep',
+    description: 'A complete 70-second dark fantasy film: a wind-swept grassland, modular Gothic castle, storm clouds, rain, moonlight, gate fires, simulated heraldic cloth and lightning-driven live destruction. Includes all models, materials, original music and weather sound design, ten editable shots and the storm Director Blueprint. Play the film; R replays.',
+    tags: ['template', 'world', 'cinematic', 'film', 'dark-fantasy', 'castle', 'weather', 'lighting', 'physics'],
+    build: async () => (await import('../project/blackthornTemplate')).createBlackthornTemplate(),
   },
   meadows: {
     slug: 'template-meadows',
@@ -204,7 +230,7 @@ async function run(key: TemplateKey) {
       name: def.title,
       description: def.description,
       author: 'Feather',
-      version: '1.0.0',
+      version: def.version ?? '1.0.0',
       tags: def.tags,
     });
 

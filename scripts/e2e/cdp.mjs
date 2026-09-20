@@ -96,7 +96,7 @@ export class CdpSession {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP command timed out: ${method}`));
-      }, 30_000);
+      }, Number(process.env.FEATHER_CDP_TIMEOUT_MS) || 30_000);
       this.pending.set(id, { resolve: done, reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
@@ -153,7 +153,7 @@ export async function launch({ width = 1600, height = 1000, hostResolverRules, i
       ...(ignoreCertificateErrors ? ['--ignore-certificate-errors'] : []),
       // The editor is a WebGL app; ANGLE's SwiftShader path is the stable deterministic headless
       // renderer. Combining the older --use-gl flag with --disable-gpu intermittently killed Chrome.
-      `--use-angle=${process.env.FEATHER_E2E_ANGLE || 'swiftshader'}`,
+      `--use-angle=${process.env.FEATHER_E2E_ANGLE ?? process.env.FEATHER_CHROME_ANGLE ?? 'swiftshader'}`,
       '--hide-scrollbars',
       'about:blank',
     ],

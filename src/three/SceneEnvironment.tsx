@@ -1,3 +1,6 @@
+import { skyVertexShader, skyFragmentShader } from './skyShader';
+import { SkyLighting } from './SkyLighting';
+import { SurfaceWeather } from './SurfaceWeather';
 import { Environment, Lightformer } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
@@ -13,41 +16,9 @@ import { withDayCycleVisuals } from './dayCycle';
 import { useEditorStore } from '../store/editorStore';
 import { qualityProfile, SHADOW_NORMAL_BIAS } from './quality';
 import { resetAerialFog, setAerialFog } from './aerialFog';
+import { SceneWeather } from './SceneWeather';
+import { advanceWeatherDrift, type WeatherDrift } from './weatherMotion';
 
-const skyVertexShader = `
-varying vec3 vDirection;
-
-void main() {
-  vDirection = normalize(position);
-  vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * viewMatrix * worldPosition;
-}
-`;
-
-const skyFragmentShader = `
-uniform vec3 topColor;
-uniform vec3 horizonColor;
-uniform vec3 groundColor;
-uniform vec3 sunColor;
-uniform vec3 sunDirection;
-uniform float sunIntensity;
-varying vec3 vDirection;
-
-void main() {
-  float height = clamp(vDirection.y * 0.5 + 0.5, 0.0, 1.0);
-  float upper = smoothstep(0.44, 1.0, height);
-  float lower = smoothstep(0.0, 0.46, height);
-  vec3 lowerSky = mix(groundColor, horizonColor, lower);
-  vec3 upperSky = mix(horizonColor, topColor, upper);
-  vec3 color = mix(lowerSky, upperSky, smoothstep(0.45, 0.55, height));
-
-  float sunDisc = pow(max(dot(normalize(vDirection), normalize(sunDirection)), 0.0), 720.0);
-  float sunGlow = pow(max(dot(normalize(vDirection), normalize(sunDirection)), 0.0), 18.0);
-  color += sunColor * (sunDisc * 1.8 + sunGlow * 0.2) * sunIntensity;
-
-  gl_FragColor = vec4(color, 1.0);
-}
-`;
 
 function CameraLockedSky({
   children,
@@ -69,6 +40,7 @@ function CameraLockedSky({
 }
 
 function ProceduralSky({ environment }: { environment: SceneEnvironmentSettings }) {
+  const drift = useRef<WeatherDrift>({ x: 0, z: 0 });
   const uniforms = useMemo(
     () => ({
       topColor: { value: new THREE.Color(environment.skyTopColor) },
@@ -77,6 +49,9 @@ function ProceduralSky({ environment }: { environment: SceneEnvironmentSettings 
       sunColor: { value: new THREE.Color(environment.sunColor) },
       sunDirection: { value: sunDirectionFromEnvironment(environment) },
       sunIntensity: { value: environment.sunIntensity },
+      cloudCoverage: { value: environment.cloudCoverage ?? 0 },
+      cloudOffset: { value: new THREE.Vector2() },
+      lightningFlash: { value: environment.lightningFlash ?? 0 },
     }),
     [],
   );
@@ -88,7 +63,16 @@ function ProceduralSky({ environment }: { environment: SceneEnvironmentSettings 
     uniforms.sunColor.value.set(environment.sunColor);
     uniforms.sunDirection.value.copy(sunDirectionFromEnvironment(environment));
     uniforms.sunIntensity.value = environment.sunIntensity;
+    uniforms.cloudCoverage.value = environment.cloudCoverage ?? 0;
+    uniforms.lightningFlash.value = environment.lightningFlash ?? 0;
   }, [environment, uniforms]);
+  useFrame(({ clock }) => {
+    const s = useEditorStore.getState();
+    const wind = environment.wind ?? [0, 0, 0];
+    const speed = environment.cloudSpeed ?? 0.35;
+    advanceWeatherDrift(drift.current, s.isPlaying ? s.runtimeTime : clock.elapsedTime, (wind[0] * 0.015 + 0.01) * speed, (wind[2] * 0.015 + 0.004) * speed);
+    uniforms.cloudOffset.value.set(drift.current.x, drift.current.z);
+  });
 
   return (
     <CameraLockedSky rotationY={THREE.MathUtils.degToRad(environment.skyRotation)}>
@@ -96,10 +80,10 @@ function ProceduralSky({ environment }: { environment: SceneEnvironmentSettings 
         side={THREE.BackSide}
         depthWrite={false}
         depthTest={false}
-        toneMapped={false}
+        toneMapped={environment.skyLighting === 'sky'}
         uniforms={uniforms}
         vertexShader={skyVertexShader}
-        fragmentShader={skyFragmentShader}
+        fragmentShader={environment.skyLighting === 'sky' ? skyFragmentShader.replace('gl_FragColor = vec4(color, 1.0);', 'gl_FragColor = vec4(color, 1.0);\n#include <tonemapping_fragment>\n#include <colorspace_fragment>') : skyFragmentShader}
       />
     </CameraLockedSky>
   );
@@ -171,7 +155,7 @@ export function SceneEnvironment({
     const t = isPlaying ? dayCycleTime : (resolved.dayCycleTime ?? 0.35);
     return withDayCycleVisuals(resolved, t);
   }, [environment, dayCycleTime, isPlaying]);
-  const sunPosition = useMemo(() => sunPositionFromEnvironment(env), [env]);
+  const sunPosition = useMemo(() => sunPositionFromEnvironment(env, Math.max(18, (env.sunShadowExtent ?? 9) * 2)), [env]);
   const lightIntensity = Math.max(0, env.environmentIntensity);
   // IBL cubemap resolution follows the quality preset — sharper reflections at High/Epic.
   const profile = qualityProfile(useEditorStore((state) => state.renderSettings?.quality));
@@ -230,10 +214,10 @@ export function SceneEnvironment({
         <hemisphereLight
           color={env.skyTopColor}
           groundColor={env.skyGroundColor}
-          intensity={0.38 + lightIntensity * 0.24}
+          intensity={env.ambientIntensity ?? (0.38 + lightIntensity * 0.24)}
         />
       ) : (
-        <ambientLight intensity={0.38 + lightIntensity * 0.24} />
+        <ambientLight intensity={env.ambientIntensity ?? (0.38 + lightIntensity * 0.24)} />
       )}
       {/* The sun. The shadow camera is explicitly framed (not the tiny three.js ±5 default) so it covers
           the play area — this is the shadow map the volumetric pass samples to carve god-ray light shafts,
@@ -241,6 +225,7 @@ export function SceneEnvironment({
           the quality tier; bias/normalBias kill acne (which would otherwise stripe the shafts). */}
       <directionalLight
         position={sunPosition}
+        onUpdate={(light) => light.shadow.camera.updateProjectionMatrix()}
         color={env.sunColor}
         intensity={Math.max(0, env.sunIntensity)}
         castShadow={castSunShadow}
@@ -250,14 +235,16 @@ export function SceneEnvironment({
         shadow-normalBias={SHADOW_NORMAL_BIAS}
         shadow-radius={profile.shadowMapSize >= 2048 ? 2.25 : 1.25}
         shadow-camera-near={0.5}
-        shadow-camera-far={200}
-        shadow-camera-left={-80}
-        shadow-camera-right={80}
-        shadow-camera-top={80}
-        shadow-camera-bottom={-80}
+        shadow-camera-far={Math.max(200, (env.sunShadowExtent ?? 0) * 4)}
+        shadow-camera-left={-(env.sunShadowExtent ?? 80)}
+        shadow-camera-right={env.sunShadowExtent ?? 80}
+        shadow-camera-top={env.sunShadowExtent ?? 80}
+        shadow-camera-bottom={-(env.sunShadowExtent ?? 80)}
       />
       {useImageIbl ? (
         <Environment map={envMapTexture} environmentIntensity={lightIntensity} environmentRotation={iblRotation} />
+      ) : env.skyMode === 'procedural' && env.skyLighting === 'sky' ? (
+        <SkyLighting environment={env} />
       ) : (
         // Default studio IBL rig — a soft 3-point + rim + bounce setup so metals/glossy surfaces get
         // believable reflections and shading separation before any HDRI is assigned. All scaled by
@@ -277,7 +264,9 @@ export function SceneEnvironment({
       )}
 
       {env.skyMode === 'procedural' && <ProceduralSky environment={env} />}
+      {((env.surfaceWetness ?? 0) > 0 || env.wetnessFromRain) && <SurfaceWeather environment={env} />}
       {env.skyMode === 'image' && <ImageSky environment={env} />}
+      {((env.rainIntensity ?? 0) > 0 || (env.lightningFlash ?? 0) > 0) && <SceneWeather environment={env} />}
     </>
   );
 }

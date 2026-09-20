@@ -91,6 +91,8 @@ function TerrainSettings({ objectId, terrain }: { objectId: string; terrain: Ter
       <NumberField label="Physics Radius" value={terrain.physicsRadius} min={1} max={5} step={1} onChange={(physicsRadius) => set({ physicsRadius })} />
       <NumberField label="Seed" value={terrain.seed} step={1} precision={0} onChange={(seed) => set({ seed })} />
       <NumberField label="Height" value={terrain.heightScale} min={0} step={0.5} onChange={(heightScale) => set({ heightScale })} />
+      <NumberField label="Mountain Ridges" value={terrain.ridgeStrength ?? 0} min={0} max={1} step={0.05} onChange={(ridgeStrength) => set({ ridgeStrength })} />
+      <NumberField label="Domain Warp" value={terrain.domainWarp ?? 0} min={0} max={256} step={1} onChange={(domainWarp) => set({ domainWarp })} />
       <NumberField label="Frequency" value={terrain.frequency} min={0.001} max={0.25} step={0.001} precision={4} onChange={(frequency) => set({ frequency })} />
       <NumberField label="Octaves" value={terrain.octaves} min={1} max={8} step={1} onChange={(octaves) => set({ octaves })} />
       <NumberField label="Persistence" value={terrain.persistence} min={0.05} max={0.95} step={0.05} onChange={(persistence) => set({ persistence })} />

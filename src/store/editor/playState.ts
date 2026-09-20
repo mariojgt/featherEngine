@@ -174,6 +174,7 @@ export const applySetPlaying = (
           // spawned projectiles, reverts transforms/materials/instance variables).
           playSnapshot: { sceneId: state.activeSceneId, objects: structuredClone(authoredObjects) },
           runtimeSceneSnapshots: { [state.activeSceneId]: structuredClone(authoredObjects) },
+          runtimeEnvironmentSnapshots: { [state.activeSceneId]: structuredClone(state.scenes.find(scene => scene.id === state.activeSceneId)?.environment) },
         };
       }
 
@@ -183,7 +184,10 @@ export const applySetPlaying = (
       const snapshot = state.playSnapshot;
       const sceneSnaps = state.runtimeSceneSnapshots ?? (snapshot ? { [snapshot.sceneId]: snapshot.objects } : {});
       const scenes = state.scenes.map((scene) =>
-        sceneSnaps[scene.id] ? { ...scene, objects: sceneSnaps[scene.id] } : scene,
+        sceneSnaps[scene.id] ? { ...scene, objects: sceneSnaps[scene.id],
+          ...(state.runtimeEnvironmentSnapshots && scene.id in state.runtimeEnvironmentSnapshots
+            ? { environment: state.runtimeEnvironmentSnapshots[scene.id] } : {}),
+        } : scene,
       );
       // If Play hopped to another scene, return the editor to the scene it started in.
       const restoredActiveSceneId = snapshot?.sceneId ?? state.activeSceneId;
@@ -293,5 +297,6 @@ export const applySetPlaying = (
         activeSceneId: restoredActiveSceneId,
         playSnapshot: undefined,
         runtimeSceneSnapshots: undefined,
+        runtimeEnvironmentSnapshots: undefined,
       };
 };

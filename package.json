@@ -1,7 +1,7 @@
 {
   "name": "nodeforge-engine",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "demo:titan": "node examples/titan-mmo/server/launch.mjs",
@@ -42,7 +42,17 @@
     "test:beginner": "node scripts/e2e/creator.mjs && node scripts/e2e/beginner-journey.mjs",
     "test:e2e:local-ai": "node scripts/e2e/local-ai.mjs",
     "uikit:capture": "node scripts/uikit/capture.mjs",
-    "uikit:pack": "node scripts/uikit/pack.mjs"
+    "uikit:pack": "node scripts/uikit/pack.mjs",
+    "cinematic:score": "node scripts/generate-last-light-score.mjs",
+    "cinematic:preview": "node scripts/render-cinematic.mjs --preview",
+    "cinematic:render": "node scripts/render-cinematic.mjs",
+    "cinematic:assets": "node scripts/generate-last-light-surfaces.mjs && node scripts/generate-last-light-score.mjs",
+    "cinematic:blackthorn:assets": "node scripts/generate-blackthorn-assets.mjs && node scripts/generate-blackthorn-score.mjs",
+    "cinematic:blackthorn:preview": "node scripts/render-cinematic.mjs --template blackthorn --preview",
+    "cinematic:blackthorn:render": "node scripts/render-cinematic.mjs --template blackthorn",
+    "cinematic:neon:assets": "node scripts/generate-neon-afterlight-assets.mjs && node scripts/generate-neon-afterlight-score.mjs",
+    "cinematic:neon:preview": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic --preview",
+    "cinematic:neon:render": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",

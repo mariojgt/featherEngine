@@ -114,7 +114,11 @@ vec3 rainRipples(vec2 p, float t) {
     vec2 center = vec2(h1, h2) * 0.6 + 0.2;
     float phase = fract(t * 0.9 + h1 * 7.0);
     vec2 d = f - center;
-    float ring = smoothstep(0.07, 0.0, abs(length(d) - phase * 0.55)) * (1.0 - phase);
+    float footprint = max(length(dFdx(q)), length(dFdy(q)));
+    float ringWidth = max(0.045, footprint);
+    float ring = (1.0 - smoothstep(0.0, ringWidth, abs(length(d) - phase * 0.45)))
+      * (1.0 - phase) * smoothstep(0.0, 0.15, phase)
+      * (1.0 - smoothstep(0.12, 0.45, footprint));
     acc.xy += normalize(d + 1e-4) * ring;
     acc.z += ring;
   }
@@ -126,8 +130,8 @@ void main() {
   float rainFoam = 0.0;
   if (uRain > 0.001) {
     vec3 rf = rainRipples(vWorldPos.xz, uTime);
-    N = normalize(N + vec3(rf.x, 0.0, rf.y) * uRain * 0.6);
-    rainFoam = rf.z * uRain;
+    N = normalize(N + vec3(rf.x, 0.0, rf.y) * uRain * 0.09);
+    rainFoam = rf.z * uRain * 0.06;
   }
   vec3 V = normalize(uCamPos - vWorldPos);
   float ndv = clamp(dot(N, V), 0.0, 1.0);
@@ -166,7 +170,9 @@ void main() {
     vec2 rUV = vReflCoord.xy / max(vReflCoord.w, 0.0001);
     rUV += N.xz * (uRefract * 1.5); // distort the mirror by the wave normal
     vec3 planar = texture2D(uReflection, clamp(rUV, 0.001, 0.999)).rgb;
-    skyCol = mix(skyCol, planar, uUseReflection);
+    vec2 edge = min(rUV, 1.0 - rUV);
+    float valid = smoothstep(0.0, 0.025, min(edge.x, edge.y)) * step(0.0001, vReflCoord.w);
+    skyCol = mix(skyCol, planar, uUseReflection * valid);
   }
   vec3 col = mix(baseColor, skyCol, fres * uReflect);
 
@@ -331,23 +337,12 @@ export function WaterSurface({ object }: { object: SceneObject }) {
     u.uSunDir.value.copy(sunDirectionFromEnvironment(env));
     u.uCamPos.value.copy(state.camera.position);
 
-    // Pull in this frame's scene captures (planar reflection + refraction/depth). Gates stay 0 when the
-    // capture pass is off (Low/Medium), so the shader uses its fresnel-sky + UV-edge fallback.
-    u.uUseReflection.value = waterCapture.hasReflection ? 1 : 0;
-    u.uReflection.value = waterCapture.reflection;
-    u.uReflectionMatrix.value.copy(waterCapture.reflectionMatrix);
-    u.uUseRefraction.value = waterCapture.hasRefraction ? 1 : 0;
-    u.uSceneColor.value = waterCapture.sceneColor;
-    u.uSceneDepth.value = waterCapture.sceneDepth;
-    u.uResolution.value.copy(waterCapture.resolution);
-    u.uNear.value = waterCapture.cameraNear;
-    u.uFar.value = waterCapture.cameraFar;
     u.uRefract.value = 0.025 + (water.waveAmplitude ?? 0.2) * 0.05;
     u.uShoreFade.value = 0.6;
     // Murkier water (higher opacity) absorbs light over a shorter distance → shallower visibility.
     const absorbScale = 0.5 + (water.opacity ?? 0.82) * 2.4;
     u.uAbsorb.value.set(0.35 * absorbScale, 0.12 * absorbScale, 0.06 * absorbScale);
-    u.uRain.value = water.rainStrength ?? 0;
+    u.uRain.value = Math.max(water.rainStrength ?? 0, env.rainIntensity ?? 0);
 
     // Consume new surface impacts that land inside this volume → spawn an expanding ripple ring.
     const impacts = store.runtimeWaterImpacts;
@@ -372,8 +367,24 @@ export function WaterSurface({ object }: { object: SceneObject }) {
     }
   });
 
+  const syncCapture = (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
+    const u = uniforms;
+    camera.getWorldPosition(u.uCamPos.value);
+    // Pull in this frame's scene captures (planar reflection + refraction/depth). Gates stay 0 when the
+    // capture pass is off (Low/Medium), so the shader uses its fresnel-sky + UV-edge fallback.
+    u.uUseReflection.value = waterCapture.hasReflection && Math.abs((meshRef.current?.position.y ?? 0) - waterCapture.planeY) < 0.1 ? 1 : 0;
+    u.uReflection.value = waterCapture.reflection;
+    u.uReflectionMatrix.value.copy(waterCapture.reflectionMatrix);
+    u.uUseRefraction.value = waterCapture.hasRefraction ? 1 : 0;
+    u.uSceneColor.value = waterCapture.sceneColor;
+    u.uSceneDepth.value = waterCapture.sceneDepth;
+    u.uResolution.value.copy(waterCapture.resolution);
+    u.uNear.value = waterCapture.cameraNear;
+    u.uFar.value = waterCapture.cameraFar;
+  };
+
   return (
-    <mesh ref={meshRef} geometry={geom} raycast={() => {}} frustumCulled={false} renderOrder={2}>
+    <mesh onBeforeRender={syncCapture} ref={meshRef} geometry={geom} raycast={() => {}} frustumCulled={false} renderOrder={2}>
       <shaderMaterial
         vertexShader={vertexShader}
         fragmentShader={fragmentShader}

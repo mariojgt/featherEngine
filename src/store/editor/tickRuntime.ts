@@ -4694,6 +4694,11 @@ export const applyRuntimeTick = (
           kickedChunkIds.add(o.id);
         }
         const initialVelocity = o.variables?.__initialVelocity;
+        const initialSpin = o.variables?.__initialAngularVelocity;
+        if (Array.isArray(initialSpin) && initialSpin.length === 3 && initialSpin.every(Number.isFinite)) {
+          setAngularVelocities[o.id] = [...initialSpin] as Vector3Tuple;
+          kickedChunkIds.add(o.id);
+        }
         if (Array.isArray(initialVelocity) && initialVelocity.length === 3 && initialVelocity.every(Number.isFinite)) {
           // New bodies start at rest. Convert inherited velocity to momentum and ADD the burst.
           // A hard setVelocities command would overwrite the kick later in physics.frame.
@@ -5921,10 +5926,10 @@ export const applyRuntimeTick = (
       let allObjects = [...resolvedObjects, ...spawned];
       for (const id of destroyedIds) allObjects = deleteWithChildren(allObjects, id);
       // Drop the one-shot fracture kick now it's been applied, so chunks aren't re-kicked every frame.
-      if (physics && kickedChunkIds.size) {
+      if (physics && delta > 0 && kickedChunkIds.size) {
         allObjects = allObjects.map((o) => {
           if (!kickedChunkIds.has(o.id)) return o;
-          const { __impulse: _used, __initialVelocity: _velocity, ...rest } = o.variables ?? {};
+          const { __impulse: _used, __initialVelocity: _velocity, __initialAngularVelocity: _spin, ...rest } = o.variables ?? {};
           return { ...o, variables: rest };
         });
       }
@@ -6302,13 +6307,17 @@ export const applyRuntimeTick = (
         if (targetScene) {
           const leavingId = state.activeSceneId;
           const snaps = { ...(state.runtimeSceneSnapshots ?? {}) };
+          const environmentSnaps = { ...(state.runtimeEnvironmentSnapshots ?? {}) };
+          if (!(targetScene.id in environmentSnaps)) environmentSnaps[targetScene.id] = structuredClone(targetScene.environment);
           // First visit to the target this session → capture its pristine objects for later revert.
           if (!snaps[targetScene.id]) snaps[targetScene.id] = structuredClone(targetScene.objects);
           const freshObjects = withProjectUILogic(structuredClone(snaps[targetScene.id]), state.uiDocuments, state.blueprints);
           // Revert the scene we're leaving back to the clean state it had when first entered.
           const revertedScenes = state.scenes.map((scene) => {
-            if (scene.id === targetScene.id) return { ...scene, objects: freshObjects };
-            if (scene.id === leavingId && snaps[leavingId]) return { ...scene, objects: structuredClone(snaps[leavingId]) };
+            if (scene.id === targetScene.id) return { ...scene, objects: freshObjects, environment: structuredClone(environmentSnaps[targetScene.id]) };
+            if (scene.id === leavingId && snaps[leavingId]) return { ...scene, objects: structuredClone(snaps[leavingId]),
+              ...(leavingId in environmentSnaps ? { environment: structuredClone(environmentSnaps[leavingId]) } : {}),
+            };
             return scene;
           });
           startPhysics();
@@ -6323,6 +6332,7 @@ export const applyRuntimeTick = (
             activeSceneId: targetScene.id,
             scenes: revertedScenes,
             runtimeSceneSnapshots: snaps,
+            runtimeEnvironmentSnapshots: environmentSnaps,
             runtimeStarted: false,
             runtimeTime: 0,
             runtimeTimeScale: 1, // a freshly loaded scene starts at normal speed (a pause carried across a load would soft-lock it)

@@ -58,6 +58,9 @@ import { createMeadowTemplate } from '../project/meadowTemplate';
 import { createCubeRealmTemplate } from '../project/cubeRealmTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
+import { createLastLightTemplate } from '../project/lastLightTemplate';
+import { createBlackthornTemplate } from '../project/blackthornTemplate';
+import { createNeonAfterlightTemplate } from '../project/neonAfterlightTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createPhysicsLabTemplate } from '../project/physicsLabTemplate';
 import { createTimelineShowcaseTemplate } from '../project/timelineShowcaseTemplate';
@@ -146,6 +149,8 @@ const terrainPatchSchema = z.object({
   physicsRadius: z.number().int().min(1).max(5).optional().describe('Physics chunk rings around characters/dynamic bodies.'),
   seed: z.number().int().optional(),
   heightScale: z.number().min(0).max(256).optional(),
+  ridgeStrength: z.number().min(0).max(1).optional().describe('Sharp mountain ridges; 0 preserves rolling hills.'),
+  domainWarp: z.number().min(0).max(256).optional().describe('World-space warp that breaks up regular terrain noise.'),
   frequency: z.number().min(0.001).max(0.25).optional(),
   octaves: z.number().int().min(1).max(8).optional(),
   persistence: z.number().min(0.05).max(0.95).optional(),
@@ -182,6 +187,10 @@ const environmentPatchSchema = z.object({
     debug: z.boolean().optional(),
   }).optional().describe('Lux 2.0 dynamic indirect lighting and reflections. Rooms mode supports up to four bounded, blended captures with depth-based wall checks. Position captures in empty space. All rooms share one face per frame. Low engine quality suspends Lux.'),
   skyMode: z.enum(['color', 'procedural', 'image']).optional(),
+  skyLighting: z.enum(['studio', 'sky']).optional().describe('sky: filtered live procedural sky supplies ambient/reflections and follows clouds, sun and lightning. Requires procedural sky and no IBL image. studio preserves the default rig.'),
+  surfaceWetness: z.number().min(0).max(1).optional().describe('Wet-surface baseline: darkens porous PBR surfaces and reduces roughness without modifying materials.'),
+  puddleCoverage: z.number().min(0).max(1).optional().describe('Puddle patches on upward-facing wet surfaces; rain animates ripple normals.'),
+  wetnessFromRain: z.boolean().optional().describe('Accumulate and gradually dry wet surfaces using simulation time. Surface wetness remains the minimum.'),
   backgroundColor: z.string().optional().describe('Flat/fallback background hex color.'),
   skyTopColor: z.string().optional().describe('Procedural sky zenith hex color.'),
   skyHorizonColor: z.string().optional().describe('Procedural horizon hex color.'),
@@ -195,6 +204,8 @@ const environmentPatchSchema = z.object({
   environmentIntensity: z.number().min(0).optional().describe('Built-in ambient/environment light strength.'),
   sunColor: z.string().optional().describe('Directional sun hex color.'),
   sunIntensity: z.number().min(0).optional().describe('Directional sun strength.'),
+  ambientIntensity: z.number().min(0).max(5).optional().describe('Independent ambient fill; lower values preserve cinematic shadow contrast.'),
+  sunShadowExtent: z.number().min(8).max(256).optional().describe('Sun shadow map half-width; reduce for finer detail in compact sets.'),
   sunAzimuth: z.number().optional().describe('Sun compass angle in degrees.'),
   sunElevation: z.number().optional().describe('Sun height in degrees.'),
   fogEnabled: z.boolean().optional(),
@@ -215,9 +226,14 @@ const environmentPatchSchema = z.object({
   volumetricFogFalloff: z.number().min(0).optional().describe('How fast volumetric fog thins with height (0 = uniform).'),
   volumetricScattering: z.number().min(-0.95).max(0.95).optional().describe('Sun scatter anisotropy (−0.95..0.95); higher = stronger forward glow toward the sun.'),
   volumetricSunStrength: z.number().min(0).optional().describe('Strength of the volumetric sun glow / light shafts.'),
+  volumetricLocalStrength: z.number().min(0).max(4).optional().describe('Colored fog from nearby point, spot and area lights. Quality-bounded, unshadowed; 0 preserves sun-only fog.'),
   volumetricMaxDistance: z.number().min(1).optional().describe('Far clamp (world units) for the volumetric raymarch.'),
   wind: vec3.optional().describe('Global wind force vector [x,y,z] (world space). Drives all cloth and pushes dynamic bodies by their windInfluence. [0,0,0] = calm.'),
   windTurbulence: z.number().min(0).max(1).optional().describe('Global wind gust turbulence 0–1.'),
+  cloudCoverage: z.number().min(0).max(1).optional().describe('Procedural sky cloud cover: 0 clear, 1 overcast.'),
+  cloudSpeed: z.number().min(0).max(5).optional().describe('Cloud movement speed; scene wind sets the direction.'),
+  rainIntensity: z.number().min(0).max(1).optional().describe('Depth-tested rainfall driven by global wind, 0 dry..1 storm.'),
+  lightningFlash: z.number().min(0).max(1).optional().describe('Authored lightning envelope: illuminates geometry, sky and rain. Set back to 0 after the flash.'),
   gravity: vec3
     .optional()
     .describe('World gravity acceleration [x,y,z] in units/s². Earth = [0,-9.81,0] (the default), Moon = [0,-1.62,0], space = [0,0,0]. Every dynamic body scales this by its own gravityScale.'),
@@ -253,6 +269,8 @@ const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   environmentIntensity: true,
   sunColor: true,
   sunIntensity: true,
+  ambientIntensity: true,
+  sunShadowExtent: true,
   sunAzimuth: true,
   sunElevation: true,
   fogEnabled: true,
@@ -267,9 +285,18 @@ const runtimeEnvironmentPatchSchema = environmentPatchSchema.pick({
   volumetricFogFalloff: true,
   volumetricScattering: true,
   volumetricSunStrength: true,
+  volumetricLocalStrength: true,
   volumetricMaxDistance: true,
   wind: true,
   windTurbulence: true,
+  cloudCoverage: true,
+  skyLighting: true,
+  surfaceWetness: true,
+  puddleCoverage: true,
+  wetnessFromRain: true,
+  cloudSpeed: true,
+  rainIntensity: true,
+  lightningFlash: true,
   gravity: true,
   dayCycleEnabled: true,
   dayCycleDuration: true,
@@ -2528,6 +2555,7 @@ const rawEngineTools = {
       focusImpact: z.boolean().optional().describe('Make pieces smaller near the hit point and bigger away (radial).'),
       debrisLifetime: z.number().min(0.1).max(120).optional().describe('Seconds before debris is removed (default 12). Oldest pieces are recycled above 256 live fracture pieces.'),
       inheritVelocity: z.boolean().optional().describe('Carry the source body velocity into its fragments (default true).'),
+      angularSpeed: z.number().min(0).max(20).optional().describe('Deterministic fragment tumble in radians/second. Default 0.'),
     }),
     execute: async ({ id, ...patch }) => {
       const object = findObject(id);
@@ -3343,6 +3371,33 @@ const rawEngineTools = {
     execute: async () => {
       const id = await createFilmModeTemplate();
       return id ? `Created "Resonance" with cinematicId ${id}. Press Play for the 32-second kinetic hall film: wind-driven cloth, real domino collisions, Lux lighting and a live reactor fracture at 24 seconds. Replay film or R resets the simulation. Open the Cinematic panel for eight named shots and beat markers; open the Resonance Physics & replay cues Blueprint to edit the event-driven physics. Scrubbing previews the edit; play from the start for the full simulation.` : `Couldn't build the Film Mode template.`;
+    },
+  }),
+
+  create_neon_afterlight_template: tool({
+    description: 'Build Neon Afterlight, a complete 70-second cyberpunk film: dense city canyon, neon signs, wet street and water reflections, local-light volumetric fog, steam, live sparks, cooling-water particles and an animated searchlight drone. Includes all original models, maps, synth score, ten shots and editable weather Blueprint. Adds to the active scene; use a blank project. R replays.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createNeonAfterlightTemplate();
+      return id ? `Built Neon Afterlight, cinematicId ${id}. Play the 70-second film; R replays. Edit shots and drone/VFX cues in Film Mode, weather in the Afterlight Director Blueprint. Epic enables screen-space reflections.` : 'No active scene to build Neon Afterlight into.';
+    },
+  }),
+
+  create_blackthorn_template: tool({
+    description: 'Build Blackthorn Keep, a complete 70-second dark fantasy film: tall grass, modular Gothic castle, animated storm clouds, wind-driven rain, moonlight, warm fires, simulated banners, lightning and live destruction. Includes original models, materials, a synchronized score/weather soundtrack, ten shots and editable storm Blueprint cues. Adds to the active scene; use a blank project. Play from the start; R replays.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createBlackthornTemplate();
+      return id ? `Built Blackthorn Keep, cinematicId ${id}. Press Play for the 70-second film, R to replay. Edit cameras in Film Mode and storm/lightning/physics in the Blackthorn Director Blueprint.` : 'No active scene to build Blackthorn Keep into.';
+    },
+  }),
+
+  create_last_light_template: tool({
+    description: 'Build Last Light, a complete editable 70-second mountain-ruins film: ten camera shots, ridged terrain, water, warm/cool lighting, cloth, an original score and live tumbling fracture at 48 seconds. Play from the start for physics; R replays. Adds to the active scene; use a blank project for the standalone showcase.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createLastLightTemplate();
+      return id ? `Built Last Light, cinematicId ${id}. Press Play for the 70-second film, R to replay. Edit shots in Film Mode and physics cues in the Last Light Director Blueprint.` : 'No active scene to build Last Light into.';
     },
   }),
 
@@ -5098,18 +5153,27 @@ const rawEngineTools = {
 
   set_light: tool({
     description:
-      'Configure an object light: point, spot, or directional. Move the object to position the light.',
+      'Configure point, spot, directional or rectangular area lighting. Rect lights face local -Z and use width/height for broad diffuse and specular highlights; they do not cast shadows. useRotation aims spots/directional lights along local -Z. Settings match editor and exported games.',
     inputSchema: z.object({
       objectId: z.string(),
-      type: z.enum(['point', 'spot', 'directional']).optional(),
+      type: z.enum(['point', 'spot', 'directional', 'rect']).optional(),
       color: z.string().optional().describe('Hex color, e.g. #ff8a3d.'),
       intensity: z.number().optional().describe('Brightness. Point/spot ~4–20; directional ~1–3.'),
       distance: z.number().optional().describe('point/spot falloff range in world units (0 = no limit).'),
       angleDegrees: z.number().optional().describe('spot cone half-angle in degrees.'),
       penumbra: z.number().min(0).max(1).optional().describe('spot cone edge softness, 0 (hard) to 1 (very soft).'),
+      width: z.number().min(0.01).max(1000).optional(),
+      height: z.number().min(0.01).max(1000).optional(),
+      decay: z.number().min(0).max(4).optional().describe('Point/spot falloff exponent; 2 = inverse square.'),
+      useRotation: z.boolean().optional(),
+      shadowBias: z.number().min(-0.05).max(0.05).optional(),
+      shadowNormalBias: z.number().min(0).max(2).optional(),
+      shadowNear: z.number().min(0.01).max(100).optional(),
+      shadowFar: z.number().min(0.02).max(100000).optional(),
+      shadowExtent: z.number().min(0.1).max(1000).optional(),
       castShadow: z.boolean().optional(),
     }),
-    execute: async ({ objectId, type, color, intensity, distance, angleDegrees, penumbra, castShadow }) => {
+    execute: async ({ objectId, type, color, intensity, distance, angleDegrees, penumbra, castShadow, width, height, decay, useRotation, shadowBias, shadowNormalBias, shadowNear, shadowFar, shadowExtent }) => {
       if (!findObject(objectId)) return `No object with id ${objectId}.`;
       store().setObjectLight(objectId, {
         type,
@@ -5118,6 +5182,7 @@ const rawEngineTools = {
         distance,
         ...(angleDegrees !== undefined ? { angle: (angleDegrees * Math.PI) / 180 } : {}),
         penumbra,
+        width, height, decay, useRotation, shadowBias, shadowNormalBias, shadowNear, shadowFar, shadowExtent,
         castShadow,
       });
       return `Configured light on ${objectId}${type ? ` (${type})` : ''}.`;
@@ -5170,6 +5235,9 @@ const rawEngineTools = {
       'Set project-wide bloom/vignette post-processing + the GTA-style minimap/radar, used in Play and export. The radar draws the player (or driven car) at center with building footprints (objects with a `minimapShape` instance var) + colored blips (objects with a `minimapBlip` color var) + health/armor arcs + a cash readout from the player\'s health/maxHealth/armor/money instance vars.',
     inputSchema: z.object({
       bloomEnabled: z.boolean().optional(),
+      ambientOcclusionEnabled: z.boolean().optional(),
+      ambientOcclusionIntensity: z.number().min(0).max(5).optional().describe('Contact/crevice shadow strength at High/Epic. Lower for dense grass to avoid crushed shadows.'),
+      ambientOcclusionRadius: z.number().min(0.05).max(10).optional().describe('Ambient occlusion sampling radius in world units.'),
       bloomIntensity: z.number().optional().describe('Bloom strength, ~0.3–2.'),
       bloomThreshold: z.number().optional().describe('Luminance cutoff 0–1; lower = more glow.'),
       bloomRadius: z.number().optional().describe('Bloom spread/smoothing 0–1.'),
@@ -5190,8 +5258,8 @@ const rawEngineTools = {
           'Texture compression for FUTURE model imports. On (default) transcodes imported model textures to GPU-compressed KTX2 — cuts GPU memory ~6–8x and shrinks the exported game (the biggest browser perf/size lever). Off keeps textures lossless. Affects models imported AFTER this is set, not ones already in the project.',
         ),
     }),
-    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, autoQuality, compressTextures }) => {
-      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, autoQuality, compressTextures });
+    execute: async ({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, autoQuality, compressTextures, ambientOcclusionEnabled, ambientOcclusionIntensity, ambientOcclusionRadius }) => {
+      store().updateRenderSettings({ bloomEnabled, bloomIntensity, bloomThreshold, bloomRadius, vignetteEnabled, minimapEnabled, minimapRotate, minimapRange, autoQuality, compressTextures, ambientOcclusionEnabled, ambientOcclusionIntensity, ambientOcclusionRadius });
       return 'Updated render/post-processing settings.';
     },
   }),

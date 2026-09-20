@@ -140,7 +140,8 @@ export function CinematicCamera({ pose }: { pose?: RuntimeCinematicCamera }) {
       camera.position.set(...activePose.position);
       camera.lookAt(new THREE.Vector3(...activePose.lookAt));
     }
-  });
+    camera.updateMatrixWorld();
+  }, -1);
 
   if (!activePose) return null;
   return <PerspectiveCamera ref={cameraRef} makeDefault fov={activePose.fov} near={0.02} position={activePose.position} />;

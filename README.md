@@ -107,6 +107,12 @@ Start with a blank project or launch one of nine playable templates:
 Templates are editable projects, not videos or hard-coded demos. Open their scenes, inspect their
 Blueprints, replace assets, and reuse the systems in your own game.
 
+The **[Neon Afterlight showcase](docs/NEON_AFTERLIGHT.md)** is a complete 70-second cyberpunk Asset Store project: a rain-soaked city canyon, emissive signs, wet street and water reflections, colored volumetric mist, steam, sparks, cooling-water spray and an animated searchlight drone. It adds reusable local-light fog scattering with quality budgets and includes all city assets, ten editable shots and an original synth score.
+
+The **[Blackthorn Keep showcase](docs/BLACKTHORN_KEEP.md)** is a complete 70-second dark fantasy Asset Store project: a castle beyond a wind-swept field, storm clouds, rain, lightning, simulated banners, live destruction and original sound design. Its [lighting and weather systems](docs/CINEMATIC_LIGHTING.md) include rectangular lights, live sky reflections, rain-driven wet materials and puddle ripples, shared editor/player light controls, adjustable AO and simulation-timed effects.
+
+The **[Last Light cinematic showcase](docs/LAST_LIGHT.md)** adds a 70-second mountain-ruins film, an editable package, an original score, and a production MP4 renderer. It also introduces ridged terrain, independent ambient fill, focused sun shadows, and seeded fragment tumbling.
+
 ## Feature map
 
 | System | Highlights |
@@ -117,7 +123,7 @@ Blueprints, replace assets, and reuse the systems in your own game.
 | **Scripting** | Reusable Blueprint graphs, typed execution/value wires, functions, global and per-instance variables, data tables, save slots, runtime events, and FeatherScript source. |
 | **Assets and animation** | GLB, glTF, FBX, PNG, JPEG, WebP, MP3, and WAV import; skeleton inspection, sockets, bone attachments, animation state machines, 1D and 2D blend spaces, bone-masked animation layers, optional root motion, foot and look-at IK, a live animation debugger, reusable prefabs, LOD, instancing, and optional KTX2 texture compression. |
 | **UI and input** | Screen-space and world-space UI, interactive controls, HUD bindings, minimap, keyboard, mouse, gamepad focus, and automatic touch controls in exported games. |
-| **Cinematics** | Shot sequencing, camera paths, cuts and blends, timed object/audio/event actions, overlays, frame-locked WebM capture, and MP4 export through ffmpeg.wasm. |
+| **Cinematics** | Shot sequencing, camera paths, cuts and blends, timed object/audio/event actions, overlays, browser preview capture, and a fixed-step production cinematic renderer with live physics and audio. |
 | **Runtime diagnostics** | On-screen console, live variable watch, execution and value tracing, problem reporting, performance profiler with hitch and stall attribution, render statistics including lights, shadow casters and skinned meshes, a live animation debugger, and replay capture. |
 | **AI authoring** | Bring-your-own-key support for OpenAI, Anthropic, and Google models, tool-driven scene editing, smart routing, and a localhost-only MCP bridge for external agents. |
 | **Live collaboration** | Host/editor/viewer roles, presence and participant controls, reconnect-safe CRDT editing, and authenticated host-to-guest asset streaming without a Feather cloud server. |

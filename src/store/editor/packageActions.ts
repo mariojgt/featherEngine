@@ -226,6 +226,7 @@ export const applyBuildProjectPackage = (set: SetState, get: GetState): { conten
     treeSpecs: state.treeSpecs,
     // Never ship the transient prefab-editing scene — it isn't part of the project.
     scenes: state.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID),
+    renderSettings: state.renderSettings,
     prefabs: state.prefabs,
     blueprints: state.blueprints,
     graphs: state.graphs,
@@ -270,6 +271,7 @@ export const applyMergeProjectPackage = (set: SetState, content: PackageContent,
         ? {
             scenes,
             activeSceneId: scenes[0].id,
+            renderSettings: { ...state.renderSettings, ...structuredClone(content.renderSettings ?? {}) },
             selectedIds: [],
             exportSettings: {
               ...state.exportSettings,

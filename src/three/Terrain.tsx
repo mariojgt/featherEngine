@@ -315,7 +315,8 @@ function generateFoliage(terrain: TerrainComponent, chunks: TerrainChunkKey[]) {
       const crz = terrainHash01(terrain.seed + 5002, chunk.x, chunk.z, c * 2 + 1);
       const cX = bounds.minX + crx * terrain.chunkSize;
       const cZ = bounds.minZ + crz * terrain.chunkSize;
-      if (sampleTerrainNormal(terrain, cX, cZ)[1] < foliage.slopeLimit) continue;
+      const normalY = sampleTerrainNormal(terrain, cX, cZ)[1];
+      if (normalY < foliage.slopeLimit) continue;
       // Patchy: low-freq noise = probability this tuft survives → lush pockets + bare gaps.
       const dens = Math.max(0, Math.min(1, 0.44
         + 0.4 * (Math.sin(cX * 0.052 + 1.3) * Math.sin(cZ * 0.047 + 2.7)
@@ -328,7 +329,7 @@ function generateFoliage(terrain: TerrainComponent, chunks: TerrainChunkKey[]) {
       }
       // Ground-borrowed blade color for this tuft — halfway to the grass green so blades read a touch
       // fresher/brighter than the turf they stand on (catching light), while still melting into it.
-      grassGround.set(sampleTerrainMaterialLayer(terrain, cX, cZ).color);
+      grassGround.set(sampleTerrainMaterialLayer(terrain, cX, cZ, undefined, normalY).color);
       grassBase.copy(grassGround).lerp(grassTarget, 0.55).multiplyScalar(1.02);
       const warmCool = Math.sin(cX * 0.031 + 1.1) * Math.sin(cZ * 0.036 + 2.3);
       const valueVar = Math.sin(cX * 0.019 - cZ * 0.024 + 5.0);

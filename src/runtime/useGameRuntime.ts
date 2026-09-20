@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { resetFrameClock, smoothFrameDelta } from './frameClock';
 import { resetGamepadInput, sampleGamepads } from './gamepadInput';
+import { isCinematicCaptureEnabled } from './cinematicCapture';
 
 export interface RuntimeLoopInstrumentation {
   onSessionStart?: () => void;
@@ -29,6 +30,12 @@ export function useGameRuntime(active: boolean, instrumentation?: RuntimeLoopIns
       const delta = smoothFrameDelta(frameMs / 1000);
       lastTime = time;
       const tickStart = performance.now();
+      // The production renderer advances fixed steps itself. Even paused ticks can process events
+      // and allocate scene state, so do not run a competing wall-clock driver during capture.
+      if (isCinematicCaptureEnabled()) {
+        frame = requestAnimationFrame(loop);
+        return;
+      }
       // Live cinematic camera possession owns movement input; do not also drive the player/vehicle.
       if (!useEditorStore.getState().playtimeCameraSession) sampleGamepads(delta, setRuntimeKey);
       tickRuntime(delta);
