@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createServer } from 'vite';
 import { cookBuildVariants } from './lib/cook-build.mjs';
 import { artifactInventory, sha256 } from './lib/release-evidence.mjs';
+import { writeTitanServer } from './lib/titan-package.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argument = (name, fallback) => { const i = process.argv.indexOf(name); return i < 0 ? fallback : process.argv[i + 1]; };
 const target = ({ darwin: 'macos', win32: 'windows', linux: 'linux' })[process.platform];
@@ -58,6 +59,7 @@ try {
     for (const [path, bytes] of variant.files) { if (!/^game-assets\/[a-f0-9]+\.[a-z0-9]+$/.test(path)) throw new Error(`Unsafe prepared asset: ${path}`); const dest = resolve(directory, path); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, bytes); }
   };
   writeGame(game, variants.get(target));
+  writeTitanServer(runtime, depot, bundle);
   if (target === 'macos') {
     const identity = bundle.buildProfile.application;
     writeFileSync(resolve(app, 'Contents/Info.plist'), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>feather-game</string><key>CFBundleIdentifier</key><string>${xml(identity.identifier)}</string><key>CFBundleName</key><string>${xml(identity.productName)}</string><key>CFBundleShortVersionString</key><string>${xml(identity.version)}</string><key>CFBundleVersion</key><string>${identity.buildNumber}</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`);
@@ -75,6 +77,7 @@ try {
   if (variants.has('web')) {
     const web = resolve(staging, 'web'); mkdirSync(web);
     writeGame(web, variants.get('web'));
+    writeTitanServer(runtime, web, bundle);
     await exec(tar, ['-czf', resolve(output, `${product}-web.tar.gz`), '-C', staging, 'web'], { timeout: 120000 });
     report.web = { archive: `${product}-web.tar.gz`, sha256: sha256(readFileSync(resolve(output, `${product}-web.tar.gz`))), files: artifactInventory(web), launchTest: 'not-run', assets: variants.get('web').report };
   }

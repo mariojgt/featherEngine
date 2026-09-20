@@ -63,19 +63,19 @@ describe('store plugin install', () => {
     expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === listing!.pluginId)).toBe(true);
   });
 
-  it('ships and activates Pixel Art Trees as its own removable store plugin', async () => {
+  it.each([PIXEL_ART_TREES_PLUGIN_ID, 'feather.titan'])('ships and activates %s as a removable store plugin', async (pluginId) => {
     await useMarketplaceStore.getState().load();
     const listing = useMarketplaceStore.getState().packages.find(
-      (entry) => entry.pluginId === PIXEL_ART_TREES_PLUGIN_ID,
+      (entry) => entry.pluginId === pluginId,
     );
     expect(listing?.kind).toBe('plugin');
-    expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
+    expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === pluginId)).toBe(true);
 
     await useMarketplaceStore.getState().install(listing!);
-    expect(extensionRegistry.hasPlugin(PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
-    expect(extensionRegistry.getSnapshot().panels.some((panel) => panel.pluginId === PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
-    expect(usePluginStore.getState().disable(PIXEL_ART_TREES_PLUGIN_ID)).toBe(true);
-    expect(extensionRegistry.hasPlugin(PIXEL_ART_TREES_PLUGIN_ID)).toBe(false);
+    expect(extensionRegistry.hasPlugin(pluginId)).toBe(true);
+    expect(extensionRegistry.getSnapshot().panels.some((panel) => panel.pluginId === pluginId)).toBe(true);
+    expect(usePluginStore.getState().disable(pluginId)).toBe(true);
+    expect(extensionRegistry.hasPlugin(pluginId)).toBe(false);
   });
 
   it('installs from the store WITHOUT an open project and activates the module', async () => {

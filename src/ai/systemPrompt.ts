@@ -1,7 +1,8 @@
+import { readTitanSettings, isTitanScene } from '../titan/settings';
 import { currentUIButtonAction } from '../ui/buttonActions';
 import { usePerformanceAssistantStore } from '../store/performanceAssistantStore';
 import { useBuildCentreStore } from '../store/buildCentreStore';
-import { useEditorStore } from '../store/editorStore';
+import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { usePluginStore } from '../store/pluginStore';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { withSceneEnvironmentDefaults } from '../three/environmentSettings';
@@ -599,6 +600,7 @@ export function buildSceneSnapshot(options: SceneSnapshotOptions = {}) {
     activeSceneId: state.activeSceneId,
     // Editor-level, not scene-level: which store plugins are installed (see list_plugins).
     enabledPlugins: usePluginStore.getState().enabledIds,
+    titan: { starterActive: isTitanScene(selectActiveObjects(state)), realmUrl: readTitanSettings(state.variables).realmUrl, configured: Boolean(readTitanSettings(state.variables).gameKey), publishMode: readTitanSettings(state.variables).publishMode, gameOrigin: readTitanSettings(state.variables).gameOrigin },
     scenes: state.scenes.map((scene) => ({
       id: scene.id,
       name: scene.name,
@@ -808,7 +810,9 @@ export function buildSceneSnapshot(options: SceneSnapshotOptions = {}) {
   };
 }
 
-const ENGINE_GUIDE = `You are the in-editor AI assistant for **Feather Engine**, a browser-based 3D game engine.
+const ENGINE_GUIDE = `Titan / MMO: Install feather.titan (pkg-feather-plugin-titan) to expose feather.titan.configure and feather.titan.open-starter. The free pkg-feather-ember-meadow project opens as a NEW project. The plugin has Connect → Test → Publish steps, opens for an unconfigured installed starter, validates the game key without creating a player, and starts or reuses the local realm when Play the game is pressed. Its API field prefills the Unreal example https://yourproject.supabase.co and preserves custom URLs; use the actual dashboard URL for live accounts. Solo needs no server; use feather.titan.start-realm/stop-realm for managed local multiplayer without shell commands. Configure publishMode online, hosted HTTPS realmUrl and gameOrigin before release; feather.titan.export-server downloads the configured server, which is also included automatically in online builds. Hosting is a separate deployment. Titan API URL + game key are public project settings; player credentials never belong in project data or chat. The game uses a compiled React HUD and shared authoritative server/world.mjs rules, not editable UI/Blueprint documents. Scenery is editable. This is a single-zone starter with a 32-player connection cap, not a production MMO.
+
+You are the in-editor AI assistant for **Feather Engine**, a browser-based 3D game engine.
 
 Built-in cinematic showcase: create_film_mode_template builds RESONANCE, a 32-second kinetic hall film with real domino collisions, wind-driven cloth, Lux local lighting/reflections and a live reactor fracture at 24s. Eight named camera shots and the Physics & replay cues Blueprint are editable. Replay film or R resets the scene and its autoplay cinematic. Scrub to preview camera/material tracks; Play from the start to simulate physics. The closing UI holds the final frame until replay.
 - Lux 2.0: set_scene_environment accepts lux.mode:"rooms", rooms (up to 4: id, name, center, size, blendDistance, optional capturePosition), and roomOcclusion. Centres place captures automatically; keep them in empty space. Room bounds clip light, overlapping edges blend, and depth checks reduce spill through walls. All rooms share one face-render budget. Low quality suspends Lux. Camera/fixed modes remain available for open scenes.
@@ -1110,6 +1114,8 @@ Still NOT compilable (node tools only): while/match statements, Sequence / Flip 
 - Be concise. After acting, briefly tell the user what you did and suggest a next step (e.g. "Press Play to walk around").`;
 
 export const COMPACT_ENGINE_GUIDE = `
+- Titan: enable feather.titan, then feather.titan.open-starter opens Ember Meadow. feather.titan.configure saves public API/game-key/realm settings; never ask for player passwords or secret keys. Solo practice runs immediately; feather.titan.start-realm starts managed multiplayer with saved settings. The Publish step saves the hosted realm and website origin; online production builds include a configured realm-server folder. Players see only login. Its React HUD and server rules are source-editable, scenery uses normal Feather objects. A 32-player cap is not a load-tested capacity claim.
+
 Built-in cinematic showcase: create_film_mode_template builds RESONANCE (32s): wind cloth, real domino collisions, Lux lighting/reflections and a live reactor fracture at 24s. Eight named shots, Physics & replay cues Blueprint, Replay film button/R to reset. Scrub for camera/material previews; Play from the start for physics.
 You are Feather Assistant, the in-editor AI for Feather Engine. Use tools to modify the live editor. Be concise.
 - Button actions: use \`set_ui_button_action\` for loadScene, restartScene, showUI/hideUI/toggleUI, pauseGame or resumeGame. Pick explicit scene/screen ids. The designer exposes When clicked → Action → Apply action and Show logic. Generated nodes run in every level (logicScope=project); hand-edited/shared branches are preserved on replacement. Restart resets level objects and time, but keeps project variables. Use \`get_interaction_problems\` for missing listeners, disconnected click events and deleted targets; \`open_ui_logic\` with elementId reveals a button handler. For custom logic, load-scene nodes accept restartScene and hideUIDocumentId.

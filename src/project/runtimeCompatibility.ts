@@ -1,5 +1,6 @@
 import type { ExportProfile, NodeForgeProject, SceneObject } from '../types';
 import { validateExportProfile } from './exportProfiles';
+import { isTitanScene } from '../titan/settings';
 
 export const RUNTIME_CONTRACT_VERSION = '1.1.0';
 
@@ -37,6 +38,7 @@ export const SUPPORTED_RUNTIME_FEATURES = [
   'persistence',
   'timelines',
   'post-processing',
+  'titan-realm',
 ] as const;
 
 export type RuntimeFeatureId = (typeof SUPPORTED_RUNTIME_FEATURES)[number];
@@ -68,6 +70,7 @@ export function detectRuntimeFeatures(project: NodeForgeProject): RuntimeFeature
   if (project.scenes.some((scene) => scene.environment?.lux?.enabled)) features.add('lux-lighting');
   if (project.scenes.some((scene) => scene.environment?.lux?.enabled && scene.environment.lux.mode === 'rooms')) features.add('lux-rooms');
   const objects = allObjects(project);
+  if (isTitanScene(objects)) features.add('titan-realm');
   if ((project.uiDocuments ?? []).some(doc => doc.logicScope === 'project')) features.add('ui-button-actions');
   const nodes = (project.graphs ?? []).flatMap((graph) => graph.nodes ?? []);
   if (nodes.some(node => node.data.nodeKind === 'action.loadScene' || node.data.restartScene || node.data.hideUIDocumentId)) features.add('ui-button-actions');

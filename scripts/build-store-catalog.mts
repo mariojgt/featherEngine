@@ -21,6 +21,8 @@ import { readPackageFile, writePackageArchive } from '../src/project/packageArch
 // Kept as data so this catalog stays byte-stable — re-running the capture is a deliberate act, not
 // a side effect of building the store.
 import uiKits from '../src/store-assets/uiKits.json';
+import { emberMeadowContent } from '../src/titan/starter';
+import { zipSync } from 'fflate';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'public', 'store');
@@ -1206,7 +1208,7 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
     version: pkg.meta.version,
     kind: pkg.kind,
     tags: pkg.meta.tags ?? [],
-    license: 'CC0-1.0',
+    license: pkg.meta.license ?? 'CC0-1.0',
     priceCents: 0,
     thumbnail: thumbnail ?? pkg.meta.thumbnail,
     sizeBytes: installFootprint(archiveBytes),
@@ -1228,6 +1230,23 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
 
 // ------------------------------------------------------------------------------------------------
 
+async function buildEmberMeadowPack() {
+  const avatar = await externalAsset('ember-avatar', 'templates/UAL1.glb', 'model');
+  const sword = await externalAsset('ember-sword', 'templates/Sword.glb', 'model');
+  const content = emberMeadowContent();
+  const zipFiles = {};
+  for (const path of ['package.json', 'README.md', '.env.example', 'LICENSE', 'server/launch.mjs', 'server/server.mjs', 'server/world.mjs', 'server/server.test.mjs']) {
+    zipFiles[`ember-meadow-server/${path}`] = [new Uint8Array(await readFile(join(ROOT, 'examples/titan-mmo', path))), { mtime: new Date(EPOCH) }];
+  }
+  await mkdir(join(OUT_DIR, 'downloads'), { recursive: true });
+  await writeFile(join(OUT_DIR, 'downloads/ember-meadow-server.zip'), zipSync(zipFiles));
+  return { slug: 'ember-meadow', kind: 'project', content,
+    assets: [avatar.asset, sword.asset], assetBytes: new Map([[avatar.asset.id, avatar.bytes], [sword.asset.id, sword.bytes]]),
+    meta: { id: 'pkg-feather-ember-meadow', name: 'Ember Meadow — MMO Starter', version: '1.0.0', author: 'Feather / TheDevRealm', license: 'MIT + bundled asset licenses',
+      description: 'A free fantasy RPG integration example: login, an animated adventurer, a Pixel Art Trees woodland, a quest, combat, loot, equipment and saved progress. Play solo immediately, or run the included authoritative realm server and explore with friends. Supports Titan guest and email accounts. One zone; 32-player connection cap, not a production-scale MMO.',
+      tags: ['project', 'mmo', 'rpg', 'multiplayer', 'titan', 'beginner'], thumbnail: thumbnail('#d7b36c', '#22564c', '✧') } };
+}
+
 async function main() {
   // One folder per kind, so what a package IS is obvious from where it lives — both here and in
   // whatever bucket this is eventually mirrored into.
@@ -1240,6 +1259,13 @@ async function main() {
     ARBOR_FORGE_PLUGIN,
     MODEL_FORGE_PLUGIN,
     PIXEL_ART_TREES_PLUGIN,
+    {
+      slug: 'titan-backend', kind: 'plugin', content: {},
+      meta: { id: 'pkg-feather-plugin-titan', pluginId: 'feather.titan', name: 'Titan — Game Backend', version: '1.1.0', author: 'Feather / TheDevRealm',
+        description: 'Connect Feather to the Titan backend used by the Unreal plugin. Connect, test and publish from a guided panel. Includes managed local realms, configured production server packages, a typed REST client and the free Ember Meadow MMO starter.',
+        tags: ['plugin', 'backend', 'mmo', 'multiplayer', 'login', 'titan'], license: 'MIT', thumbnail: thumbnail('#a28b4c', '#153e3b', 'T') },
+    },
+    await buildEmberMeadowPack(),
   ];
   const entries = [];
   for (const pack of packs) {

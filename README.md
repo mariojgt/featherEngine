@@ -4,6 +4,8 @@
 
 <h1 align="center">Feather Engine</h1>
 
+**New: [Titan + Ember Meadow MMO starter](docs/TITAN_MMO_STARTER.md).** Install Titan from the Asset Store, open the free fantasy RPG example and play solo immediately. Use the plugin’s Connect → Test → Publish panel to save your key, start a local realm and include the configured server in online builds.
+
 <p align="center">
   <strong>A visual-first 3D game engine for building, playing, and shipping interactive worlds.</strong>
 </p>

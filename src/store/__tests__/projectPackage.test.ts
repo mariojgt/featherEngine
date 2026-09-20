@@ -60,7 +60,21 @@ describe('kind: project packages', () => {
     useProjectStore.setState({ toast: null, error: null });
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('leaves the existing world intact when native project creation is cancelled', async () => {
+    authorProject();
+    const originalScenes = useEditorStore.getState().scenes;
+    const pkg = buildPackage('project', useEditorStore.getState().buildProjectPackage().content, [], {
+      id: 'pkg-cancel', name: 'Cancelled starter', version: '1.0.0',
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => writePackageArchive(pkg, new Map()).buffer }));
+    const createProject = vi.spyOn(useProjectStore.getState(), 'newProject').mockResolvedValue(undefined);
+    expect(await useProjectStore.getState().newProjectFromPackageUrl('store/cancel.nfpack', 'Cancelled')).toBe(false);
+    expect(createProject).toHaveBeenCalled();
+    expect(useEditorStore.getState().scenes).toBe(originalScenes);
+    expect(useProjectStore.getState().toast).toBeNull();
+  });
 
   it('collects every scene plus its dependency closure', () => {
     const { secondSceneId } = authorProject();

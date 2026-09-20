@@ -9,6 +9,12 @@ export interface TemplateLesson {
 
 /** Shared by the launcher, catalog builder, and learning documentation. */
 export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
+  'ember-meadow': {
+    version: 1, difficulty: 'Beginner', minutes: 15,
+    goal: 'Log in, restore the meadow beacon, earn a blade, and reconnect with your saved progress.',
+    controls: 'WASD / arrows move · E talk/gather · Space or 1 attack · 2 tonic · I inventory',
+    lessons: ['Press Play and choose Solo practice to explore immediately.', 'Speak to Elara, gather three shards, defeat two wisps and return for your reward.', 'Install Titan — Game Backend, download the realm server, run npm install and npm start.', 'Join the realm from two browser profiles. Save, leave and reconnect.', 'Edit the scenery in Feather. Extend authoritative rules in server/world.mjs and the HUD in src/titan.'],
+  },
   'template-cinematic': {
     version: 1, difficulty: 'Beginner', minutes: 10,
     goal: 'Watch Resonance, then remix its cameras, lighting and real physics cues.',

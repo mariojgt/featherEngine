@@ -325,6 +325,83 @@
       }
     },
     {
+      "id": "pkg-feather-plugin-titan",
+      "slug": "titan-backend",
+      "title": "Titan — Game Backend",
+      "description": "Connect Feather to the Titan backend used by the Unreal plugin. Connect, test and publish from a guided panel. Includes managed local realms, configured production server packages, a typed REST client and the free Ember Meadow MMO starter.",
+      "author": "Feather / TheDevRealm",
+      "version": "1.1.0",
+      "kind": "plugin",
+      "tags": [
+        "plugin",
+        "backend",
+        "mmo",
+        "multiplayer",
+        "login",
+        "titan"
+      ],
+      "license": "MIT",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjYTI4YjRjIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTUzZTNiIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPlQ8L3RleHQ+PC9zdmc+",
+      "sizeBytes": 1059,
+      "downloadUrl": "packages/plugins/titan-backend.nfpack",
+      "engineVersion": "0.8.0",
+      "pluginId": "feather.titan",
+      "contents": {
+        "prefabs": 0,
+        "materials": 0,
+        "blueprints": 0,
+        "assets": 0,
+        "scenes": 0,
+        "uiDocuments": 0
+      }
+    },
+    {
+      "id": "pkg-feather-ember-meadow",
+      "slug": "ember-meadow",
+      "learning": {
+        "version": 1,
+        "difficulty": "Beginner",
+        "minutes": 15,
+        "goal": "Log in, restore the meadow beacon, earn a blade, and reconnect with your saved progress.",
+        "controls": "WASD / arrows move · E talk/gather · Space or 1 attack · 2 tonic · I inventory",
+        "lessons": [
+          "Press Play and choose Solo practice to explore immediately.",
+          "Speak to Elara, gather three shards, defeat two wisps and return for your reward.",
+          "Install Titan — Game Backend, download the realm server, run npm install and npm start.",
+          "Join the realm from two browser profiles. Save, leave and reconnect.",
+          "Edit the scenery in Feather. Extend authoritative rules in server/world.mjs and the HUD in src/titan."
+        ]
+      },
+      "title": "Ember Meadow — MMO Starter",
+      "description": "A free fantasy RPG integration example: login, an animated adventurer, a Pixel Art Trees woodland, a quest, combat, loot, equipment and saved progress. Play solo immediately, or run the included authoritative realm server and explore with friends. Supports Titan guest and email accounts. One zone; 32-player connection cap, not a production-scale MMO.",
+      "author": "Feather / TheDevRealm",
+      "version": "1.0.0",
+      "kind": "project",
+      "tags": [
+        "project",
+        "mmo",
+        "rpg",
+        "multiplayer",
+        "titan",
+        "beginner"
+      ],
+      "license": "MIT + bundled asset licenses",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZDdiMzZjIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMjI1NjRjIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPuKcpzwvdGV4dD48L3N2Zz4=",
+      "sizeBytes": 8679180,
+      "downloadUrl": "packages/projects/ember-meadow.nfpack",
+      "engineVersion": "0.8.0",
+      "contents": {
+        "prefabs": 0,
+        "materials": 0,
+        "blueprints": 0,
+        "assets": 2,
+        "scenes": 1,
+        "uiDocuments": 0
+      }
+    },
+    {
       "id": "pkg-feather-template-cinematic",
       "slug": "template-cinematic",
       "learning": {

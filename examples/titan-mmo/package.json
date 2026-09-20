@@ -1,0 +1,9 @@
+{
+  "name": "feather-ember-meadow-realm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server/launch.mjs", "test": "node --test server/server.test.mjs" },
+  "engines": { "node": ">=22" },
+  "dependencies": { "ws": "^8.21.0" }
+}

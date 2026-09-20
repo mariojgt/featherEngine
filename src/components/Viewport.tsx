@@ -91,6 +91,8 @@ import { highestTerrainWorldHeight } from '../terrain/terrain';
 import type { MaterialOverrides, SceneObject, } from '../types';
 import { GameView } from '../player/GameView';
 import { RuntimeOverlays } from '../runtime/RuntimeOverlays';
+import { TitanWorld } from '../titan/TitanWorld';
+import { useTitanActive } from '../titan/TitanHUD';
 import { useCollaborationStore, type CollaborationParticipant } from '../store/collaborationStore';
 import { CollaboratorAvatars } from './CollaboratorAvatars';
 
@@ -990,6 +992,7 @@ function SceneContent({
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
   const cinematicPreview = useEditorStore((state) => state.editorCinematicPreview);
+  const titanActive = useTitanActive();
   const cinematicPreviewCamera = useEditorStore((state) => state.editorCinematicPreviewCamera);
   const cinematicPreviewTransforms = useEditorStore((state) => state.editorCinematicPreviewTransforms);
   const cinematicPreviewHidden = useEditorStore((state) => state.editorCinematicPreviewHidden);
@@ -1402,7 +1405,7 @@ function SceneContent({
       )}
       {/* During Play (or when previewing) a character's follow camera takes over the view; otherwise free-orbit.
           Preview mode (editor, not playing) frames the resting camera so offset/pitch tuning is visible live. */}
-      {isPlaying && cinematicCamera ? (
+      {titanActive ? <TitanWorld /> : isPlaying && cinematicCamera ? (
         <CinematicCamera />
       ) : !isPlaying && cinematicPreviewCamera && cinematicViewportMode === 'camera' && !recording ? (
         // Camera View is explicit. Scrubbing in Edit Paths keeps the normal free editor camera so

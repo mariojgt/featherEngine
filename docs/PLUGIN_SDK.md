@@ -176,3 +176,9 @@ The registry is the stable seam for future work. The next useful increments are:
 
 New engine access should be added as a typed capability on `FeatherPluginAPI`, rather than exposing
 the raw store. That keeps plugin code stable while Feather's internals continue to evolve.
+
+## Titan backend capability
+
+The free `feather.titan` plugin adds the Connect → Test → Publish panel. `api.titan.settings()` reads project configuration; `configure({ realmUrl, baseUrl, gameKey, publishMode, gameOrigin })` saves it. `openStarter()` opens the example; `startRealm()`, `stopRealm()` and `realmStatus()` manage local testing; `await play()` starts or reuses the project’s local realm and opens preview; `edit()` returns to editing. `exportServer()` downloads a configured deployment package, and `build()` opens the normal production build review. Online exports automatically include `realm-server/`.
+
+Configuration is rejected during Play and in read-only collaboration. Player tokens and passwords are never project settings. Managed desktop realms use a bundled executable with persistent application data; localhost development uses a same-origin bridge. Hosted browser editors use deployed realms. See [Titan and Ember Meadow](TITAN_MMO_STARTER.md).

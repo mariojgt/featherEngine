@@ -13,6 +13,7 @@
 import { execFileSync } from 'node:child_process';
 import { artifactInventory, engineEvidence, sha256 } from './lib/release-evidence.mjs';
 import { cookBuildVariants } from './lib/cook-build.mjs';
+import { writeTitanServer } from './lib/titan-package.mjs';
 import {
   cpSync,
   existsSync,
@@ -443,6 +444,7 @@ const buildReport = {
 };
 
 function writeBuildReport(directory) {
+  writeTitanServer(resolve(root, 'src-tauri/export-runtime'), directory, bundle);
   const credits = bundle.project.assets.filter((asset) => asset.modelInspection?.stats?.copyright).map((asset) => `${asset.name}: ${asset.modelInspection.stats.copyright}`);
   writeFileSync(resolve(directory, 'ASSET-CREDITS.txt'), ['Asset attribution supplied by imported models', '', ...(credits.length ? credits : ['No embedded model copyright metadata was supplied.']), '', 'Review your asset licenses before distributing this game.'].join('\n'));
   const variant = variants.get(outputTargets.get(directory));

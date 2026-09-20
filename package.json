@@ -4,6 +4,10 @@
   "version": "0.3.0",
   "type": "module",
   "scripts": {
+    "demo:titan": "node examples/titan-mmo/server/launch.mjs",
+    "build:titan-runtime": "node scripts/build-titan-runtime.mjs --native",
+    "test:titan-runtime": "node scripts/build-titan-runtime.mjs --native && node --test scripts/tests/titan-runtime.test.mjs",
+    "test:titan": "node --test examples/titan-mmo/server/server.test.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && node scripts/build-player.mjs --skip-typecheck && vite build",
     "test": "vitest run",

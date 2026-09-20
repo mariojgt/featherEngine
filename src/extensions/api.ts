@@ -1,4 +1,8 @@
 import { canEditCollaborativeProject } from '../collaboration/access';
+import { readTitanSettings, validateTitanSettings, TITAN_SETTINGS, titanReleaseConfig, isTitanScene } from '../titan/settings';
+import { managedRealm } from '../titan/managedRealm';
+import { sha256Hex } from '../utils/contentHash';
+import { activeExportProfile } from '../project/exportProfiles';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import {
@@ -381,6 +385,70 @@ export function createFeatherPluginAPI(
   });
 
   return Object.freeze({
+    titan: Object.freeze({
+      settings: () => readTitanSettings(useEditorStore.getState().variables),
+      configure: (input: import('../titan/settings').TitanSettingsInput) => {
+        requireEditableProject();
+        const settings = validateTitanSettings(input);
+        eventBus.batch(() => {
+          for (const key of Object.keys(TITAN_SETTINGS) as (keyof typeof TITAN_SETTINGS)[]) {
+            const store = useEditorStore.getState();
+            const id = store.variables.find(v => v.name === TITAN_SETTINGS[key])?.id ?? store.createVariable(TITAN_SETTINGS[key], 'string', false);
+            useEditorStore.getState().updateVariable(id, { defaultValue: settings[key], persistent: false });
+          }
+        });
+        return settings;
+      },
+      openStarter: async () => {
+        if (!canEditCollaborativeProject()) throw new Error('This shared project is read-only for viewers.');
+        if (useEditorStore.getState().isPlaying) throw new Error('Stop Play before opening the starter.');
+        if (useEditorStore.getState().isDirty) {
+          const { confirmAction } = await import('../store/confirmStore');
+          if (!await confirmAction({ title: 'Open Ember Meadow?', message: 'This creates a new project. Save any changes in your current project before continuing.', confirmLabel: 'Create project' })) return false;
+        }
+        return useProjectStore.getState().newProjectFromPackageUrl('store/packages/projects/ember-meadow.nfpack', 'Ember Meadow');
+      },
+      startRealm: async () => {
+        requireEditableProject();
+        const state = useEditorStore.getState();
+        return managedRealm('start', activeExportProfile(state.exportSettings).application.identifier, validateTitanSettings(readTitanSettings(state.variables)));
+      },
+      stopRealm: () => {
+        if (!canEditCollaborativeProject()) throw new Error('Only the host can stop the local realm.');
+        return managedRealm('stop');
+      },
+      realmStatus: () => managedRealm('status'),
+      play: async () => {
+        requireEditableProject();
+        const state = useEditorStore.getState();
+        if (!isTitanScene(selectActiveObjects(state))) throw new Error('Open the Ember Meadow scene before playing.');
+        const gameId = activeExportProfile(state.exportSettings).application.identifier;
+        const settings = validateTitanSettings(readTitanSettings(state.variables));
+        const storageId = (await sha256Hex(new TextEncoder().encode(`${gameId}:${settings.baseUrl}:${settings.gameKey}`))).slice(0, 24);
+        const realm = await managedRealm('status');
+        // Keep an existing matching realm alive so other adventurers stay connected.
+        if (!realm.running || realm.gameId !== gameId || realm.storageId !== storageId) await managedRealm('start', gameId, settings);
+        requireEditableProject();
+        const current = useEditorStore.getState();
+        if (current.activeSceneId !== state.activeSceneId || activeExportProfile(current.exportSettings).application.identifier !== gameId
+          || JSON.stringify(readTitanSettings(current.variables)) !== JSON.stringify(settings)) throw new Error('The project changed while the realm was starting. Press Play again.');
+        useEditorStore.getState().setPlaying(true);
+      },
+      edit: () => {
+        if (!canEditCollaborativeProject()) throw new Error('Only the host can configure this game.');
+        useEditorStore.getState().setPlaying(false);
+      },
+      exportServer: async () => {
+        requireEditableProject();
+        const state = useEditorStore.getState(); const profile = activeExportProfile(state.exportSettings);
+        const config = titanReleaseConfig(readTitanSettings(state.variables), profile.application.identifier, profile.targets.includes('web'));
+        if (!config) throw new Error('Choose Online game in Publish before exporting its server.');
+        const { configuredServerArchive } = await import('../titan/serverPackage');
+        const { getPlatform } = await import('../platform');
+        await (await getPlatform()).saveBinary('titan-realm-server.zip', await configuredServerArchive(config), { mimeType: 'application/zip' });
+      },
+      build: async () => { requireEditableProject(); await useProjectStore.getState().exportProduction(); },
+    }),
     apiVersion: FEATHER_EXTENSION_API_VERSION,
     pluginId,
     commands,

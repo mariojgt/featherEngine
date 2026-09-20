@@ -9,6 +9,8 @@ src-tauri/export-runtime/
 src-tauri/runner/target/
 src-tauri/runner/gen/schemas/
 exports/
+/artifacts/titan/
+/realm-data/
 
 # Vite / TypeScript build artifacts
 *.tsbuildinfo
