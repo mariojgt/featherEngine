@@ -67,6 +67,10 @@ jobs:
     name: Rust checks
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    env:
+      # Compile/lint a clean checkout without packaging the generated export runtime.
+      # Desktop release builds still prepare and bundle the complete runtime.
+      TAURI_CONFIG: '{"bundle":{"resources":[]}}'
     steps:
       - uses: actions/checkout@v4
 

@@ -379,9 +379,11 @@ pub(crate) fn build(
     let data = manifest(&runtime)?;
     let runners = all_runners(app, &runtime, &data);
     build_from_runtime(
-        &runtime,
-        data,
-        runners,
+        BuildRuntime {
+            root: &runtime,
+            manifest: data,
+            runners,
+        },
         variants,
         profile_json,
         targets,
@@ -393,10 +395,14 @@ pub(crate) fn build(
     )
 }
 
-fn build_from_runtime(
-    runtime: &Path,
-    data: RuntimeManifest,
+struct BuildRuntime<'a> {
+    root: &'a Path,
+    manifest: RuntimeManifest,
     runners: Vec<(Runner, PathBuf)>,
+}
+
+fn build_from_runtime(
+    source: BuildRuntime<'_>,
     variants: HashMap<String, String>,
     profile_json: String,
     targets: Vec<String>,
@@ -404,6 +410,11 @@ fn build_from_runtime(
     asset_reports: Value,
     progress: impl Fn(String),
 ) -> Result<String, String> {
+    let BuildRuntime {
+        root: runtime,
+        manifest: data,
+        runners,
+    } = source;
     if targets.is_empty()
         || targets
             .iter()
@@ -492,8 +503,8 @@ fn build_from_runtime(
                 }
                 (game, Some(exe))
             };
-            copy_player(&runtime, &data, &game)?;
-            copy_titan_server(&runtime, &dest, &bundle)?;
+            copy_player(runtime, &data, &game)?;
+            copy_titan_server(runtime, &dest, &bundle)?;
             write_bundle(bundle, &game, &data)?;
             if target == "macos" {
                 let status = Command::new("/usr/bin/codesign")
@@ -711,9 +722,11 @@ mod tests {
         let out_dir = dir.0.join("exports").to_string_lossy().into_owned();
         let package = |bundle: &Value, data: RuntimeManifest| {
             build_from_runtime(
-                &runtime,
-                data,
-                vec![],
+                BuildRuntime {
+                    root: &runtime,
+                    manifest: data,
+                    runners: vec![],
+                },
                 HashMap::from([("web".into(), bundle.to_string())]),
                 profile.to_string(),
                 vec!["web".into()],
