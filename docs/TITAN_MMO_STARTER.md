@@ -1,6 +1,8 @@
 # Titan and Ember Meadow
 
-Install **Asset Store → Titan — Game Backend** (`feather.titan`). Open **View → Extensions → Titan Backend**, or search **Open Titan Backend** in the command palette. Choose **Open starter** to create an Ember Meadow project. The separate **Ember Meadow — MMO Starter** store listing also opens it directly.
+Looking for the bigger world? The three-zone **Sunlit Reach — Mini MMO** template (classes, quests, a boss, per-zone cinematics, zone chat) builds on everything below and has its own tutorial: [Sunlit Reach — Mini MMO](SUNLIT_REACH_MMO.md). Ember Meadow stays the smallest possible integration example.
+
+Install **Asset Store → Titan — Game Backend** (`feather.titan`). Open **View → Extensions → Titan Backend**, or search **Open Titan Backend** in the command palette. Choose **Ember Meadow → Open** (or **Sunlit Reach → Open** for the full template) to create the project. The separate **Ember Meadow — MMO Starter** store listing also opens it directly.
 
 The setup panel opens automatically when the plugin and an unconfigured Ember Meadow scene are both installed.
 
@@ -20,17 +22,17 @@ Hosted browser editors can configure connections and export packages; managed lo
 
 ## The sample game
 
-WASD/arrows move; E talks and gathers; Space/1 attacks; 2 drinks a tonic; I opens inventory. Talk to Warden Elara, collect three sun shards, defeat two wisps and return for Warden's blade. Equip it, save, leave and reconnect. The scene reuses the bundled animated UAL1 character, Sword and editable Pixel Art Trees recipes.
+WASD/arrows move relative to the camera (right-drag orbits, wheel zooms); E talks, gathers and travels; Space/1 attacks; 2 uses the class ability; 3 drinks a tonic; I opens inventory; L opens the quest log; Enter chats. Pick a class (Warrior, Ranger or Mage) at login, talk to Warden Elara, collect three sun shards, defeat two wisps and return for Warden's blade. Equip it, save, leave and reconnect. The meadow's north waystone leads to Thornwood only in the Sunlit Reach template; in this single-zone starter it explains that the world ends here. The scene reuses the bundled animated UAL1 character, Sword and editable Pixel Art Trees recipes.
 
 `Ember Meadow · Realm runtime` is the named empty scene marker enabling the sample runtime. ID remapping preserves it. `TitanWorld` renders actors and controls the camera in editor Play and exported Player; `TitanHUD` supplies the shared login and gameplay UI. Renaming/deleting the marker disables the sample. Removing the setup plugin does not remove runtime support from exported games.
 
-The authoritative [world.mjs](../examples/titan-mmo/server/world.mjs) runs both solo and the server. Clients submit intentions, never positions, damage or rewards. Attacks validate timing and distance; equipment requires ownership; rewards are granted once. Movement clamps bounds and expires stale input. Enemies are shared; gathering and quest progress are per player. Edit the rules and rebuild client and server together. Scenery is editable in Feather; custom gameplay/HUD rules currently require source edits.
+The authoritative [world.mjs](../examples/titan-mmo/server/world.mjs) runs both solo and the server (protocol 2; version 1 saves migrate automatically). Clients submit intentions, never positions, damage or rewards. Attacks and abilities validate timing, range and cooldowns; equipment requires ownership; rewards are granted once; XP levels and equipment slots are computed server-side. Movement clamps each zone's bounds and expires stale input. Enemies are shared and leash back to their spawn; gathering and quest progress are per player. Zone chat is relayed only to players in the same zone. Edit the rules and rebuild client and server together. Scenery is editable in Feather; custom gameplay/HUD rules currently require source edits.
 
 Solo saves stay on the device under the application identifier. Local desktop realms save in Feather's application data, separated by game and Titan connection. Source realms use `.feather-cache/titan/`. Hosted Docker realms save at `/data/players.json`; other Node deployments default to `~/.feather-realms/<hashed-game-id>/players.json`. Autosave runs every ten seconds, on disconnect, shutdown and explicit save. Keep one process per save file and back it up.
 
 Titan-connected explicit saves also write an `ember-meadow` cloud checkpoint. The realm restores authoritative disk state; player-writable cloud slots are not trusted to grant equipment. There is no cross-mode migration. This sample uses its own item/quest definitions, rather than mirroring the dashboard's economy tables.
 
-This is one flat zone with cosmetic scenery and a 32-player connection cap, without mesh collisions, trading, chat, guilds, sharding or a production account/session service. The cap is not a load-tested capacity claim.
+This is one flat zone with cosmetic scenery and a 32-player connection cap, without mesh collisions, trading, guilds, sharding or a production account/session service. The cap is not a load-tested capacity claim.
 
 ## Plugin and client API
 

@@ -100,11 +100,11 @@ try {
   await app.realClick('.titan-secondary');
   await app.waitFor(`document.querySelector('.titan-location')?.textContent.includes('Realm online')`, { label: 'exported game authenticates with live Titan over its configured HTTPS realm' });
   sessions.peer = await app.evaluate(`localStorage.getItem(${JSON.stringify(key)})`); await writeFile(sessionsPath, JSON.stringify(sessions), { mode: 0o600 });
-  await app.realClick('.titan-actions button:nth-child(5)');
+  await app.realClick('.titan-actions button:nth-child(6)');
   await app.waitFor(`document.querySelector('.titan-notice').textContent.includes('Titan cloud')`);
   const cloud = await fetch(`${credentials.baseUrl.replace(/\/+$/, '').replace(/\/functions\/v1$/, '')}/functions/v1/game-saves/ember-meadow`, { headers: { 'X-Game-Key': credentials.gameKey, 'X-Player-Token': sessions.peer, Authorization: `Bearer ${sessions.peer}` } });
   assert.equal(cloud.status, 200); const body = await cloud.json(); const saved = typeof body.data === 'string' ? JSON.parse(body.data) : body.data;
-  assert.equal(saved.equipped, 'training-blade'); assert.equal(saved.quest, 'available');
+  assert.equal(saved.equipped.weapon, 'training-blade'); assert.equal(saved.quests['light-in-the-meadow'], undefined);
   await app.realClick('.titan-menu'); await stop(); realmUrl = ''; await start();
   await app.realClick('.titan-secondary'); await app.waitFor(`document.querySelector('.titan-location')?.textContent.includes('Realm online')`);
   console.log('PASS: production guest login, HTTPS/WSS, live cloud save/readback and packaged-server restart');
@@ -132,7 +132,7 @@ try {
   await app.realClick('.titan-menu'); await stop(); realmUrl = ''; await start(true);
   await fill('input[type="password"]', sessions.account.password); await app.realClick('.titan-secondary');
   await app.waitFor(`document.querySelector('.titan-location')?.textContent.includes('Realm online')`, { label: 'standalone desktop executable authenticates against live Titan' });
-  await app.realClick('.titan-actions button:nth-child(5)'); await app.waitFor(`document.querySelector('.titan-notice').textContent.includes('Titan cloud')`);
+  await app.realClick('.titan-actions button:nth-child(6)'); await app.waitFor(`document.querySelector('.titan-notice').textContent.includes('Titan cloud')`);
   console.log('PASS: bundled desktop realm authenticates and saves to live Titan with an empty PATH, without Node or npm.');
   await app.realClick('.titan-menu');
   const shutdown = setTimeout(() => { console.error('Native shutdown timed out'); realm.kill('SIGKILL'); }, 5000);

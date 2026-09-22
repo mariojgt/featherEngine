@@ -1,18 +1,42 @@
-import type { SceneObject, Vector3Tuple } from '../types';
+import type { ProjectVariable, SceneEnvironmentSettings, SceneObject, SceneObjectKind, Vector3Tuple } from '../types';
 import { defaultSceneEnvironment } from '../three/environmentSettings';
 import { pixelTreeSpec, DEFAULT_PIXEL_TREE_RECIPE } from '../extensions/pixelArtTrees/presets';
-import { defaultTitanSettings, TITAN_SCENE_MARKER, TITAN_SETTINGS } from './settings';
+import { defaultTitanSettings, TITAN_SCENE_MARKER, TITAN_SETTINGS, TITAN_ZONE_MARKER } from './settings';
 
-/** Pure package authoring: ordinary editable scenery, with no installed-editor-plugin dependency. */
-export function emberMeadowContent() {
+/** Kinds that carry a mesh renderer. `empty`/`light`/`camera`/`terrain` carry a component instead. */
+const MESH_KINDS = ['cube', 'sphere', 'capsule', 'plane'] as const;
+type MeshKind = (typeof MESH_KINDS)[number];
+const isMeshKind = (kind: SceneObjectKind): kind is MeshKind => (MESH_KINDS as readonly string[]).includes(kind);
+
+/** Appends one ordinary editable prop and hands it back, so callers can bolt a component onto it. */
+export type StarterProp = (name: string, kind: SceneObjectKind, position: Vector3Tuple, scale: Vector3Tuple, color: string, rotation?: Vector3Tuple) => SceneObject;
+
+/** A scene's object list plus the `prop` that keeps appending to it with stable sequential ids. */
+export function starterScenery(prefix: string): { objects: SceneObject[]; prop: StarterProp } {
   const objects: SceneObject[] = [];
   let counter = 0;
-  const prop = (name: string, kind: 'cube' | 'sphere' | 'empty', position: Vector3Tuple, scale: Vector3Tuple, color: string, rotation: Vector3Tuple = [0, 0, 0]) => {
-    const object: SceneObject = { id: `ember-prop-${++counter}`, name, kind, transform: { position, scale, rotation },
-      ...(kind === 'empty' ? {} : { renderer: { enabled: true, mesh: kind, color, metalness: 0, roughness: .9 } }) };
+  const prop: StarterProp = (name, kind, position, scale, color, rotation = [0, 0, 0]) => {
+    const object: SceneObject = { id: `${prefix}${++counter}`, name, kind, transform: { position, scale, rotation },
+      ...(isMeshKind(kind) ? { renderer: { enabled: true, mesh: kind, color, metalness: 0, roughness: .9 } } : {}) };
     objects.push(object); return object;
   };
+  return { objects, prop };
+}
+
+export interface MeadowSceneryOptions {
+  /** Object-id prefix. Defaults to the single-zone starter's own, which must never change. */
+  prefix?: string;
+  /** Zone id for the extra `Realm zone · <id>` marker. Omitted = the single-zone starter's home scene. */
+  zoneId?: string;
+  /** Tree spec id, so two packages shipping this meadow never collide on one id. */
+  treeId?: string;
+}
+
+/** The Ember Meadow village, shared by the one-zone starter and the Sunlit Reach hub. */
+export function emberMeadowScenery(options: MeadowSceneryOptions = {}) {
+  const { objects, prop } = starterScenery(options.prefix ?? 'ember-prop-');
   prop(TITAN_SCENE_MARKER, 'empty', [0, 0, 0], [1, 1, 1], '#fff');
+  if (options.zoneId) prop(`${TITAN_ZONE_MARKER}${options.zoneId}`, 'empty', [0, 0, 0], [1, 1, 1], '#fff');
   prop('The Sunlit Reach · editable ground', 'cube', [0, -.5, -5], [66, 1, 64], '#68866a');
   prop('Village square', 'cube', [0, .015, 1], [13, .08, 11], '#a2a17c');
   // Keep overlapping paving above the square and at distinct heights to avoid depth flicker.
@@ -36,7 +60,7 @@ export function emberMeadowContent() {
   }
   prop('Beacon gateway lintel', 'cube', [0, 4.35, -5], [7.2, .55, .9], '#aeba9d');
   prop('The village beacon', 'sphere', [0, 4.8, -5], [.55, .55, .55], '#edce72');
-  const tree = pixelTreeSpec({ ...DEFAULT_PIXEL_TREE_RECIPE, scale: .75, leafDensity: .6 }, 'ember-tree', 'Meadow woodland');
+  const tree = pixelTreeSpec({ ...DEFAULT_PIXEL_TREE_RECIPE, scale: .75, leafDensity: .6 }, options.treeId ?? 'ember-tree', 'Meadow woodland');
   for (let i = 0; i < 26; i++) {
     const side = i % 2 ? -1 : 1;
     const x = side * (11 + (i * 7 % 9)); const z = 7 - Math.floor(i / 2) * 2.7;
@@ -49,12 +73,25 @@ export function emberMeadowContent() {
     prop('Wildflower patch', 'sphere', [x, .2, z], [.5, .45, .5], i % 3 === 0 ? '#e2c985' : i % 3 === 1 ? '#a6bccc' : '#d4b4a6');
   }
   for (let i = 0; i < 10; i++) prop('Boundary boulder', 'sphere', [-24 + i * 5.2, 1, -27], [3 + i % 2, 2.3, 2.8], '#839787', [0, i, 0]);
+  return { objects, prop, tree };
+}
+
+/** The meadow's late-summer afternoon. Shared by both packages that ship this zone. */
+export const emberMeadowEnvironment = (): SceneEnvironmentSettings => ({ ...defaultSceneEnvironment(),
+  skyTopColor: '#76aead', skyHorizonColor: '#e3d4a6', skyGroundColor: '#5c7a6b', sunColor: '#ffedc6', sunIntensity: 2,
+  sunAzimuth: 140, sunElevation: 40, fogColor: '#bac7a8', fogNear: 35, fogFar: 85, contactShadows: false,
+  ambientMode: 'hemisphere', environmentIntensity: .8 });
+
+/** The five public Titan client settings every realm project carries as project variables. */
+export const titanSettingsVariables = (prefix: string): ProjectVariable[] =>
+  (Object.keys(TITAN_SETTINGS) as (keyof typeof TITAN_SETTINGS)[]).map(key => ({ id: `${prefix}${key}`, name: TITAN_SETTINGS[key], type: 'string' as const, defaultValue: defaultTitanSettings[key], persistent: false, createdAt: 1767225600000 }));
+
+/** Pure package authoring: ordinary editable scenery, with no installed-editor-plugin dependency. */
+export function emberMeadowContent() {
+  const { objects, tree } = emberMeadowScenery();
   return {
-    scenes: [{ id: 'scene-ember-meadow', name: 'Ember Meadow', objects, environment: { ...defaultSceneEnvironment(),
-      skyTopColor: '#76aead', skyHorizonColor: '#e3d4a6', skyGroundColor: '#5c7a6b', sunColor: '#ffedc6', sunIntensity: 2,
-      sunAzimuth: 140, sunElevation: 40, fogColor: '#bac7a8', fogNear: 35, fogFar: 85, contactShadows: false,
-      ambientMode: 'hemisphere' as const, environmentIntensity: .8 } }],
+    scenes: [{ id: 'scene-ember-meadow', name: 'Ember Meadow', objects, environment: emberMeadowEnvironment() }],
     treeSpecs: [tree],
-    variables: (Object.keys(TITAN_SETTINGS) as (keyof typeof TITAN_SETTINGS)[]).map(key => ({ id: `ember-${key}`, name: TITAN_SETTINGS[key], type: 'string' as const, defaultValue: defaultTitanSettings[key], persistent: false, createdAt: 1767225600000 })),
+    variables: titanSettingsVariables('ember-'),
   };
 }

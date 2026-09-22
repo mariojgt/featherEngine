@@ -74,11 +74,11 @@ test('standalone desktop realm needs no Node, stops with editor, and restores ch
     player.socket.send(JSON.stringify({ type: 'move', x: 0, z: 0 }));
     player.socket.send(JSON.stringify({ type: 'interact' }));
     await new Promise(done => setTimeout(done, 100));
-    assert.equal(player.state().players[0].quest, 'active');
+    assert.equal(player.state().players[0].quests['light-in-the-meadow'].state, 'active');
     const identity = player.state().selfId, resume = player.auth.resume;
     await realm.stop(); realm = undefined; player.socket.terminate();
     realm = await run(); player = await joinRealm(realm.url, resume);
-    assert.equal(player.state().selfId, identity); assert.equal(player.state().players[0].quest, 'active');
+    assert.equal(player.state().selfId, identity); assert.equal(player.state().players[0].quests['light-in-the-meadow'].state, 'active');
     await realm.stop(); realm = undefined;
   } finally { player?.socket.terminate(); realm?.child.kill(); await rm(dir, { recursive: true, force: true }); }
 });

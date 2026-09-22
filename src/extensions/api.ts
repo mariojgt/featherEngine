@@ -24,7 +24,14 @@ import {
   type FeatherModelStarterInfo,
   type FeatherObjectCreateOptions,
   type FeatherPluginAPI,
+  type TitanStarterTemplate,
 } from './types';
+
+/** Store slug + project name of each Titan starter `api.titan.openStarter` can create. */
+const TITAN_STARTERS: Record<TitanStarterTemplate, { slug: string; name: string }> = {
+  'ember-meadow': { slug: 'ember-meadow', name: 'Ember Meadow' },
+  'sunlit-reach': { slug: 'sunlit-reach', name: 'Sunlit Reach' },
+};
 
 type TrackDisposer = (disposer: FeatherDispose) => FeatherDispose;
 
@@ -399,14 +406,15 @@ export function createFeatherPluginAPI(
         });
         return settings;
       },
-      openStarter: async () => {
+      openStarter: async (template: TitanStarterTemplate = 'ember-meadow') => {
         if (!canEditCollaborativeProject()) throw new Error('This shared project is read-only for viewers.');
         if (useEditorStore.getState().isPlaying) throw new Error('Stop Play before opening the starter.');
+        const starter = TITAN_STARTERS[template] ?? TITAN_STARTERS['ember-meadow'];
         if (useEditorStore.getState().isDirty) {
           const { confirmAction } = await import('../store/confirmStore');
-          if (!await confirmAction({ title: 'Open Ember Meadow?', message: 'This creates a new project. Save any changes in your current project before continuing.', confirmLabel: 'Create project' })) return false;
+          if (!await confirmAction({ title: `Open ${starter.name}?`, message: 'This creates a new project. Save any changes in your current project before continuing.', confirmLabel: 'Create project' })) return false;
         }
-        return useProjectStore.getState().newProjectFromPackageUrl('store/packages/projects/ember-meadow.nfpack', 'Ember Meadow');
+        return useProjectStore.getState().newProjectFromPackageUrl(`store/packages/projects/${starter.slug}.nfpack`, starter.name);
       },
       startRealm: async () => {
         requireEditableProject();
@@ -421,7 +429,7 @@ export function createFeatherPluginAPI(
       play: async () => {
         requireEditableProject();
         const state = useEditorStore.getState();
-        if (!isTitanScene(selectActiveObjects(state))) throw new Error('Open the Ember Meadow scene before playing.');
+        if (!isTitanScene(selectActiveObjects(state))) throw new Error('Open a realm scene (one carrying the Titan runtime marker) before playing.');
         const gameId = activeExportProfile(state.exportSettings).application.identifier;
         const settings = validateTitanSettings(readTitanSettings(state.variables));
         const storageId = (await sha256Hex(new TextEncoder().encode(`${gameId}:${settings.baseUrl}:${settings.gameKey}`))).slice(0, 24);

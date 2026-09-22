@@ -22,6 +22,7 @@ import { readPackageFile, writePackageArchive } from '../src/project/packageArch
 // a side effect of building the store.
 import uiKits from '../src/store-assets/uiKits.json';
 import { emberMeadowContent } from '../src/titan/starter';
+import { sunlitReachContent } from '../src/titan/sunlitReach';
 import { zipSync } from 'fflate';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1247,6 +1248,21 @@ async function buildEmberMeadowPack() {
       tags: ['project', 'mmo', 'rpg', 'multiplayer', 'titan', 'beginner'], thumbnail: thumbnail('#d7b36c', '#22564c', '✧') } };
 }
 
+/**
+ * The three-zone template. Same two bundled assets as Ember Meadow (one animated adventurer, one
+ * sword) — the extra content is scenes, not megabytes — and no server ZIP: the Titan panel starts
+ * a managed realm, so nobody needs the source server to play all three zones.
+ */
+async function buildSunlitReachPack() {
+  const avatar = await externalAsset('sunlit-avatar', 'templates/UAL1.glb', 'model');
+  const sword = await externalAsset('sunlit-sword', 'templates/Sword.glb', 'model');
+  return { slug: 'sunlit-reach', kind: 'project', content: sunlitReachContent(),
+    assets: [avatar.asset, sword.asset], assetBytes: new Map([[avatar.asset.id, avatar.bytes], [sword.asset.id, sword.bytes]]),
+    meta: { id: 'pkg-feather-sunlit-reach', name: 'Sunlit Reach — Mini MMO', version: '1.0.0', author: 'Feather / TheDevRealm', license: 'MIT + bundled asset licenses',
+      description: 'A free three-zone MMO template: Warrior, Ranger and Mage classes with their own abilities, a hub village with a vendor, the Thornwood, and Cinder Keep with a telegraphed boss. Three chapter quests, waystone travel between zones, zone chat, an intro cinematic per zone, saved progress and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.',
+      tags: ['project', 'mmo', 'rpg', 'multiplayer', 'titan', 'classes', 'boss', 'cinematic'], thumbnail: thumbnail('#e0803f', '#2b1b3d', '\u265B') } };
+}
+
 async function main() {
   // One folder per kind, so what a package IS is obvious from where it lives — both here and in
   // whatever bucket this is eventually mirrored into.
@@ -1266,6 +1282,7 @@ async function main() {
         tags: ['plugin', 'backend', 'mmo', 'multiplayer', 'login', 'titan'], license: 'MIT', thumbnail: thumbnail('#a28b4c', '#153e3b', 'T') },
     },
     await buildEmberMeadowPack(),
+    await buildSunlitReachPack(),
   ];
   const entries = [];
   for (const pack of packs) {

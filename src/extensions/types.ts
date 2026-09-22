@@ -87,12 +87,16 @@ export interface FeatherModelPlaceOptions {
   name?: string;
 }
 
+/** The Titan starters a plugin can open: the one-zone first quest, or the three-zone mini MMO. */
+export type TitanStarterTemplate = 'ember-meadow' | 'sunlit-reach';
+
 export interface FeatherPluginAPI {
   /** Titan setup persists only public client settings; player credentials stay in the runtime. */
   readonly titan: {
     settings(): TitanProjectSettings;
     configure(settings: TitanSettingsInput): TitanProjectSettings;
-    openStarter(): Promise<boolean>;
+    /** Open a Titan starter as a NEW project. Defaults to the one-zone Ember Meadow starter. */
+    openStarter(template?: TitanStarterTemplate): Promise<boolean>;
     startRealm(): Promise<TitanRealmStatus>;
     stopRealm(): Promise<TitanRealmStatus>;
     realmStatus(): Promise<TitanRealmStatus>;

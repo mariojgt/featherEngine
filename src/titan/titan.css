@@ -21,3 +21,69 @@
 .titan-walkthrough{margin:20px 0;padding:18px;border:1px solid #bda97045;border-radius:9px;background:#dfc17c08;font-size:12px;line-height:1.7;color:#bbccc1}
 .titan-walkthrough>strong{display:block;color:#efdab0;font-size:13px;margin-bottom:10px}.titan-walkthrough ol{margin:0;padding-left:19px;line-height:1.7}.titan-walkthrough li{padding:4px 0 7px 5px}.titan-walkthrough b{color:#e4eada}.titan-walkthrough p:last-child{margin-bottom:0}.titan-walkthrough a{padding:0;border:0;background:none;margin:9px 0 0;color:#e9cc8c;font-size:11px;text-decoration:underline;text-underline-offset:3px}
 .titan-wizard .titan-field-help{font-size:11px;margin:-8px 0 18px;overflow-wrap:anywhere}.titan-field-help code{color:#e0d5aa}.titan-setup-help{margin-top:14px;border:1px solid #809b8033;border-radius:7px;padding:12px;color:#b7c9bd;font-size:11px;line-height:1.7}.titan-setup-help summary{cursor:pointer;color:#e5cf9b;font-weight:600}.titan-setup-help ul{padding-left:18px;margin-bottom:0}.titan-setup-help li{margin:9px 0}.titan-setup-help strong{color:#e5e9d6}.titan-connection-map{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:14px 0}.titan-connection-map span{flex:1;min-width:0;padding:9px 4px;background:#112725;border-radius:6px;color:#eedcaf;text-align:center;font-size:10px}.titan-connection-map small{color:#a2b9aa;font-size:9px}.titan-connection-map>svg{flex-shrink:0;color:#af9865}
+
+/* --- The Sunlit Reach: class select, zones, boss, chat and the quest log ------------------------ */
+.titan-classes{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:14px 0 6px}
+.titan-hud .titan-class-option{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:3px;padding:10px 9px;background:#0e2224;border-color:#b5ad7342}
+.titan-hud .titan-class-option[aria-pressed=true]{border-color:#e6c477;background:#31433a}
+.titan-class-option>span{font:20px Georgia,serif;color:#e9c87f}
+.titan-class-option strong{font-size:11px}
+.titan-class-option small{font-size:9px;line-height:1.45;color:#a9bcae;display:none}
+.titan-hud .titan-class-option[aria-pressed=true] small{display:block}
+.titan-xp{height:4px;border-radius:3px;background:#0d1a17;margin:4px 0;width:155px;overflow:hidden}
+.titan-xp i{display:block;height:100%;background:linear-gradient(90deg,#8d6ecb,#d6b6f0);transition:width .2s}
+.titan-boss{position:absolute;top:118px;left:50%;transform:translateX(-50%);width:330px;padding:10px 14px;text-align:center;border-color:#d88a6a66}
+.titan-boss strong{font:17px Georgia,serif;color:#ffd9b6}
+.titan-boss-health{height:9px;border-radius:3px;background:#2a1513;margin:6px 0 5px;overflow:hidden;border:1px solid #d8724b40}
+.titan-boss-health i{display:block;height:100%;background:linear-gradient(90deg,#b8391f,#ef8c4f);transition:width .2s}
+.titan-boss small{font-size:9px;letter-spacing:1px;color:#ffc4a6}
+.titan-quest-other{font-size:10px!important;color:#9fb7a7!important;border-top:1px solid #a0ae7922;padding-top:9px}
+.titan-hud .titan-questlog-toggle{width:100%;margin-top:14px;font-size:9px;padding:7px;letter-spacing:1px;background:#0e2224}
+.titan-questlog{list-style:none;margin:12px 0 0;padding:0;border-top:1px solid #a0ae792a}
+.titan-questlog li{padding:9px 0;border-bottom:1px solid #a0ae7918}
+.titan-questlog strong{display:block;font-size:11px;color:#eddfb6}
+.titan-questlog small{display:block;font-size:9px;color:#9fb3a4;margin-top:3px}
+.titan-questlog .titan-done strong{color:#91d7ac}
+.titan-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:12px 0}
+.titan-slot{display:flex;flex-direction:column;align-items:center;text-align:center;gap:3px;padding:6px 4px;border:1px solid #b6ab6829;border-radius:5px;background:#0e21201f}
+.titan-slot .titan-item-icon{min-width:30px;height:30px;font-size:17px}
+.titan-slot small{display:block;font-size:7px;letter-spacing:1.3px;text-transform:uppercase;color:#9db3a5}
+.titan-slot strong{font-size:9px;line-height:1.3;overflow-wrap:anywhere}
+.titan-slot button{font-size:8px;padding:3px 6px}
+.titan-item-quest{opacity:.62}
+.titan-item-tag{font-size:8px;letter-spacing:1px;color:#8fa79a;text-transform:uppercase}
+.titan-shop{border-top:1px solid #d3b46540;margin-top:14px;padding-top:12px}
+.titan-shop article{display:flex;gap:10px;align-items:center;padding:10px 0}
+.titan-shop article>div{flex:1}
+.titan-shop strong{font-size:11px;display:block}
+.titan-shop small{font-size:9px;color:#a9bca9;line-height:1.5}
+.titan-shop button{font-size:9px;padding:6px 9px}
+.titan-chat{position:absolute;left:20px;bottom:20px;width:268px;padding:11px 13px}
+.titan-chat-log{list-style:none;margin:8px 0;padding:0;max-height:118px;overflow:auto;font-size:10px;line-height:1.65;color:#dfe6d5}
+.titan-chat-log li{margin:2px 0;overflow-wrap:anywhere}
+.titan-chat-log b{color:#a9cbb4;font-weight:600}
+.titan-chat-log .titan-chat-self{color:#efcd86}
+.titan-chat input{width:100%;background:#091b1c;color:#f5ecd7;border:1px solid #b5ad7342;border-radius:4px;padding:7px 9px}
+.titan-chat>small{display:block;font-size:9px;color:#8fa79a;margin-top:7px}
+.titan-zone-title{position:absolute;left:6%;bottom:26%;pointer-events:none;text-shadow:0 3px 18px #0415128c;animation:titan-zone-in .5s ease-out}
+.titan-zone-title strong{display:block;font:500 clamp(30px,5cqw,62px)/1 Georgia,serif;color:#fff3d6;letter-spacing:-1.5px}
+.titan-zone-title small{display:block;font-size:10px;letter-spacing:3px;color:#e3cf9c;margin-top:10px;text-transform:uppercase}
+@keyframes titan-zone-in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.titan-hud .titan-skip{position:absolute;right:24px;bottom:24px;pointer-events:auto;font-size:10px;letter-spacing:1.4px;background:#0a191cdd}
+.titan-hud .titan-ability{position:relative;overflow:hidden}
+.titan-cooldown{position:absolute;left:0;right:0;bottom:0;display:grid;place-items:center;background:#03100fb0;font-style:normal;pointer-events:none}
+.titan-cooldown b{font:9px system-ui;color:#ffe2a4}
+.titan-marker{font:20px/1 Georgia,serif;color:#ffd979;text-shadow:0 2px 8px #0b1c18,0 0 14px #e0b35f88;pointer-events:none}
+.titan-marker-dim{color:#93a49b;text-shadow:0 2px 6px #0b1c18}
+.titan-label-self{border-color:#e6c47b90}
+.titan-label-boss{border-color:#df8b6480;background:#26110dd9}
+.titan-label .titan-enemy-health{width:86px;margin-left:auto;margin-right:auto}
+.titan-locked{color:#a9b5ad}
+.titan-locked small{color:#93a49b}
+/* Keep the middle of the frame free for a cinematic's own title cards. */
+.titan-login[data-cinematic=true]{background:linear-gradient(270deg,#081c21e8 30%,transparent);justify-content:flex-end}
+.titan-login[data-cinematic=true] .titan-title,.titan-login[data-cinematic=true] .titan-login-footer{display:none}
+@container (max-width:800px){.titan-chat{width:216px;bottom:14px;left:14px}.titan-chat-log{max-height:74px}.titan-boss{width:270px;top:104px}.titan-class-option small{display:none!important}.titan-zone-title strong{font-size:34px}}
+@container (max-height:650px){.titan-chat{max-height:150px;overflow:hidden}.titan-chat-log{max-height:56px}.titan-boss{top:96px;padding:7px 12px}}
+@container (max-width:550px){.titan-chat{display:none}.titan-classes{gap:4px}.titan-hud .titan-class-option{padding:7px 5px}.titan-zone-title{bottom:34%}}
+.titan-label-hint{color:#e7f0d7!important;opacity:.85}

@@ -184,7 +184,7 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
     case 'feather.titan.configure':
       return 'Configured Titan';
     case 'feather.titan.open-starter':
-      return 'Opened Ember Meadow';
+      return 'Opened MMO starter';
     case 'list_plugins':
       return 'Listed plugins';
     case 'set_plugin_enabled':

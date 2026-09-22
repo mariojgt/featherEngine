@@ -91,32 +91,32 @@ try {
     try{while(performance.now()<deadline){const s=useRealm.getState().snapshot;const p=s.players.find(p=>p.id===s.selfId);const dx=x-p.x,dz=z-p.z;if(Math.hypot(dx,dz)<.7)return;
       const needed=new Set([...(Math.abs(dx)>.35?[dx>0?'KeyD':'KeyA']:[]),...(Math.abs(dz)>.35?[dz>0?'KeyS':'KeyW']:[])]);
       for(const c of pressed)if(!needed.has(c)){key(c,false);pressed.delete(c);}for(const c of needed)if(!pressed.has(c)){key(c,true);pressed.add(c);}
-      if(performance.now()-attack>650){key('Space',true);key('Space',false);attack=performance.now();if(p.health<55){key('Digit2',true);key('Digit2',false);}}
+      if(performance.now()-attack>650){key('Space',true);key('Space',false);attack=performance.now();if(p.health<55){key('Digit3',true);key('Digit3',false);}}
       await new Promise(r=>setTimeout(r,100));}throw new Error('Walking timed out');}finally{for(const c of pressed)key(c,false);}
   }`);
-  if ((await hero()).quest !== 'complete') {
-    await app.evaluate('window.__titanWalk(0,-3)'); await click('.titan-actions button:nth-child(2)');
+  if ((await hero()).quests['light-in-the-meadow']?.state !== 'complete') {
+    await app.evaluate('window.__titanWalk(0,-3)'); await click('.titan-actions button:nth-child(3)');
     await app.waitFor(`document.querySelector('.titan-quest')?.textContent.includes('Gather sun shards')`);
-    for (const [x, z] of [[-6, -8], [6, -11], [2, -17]]) { await app.evaluate(`window.__titanWalk(${x},${z})`); await click('.titan-actions button:nth-child(2)'); }
+    for (const [x, z] of [[-6, -8], [6, -11], [2, -17]]) { await app.evaluate(`window.__titanWalk(${x},${z})`); await click('.titan-actions button:nth-child(3)'); }
     await app.evaluate(`(async()=>{const {useRealm,realmCommand}=await import('/src/titan/session.ts');const start=performance.now();while(performance.now()-start<25000){
-      const s=useRealm.getState().snapshot,p=s.players.find(p=>p.id===s.selfId);if(p.kills>=2)return;
+      const s=useRealm.getState().snapshot,p=s.players.find(p=>p.id===s.selfId);if((p.quests['light-in-the-meadow']?.progress?.[1]??0)>=2)return;
       const e=s.enemies.filter(e=>e.health>0).sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z))[0];
       if(e&&Math.hypot(e.x-p.x,e.z-p.z)>2.5)await window.__titanWalk(e.x,e.z);realmCommand({type:'attack'});if(p.health<55)realmCommand({type:'potion'});await new Promise(r=>setTimeout(r,650));}throw new Error('Combat timed out');})()`);
-    await app.evaluate('window.__titanWalk(0,-3)'); await click('.titan-actions button:nth-child(2)');
+    await app.evaluate('window.__titanWalk(0,-3)'); await click('.titan-actions button:nth-child(3)');
   }
   await app.waitFor(`document.querySelector('.titan-quest').textContent.includes('CHAPTER COMPLETE')`);
-  await click('.titan-actions button:nth-child(4)');
+  await click('.titan-actions button:nth-child(5)');
   await app.waitFor(`document.querySelector('.titan-bag')`);
-  if ((await hero()).equipped !== 'warden-blade') await click('.titan-items article:nth-child(2) button');
+  if ((await hero()).equipped.weapon !== 'warden-blade') await click('.titan-items article:nth-child(2) button');
   await app.waitFor(`document.querySelector('.titan-items article:nth-child(2)').textContent.includes('Equipped')`);
   pass('Quest gathering, combat, rewards and equipping earned equipment work online');
-  await click('.titan-actions button:nth-child(5)');
+  await click('.titan-actions button:nth-child(6)');
   await app.waitFor(`document.querySelector('.titan-notice').textContent.includes('Titan cloud')`, { label: 'live cloud save' });
   const cloudResponse = await fetch(`${credentials.baseUrl.replace(/\/+$/, '').replace(/\/functions\/v1$/, '')}/functions/v1/game-saves/ember-meadow`, { headers: { 'X-Game-Key': credentials.gameKey, 'X-Player-Token': sessions.player, Authorization: `Bearer ${sessions.player}` } });
   assert.equal(cloudResponse.status, 200);
   const cloudBody = await cloudResponse.json(); const saved = typeof cloudBody.data === 'string' ? JSON.parse(cloudBody.data) : cloudBody.data;
   const completed = await hero();
-  assert.equal(saved.quest, 'complete'); assert.equal(saved.equipped, completed.equipped); assert.equal(saved.gold, completed.gold); assert.ok(saved.kills >= 2);
+  assert.equal(saved.quests['light-in-the-meadow'].state, 'complete'); assert.deepEqual(saved.equipped, completed.equipped); assert.equal(saved.gold, completed.gold); assert.ok(saved.quests['light-in-the-meadow'].progress[1] >= 2);
   pass('Saved quest, gold and equipment read back from the real Titan cloud API');
   await click('.titan-menu'); await click('.titan-secondary');
   await app.waitFor(`document.querySelector('.titan-quest')?.textContent.includes('CHAPTER COMPLETE')`);
@@ -135,7 +135,7 @@ try {
   await app.waitFor(`document.querySelector('.titan-secondary')`);
   assert.equal((await bridge()).storageId, realm.storageId);
   await click('.titan-secondary'); await app.waitFor(`document.querySelector('.titan-quest')?.textContent.includes('CHAPTER COMPLETE')`);
-  const restored = await hero(); assert.equal(restored.id, firstId); assert.equal(restored.equipped, completed.equipped); assert.equal(restored.gold, completed.gold);
+  const restored = await hero(); assert.equal(restored.id, firstId); assert.deepEqual(restored.equipped, completed.equipped); assert.equal(restored.gold, completed.gold);
   pass('Server restart restores the same Titan character, quest, gold and equipment');
   assert.deepEqual(await app.evaluate('window.__titanErrors'), []);
   await writeFile('artifacts/titan/live-report.json', JSON.stringify({ passed: true, checks, anonymousTestPlayers: 2, checkedAt: new Date().toISOString() }, null, 2));
