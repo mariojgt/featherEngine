@@ -1,4 +1,4 @@
-import type { ProjectVariable, SceneObject } from '../types';
+import type { ProjectVariable, Scene, SceneObject } from '../types';
 import { validateHttpUrl } from './client';
 
 export const TITAN_PLUGIN_ID = 'feather.titan';
@@ -34,6 +34,14 @@ export function validateTitanSettings(settings: TitanSettingsInput): TitanProjec
   return { realmUrl, baseUrl, gameKey, publishMode, gameOrigin };
 }
 export const isTitanScene = (objects: readonly SceneObject[]) => objects.some(o => o.kind === 'empty' && o.name === TITAN_SCENE_MARKER);
+/** Zone scenes of the Sunlit Reach template carry an empty named `Realm zone · <zoneId>`; a Titan scene without one is the home zone. */
+export const TITAN_ZONE_MARKER = 'Realm zone · ';
+export const TITAN_HOME_ZONE = 'ember-meadow';
+export const zoneOfScene = (objects: readonly SceneObject[]): string =>
+  objects.find(o => o.kind === 'empty' && o.name.startsWith(TITAN_ZONE_MARKER))?.name.slice(TITAN_ZONE_MARKER.length).trim() || TITAN_HOME_ZONE;
+/** zoneId → sceneId for every Titan scene in the project (the zones this build can travel to). */
+export const titanZoneScenes = (scenes: readonly Scene[]): Record<string, string> =>
+  Object.fromEntries(scenes.filter(scene => isTitanScene(scene.objects)).map(scene => [zoneOfScene(scene.objects), scene.id]));
 
 export interface TitanRealmConfig {
   version: 1; gameId: string; titanUrl: string; gameKey: string; origins: string; host: string; port: number;

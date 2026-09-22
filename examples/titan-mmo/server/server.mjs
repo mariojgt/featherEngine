@@ -59,7 +59,7 @@ export async function startRealm(options = {}) {
     // Public readiness contains no credentials; the editor can test a hosted realm before deployment.
     if (req.method === 'GET' && req.url === '/health') {
       res.setHeader('Access-Control-Allow-Origin', '*');
-      return reply(200, { name: 'Ember Meadow', protocol: 1, gameId: options.gameId, authMode: titan ? 'titan' : 'local', players: world.players.size, capacity: 32 });
+      return reply(200, { name: 'The Sunlit Reach', protocol: 2, gameId: options.gameId, authMode: titan ? 'titan' : 'local', players: world.players.size, capacity: 32 });
     }
     if (!allowed(origin)) return reply(403, { message: 'Origin is not in ALLOWED_ORIGINS.' });
     if (req.method === 'OPTIONS') return reply(204, {});
@@ -105,7 +105,7 @@ export async function startRealm(options = {}) {
   wss.on('error', () => {}); // Listen failures are reported by server.listen's rejected promise.
   wss.on('connection', (ws, req) => {
     if (!allowed(req.headers.origin) || req.url !== '/realm' || wss.clients.size > 40) { ws.close(1008, 'Realm unavailable'); return; }
-    let session; let burst = 0; let windowAt = Date.now(); let saving = false;
+    let session; let burst = 0; let windowAt = Date.now(); let saving = false; let lastSay = 0; let chatId = 0;
     const authTimer = setTimeout(() => ws.close(1008, 'Login timed out'), 5000);
     const send = data => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data)); };
     ws.on('error', () => {});
@@ -121,7 +121,9 @@ export async function startRealm(options = {}) {
           if (world.players.size >= 32) throw new Error('The realm is full.');
           if (peers.has(ticket.id)) throw new Error('This character is already connected. Use another browser profile for a second player.');
           session = ticket; clearTimeout(authTimer);
-          world.join(session.id, session.name, records[session.id]?.progress); peers.set(session.id, ws);
+          // The client may state its class for a new character and which zone scenes its build contains.
+          const zones = Array.isArray(command.zones) ? command.zones.filter(zone => typeof zone === 'string').slice(0, 16) : undefined;
+          world.join(session.id, session.name, records[session.id]?.progress, { class: typeof command.class === 'string' ? command.class : undefined, zones }); peers.set(session.id, ws);
           send({ type: 'snapshot', data: world.snapshot(session.id) }); return;
         }
         if (command?.type === 'save') {
@@ -131,6 +133,18 @@ export async function startRealm(options = {}) {
             if (session.titanToken) await titanRequest('game-saves/ember-meadow', { data: saveHero(world.players.get(session.id)) }, session.titanToken, 'PUT');
             send({ type: 'notice', message: session.titanToken ? 'Progress saved to the realm and Titan cloud.' : 'Progress saved to the realm.' });
           } finally { saving = false; }
+        } else if (command?.type === 'say') {
+          // Zone chat: sanitized, rate limited, delivered to everyone in the sender's zone (including the sender).
+          const text = String(command.text ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 140);
+          if (!text) return;
+          if (Date.now() - lastSay < 1200) { send({ type: 'error', message: 'Slow down a little before chatting again.' }); return; }
+          lastSay = Date.now();
+          const hero = world.players.get(session.id);
+          const message = { type: 'chat', id: ++chatId, from: session.name, text, at: world.time, zone: hero?.zone };
+          for (const [id, peer] of peers) {
+            const other = world.players.get(id);
+            if (other?.zone === message.zone && peer.readyState === WebSocket.OPEN) peer.send(JSON.stringify({ ...message, self: id === session.id }));
+          }
         } else world.command(session.id, command);
       } catch (error) { send({ type: 'error', message: error.message }); if (!session) ws.close(1008, 'Join failed'); }
     });

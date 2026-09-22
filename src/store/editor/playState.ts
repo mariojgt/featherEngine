@@ -280,6 +280,7 @@ export const applySetPlaying = (
         runtimeUITextOverrides: {},
         runtimeUIVisibleOverrides: {},
         runtimeCinematic: undefined,
+        runtimeSceneRequest: undefined,
         runtimeCinematicCamera: undefined,
         runtimeCinematicFade: undefined,
         runtimeCinematicLook: undefined,

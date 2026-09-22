@@ -944,6 +944,8 @@ export interface EditorState {
   /** Runtime element visibility overrides written by ui.setVisible, keyed by `${docId}:${elementId}`. Play-only. */
   runtimeUIVisibleOverrides: Record<string, boolean>;
   runtimeCinematic?: RuntimeCinematicState;
+  /** A runtime request (Titan zone travel, plugins) to switch the active scene at the end of the current tick. Play-only. */
+  runtimeSceneRequest?: string;
   runtimeCinematicCamera?: RuntimeCinematicCamera;
   runtimeCinematicFade?: RuntimeCinematicFade;
   /** The active cinematic's film look (letterbox/grade/grain) while playing; drives CinematicOverlay. */
@@ -1334,6 +1336,8 @@ export interface EditorState {
   clearCinematicPreview: () => void;
   playCinematic: (cinematicId: string) => void;
   stopCinematic: () => void;
+  /** Ask the runtime to switch scenes at the end of this tick, like a Load Scene node (only while Playing). */
+  requestSceneLoad: (sceneId: string) => void;
   attachScript: (id: string, nextBlueprintId?: string) => void;
   /** One-click behavior: compile the preset's FeatherScript into a (shared) blueprint, apply the
    *  collider it needs, ensure its project variables, and attach it. Returns the blueprintId. */
@@ -1710,6 +1714,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   runtimeUITextOverrides: {},
   runtimeUIVisibleOverrides: {},
   runtimeCinematic: undefined,
+  runtimeSceneRequest: undefined,
   runtimeCinematicCamera: undefined,
   runtimeCinematicFade: undefined,
   runtimeCinematicLook: undefined,
@@ -1926,6 +1931,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   clearCinematicPreview: () => applyClearCinematicPreview(set),
   playCinematic: (cinematicId) => applyPlayCinematic(set, get, cinematicId),
   stopCinematic: () => applyStopCinematic(set),
+  requestSceneLoad: (sceneId) => set((state) => (state.isPlaying && sceneId !== state.activeSceneId && state.scenes.some((scene) => scene.id === sceneId) ? { runtimeSceneRequest: sceneId } : state)),
   attachScript: (id, nextBlueprintId) => applyAttachScript(set, id, nextBlueprintId),
   updateSceneStreaming: (patch) => applyUpdateSceneStreaming(set, patch),
   attachBehaviorPreset: (objectId, presetId) => applyAttachBehaviorPreset(set, get, objectId, presetId),
