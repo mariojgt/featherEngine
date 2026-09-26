@@ -88,6 +88,19 @@ export class CdpSession {
   }
 
   call(method, params = {}) {
+    const first = this.sendCommand(method, params);
+    if (method !== 'Page.captureScreenshot') return first;
+    // In CI a headless SwiftShader capture timed out, then a fresh capture succeeded.
+    // Retry that read once;
+    // never replay input/mutation commands or suppress a second screenshot failure.
+    return first.catch((error) => {
+      if (error.message !== `CDP command timed out: ${method}`) throw error;
+      console.warn('Retrying timed-out browser screenshot once.');
+      return this.sendCommand(method, params);
+    });
+  }
+
+  sendCommand(method, params) {
     if (this.closed || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Chrome DevTools connection closed'));
     }
