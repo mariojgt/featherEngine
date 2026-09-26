@@ -112,3 +112,12 @@ Source: [`verdantTemplate.ts`](../src/project/verdantTemplate.ts) authors the
 scene and score cues; [`verdantLayout.ts`](../src/project/verdantLayout.ts)
 defines the landscape and cameras. The in-editor assistant also supports
 `create_verdant_template`.
+
+## Final delivery validation — 26 September 2026
+
+The final Epic capture contains all 1,152 frames at 1920 × 1080 / 24 fps,
+48 seconds of stereo AAC audio, and no recorded browser or shader errors.
+The visual archive passed package integrity checks with 13 embedded assets
+and no audio references. The merged engine passed all 1,050 tests in 155 files
+and the production editor/player build. Launcher acceptance and Creator Mode
+browser checks passed, including current Titan templates.
