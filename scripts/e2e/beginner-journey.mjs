@@ -21,8 +21,12 @@ try {
   await app.page.call('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDir });
   await app.page.call('Network.enable');
   await app.page.call('Network.setBlockedURLs', { urls: ['*/store/catalog.json'] });
+  // Page.reload acknowledges the request before replacing the old document. Its launcher
+  // already has this button, so checking the selector alone can race screenshot capture
+  // against navigation. Wait for the old window marker to disappear as well.
+  await app.evaluate('window.__featherBeforeOfflineReload = true');
   await app.page.call('Page.reload', { ignoreCache: true });
-  await app.waitFor(`document.querySelector('[data-quick-start="platformer"]')`);
+  await app.waitFor(`!window.__featherBeforeOfflineReload && document.querySelector('[data-quick-start="platformer"]')`);
   await shot(app.page, 'launcher-1280');
   await app.evaluate(`document.querySelector('[data-quick-start="platformer"]').scrollIntoView({ block: 'center' })`);
   await app.realClick('[data-quick-start="platformer"]');
@@ -165,7 +169,10 @@ try {
     await until(`(() => { const p = document.querySelector('.journey-player-position').textContent.split(',').map(Number); return Math.hypot(p[0]-(${before[0]}),p[2]-(${before[2]})) > 1; })()`, 'Exported player movement');
     await press('KeyW', 'w', 'keyUp'); console.log('Player moved to', await position());
     await press('KeyP', 'p'); await press('KeyP', 'p', 'keyUp');
-    await until(`document.querySelector('.cloudstep-game-menu')?.textContent.includes('Take a breather')`, 'Pause menu');
+    await until(`(() => { const menu = document.querySelector('.cloudstep-game-menu'); return menu?.offsetHeight > 0 && menu.textContent.includes('Take a breather'); })()`, 'Visible pause menu');
+    // The Update readout samples before physics. Let it publish the pause frame's final
+    // transform and React commit it before measuring that subsequent paused ticks stay still.
+    await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     const paused = await position(); await delay(600); assert.deepEqual(await position(), paused, 'Paused physics stays still');
     await shot(browser.page, `player-pause-${label}`);
     await evaluate(`[...document.querySelectorAll('.cloudstep-menu-button')].find((b) => b.textContent === 'Restart course').click()`);
