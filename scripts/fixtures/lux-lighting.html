@@ -29,7 +29,7 @@ window.luxQA={
   stop(){cache?.dispose();cache=null;},
   color(color){emitter.material.color.set(color);emitter.material.emissive.set(color);},
   indirect(value){settings.indirectIntensity=value;}, reflections(value){settings.reflections=value;},
-  status(){return cache ? {...cache.status,maxFaces}:null;},
+  status(){return cache ? {...cache.status,active:cache.uniforms.luxActive.value,maxFaces}:null;},
   pixels(){return {diffuse:sample(new THREE.Vector3(-0.5,0,1.4)),metal:sample(metal.position.clone().add(new THREE.Vector3(-0.45,0,0.52)))};},
   resources(){return {...renderer.info.memory};},
   hooks(){return receiver.material.customProgramCacheKey();},

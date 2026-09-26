@@ -9,12 +9,15 @@ const out=resolve('exports/lux-acceptance');await mkdir(out,{recursive:true});
 const {page,dispose}=await launch({width:960,height:640});
 const evaluate=async(expression)=>{const r=await page.call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description??r.exceptionDetails.text);return r.result.value;};
 const wait=async(expression)=>{const end=Date.now()+90000;while(Date.now()<end){if(await evaluate(expression).catch(()=>false))return;await delay(200);}throw new Error(`Timed out: ${expression}; ${JSON.stringify(await evaluate('window.luxQA?.status()'))}`);};
+// Capture completion publishes asynchronously; activation/fade happens on subsequent frames.
+// SwiftShader can take longer than a fixed 500ms delay to render that first active frame.
+const waitActive=async(captures=1)=>wait(`luxQA.status().captures >= ${captures} && luxQA.status().active >= 1`);
 const shot=async(name)=>{const r=await page.call('Page.captureScreenshot',{format:'png'});await writeFile(resolve(out,`${name}.png`),Buffer.from(r.data,'base64'));};
 if (!process.argv.includes('--editor-only')) try {
   await page.call('Page.navigate',{url:`${baseUrl}/scripts/fixtures/lux-lighting.html`});
   await wait('window.luxQA');await delay(1000);
   const baseline=await evaluate('luxQA.pixels()');await shot('01-authored');
-  await evaluate('luxQA.start()');await wait('luxQA.status().captures >= 2');await delay(700);
+  await evaluate('luxQA.start()');await waitActive(2);await delay(700);
   await writeFile(resolve(out,'shaders.json'),JSON.stringify(await evaluate('luxQA.sources')));
   assert.deepEqual(await evaluate('luxQA.errors'),[],'Lux shaders compile on real WebGL');
   const red=await evaluate('luxQA.pixels()');await shot('02-red-bounce');
@@ -37,9 +40,9 @@ if (!process.argv.includes('--editor-only')) try {
   const restored=await evaluate('luxQA.pixels()');
   assert.deepEqual(restored.diffuse,baseline.diffuse,'Disabling restores original direct/ambient light exactly');
   const idle=await evaluate('luxQA.resources()');
-  for(let i=0;i<3;i++){await evaluate('luxQA.start()');await wait('luxQA.status().captures >= 1');await delay(500);assert.ok((await evaluate('luxQA.pixels()')).diffuse[2]>baseline.diffuse[2]+8,'Indirect lighting returns after every re-enable');await evaluate('luxQA.stop()');await delay(500);}
+  for(let i=0;i<3;i++){await evaluate('luxQA.start()');await waitActive();assert.ok((await evaluate('luxQA.pixels()')).diffuse[2]>baseline.diffuse[2]+8,'Indirect lighting returns after every re-enable');await evaluate('luxQA.stop()');await delay(500);}
   const final=await evaluate('luxQA.resources()');assert.ok(final.textures<=idle.textures+1,`No accumulated GPU textures: ${JSON.stringify({idle,final})}`);
-  await evaluate('luxQA.start(true)');await wait('luxQA.status().captures >= 1');await delay(500);
+  await evaluate('luxQA.start(true)');await waitActive();
   assert.equal(await evaluate('luxQA.status().hdr'),false,'LDR diffuse fallback does not need HDR render targets');
   const ldr=await evaluate('luxQA.pixels()');assert.ok(ldr.diffuse[2]>baseline.diffuse[2]+1 && ldr.diffuse[2]>ldr.diffuse[0],`LDR diffuse fallback still receives blue bounce: ${JSON.stringify({baseline,ldr})}`);
   await evaluate('luxQA.stop()');await delay(300);
