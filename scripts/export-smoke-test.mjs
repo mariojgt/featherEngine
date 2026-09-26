@@ -267,6 +267,10 @@ try {
   const totalBytes = currentResult.files.reduce((total, file) => total + statSync(file).size, 0);
   const maximumPortableExportBytes = 25 * 1024 * 1024;
   assert.ok(
+    !currentResult.files.some(file => /(?:woodland-trees|woodland-ground-cover|(?:grass|soil|rock)-(?:albedo|normal))-/.test(file)),
+    'blank portable exports must not include editor-only landscape preset libraries',
+  );
+  assert.ok(
     totalBytes < maximumPortableExportBytes,
     `portable export is unexpectedly large: ${(totalBytes / 1024 / 1024).toFixed(1)} MB`,
   );

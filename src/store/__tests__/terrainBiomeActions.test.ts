@@ -102,6 +102,7 @@ it('cancels a pending preset if its terrain is removed', async () => {
   let finish!: (assets: Awaited<ReturnType<typeof biomeSurfaceAssets>>) => void;
   vi.mocked(biomeSurfaceAssets).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
   const pending = useEditorStore.getState().applyTerrainBiome('terrain', 'woodland');
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
   useEditorStore.getState().deleteObject('terrain');
   finish([]);
   expect(await pending).toBe(false);

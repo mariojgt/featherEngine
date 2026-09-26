@@ -121,3 +121,10 @@ The visual archive passed package integrity checks with 13 embedded assets
 and no audio references. The merged engine passed all 1,050 tests in 155 files
 and the production editor/player build. Launcher acceptance and Creator Mode
 browser checks passed, including current Titan templates.
+
+Landscape preset libraries load only in the editor; saved projects keep their own
+referenced assets. The portable export regression check passed at 12.9 MB for the
+blank fixture, without bundled woodland scans, and verified the real browser
+runtime and legacy migration. A separate exported woodland scene loaded both GLB
+libraries and all six ground maps successfully. The 11 biome/template tests and
+vegetation streaming browser check also passed after this export correction.
