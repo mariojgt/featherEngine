@@ -347,6 +347,26 @@ fn xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn copy_titan_server(runtime: &Path, destination: &Path, bundle: &Value) -> Result<(), String> {
+    let Some(config) = bundle.get("realmServer").filter(|value| !value.is_null()) else { return Ok(()); };
+    if config["version"] != 1 || config["gameId"] != bundle["buildProfile"]["application"]["identifier"] {
+        return Err("Titan server configuration does not match this game.".into());
+    }
+    let source = runtime.join("titan-server");
+    let manifest: Value = serde_json::from_slice(&fs::read(source.join("manifest.json")).map_err(|_| "This editor is missing its Titan server runtime. Reinstall the current build.")?).map_err(|e| e.to_string())?;
+    if manifest["version"] != 1 { return Err("Invalid Titan server runtime.".into()); }
+    let files: Vec<RuntimeFile> = serde_json::from_value(manifest["files"].clone()).map_err(|e| e.to_string())?;
+    if !files.iter().any(|file| file.path == "realm.cjs") { return Err("Incomplete Titan server runtime.".into()); }
+    let output = destination.join("realm-server"); fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    let mut listed = std::collections::HashSet::new();
+    for file in files {
+        let checked = checked_file(&source, &file.path, &file.sha256)?;
+        if file.path.contains('/') || file.path.contains('\\') || file.path == "realm-config.json" || file.path == "manifest.json" || !listed.insert(file.path.clone()) { return Err("Invalid Titan runtime inventory.".into()); }
+        fs::copy(checked, output.join(&file.path)).map_err(|e| e.to_string())?;
+    }
+    fs::write(output.join("realm-config.json"), serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
 pub(crate) fn build(
     app: &AppHandle,
     variants: HashMap<String, String>,
@@ -359,9 +379,11 @@ pub(crate) fn build(
     let data = manifest(&runtime)?;
     let runners = all_runners(app, &runtime, &data);
     build_from_runtime(
-        &runtime,
-        data,
-        runners,
+        BuildRuntime {
+            root: &runtime,
+            manifest: data,
+            runners,
+        },
         variants,
         profile_json,
         targets,
@@ -373,10 +395,14 @@ pub(crate) fn build(
     )
 }
 
-fn build_from_runtime(
-    runtime: &Path,
-    data: RuntimeManifest,
+struct BuildRuntime<'a> {
+    root: &'a Path,
+    manifest: RuntimeManifest,
     runners: Vec<(Runner, PathBuf)>,
+}
+
+fn build_from_runtime(
+    source: BuildRuntime<'_>,
     variants: HashMap<String, String>,
     profile_json: String,
     targets: Vec<String>,
@@ -384,6 +410,11 @@ fn build_from_runtime(
     asset_reports: Value,
     progress: impl Fn(String),
 ) -> Result<String, String> {
+    let BuildRuntime {
+        root: runtime,
+        manifest: data,
+        runners,
+    } = source;
     if targets.is_empty()
         || targets
             .iter()
@@ -472,7 +503,8 @@ fn build_from_runtime(
                 }
                 (game, Some(exe))
             };
-            copy_player(&runtime, &data, &game)?;
+            copy_player(runtime, &data, &game)?;
+            copy_titan_server(runtime, &dest, &bundle)?;
             write_bundle(bundle, &game, &data)?;
             if target == "macos" {
                 let status = Command::new("/usr/bin/codesign")
@@ -690,9 +722,11 @@ mod tests {
         let out_dir = dir.0.join("exports").to_string_lossy().into_owned();
         let package = |bundle: &Value, data: RuntimeManifest| {
             build_from_runtime(
-                &runtime,
-                data,
-                vec![],
+                BuildRuntime {
+                    root: &runtime,
+                    manifest: data,
+                    runners: vec![],
+                },
                 HashMap::from([("web".into(), bundle.to_string())]),
                 profile.to_string(),
                 vec!["web".into()],

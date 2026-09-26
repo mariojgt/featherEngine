@@ -803,7 +803,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         newProjectFromPackageUrl: async (url, name) => {
-          if (blockProjectLifecycleDuringCollaboration()) return false;
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return false;
           set({ busy: true, error: null });
           try {
             const archive = readPackageFile(await fetchPackage(url));
@@ -813,8 +813,9 @@ export const useProjectStore = create<ProjectState>()(
             }
             // Only create the project once we know the package is usable — otherwise a bad download
             // would leave the user staring at an empty project they didn't ask for.
+            const previousScenes = useEditorStore.getState().scenes;
             await get().newProject(name);
-            if (!get().hasProject) return false;
+            if (get().error || !get().hasProject || useEditorStore.getState().scenes === previousScenes) return false;
 
             const platform = await getPlatform();
             const summary = await applyPackage(

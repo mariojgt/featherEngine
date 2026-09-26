@@ -8,8 +8,8 @@
 import assert from 'node:assert/strict';
 import { delay, launch } from './cdp.mjs';
 
-export async function openEditor({ baseUrl, query = '', timeoutMs = 60_000, readySelector = '.toolbar', width = 1600, height = 1000 } = {}) {
-  const { page, dispose } = await launch({ width, height });
+export async function openEditor({ baseUrl, query = '', timeoutMs = 60_000, readySelector = '.toolbar', width = 1600, height = 1000, browserOptions = {} } = {}) {
+  const { page, dispose } = await launch({ ...browserOptions, width, height });
   const url = `${baseUrl}/${query}`;
 
   const evaluate = async (expression) => {

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
+import { unzipSync } from 'fflate';
 import { openEditor } from './harness.mjs';
 import { delay, launch } from './cdp.mjs';
 
@@ -97,8 +98,13 @@ try {
   await app.waitFor(`document.querySelector('.report-body')?.textContent.includes('Project checks passed')`);
   await shot(app.page, 'export-checks-1440');
   await app.realClick('.report-footer .prefs-primary-button');
-  await app.waitFor(`document.querySelector('[aria-label="Build package ready"]')`);
-  console.log('Build package downloaded through the guided export dialog');
+  await app.waitFor(`document.querySelector('[aria-label="Export finished"]') && window.__featherProject.buildProgress?.status === 'complete'`);
+  let archive;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try { archive = unzipSync(new Uint8Array(await readFile(resolve(downloadDir, 'My-Game-web.zip')))); break; } catch { await delay(250); }
+  }
+  assert.ok(archive?.['index.html'] && archive?.['game.json'] && archive?.['build-report.json'], 'Guided export downloads the complete playable web archive');
+  console.log('Playable web archive downloaded through the guided export dialog');
   await shot(app.page, 'build-next-steps');
   await app.realClick('.build-overlay-close');
   // These ordinary Blueprint/UI probes are in the acceptance fixture only, separate from the clean game.

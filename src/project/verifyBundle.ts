@@ -1,4 +1,5 @@
 import type { AssetItem, NodeForgeProject } from '../types';
+import { isTitanScene, readTitanSettings, titanReleaseConfig } from '../titan/settings';
 import type { GameBundle } from './exportGame';
 import { validateRuntimeContract, validateRuntimeReferences, type RuntimeFeatureId } from './runtimeCompatibility';
 
@@ -45,6 +46,7 @@ const RUNTIME_NAMED_ASSET_RULES: readonly {
   isEnabled: (project: NodeForgeProject) => boolean;
   names: readonly string[];
 }[] = [
+  { isEnabled: project => project.scenes.some(scene => isTitanScene(scene.objects)), names: ['UAL1.glb', 'Sword.glb'] },
   {
     // The lap/checkpoint pass in editorStore indexes these exact filenames when a Lap variable opts
     // the project into race timing. There is deliberately no serialized asset-id field to scan.
@@ -176,6 +178,13 @@ export function verifyGameBundle(bundle: GameBundle): BundleReport {
   const summary: string[] = [];
   const warnings: string[] = [];
   const errors: string[] = [];
+  if (project.scenes.some(scene => isTitanScene(scene.objects))) {
+    try {
+      const expected = titanReleaseConfig(readTitanSettings(project.variables), bundle.buildProfile.application.identifier, bundle.buildProfile.targets.includes('web'));
+      if (JSON.stringify(expected) !== JSON.stringify(bundle.realmServer)) errors.push('Titan server configuration does not match this game. Rebuild the bundle from the project.');
+      summary.push(expected ? 'Titan: online login configured; realm-server deployment included' : 'Titan: solo release; no server required');
+    } catch (error) { errors.push(error instanceof Error ? error.message : 'Invalid Titan release settings.'); }
+  }
 
   const compatibility = validateRuntimeReferences(bundle.project, bundle.startSceneId, bundle.buildProfile);
   errors.push(...validateRuntimeContract(bundle.runtimeContract), ...compatibility.errors);

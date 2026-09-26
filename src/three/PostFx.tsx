@@ -168,11 +168,11 @@ export function PostFx() {
     );
   }
   if (!children.length) return null;
-  // MSAA on the composer's HDR target is one of the biggest Play-mode GPU costs (a multisampled float
-  // framebuffer + per-frame resolve over the whole screen). 2x keeps edges clean enough while roughly
-  // halving that bandwidth vs 4x — a meaningful win on integrated GPUs with little visible quality loss.
+  // N8AO uses the resolved depth texture and does not support hardware MSAA. SMAA above provides
+  // edge smoothing instead. Recreate the pass tree when the quality tier changes so depth-reading
+  // passes never retain attachments from the previous compositor.
   return (
-    <EffectComposer ref={configureComposer} multisampling={0}>
+    <EffectComposer key={rs?.quality ?? 'High'} ref={configureComposer} multisampling={0}>
       {children}
     </EffectComposer>
   );

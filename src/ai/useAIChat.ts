@@ -177,6 +177,16 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Placed model in scene';
     case 'bake_model_asset':
       return 'Baked model to GLB asset';
+    case 'feather.titan.start-realm':
+      return 'Started Titan realm';
+    case 'feather.titan.stop-realm':
+      return 'Stopped Titan realm';
+    case 'feather.titan.export-server':
+      return 'Exported configured realm';
+    case 'feather.titan.configure':
+      return 'Configured Titan';
+    case 'feather.titan.open-starter':
+      return 'Opened MMO starter';
     case 'list_plugins':
       return 'Listed plugins';
     case 'set_plugin_enabled':

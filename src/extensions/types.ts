@@ -13,6 +13,8 @@ import type {
 } from '../types';
 import type { StylizedTreePreset } from '../tree/stylizedPresets';
 import type { PlantGroveOptions } from '../store/editorStore';
+import type { TitanProjectSettings, TitanSettingsInput } from '../titan/settings';
+import type { TitanRealmStatus } from '../titan/preview';
 
 /** Version of the public extension contract. Bump this only for SDK changes. */
 export const FEATHER_EXTENSION_API_VERSION = '0.2.0' as const;
@@ -85,7 +87,25 @@ export interface FeatherModelPlaceOptions {
   name?: string;
 }
 
+/** The Titan starters a plugin can open: the one-zone first quest, or the three-zone mini MMO. */
+export type TitanStarterTemplate = 'ember-meadow' | 'sunlit-reach';
+
 export interface FeatherPluginAPI {
+  /** Titan setup persists only public client settings; player credentials stay in the runtime. */
+  readonly titan: {
+    settings(): TitanProjectSettings;
+    configure(settings: TitanSettingsInput): TitanProjectSettings;
+    /** Open a Titan starter as a NEW project. Defaults to the one-zone Ember Meadow starter. */
+    openStarter(template?: TitanStarterTemplate): Promise<boolean>;
+    startRealm(): Promise<TitanRealmStatus>;
+    stopRealm(): Promise<TitanRealmStatus>;
+    realmStatus(): Promise<TitanRealmStatus>;
+    /** Start or reuse this project's local realm, then open the game preview. */
+    play(): Promise<void>;
+    edit(): void;
+    exportServer(): Promise<void>;
+    build(): Promise<void>;
+  };
   readonly apiVersion: typeof FEATHER_EXTENSION_API_VERSION;
   readonly pluginId: string;
 

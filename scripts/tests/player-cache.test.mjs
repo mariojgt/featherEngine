@@ -15,6 +15,9 @@ test('cached runtime rejects source changes, edited files, and extra output', ()
     assert.equal(readPlayerCache(root, hash).checked, true);
     write('src/player.ts', 'changed'); assert.equal(readPlayerCache(root, playerInputHash(root)), null);
     write('src/player.ts', 'original'); assert.ok(readPlayerCache(root, playerInputHash(root)));
+    mkdirSync(join(root, 'examples/titan-mmo/server'), { recursive: true });
+    write('examples/titan-mmo/server/world.mjs', 'export const rules = 1;');
+    assert.equal(readPlayerCache(root, playerInputHash(root)), null, 'shared realm rules participate in player cache invalidation');
     write('dist-player/index.html', '<html>changed</html>'); assert.equal(readPlayerCache(root, hash), null);
     writePlayerCache(root, hash, true); write('dist-player/game.json', '{}'); assert.equal(readPlayerCache(root, hash), null);
   } finally { rmSync(root, { recursive: true, force: true }); }

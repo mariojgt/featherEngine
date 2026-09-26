@@ -8,6 +8,7 @@ import {
   type RuntimeContract,
 } from './runtimeCompatibility';
 import { migrateLoaded } from './serialize';
+import { isTitanScene, readTitanSettings, titanReleaseConfig, type TitanRealmConfig } from '../titan/settings';
 
 /** Bundle format version, bumped independently of the project file format. */
 export const GAME_BUNDLE_VERSION = '1.1.0';
@@ -36,6 +37,8 @@ export const GAME_BUNDLE_FILE = 'game.json';
  * the player rebuilds runtime URLs from them on load.
  */
 export interface GameBundle {
+  /** Generated server deployment settings for an online Titan game. Public project credentials only. */
+  realmServer?: TitanRealmConfig;
   bundleVersion: string;
   /** When the game's window/player opens, this scene plays first. */
   startSceneId: string;
@@ -137,6 +140,7 @@ export function buildGameBundle(project: NodeForgeProject, profile?: ExportProfi
   const canonicalProject = { ...project, exportSettings };
   return {
     bundleVersion: GAME_BUNDLE_VERSION,
+    ...(project.scenes.some(scene => isTitanScene(scene.objects)) ? { realmServer: titanReleaseConfig(readTitanSettings(project.variables), buildProfile.application.identifier, buildProfile.targets.includes('web')) } : {}),
     startSceneId: buildProfile.startSceneId,
     buildProfile,
     runtimeContract: buildRuntimeContract(canonicalProject),

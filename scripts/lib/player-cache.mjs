@@ -13,7 +13,7 @@ export function playerInputHash(root) {
     }
   };
   for (const name of ['src', 'public']) walk(resolve(root, name));
-  for (const name of ['package.json', 'package-lock.json', 'player.html', 'vite.config.ts', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json', 'scripts/build-player.mjs', 'scripts/lib/player-cache.mjs']) if (existsSync(resolve(root, name))) files.push(resolve(root, name));
+  for (const name of ['package.json', 'package-lock.json', 'player.html', 'vite.config.ts', 'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json', 'scripts/build-player.mjs', 'scripts/lib/player-cache.mjs', 'scripts/build-titan-runtime.mjs', 'examples/titan-mmo/server/world.mjs', 'examples/titan-mmo/server/server.mjs', 'examples/titan-mmo/server/launch.mjs']) if (existsSync(resolve(root, name))) files.push(resolve(root, name));
   const hash = createHash('sha256').update('feather-player-cache-v1\0');
   for (const file of files.sort()) hash.update(relative(root, file).replaceAll('\\', '/')).update('\0').update(readFileSync(file)).update('\0');
   return hash.digest('hex');

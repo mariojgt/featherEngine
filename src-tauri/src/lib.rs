@@ -1,6 +1,7 @@
 mod collaboration;
 mod steam_publishing;
 mod production_runtime;
+mod titan_realm;
 mod build_centre;
 
 use std::fs::OpenOptions;
@@ -822,10 +823,12 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
 pub fn run() {
   tauri::Builder::default()
     .manage(CollaborationManager::default())
+    .manage(titan_realm::TitanRealmManager::default())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
       run_production_build,
+      titan_realm::manage_titan_realm,
       build_centre::cloud_build,
       production_runtime::install_runner_pack,
       production_runtime::inspect_production_build,
@@ -844,6 +847,7 @@ pub fn run() {
     .on_window_event(|window, event| {
       if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
         window.state::<CollaborationManager>().shutdown_now();
+        window.state::<titan_realm::TitanRealmManager>().shutdown_now();
       }
     })
     .setup(|app| {

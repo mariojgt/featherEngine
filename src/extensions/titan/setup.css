@@ -1,0 +1,54 @@
+/* Titan setup panel — layout specific to this plugin's wizard. The runtime's styles live in
+   src/titan/titan.css and are shared with the in-game HUD; keep the two apart. */
+
+.titan-starter-cards {
+  display: grid;
+  gap: 10px;
+}
+
+/* The wizard declares container-type:inline-size, so size these against the panel, not the window. */
+@container (min-width: 620px) {
+  .titan-starter-cards {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Side by side there is no room for an inline button, so keep each card stacked. */
+.titan-starter-cards .titan-starter-card {
+  position: relative;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+}
+
+.titan-starter-cards .titan-starter-card button {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.titan-starter-badge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: 700 9px/1.6 Inter, system-ui, sans-serif;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: #1b3026;
+  background: #dfc17c;
+}
+
+.titan-starter-zones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.titan-starter-zones span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #bccfc1;
+  border: 1px solid #7f9a8655;
+}

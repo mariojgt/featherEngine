@@ -51,28 +51,25 @@ async function editorSmoke() {
   try {
     await app.waitFor(`document.querySelector('[data-creator-mode="build"].active')`, { label: 'Build mode active' });
     assert.equal(await app.count('[data-creator-mode]'), 3);
-    assert.equal(await app.count('.dv-tabs-and-actions-container'), 3, 'default workspace remains three-zone');
+    assert.equal(await app.count('.dv-tabs-and-actions-container'), 4, 'default workspace includes the bottom asset dock');
     assert.ok((await app.text('.dv-tabs-and-actions-container'))?.includes('Agent'));
+    assert.ok(await app.evaluate(`Array.from(document.querySelectorAll('.dv-tabs-and-actions-container')).some((tabs) => tabs.textContent.includes('Assets') && tabs.textContent.includes('Asset Store'))`), 'Assets and Asset Store share the bottom dock');
 
     await app.realClick('.add-trigger');
-    await app.waitFor(`document.querySelector('.add-popover')`, { label: 'Creator Add menu' });
-    assert.equal(await app.count('.creator-add-role'), 7);
-    assert.ok((await app.text('.add-popover'))?.includes('Gameplay'));
-    assert.ok((await app.text('.add-popover'))?.includes('World'));
-    assert.ok((await app.text('.add-popover'))?.includes('Advanced'));
-    assert.ok((await app.text('.add-popover'))?.includes('Add Gameplay Kit'));
-
-    await app.evaluate(`(() => {
-      const buttons = [...document.querySelectorAll('.creator-add-role')];
-      buttons.find((button) => button.querySelector('strong')?.textContent.trim() === 'Collectible')?.click();
-    })()`);
+    await app.waitFor(`document.querySelector('.editor-picker[role="dialog"]')`, { label: 'Creator Add object picker' });
+    const categories = await app.text('.editor-picker-categories');
+    for (const name of ['Gameplay', 'Nature', 'Advanced', 'Scene starters']) assert.ok(categories.includes(name));
+    await app.evaluate(`Array.from(document.querySelectorAll('.editor-picker-categories button')).find((button) => button.textContent === 'Gameplay').click()`);
+    await app.waitFor(`document.querySelector('[data-action-id="role-collectible"]')`);
+    assert.equal(await app.count('.editor-picker-result[data-action-id^="role-"]'), 7);
+    await app.realClick('[data-action-id="role-collectible"]');
     await app.waitFor(`window.__featherStore.scenes.flatMap((scene) => scene.objects).some((object) => object.creatorRoleId === 'collectible')`, {
       label: 'Collectible created through Add',
     });
     await app.waitFor(`document.querySelector('.make-it-section') && document.querySelector('.creator-appearance-section')`, {
       label: 'Creator Inspector sections',
     });
-    assert.ok((await app.text('.inspector-panel'))?.includes('Make It'));
+    assert.ok((await app.text('.inspector-panel'))?.includes('Gameplay role'));
     assert.ok((await app.text('.inspector-panel'))?.includes('Gameplay'));
     assert.ok((await app.text('.inspector-panel'))?.includes('Appearance'));
     assert.ok((await app.text('.inspector-panel'))?.includes('Interactions'));
@@ -81,11 +78,10 @@ async function editorSmoke() {
     // The milestone scene needs a real Player and ground before Play. Create the Player through the
     // visible gameplay-first Add menu, then let the kit action add only the missing ground.
     await app.realClick('.add-trigger');
-    await app.waitFor(`document.querySelector('.add-popover')`, { label: 'Add menu reopened' });
-    await app.evaluate(`(() => {
-      const buttons = [...document.querySelectorAll('.creator-add-role')];
-      buttons.find((button) => button.querySelector('strong')?.textContent.trim() === 'Player')?.click();
-    })()`);
+    await app.waitFor(`document.querySelector('.editor-picker')`, { label: 'Add object picker reopened' });
+    await app.evaluate(`Array.from(document.querySelectorAll('.editor-picker-categories button')).find((button) => button.textContent === 'Gameplay').click()`);
+    await app.waitFor(`document.querySelector('[data-action-id="role-player"]')`);
+    await app.realClick('[data-action-id="role-player"]');
     await app.waitFor(`window.__featherStore.scenes.flatMap((scene) => scene.objects).some((object) => object.creatorRoleId === 'player')`, {
       label: 'Player created through Add',
     });
@@ -104,6 +100,7 @@ async function editorSmoke() {
       return id;
     })()`);
     await app.waitFor(`document.querySelector('.make-it-section')`, { label: 'Make It available for cube' });
+    await app.evaluate(`Array.from(document.querySelectorAll('.editor-disclosure summary')).find((summary) => summary.textContent.startsWith('Gameplay role')).click()`);
     await app.evaluate(`(() => {
       const buttons = [...document.querySelectorAll('.creator-role-card')];
       buttons.find((button) => button.textContent.includes('Door'))?.click();

@@ -125,7 +125,7 @@ async function waitForDevToolsUrl(profileDir, chrome) {
 }
 
 /** Launch headless Chrome and attach to a page target. Returns a Page plus a dispose(). */
-export async function launch({ width = 1600, height = 1000 } = {}) {
+export async function launch({ width = 1600, height = 1000, hostResolverRules, ignoreCertificateErrors = false } = {}) {
   const executable = chromeExecutable();
   assert.ok(executable, 'No Chrome/Chromium found. Set CHROME_PATH to run the e2e suite.');
   const profileDir = mkdtempSync(join(tmpdir(), 'feather-e2e-'));
@@ -149,9 +149,11 @@ export async function launch({ width = 1600, height = 1000 } = {}) {
       '--ignore-gpu-blocklist',
       '--metrics-recording-only',
       '--mute-audio',
+      ...(hostResolverRules ? [`--host-resolver-rules=${hostResolverRules}`] : []),
+      ...(ignoreCertificateErrors ? ['--ignore-certificate-errors'] : []),
       // The editor is a WebGL app; ANGLE's SwiftShader path is the stable deterministic headless
       // renderer. Combining the older --use-gl flag with --disable-gpu intermittently killed Chrome.
-      `--use-angle=${process.env.FEATHER_CHROME_ANGLE ?? 'swiftshader'}`,
+      `--use-angle=${process.env.FEATHER_E2E_ANGLE ?? process.env.FEATHER_CHROME_ANGLE ?? 'swiftshader'}`,
       '--hide-scrollbars',
       'about:blank',
     ],

@@ -1,6 +1,8 @@
 import { SceneLight } from '../three/SceneLight';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PlayerReady } from './PlayerReady';
+import { TitanWorld } from '../titan/TitanWorld';
+import { useTitanActive } from '../titan/TitanHUD';
 import {
   ContactShadows,
   OrbitControls,
@@ -481,6 +483,7 @@ function GameScene() {
   const runtimeHidden = useEditorStore((state) => state.runtimeHidden);
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
   const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
+  const titanActive = useTitanActive();
   // Objects holstered/hidden at runtime (action.setVisible) aren't rendered.
   const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id) && !hideInRuntime(object));
 
@@ -521,7 +524,7 @@ function GameScene() {
 
       {/* Marker over the player's lock-on target — renders nothing while no lock is held. */}
       <LockOnMarker />
-      {cinematicCamera ? (
+      {titanActive ? <TitanWorld /> : cinematicCamera ? (
         <CinematicCamera />
       ) : followTarget ? (
         <FollowCamera />

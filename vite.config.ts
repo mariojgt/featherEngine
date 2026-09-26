@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync, copyFileSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
+import { titanRealmBridge } from './scripts/vite-titan';
 
 // `BUILD_TARGET=player vite build` produces the standalone game player into dist-player/.
 const isPlayer = process.env.BUILD_TARGET === 'player';
@@ -30,15 +31,17 @@ function exportRuntime(): Plugin {
   return {
     name: 'feather-export-runtime',
     configureServer(server) {
-      server.middlewares.use('/export-runtime/player.zip', (_req, res) => {
-        if (!existsSync(zip)) { res.statusCode = 503; res.end('Build the player runtime with npm run build:player.'); return; }
-        res.setHeader('content-type', 'application/zip'); createReadStream(zip).pipe(res);
+      for (const name of ['player.zip', 'titan-server.zip']) server.middlewares.use(`/export-runtime/${name}`, (_req, res) => {
+        const source = resolve(__dirname, 'src-tauri/export-runtime', name);
+        if (!existsSync(source)) { res.statusCode = 503; res.end('Build the runtime with npm run build:player.'); return; }
+        res.setHeader('content-type', 'application/zip'); createReadStream(source).pipe(res);
       });
     },
     closeBundle() {
       if (!existsSync(zip)) throw new Error('Missing export runtime. Run npm run build:player before building the editor.');
       mkdirSync(resolve(__dirname, 'dist/export-runtime'), { recursive: true });
       copyFileSync(zip, resolve(__dirname, 'dist/export-runtime/player.zip'));
+      copyFileSync(resolve(__dirname, 'src-tauri/export-runtime/titan-server.zip'), resolve(__dirname, 'dist/export-runtime/titan-server.zip'));
     },
   };
 }
@@ -92,7 +95,8 @@ function templateExportSink(): Plugin {
 
 // Tauri expects a fixed dev server port (see src-tauri/tauri.conf.json devUrl).
 export default defineConfig({
-  plugins: [react(), templateExportSink(), ...(isPlayer ? [finalizePlayerBuild()] : [exportRuntime()])],
+  plugins: [react(), templateExportSink(), ...(isPlayer ? [finalizePlayerBuild()] : [exportRuntime(), titanRealmBridge()])],
+  define: { 'import.meta.env.FEATHER_PLAYER': JSON.stringify(isPlayer) },
   clearScreen: false,
   // Relative base so a hosted export can live under any URL path and Tauri can use the same build.
   // Browsers block module applications launched directly through file://; see PRODUCTION_EXPORT.md.

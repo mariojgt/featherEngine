@@ -14,6 +14,7 @@ if (!process.argv.includes('--skip-editor')) {
 if (process.argv.includes('--skip-editor')) run(process.execPath, ['scripts/build-player.mjs', '--verify-only']);
 const targetIndex = process.argv.indexOf('--target');
 const rustTarget = targetIndex >= 0 ? process.argv[targetIndex + 1] : process.env.FEATHER_RUNNER_TARGET || process.env.TAURI_ENV_TARGET_TRIPLE;
+run(process.execPath, ['scripts/build-titan-runtime.mjs', '--native'], rustTarget ? { TAURI_ENV_TARGET_TRIPLE: rustTarget } : {});
 const target = rustTarget?.includes('windows') ? 'windows' : rustTarget?.includes('apple') ? 'macos' : rustTarget?.includes('linux') ? 'linux' : ({ darwin: 'macos', win32: 'windows', linux: 'linux' })[process.platform];
 const architecture = rustTarget?.startsWith('aarch64') ? 'aarch64' : rustTarget?.startsWith('x86_64') ? 'x86_64' : process.arch === 'arm64' ? 'aarch64' : 'x86_64';
 if (!target) throw new Error('Unsupported desktop runner host.');

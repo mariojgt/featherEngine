@@ -447,7 +447,7 @@ export const applyRuntimeTick = (
       const prints: string[] = [];
       let pendingCinematicId: string | undefined;
       // A Load Scene node fired this frame → switch the active scene at the end of the tick (project vars carry over).
-      let pendingSceneId: string | undefined;
+      let pendingSceneId: string | undefined = state.runtimeSceneRequest;
       let pendingHideUIDocumentId: string | undefined;
       // A Set Quality node fired this frame → apply the new scalability preset at the end of the tick.
       let pendingQuality: QualityLevel | undefined;
@@ -6330,6 +6330,7 @@ export const applyRuntimeTick = (
           const autoplay = targetScene.cinematics?.find((cinematic) => cinematic.autoplay);
           return {
             activeSceneId: targetScene.id,
+            runtimeSceneRequest: undefined,
             scenes: revertedScenes,
             runtimeSceneSnapshots: snaps,
             runtimeEnvironmentSnapshots: environmentSnaps,
@@ -6424,6 +6425,7 @@ export const applyRuntimeTick = (
 
       return {
         runtimeTime,
+        runtimeSceneRequest: undefined,
         // keepRecord/keepArray: hand back the PREVIOUS reference when the fresh-built value is
         // content-identical, so 60fps subscribers only re-render for data that actually changed.
         runtimeVelocities: keepRecord(state.runtimeVelocities, nextVelocities),

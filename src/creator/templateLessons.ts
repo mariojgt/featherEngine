@@ -21,6 +21,25 @@ export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
       'Save a project package to share the editable scene. Check the audio provider terms before redistributing generated stems.',
     ],
   },
+  'ember-meadow': {
+    version: 1, difficulty: 'Beginner', minutes: 15,
+    goal: 'Log in, restore the meadow beacon, earn a blade, and reconnect with your saved progress.',
+    controls: 'WASD / arrows move · right-drag orbits · E talk/gather · Space or 1 attack · 2 ability · 3 tonic · I inventory',
+    lessons: ['Press Play and choose Solo practice to explore immediately.', 'Speak to Elara, gather three shards, defeat two wisps and return for your reward.', 'Open View → Extensions → Titan Backend, choose your accounts in Connect, then press Play the game → Join realm; Feather starts the local realm for you.', 'Join the realm from two browser profiles. Save, leave and reconnect.', 'Edit the scenery in Feather. Extend authoritative rules in server/world.mjs and the HUD in src/titan.'],
+  },
+  'sunlit-reach': {
+    version: 1, difficulty: 'Intermediate', minutes: 30,
+    goal: 'Pick a class, finish three chapters across Ember Meadow, Thornwood and Cinder Keep, and bring down the Ashen Warden with friends.',
+    controls: 'WASD move · right-drag orbits · wheel zooms · Space/1 attack · 2 ability · 3 tonic · E talk/gather/travel · I inventory · L quest log · Enter chat',
+    lessons: [
+      'Press Play and choose Warrior, Ranger or Mage at the login screen — each has its own health, reach and special ability on 2.',
+      'Take Warden Elara’s quest in the meadow, then follow the trail north past the woodland to the waystone and press E to travel.',
+      'Reach level 2, find Hermit Wren in the Thornwood, and gather moonpetals while the boars are busy with someone else.',
+      'In Cinder Keep the Ashen Warden telegraphs an ember burst — step out of the red ring. Open a second browser profile for another adventurer before you pull it.',
+      'Open View → Extensions → Titan Backend and walk Connect → Test → Publish to put your own accounts and hosted realm behind the game.',
+      'Every zone is a normal Feather scene: edit its scenery freely, and change the shared rules — quests, loot, the boss — in examples/titan-mmo/server/world.mjs.',
+    ],
+  },
   'template-cinematic': {
     version: 1, difficulty: 'Beginner', minutes: 10,
     goal: 'Watch Resonance, then remix its cameras, lighting and real physics cues.',

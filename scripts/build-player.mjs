@@ -26,6 +26,7 @@ if (args.has('--verify-only')) {
   console.log('Verified reusable player and all runtime files.');
   process.exit(0);
 }
+runNode(resolve(root, 'scripts/build-titan-runtime.mjs'), []);
 if (!args.has('--skip-typecheck') && !cached?.checked) {
   runNode(tscBin, ['-b']);
 } else if (args.has('--skip-typecheck')) {

@@ -3,6 +3,7 @@ import { arborForgePlugin } from './arborForge';
 import { imageTo3dPlugin } from './imageTo3d';
 import { modelForgePlugin } from './modelForge';
 import { pixelArtTreesPlugin } from './pixelArtTrees';
+import { titanPlugin } from './titan';
 
 /**
  * The plugin GALLERY: store-installable plugins compiled into this build but dormant until the
@@ -21,6 +22,7 @@ const candidates: readonly FeatherPluginDefinition[] = [
   imageTo3dPlugin,
   modelForgePlugin,
   pixelArtTreesPlugin,
+  titanPlugin,
   ...Object.keys(userPlugins).sort().map((path) => userPlugins[path]),
 ];
 

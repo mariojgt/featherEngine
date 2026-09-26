@@ -325,6 +325,131 @@
       }
     },
     {
+      "id": "pkg-feather-plugin-titan",
+      "slug": "titan-backend",
+      "title": "Titan — Game Backend",
+      "description": "Connect Feather to the Titan backend used by the Unreal plugin. Connect, test and publish from a guided panel. Includes managed local realms, configured production server packages, a typed REST client and the free Ember Meadow MMO starter.",
+      "author": "Feather / TheDevRealm",
+      "version": "1.1.0",
+      "kind": "plugin",
+      "tags": [
+        "plugin",
+        "backend",
+        "mmo",
+        "multiplayer",
+        "login",
+        "titan"
+      ],
+      "license": "MIT",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjYTI4YjRjIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTUzZTNiIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPlQ8L3RleHQ+PC9zdmc+",
+      "sizeBytes": 1059,
+      "downloadUrl": "packages/plugins/titan-backend.nfpack",
+      "engineVersion": "0.8.0",
+      "pluginId": "feather.titan",
+      "contents": {
+        "prefabs": 0,
+        "materials": 0,
+        "blueprints": 0,
+        "assets": 0,
+        "scenes": 0,
+        "uiDocuments": 0
+      }
+    },
+    {
+      "id": "pkg-feather-ember-meadow",
+      "slug": "ember-meadow",
+      "learning": {
+        "version": 1,
+        "difficulty": "Beginner",
+        "minutes": 15,
+        "goal": "Log in, restore the meadow beacon, earn a blade, and reconnect with your saved progress.",
+        "controls": "WASD / arrows move · right-drag orbits · E talk/gather · Space or 1 attack · 2 ability · 3 tonic · I inventory",
+        "lessons": [
+          "Press Play and choose Solo practice to explore immediately.",
+          "Speak to Elara, gather three shards, defeat two wisps and return for your reward.",
+          "Open View → Extensions → Titan Backend, choose your accounts in Connect, then press Play the game → Join realm; Feather starts the local realm for you.",
+          "Join the realm from two browser profiles. Save, leave and reconnect.",
+          "Edit the scenery in Feather. Extend authoritative rules in server/world.mjs and the HUD in src/titan."
+        ]
+      },
+      "title": "Ember Meadow — MMO Starter",
+      "description": "A free fantasy RPG integration example: login, an animated adventurer, a Pixel Art Trees woodland, a quest, combat, loot, equipment and saved progress. Play solo immediately, or run the included authoritative realm server and explore with friends. Supports Titan guest and email accounts. One zone; 32-player connection cap, not a production-scale MMO.",
+      "author": "Feather / TheDevRealm",
+      "version": "1.0.0",
+      "kind": "project",
+      "tags": [
+        "project",
+        "mmo",
+        "rpg",
+        "multiplayer",
+        "titan",
+        "beginner"
+      ],
+      "license": "MIT + bundled asset licenses",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZDdiMzZjIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMjI1NjRjIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPuKcpzwvdGV4dD48L3N2Zz4=",
+      "sizeBytes": 8679180,
+      "downloadUrl": "packages/projects/ember-meadow.nfpack",
+      "engineVersion": "0.8.0",
+      "contents": {
+        "prefabs": 0,
+        "materials": 0,
+        "blueprints": 0,
+        "assets": 2,
+        "scenes": 1,
+        "uiDocuments": 0
+      }
+    },
+    {
+      "id": "pkg-feather-sunlit-reach",
+      "slug": "sunlit-reach",
+      "learning": {
+        "version": 1,
+        "difficulty": "Intermediate",
+        "minutes": 30,
+        "goal": "Pick a class, finish three chapters across Ember Meadow, Thornwood and Cinder Keep, and bring down the Ashen Warden with friends.",
+        "controls": "WASD move · right-drag orbits · wheel zooms · Space/1 attack · 2 ability · 3 tonic · E talk/gather/travel · I inventory · L quest log · Enter chat",
+        "lessons": [
+          "Press Play and choose Warrior, Ranger or Mage at the login screen — each has its own health, reach and special ability on 2.",
+          "Take Warden Elara’s quest in the meadow, then follow the trail north past the woodland to the waystone and press E to travel.",
+          "Reach level 2, find Hermit Wren in the Thornwood, and gather moonpetals while the boars are busy with someone else.",
+          "In Cinder Keep the Ashen Warden telegraphs an ember burst — step out of the red ring. Open a second browser profile for another adventurer before you pull it.",
+          "Open View → Extensions → Titan Backend and walk Connect → Test → Publish to put your own accounts and hosted realm behind the game.",
+          "Every zone is a normal Feather scene: edit its scenery freely, and change the shared rules — quests, loot, the boss — in examples/titan-mmo/server/world.mjs."
+        ]
+      },
+      "title": "Sunlit Reach — Mini MMO",
+      "description": "A free three-zone MMO template: Warrior, Ranger and Mage classes with their own abilities, a hub village with a vendor, the Thornwood, and Cinder Keep with a telegraphed boss. Three chapter quests, waystone travel between zones, zone chat, an intro cinematic per zone, saved progress and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.",
+      "author": "Feather / TheDevRealm",
+      "version": "1.0.0",
+      "kind": "project",
+      "tags": [
+        "project",
+        "mmo",
+        "rpg",
+        "multiplayer",
+        "titan",
+        "classes",
+        "boss",
+        "cinematic"
+      ],
+      "license": "MIT + bundled asset licenses",
+      "priceCents": 0,
+      "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZTA4MDNmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMmIxYjNkIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPuKZmzwvdGV4dD48L3N2Zz4=",
+      "sizeBytes": 8698031,
+      "downloadUrl": "packages/projects/sunlit-reach.nfpack",
+      "engineVersion": "0.8.0",
+      "contents": {
+        "prefabs": 0,
+        "materials": 0,
+        "blueprints": 0,
+        "assets": 2,
+        "scenes": 3,
+        "uiDocuments": 0
+      }
+    },
+    {
       "id": "pkg-feather-template-blackthorn",
       "slug": "template-blackthorn",
       "title": "Blackthorn Keep",

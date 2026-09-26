@@ -6,6 +6,7 @@ import { compressGlbTextures } from '../three/compressTextures';
 import type { GameBundle } from './exportGame';
 import { verifyGameBundle } from './verifyBundle';
 import { sha256Hex } from '../utils/contentHash';
+import { configuredServerFiles } from '../titan/serverPackage';
 
 export const browserCookServices = (onProgress: (line: string) => void): CookServices => ({
   cache: browserAssetCookCache, geometry: prepareGeometryAsync, backend: 'browser-v1', onProgress,
@@ -30,6 +31,11 @@ export async function buildWebArchive(bundle: GameBundle, onProgress: (line: str
   for (const [path, bytes] of streamed.files) files[path] = bytes;
   files['build-report.json'] = strToU8(JSON.stringify({ profile: bundle.buildProfile, builtTargets: ['web'], assetPreparation: cooked.report }, null, 2));
   files['README.txt'] = strToU8(`${bundle.buildProfile.application.productName}\n\nUpload this whole folder to a static web host. To test locally, serve the folder over HTTP.\n`);
+  if (bundle.realmServer) {
+    onProgress('Including your configured Titan realm server…');
+    for (const [path, bytes] of Object.entries(await configuredServerFiles(bundle.realmServer))) files[`realm-server/${path}`] = bytes;
+    files['README.txt'] = strToU8(`${bundle.buildProfile.application.productName}\n\nThe client uses your saved realm address. Deploy realm-server/ to your server host; its configuration is already filled in. Upload the remaining game files to your web host. See realm-server/README.txt.\n`);
+  }
   delete files['runtime-manifest.json'];
   onProgress('Packaging your playable web game…');
   return zipSync(files, { level: 6 });

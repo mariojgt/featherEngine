@@ -65,7 +65,9 @@ fn validate(request: &Request) -> Result<(), String> {
     Ok(())
 }
 #[cfg(test)]
-thread_local! { static MOCK_GH: std::cell::RefCell<Option<std::collections::VecDeque<(String, Result<String, String>)>>> = const { std::cell::RefCell::new(None) }; }
+type MockGhResponses = std::collections::VecDeque<(String, Result<String, String>)>;
+#[cfg(test)]
+thread_local! { static MOCK_GH: std::cell::RefCell<Option<MockGhResponses>> = const { std::cell::RefCell::new(None) }; }
 fn gh(args: &[&str], seconds: u64) -> Result<String, String> {
     #[cfg(test)]
     if let Some(reply) = MOCK_GH.with(|mock| {
