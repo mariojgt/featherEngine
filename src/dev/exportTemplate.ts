@@ -13,9 +13,8 @@ import type { AssetItem } from '../types';
  * thing rather than the thing. This runs the actual builder, snapshots the resulting project, and
  * POSTs the package to the dev-server sink in vite.config.ts.
  *
- * Assets are emitted as EXTERNAL references (url + sha256), not inlined base64 — that's the whole
- * point of the exercise: the third-person template's 22 MB character would otherwise become ~29 MB
- * of JSON in a single unstreamable document.
+ * Every referenced asset is embedded as binary bytes in the archive. Recovered source URLs are
+ * optional provenance/fallback metadata; installing the archive never needs the original server.
  */
 
 type TemplateKey =
@@ -27,6 +26,7 @@ type TemplateKey =
   | 'last-light'
   | 'blackthorn'
   | 'neon-afterlight'
+  | 'verdant'
   | 'meadows'
   | 'cube-realm'
   | 'platformer'
@@ -44,6 +44,14 @@ interface TemplateDef {
 }
 
 const TEMPLATES: Record<TemplateKey, TemplateDef> = {
+  verdant: {
+    slug: 'template-verdant',
+    title: 'Verdant — A Woodland Study',
+    version: '1.1.0',
+    description: 'An original 48-second woodland cinematic: rocky clearings, fern and shrub banks, natural blade grass, clustered authored trees and volumetric sunlight. Six editable shots, an original generated score and ambience. A local reusable project package. Play; R replays.',
+    tags: ['template', 'world', 'cinematic', 'film', 'woodland', 'forest', 'terrain', 'grass', 'trees', 'understory', 'nature'],
+    build: async () => (await import('../project/verdantTemplate')).createVerdantTemplate(),
+  },
   'neon-afterlight': {
     slug: 'template-neon-afterlight',
     title: 'Neon Afterlight',
@@ -153,56 +161,62 @@ const BINARY = /\.(glb|gltf|fbx|mp3|wav|ogg|png|jpe?g|webp|ktx2)(\?|$)/i;
 
 /**
  * Record where each fetched binary came from, keyed by content hash. Templates pull their assets
- * from `public/` and then hand the bytes to the platform importer, which loses the original path —
+ * from `public/` or Vite-served `src/` files and hand them to importers or embed them as data URLs —
  * matching on hash afterwards recovers it without touching any template code.
  */
-function captureAssetSources(): { sources: Map<string, string>; restore: () => void } {
+function captureAssetSources(): { sources: Map<string, string>; flush: () => Promise<void>; restore: () => void } {
   const sources = new Map<string, string>();
+  const pending = new Set<Promise<void>>();
   const original = window.fetch;
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await original(input, init);
     const url = input instanceof Request ? input.url : String(input);
     if (response.ok && BINARY.test(url)) {
       // Clone so the template still gets an unread body.
-      response
+      const task = response
         .clone()
         .arrayBuffer()
         .then(async (buffer) => {
-          sources.set(await sha256Hex(buffer), new URL(url, document.baseURI).pathname.replace(/^\//, ''));
+          const source = new URL(url, document.baseURI);
+          sources.set(await sha256Hex(buffer), source.origin === location.origin
+            ? `${source.pathname.replace(/^\//, '')}${source.search}` : source.href);
         })
         .catch(() => undefined);
+      pending.add(task);
+      void task.finally(() => pending.delete(task));
     }
     return response;
   };
-  return { sources, restore: () => { window.fetch = original; } };
+  return { sources, flush: async () => { await Promise.all(pending); }, restore: () => { window.fetch = original; } };
 }
 
 /**
- * Read a live project asset's bytes back out, hash them, and recover the public path they came from.
+ * Read a live project asset's bytes back out, hash them, and recover its source URL when available.
  * The bytes go INTO the archive; `source` is kept alongside as a fallback for manifest-only reads.
  */
-async function toPackagedAsset(
+export async function toPackagedAsset(
   asset: AssetItem,
   sources: Map<string, string>,
-): Promise<{ asset: AssetItem; bytes: Uint8Array } | null> {
-  if (!asset.url) return null;
-  const response = await fetch(asset.url);
+): Promise<{ asset: AssetItem; bytes: Uint8Array }> {
+  const input = asset.url ?? asset.data;
+  if (!input) throw new Error(`[template-export] missing bytes for "${asset.name}" (${asset.id})`);
+  const response = await fetch(input);
+  if (!response.ok) throw new Error(`[template-export] failed to read "${asset.name}" (${asset.id}): HTTP ${response.status}`);
   const buffer = await response.arrayBuffer();
   const hash = await sha256Hex(buffer);
-  const url = sources.get(hash);
-  if (!url) {
-    console.warn(`[template-export] no public source for "${asset.name}" — skipping`);
-    return null;
-  }
+  const url = sources.get(hash) ?? asset.source?.url;
   return {
     asset: {
-      id: asset.id,
-      name: asset.name,
-      type: asset.type,
+      ...asset,
+      url: undefined,
+      data: undefined,
+      path: undefined,
+      delivery: undefined,
+      unresolved: undefined,
       size: buffer.byteLength,
       hash,
       createdAt: asset.createdAt,
-      source: { url, sha256: hash, bytes: buffer.byteLength },
+      source: url ? { url, sha256: hash, bytes: buffer.byteLength } : undefined,
     },
     bytes: new Uint8Array(buffer),
   };
@@ -212,18 +226,22 @@ async function run(key: TemplateKey) {
   const def = TEMPLATES[key];
   if (!def) throw new Error(`Unknown template "${key}". Try: ${Object.keys(TEMPLATES).join(', ')}`);
 
-  const { sources, restore } = captureAssetSources();
+  const { sources, flush, restore } = captureAssetSources();
   try {
     console.info(`[template-export] building "${def.title}"…`);
     await useProjectStore.getState().newProject(def.title);
     await def.build();
+    await flush();
 
     const editor = useEditorStore.getState();
     const collected = editor.buildProjectPackage();
-    const live = editor.assets.filter((asset) => collected.assetIds.includes(asset.id));
-    const packaged = (await Promise.all(live.map((asset) => toPackagedAsset(asset, sources)))).filter(
-      (entry): entry is { asset: AssetItem; bytes: Uint8Array } => !!entry,
-    );
+    const byId = new Map(editor.assets.map((asset) => [asset.id, asset]));
+    const live = collected.assetIds.map((id) => {
+      const asset = byId.get(id);
+      if (!asset) throw new Error(`[template-export] missing referenced asset ${id}`);
+      return asset;
+    });
+    const packaged = await Promise.all(live.map((asset) => toPackagedAsset(asset, sources)));
 
     const pkg = buildPackage('project', collected.content, packaged.map((entry) => entry.asset), {
       id: `pkg-feather-${def.slug}`,
@@ -234,7 +252,7 @@ async function run(key: TemplateKey) {
       tags: def.tags,
     });
 
-    // One file: manifest + every asset, compressed. This is what gets published and downloaded.
+    // One reusable local file: manifest + every asset, compressed.
     const archive = writePackageArchive(pkg, new Map(packaged.map((entry) => [entry.asset.id, entry.bytes])));
     const response = await fetch(`/__feather/export-template?slug=${encodeURIComponent(def.slug)}`, {
       method: 'POST',

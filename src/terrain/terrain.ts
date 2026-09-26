@@ -172,6 +172,7 @@ function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainC
     streamRadius: clampInt(terrain?.streamRadius ?? base.streamRadius, 1, 10),
     physicsRadius: clampInt(terrain?.physicsRadius ?? base.physicsRadius, 1, 5),
     seed: Math.trunc(terrain?.seed ?? base.seed),
+    materialDistribution: terrain?.materialDistribution === 'ground' ? 'ground' : 'height',
     heightScale: clamp(terrain?.heightScale ?? base.heightScale, 0, 256),
     ridgeStrength: Number.isFinite(terrain?.ridgeStrength) ? clamp(terrain!.ridgeStrength!, 0, 1) : 0,
     domainWarp: Number.isFinite(terrain?.domainWarp) ? clamp(terrain!.domainWarp!, 0, 256) : 0,
@@ -201,9 +202,18 @@ function normalizeTerrainDefaults(terrain?: Partial<TerrainComponent>): TerrainC
       grassImageAssetId: foliage.grassImageAssetId || undefined,
       treeImageAssetId: foliage.treeImageAssetId || undefined,
       // Back-compat: a project saved with only a model asset (before the source field) keeps using it.
-      grassSource: foliage.grassSource ?? (foliage.grassModelAssetId ? 'model' : 'builtin'),
-      treeSource: foliage.treeSource ?? (foliage.treeModelAssetId ? 'model' : 'builtin'),
+      grassSource: terrain?.foliage?.grassSource ?? (foliage.grassModelAssetId ? 'model' : foliage.grassImageAssetId ? 'image' : 'builtin'),
+      treeSource: terrain?.foliage?.treeSource ?? (foliage.treeModelAssetId ? 'model' : foliage.treeImageAssetId ? 'image' : 'builtin'),
+      distribution: foliage.distribution === 'woodland' ? 'woodland' : 'uniform',
+      understoryAssetId: foliage.understoryAssetId || undefined,
+      understoryDensity: Number.isFinite(foliage.understoryDensity) ? clamp(foliage.understoryDensity!, 0, 1) : 0,
       treeSpecId: foliage.treeSpecId || undefined,
+      treeSpecies: foliage.treeSpecies?.filter((entry, index, entries) => entry.specId && Number.isFinite(entry.weight) && entry.weight > 0 && entries.findIndex((other) => other.specId === entry.specId) === index)
+        .slice(0, 4).map((entry) => ({ specId: entry.specId, weight: clamp(entry.weight, 0.01, 100) })),
+      treeSpacing: Number.isFinite(foliage.treeSpacing) ? clamp(foliage.treeSpacing!, 0, 64) : 0,
+      minElevation: Number.isFinite(foliage.minElevation) ? clamp(foliage.minElevation!, -512, 512) : undefined,
+      maxElevation: Number.isFinite(foliage.maxElevation)
+        ? clamp(foliage.maxElevation!, Number.isFinite(foliage.minElevation) ? clamp(foliage.minElevation!, -512, 512) : -512, 512) : undefined,
       windStrength: clamp(foliage.windStrength ?? 1, 0, 4),
       usePaintMask: foliage.usePaintMask ?? false,
       stylizedGrass: normalizeStylizedGrass(foliage.stylizedGrass),
@@ -257,6 +267,10 @@ function normalizeTerrainMaterialLayers(
       color: layer.color || fallback.color || '#ffffff',
       textureAssetId: layer.textureAssetId || undefined,
       normalMapAssetId: layer.normalMapAssetId || undefined,
+      textureScale: clamp(Number.isFinite(layer.textureScale) ? layer.textureScale! : 8, 0.25, 256),
+      textureVariation: clamp(Number.isFinite(layer.textureVariation) ? layer.textureVariation! : 0, 0, 1),
+      normalStrength: clamp(Number.isFinite(layer.normalStrength) ? layer.normalStrength! : 1, 0, 4),
+      roughness: clamp(Number.isFinite(layer.roughness) ? layer.roughness! : 0.92, 0, 1),
     };
   });
 }
@@ -317,6 +331,24 @@ function isRecordEmpty(record: Record<string, number>): boolean {
   return empty;
 }
 
+const emptyStringRecordCache = new WeakMap<Record<string, string>, boolean>();
+function isStringRecordEmpty(record: Record<string, string>): boolean {
+  const cached = emptyStringRecordCache.get(record);
+  if (cached !== undefined) return cached;
+  const empty = Object.keys(record).length === 0;
+  emptyStringRecordCache.set(record, empty);
+  return empty;
+}
+
+const terrainLayerIndexCache = new WeakMap<TerrainComponent, Map<string, number>>();
+function terrainLayerIndex(terrain: TerrainComponent): Map<string, number> {
+  const cached = terrainLayerIndexCache.get(terrain);
+  if (cached) return cached;
+  const index = new Map(terrain.materialLayers.map((layer, layerIndex) => [layer.id, layerIndex]));
+  terrainLayerIndexCache.set(terrain, index);
+  return index;
+}
+
 export function sampleBaseTerrainLocalHeight(input: TerrainComponent | Partial<TerrainComponent>, localX: number, localZ: number): number {
   const terrain = withTerrainDefaults(input);
   let frequency = terrain.frequency;
@@ -368,17 +400,125 @@ export function autoTerrainMaterialLayerId(
   input: TerrainComponent | Partial<TerrainComponent>,
   height: number,
   normalY: number,
+  localX = 0,
+  localZ = 0,
 ): string {
   const terrain = withTerrainDefaults(input);
-  const layers = terrain.materialLayers.length ? terrain.materialLayers : defaultTerrainMaterialLayers();
-  const low = layers[0]?.id ?? 'terrain-grass';
-  const mid = layers[Math.min(1, layers.length - 1)]?.id ?? low;
-  const high = layers[Math.min(2, layers.length - 1)]?.id ?? mid;
-  if (normalY < 0.62) return high;
+  const weights = autoTerrainMaterialWeights(terrain, height, normalY, localX, localZ);
+  let best = 0;
+  for (let i = 1; i < weights.length; i += 1) if (weights[i] > weights[best]) best = i;
+  return terrain.materialLayers[best]?.id ?? 'terrain-grass';
+}
+
+const smoothRange = (min: number, max: number, value: number) =>
+  smoothstep(clamp((value - min) / Math.max(max - min, 0.0001), 0, 1));
+
+/**
+ * Smooth, normalized automatic weights for the legacy low/mid/high terrain bands. Extra layers are
+ * available to painting but remain at zero until authored. Steep ground blends toward the third (rock)
+ * layer instead of crossing a hard slope threshold.
+ */
+export function autoTerrainMaterialWeights(
+  input: TerrainComponent | Partial<TerrainComponent>,
+  height: number,
+  normalY: number,
+  localX = 0,
+  localZ = 0,
+): number[] {
+  const terrain = withTerrainDefaults(input);
+  const count = Math.max(1, terrain.materialLayers.length);
+  const weights = Array<number>(count).fill(0);
+  if (count === 1) {
+    weights[0] = 1;
+    return weights;
+  }
   const t = clamp((height / Math.max(terrain.heightScale, 0.001) + 1) * 0.5, 0, 1);
-  if (t < 0.48) return low;
-  if (t < 0.72) return mid;
-  return high;
+  const lowToMid = smoothRange(0.42, 0.54, t);
+  const midToHigh = count > 2 ? smoothRange(0.66, 0.78, t) : 0;
+  if (terrain.materialDistribution === 'ground') {
+    // Broad, world-space value noise makes coherent clearings rather than changing the mix at every
+    // vertex. Because it depends only on terrain-local coordinates and the authored seed, neighboring
+    // chunks evaluate their shared edge identically. A quieter second octave keeps the patch boundaries
+    // organic without turning the layer weights into speckle.
+    const broad = valueNoise2(localX * 0.026, localZ * 0.026, terrain.seed + 3253);
+    const breakup = valueNoise2(localX * 0.071, localZ * 0.071, terrain.seed + 8191);
+    const patch = broad * 0.76 + breakup * 0.24;
+    let soilShare = lerp(0.05, 0.72, smoothRange(0.43, 0.7, patch));
+
+    // Thin turf naturally gives way to exposed earth before the cliff face becomes predominantly rock.
+    // Keep this ramp broad and subordinate to the rock ramp so all three materials cross-fade smoothly.
+    const up = clamp(Number.isFinite(normalY) ? normalY : 1, 0, 1);
+    const weatheredSlope = 1 - smoothRange(0.7, 0.93, up);
+    soilShare = lerp(soilShare, Math.max(soilShare, 0.58), weatheredSlope * 0.45);
+
+    const slopeRock = count > 2 ? 1 - smoothRange(0.52, 0.86, up) : 0;
+    const summitRock = count > 2 ? smoothRange(0.8, 0.97, t) : 0;
+    // Probabilistic union avoids the hard ridge produced by max() when elevation and slope ramps cross.
+    const rock = 1 - (1 - slopeRock) * (1 - summitRock);
+    weights[0] = (1 - rock) * (1 - soilShare);
+    weights[1] = (1 - rock) * soilShare;
+    if (count > 2) weights[2] = rock;
+    return normalizeTerrainLayerWeights(weights);
+  }
+  weights[0] = 1 - lowToMid;
+  weights[1] = lowToMid * (1 - midToHigh);
+  if (count > 2) weights[2] = midToHigh;
+
+  if (count > 2) {
+    const rock = 1 - smoothRange(0.52, 0.72, normalY);
+    for (let i = 0; i < count; i += 1) weights[i] *= 1 - rock;
+    weights[2] += rock;
+  }
+  return normalizeTerrainLayerWeights(weights);
+}
+
+/** Normalize arbitrary layer weights, falling back safely to the first layer for an empty sum. */
+export function normalizeTerrainLayerWeights(weights: readonly number[]): number[] {
+  const clean = weights.map((weight) => (Number.isFinite(weight) && weight > 0 ? weight : 0));
+  const sum = clean.reduce((total, weight) => total + weight, 0);
+  if (sum <= 0) return clean.map((_, index) => (index === 0 ? 1 : 0));
+  return clean.map((weight) => weight / sum);
+}
+
+/**
+ * Bilinearly blend painted layer ids across edit cells. Missing cells retain the automatic landscape
+ * weights, producing a soft edge around a painted region instead of a nearest-cell material step.
+ */
+export function sampleTerrainLayerWeights(
+  input: TerrainComponent | Partial<TerrainComponent>,
+  localX: number,
+  localZ: number,
+  height?: number,
+  normalY?: number,
+): number[] {
+  const terrain = withTerrainDefaults(input);
+  const h = height ?? sampleTerrainLocalHeight(terrain, localX, localZ);
+  const ny = normalY ?? sampleTerrainNormal(terrain, localX, localZ)[1];
+  const automatic = autoTerrainMaterialWeights(terrain, h, ny, localX, localZ);
+  if (isStringRecordEmpty(terrain.paintOverrides)) return automatic;
+
+  const gx = localX / terrain.editSpacing;
+  const gz = localZ / terrain.editSpacing;
+  const ix = Math.floor(gx);
+  const iz = Math.floor(gz);
+  const tx = smoothstep(gx - ix);
+  const tz = smoothstep(gz - iz);
+  const layerIndex = terrainLayerIndex(terrain);
+  const at = (x: number, z: number) => {
+    const painted = terrain.paintOverrides[terrainEditKey(x, z)];
+    const index = painted ? layerIndex.get(painted) : undefined;
+    if (index === undefined) return automatic;
+    const result = Array<number>(terrain.materialLayers.length).fill(0);
+    result[index] = 1;
+    return result;
+  };
+  const corners = [at(ix, iz), at(ix + 1, iz), at(ix, iz + 1), at(ix + 1, iz + 1)];
+  const weights = automatic.map((_, index) => lerp(
+    lerp(corners[0][index] ?? 0, corners[1][index] ?? 0, tx),
+    lerp(corners[2][index] ?? 0, corners[3][index] ?? 0, tx),
+    tz,
+  ));
+  return normalizeTerrainLayerWeights(weights);
 }
 
 export function sampleTerrainMaterialLayerId(
@@ -389,10 +529,16 @@ export function sampleTerrainMaterialLayerId(
   normalY?: number,
 ): string {
   const terrain = withTerrainDefaults(input);
-  const { x, z } = terrainEditIndex(terrain, localX, localZ);
-  const painted = terrain.paintOverrides[terrainEditKey(x, z)];
-  if (painted && terrain.materialLayers.some((layer) => layer.id === painted)) return painted;
-  return autoTerrainMaterialLayerId(terrain, height ?? sampleTerrainLocalHeight(terrain, localX, localZ), normalY ?? sampleTerrainNormal(terrain, localX, localZ)[1]);
+  const weights = sampleTerrainLayerWeights(terrain, localX, localZ, height, normalY);
+  let best = 0;
+  for (let i = 1; i < weights.length; i += 1) if (weights[i] > weights[best]) best = i;
+  return terrain.materialLayers[best]?.id ?? autoTerrainMaterialLayerId(
+    terrain,
+    height ?? sampleTerrainLocalHeight(terrain, localX, localZ),
+    normalY ?? sampleTerrainNormal(terrain, localX, localZ)[1],
+    localX,
+    localZ,
+  );
 }
 
 export function sampleTerrainMaterialLayer(

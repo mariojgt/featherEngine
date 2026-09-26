@@ -136,7 +136,7 @@ async function readProjectDir(dir: string): Promise<OpenedProject> {
     project.assets.map(async (asset) =>
       asset.path
         ? { ...asset, url: convertFileSrc(await join(dir, asset.path)) }
-        : { ...asset, unresolved: true },
+        : asset.data ? { ...asset, url: asset.data } : { ...asset, unresolved: true },
     ),
   );
   return { dir, name: manifest.name, project };

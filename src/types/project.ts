@@ -96,7 +96,7 @@ export interface AssetItem {
   path?: string;
   /** Runtime-only URL for rendering (blob: on web, asset:// on desktop). NOT serialized. */
   url?: string;
-  /** Embedded data URL of the asset's bytes. Present only in exported game bundles (self-contained). */
+  /** Embedded bytes for self-contained bundles or authored assets without a backing file. */
   data?: string;
   /** SHA-256 of the asset's bytes, lowercase hex. The asset's content address: identical bytes
    *  imported twice reuse one file on disk, and an install can skip assets the project already has. */

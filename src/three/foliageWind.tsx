@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { Vector3Tuple } from '../types';
-import { useAssetTexture } from './ModelAsset';
+import { useAssetTexture, useAssetUrl } from './ModelAsset';
 import { MAX_FOLIAGE_INTERACTORS, foliageInteractorUniforms } from './foliageInteractors';
 
 /** Foliage is decorative — never let it catch pointer rays (it would block terrain sculpt/paint). */
@@ -104,6 +104,7 @@ interface WindUniforms {
    *  blade stays a bright uniform cartoon color no matter which face (front/back) shows — kills the dark
    *  back-faces of a LIT blade field. Grass ~0.55 (near-unlit like the reference); trees 0 (keep volume). */
   uEmit: { value: number };
+  uFade: { value: THREE.Vector2 };
 }
 
 function makeWindMaterial(
@@ -134,13 +135,14 @@ function makeWindMaterial(
     shader.uniforms.uRigid = uniforms.uRigid;
     shader.uniforms.uNormalLift = uniforms.uNormalLift;
     shader.uniforms.uEmit = uniforms.uEmit;
+    shader.uniforms.uFade = uniforms.uFade;
     // Shared, updated-in-place by the runtime tick — every foliage material sees the same actor list.
     shader.uniforms.uInteractors = foliageInteractorUniforms.uInteractors;
     shader.uniforms.uInteractorCount = foliageInteractorUniforms.uInteractorCount;
     shader.vertexShader =
       `uniform float uTime; uniform vec3 uWind; uniform float uWindStrength; uniform float uSwaySpeed; uniform float uBaseSway;
        uniform float uInteractScale; uniform float uInteractMode; uniform float uRigid; uniform float uNormalLift;
-       uniform vec4 uInteractors[${MAX_FOLIAGE_INTERACTORS}]; uniform int uInteractorCount; varying float vNfH; varying vec3 vNfTint; varying vec3 vNfInstColor; varying float vNfGust; varying float vNfPatch; varying float vNfRigid;\n` +
+       uniform vec4 uInteractors[${MAX_FOLIAGE_INTERACTORS}]; uniform int uInteractorCount; varying float vNfDistance; varying float vNfH; varying vec3 vNfTint; varying vec3 vNfInstColor; varying float vNfGust; varying float vNfPatch; varying float vNfRigid;\n` +
       shader.vertexShader
         .replace(
           '#include <beginnormal_vertex>',
@@ -164,6 +166,7 @@ function makeWindMaterial(
         #endif
         // Per-instance color variation from world position — breaks up the "one flat green" look so a
         // field reads as natural, varied vegetation (BOTW-style). Subtle: ±~10% brightness + a faint hue shift.
+        vNfDistance = distance(cameraPosition, nfWorld);
         float nfVar = fract(sin(dot(nfWorld.xz, vec2(12.9898, 78.233))) * 43758.5453);
         // When a per-instance color is present (ground-borrowed grass tints / wildflowers) the CPU color is
         // the source of truth — skip the shader green-bias so the "melt into the turf" color survives.
@@ -224,8 +227,14 @@ function makeWindMaterial(
         }`,
       );
     shader.fragmentShader =
-      'uniform float uEmit; varying float vNfH; varying vec3 vNfTint; varying vec3 vNfInstColor; varying float vNfGust; varying float vNfPatch; varying float vNfRigid;\n' +
+      'uniform vec2 uFade; uniform float uEmit; varying float vNfDistance; varying float vNfH; varying vec3 vNfTint; varying vec3 vNfInstColor; varying float vNfGust; varying float vNfPatch; varying float vNfRigid;\n' +
       shader.fragmentShader
+        .replace('#include <alphatest_fragment>', `#include <alphatest_fragment>
+          if (uFade.y > uFade.x) {
+            float coverage = 1.0 - smoothstep(uFade.x, uFade.y, vNfDistance);
+            float threshold = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+            if (coverage <= threshold) discard;
+          }`)
         .replace(
           '#include <emissivemap_fragment>',
           `#include <emissivemap_fragment>
@@ -279,6 +288,7 @@ export function WindFoliage({
   colors,
   shadow = true,
   emit = 0,
+  fade,
 }: {
   geometry: THREE.BufferGeometry;
   color: string;
@@ -305,6 +315,7 @@ export function WindFoliage({
   shadow?: boolean;
   /** Flat self-lit floor (0..1) so double-sided blades stay bright on both faces. Grass ~0.55, else 0. */
   emit?: number;
+  fade?: { start: number; end: number };
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const uniforms = useRef<WindUniforms>({
@@ -318,11 +329,29 @@ export function WindFoliage({
     uRigid: { value: rigid ? 1 : 0 },
     uNormalLift: { value: normalLift },
     uEmit: { value: emit },
+    uFade: { value: new THREE.Vector2() },
   });
   const material = useMemo(
     () => makeWindMaterial(color, map, alphaTest, uniforms.current),
     [color, map, alphaTest],
   );
+
+  const shadows = useMemo(() => {
+    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: map ?? null, alphaTest, side: THREE.DoubleSide });
+    const distance = new THREE.MeshDistanceMaterial({ map: map ?? null, alphaTest, side: THREE.DoubleSide });
+    for (const shadowMaterial of [depth, distance]) {
+      shadowMaterial.onBeforeCompile = (shader, renderer) => {
+        // Reuse exactly the visible vertex deformation, retaining the stock shadow fragment packing.
+        const patched = { ...shader, uniforms: { ...shader.uniforms } };
+        material.onBeforeCompile(patched, renderer);
+        shader.vertexShader = patched.vertexShader;
+        Object.assign(shader.uniforms, patched.uniforms);
+      };
+      shadowMaterial.customProgramCacheKey = () => `nf-wind-shadow-v2-${map ? 'tex' : 'flat'}-${alphaTest}`;
+    }
+    return { depth, distance };
+  }, [material, map, alphaTest]);
+  useEffect(() => () => { shadows.depth.dispose(); shadows.distance.dispose(); }, [shadows]);
 
   // Rebuilt whenever the colour, texture or cutoff changes, and built imperatively, so nothing else
   // frees the previous one. (The blade/cross GEOMETRIES are module-level singletons — never dispose.)
@@ -340,12 +369,17 @@ export function WindFoliage({
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
     mesh.computeBoundingSphere();
-  }, [matrices, colors]);
+    let maxScale = 1;
+    for (const matrix of matrices) maxScale = Math.max(maxScale, matrix.getMaxScaleOnAxis());
+    if (mesh.boundingSphere) mesh.boundingSphere.radius += maxScale * maxScale * (
+      Math.hypot(windVec[0], windVec[2]) * 0.08 * windStrength + baseSway * 2 + interactStrength * 1.2
+    );
+  }, [matrices, colors, windVec[0], windVec[2], windStrength, baseSway, interactStrength]);
 
-  useFrame((_, delta) => {
+  useFrame((frame) => {
     const u = uniforms.current;
     const state = useEditorStore.getState();
-    u.uTime.value = state.isPlaying ? state.runtimeTime * (1 + turbulence) : u.uTime.value + Math.min(delta, 1 / 20) * (1 + turbulence);
+    u.uTime.value = state.isPlaying ? state.runtimeTime * (1 + turbulence) : frame.clock.elapsedTime * (1 + turbulence);
     u.uWind.value.set(windVec[0], 0, windVec[2]);
     // 0.03 maps a wind magnitude of ~10 to a believable tip lean; windStrength scales it per-terrain.
     u.uWindStrength.value = 0.03 * windStrength;
@@ -356,6 +390,7 @@ export function WindFoliage({
     u.uRigid.value = rigid ? 1 : 0;
     u.uNormalLift.value = normalLift;
     u.uEmit.value = emit;
+    u.uFade.value.set(fade?.start ?? 0, fade?.end ?? 0);
   });
 
   if (matrices.length === 0) return null;
@@ -365,6 +400,8 @@ export function WindFoliage({
       args={[geometry, material, matrices.length]}
       castShadow={shadow}
       receiveShadow={shadow}
+      customDepthMaterial={shadows.depth}
+      customDistanceMaterial={shadows.distance}
       // Foliage must never intercept pointer rays — otherwise blades sitting over the terrain swallow
       // sculpt/paint clicks (and the click reads as a "miss", deselecting the terrain).
       raycast={ignoreFoliageRaycast}
@@ -387,6 +424,7 @@ export function WindFoliageImage({
   normalLift,
   interactStrength,
   interactMode,
+  fade,
 }: {
   assetId?: string;
   geometry: THREE.BufferGeometry;
@@ -400,8 +438,10 @@ export function WindFoliageImage({
   normalLift?: number;
   interactStrength?: number;
   interactMode?: number;
+  fade?: { start: number; end: number };
 }) {
-  const texture = useAssetTexture(assetId, false);
+  const url = useAssetUrl(assetId);
+  const texture = useAssetTexture(url, true);
   if (!texture || matrices.length === 0) return null;
   return (
     <WindFoliage
@@ -417,6 +457,7 @@ export function WindFoliageImage({
       normalLift={normalLift}
       interactStrength={interactStrength}
       interactMode={interactMode}
+      fade={fade}
       alphaTest={0.4}
     />
   );

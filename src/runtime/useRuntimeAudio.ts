@@ -16,12 +16,29 @@ export function useRuntimeAudio() {
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const activeSceneId = useEditorStore((state) => state.activeSceneId);
 
+  // Store subscriptions fire synchronously with the lifecycle update, before effects can drain a new scene's
+  // queue. This stops old sources and pending decodes without canceling the replacement cue from a restart.
+  useEffect(() => {
+    let previous = useEditorStore.getState();
+    return useEditorStore.subscribe((state) => {
+      const stopped = previous.isPlaying && !state.isPlaying;
+      const changedScene = previous.activeSceneId !== state.activeSceneId;
+      const restartedScene = previous.isPlaying
+        && state.isPlaying
+        && !changedScene
+        && state.runtimeTime < previous.runtimeTime;
+      if (stopped || changedScene || restartedScene) audioEngine.cancelOneShots();
+      previous = state;
+    });
+  }, []);
+
   // One-shot SFX: drain the queue and fire each through the spatial audio engine.
   useEffect(() => {
     if (queue.length === 0) return;
     const { assets } = useEditorStore.getState();
     queue.forEach((event) => {
-      const url = assets.find((asset) => asset.id === event.assetId)?.url;
+      const asset = assets.find((item) => item.id === event.assetId);
+      const url = asset?.url ?? asset?.data;
       if (!url) return;
       audioEngine.playOneShot(event.assetId, url, event.position, event.volume ?? 1, event.playbackRate ?? 1);
     });
@@ -34,7 +51,10 @@ export function useRuntimeAudio() {
     if (!isPlaying) return;
     const state = useEditorStore.getState();
     const scene = state.scenes.find((item) => item.id === state.activeSceneId);
-    const urlFor = (id?: string) => (id ? state.assets.find((asset) => asset.id === id)?.url : undefined);
+    const urlFor = (id?: string) => {
+      const asset = id ? state.assets.find((item) => item.id === id) : undefined;
+      return asset?.url ?? asset?.data;
+    };
     const start = (id: string | undefined, volume: number) => {
       const url = urlFor(id);
       if (!url || !id) return;
@@ -96,7 +116,10 @@ export function useRuntimeAudio() {
         lastPop = undefined;
       }
       const assets = useEditorStore.getState().assets;
-      const urlFor = (id?: string) => (id ? assets.find((asset) => asset.id === id)?.url : undefined);
+      const urlFor = (id?: string) => {
+        const asset = id ? assets.find((item) => item.id === id) : undefined;
+        return asset?.url ?? asset?.data;
+      };
       // Engine loop.
       const engineUrl = urlFor(vs?.engineId);
       if (vs && engineUrl && vs.engineId) {

@@ -1,0 +1,275 @@
+{
+  "license": "CC0-1.0",
+  "licenseUrl": "https://polyhaven.com/license",
+  "sources": [
+    {
+      "asset": "tree_small_02",
+      "page": "https://polyhaven.com/a/tree_small_02",
+      "authors": [
+        "Rico Cilliers"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tree_small_02/tree_small_02_1k.gltf",
+          "md5": "63f42b19687332f7b3a5c8b531734d8e"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_branch_nor_gl_1k.jpg",
+          "md5": "00a3eed0d4d28e7e890d9ec6ac0619af"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_branch_diff_1k.jpg",
+          "md5": "88b531469f5dba2fc44ca85df3776e7c"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_branch_arm_1k.jpg",
+          "md5": "9ec3d8428295d87ae363bf0d1e0a8288"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_leaves_nor_gl_1k.jpg",
+          "md5": "b06c87e73f54d9654f66d67e9de7aa85"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_leaves_diff_1k.jpg",
+          "md5": "315cbc2cebfb399e649ccd39112c109a"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_leaves_arm_1k.jpg",
+          "md5": "3dad5bafc732f7692db32a262530bbab"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_nor_gl_1k.jpg",
+          "md5": "115a20da8621cd3e034e9b1bbe574746"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_diff_1k.jpg",
+          "md5": "a7287a3f4e7f0d4577cb949b245f5b14"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_small_02/tree_small_02_arm_1k.jpg",
+          "md5": "44b6ed4bf32d7cd67cb3e9d5faeacc38"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/tree_small_02/tree_small_02.bin",
+          "md5": "7a7019a87e6fe0d7475c0fa2e08d8962"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/tree_small_02/tree_small_02_leaves_alpha_1k.png",
+          "md5": "63199ba87a9e8928424bd8c3b8017bd0",
+          "size": 264711
+        }
+      ]
+    },
+    {
+      "asset": "island_tree_02",
+      "page": "https://polyhaven.com/a/island_tree_02",
+      "authors": [
+        "Rob Tuytel",
+        "Rico Cilliers"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/island_tree_02/island_tree_02_1k.gltf",
+          "md5": "825057164e987894cbfc6c462977fa71"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_nor_gl_1k.jpg",
+          "md5": "d8b8bc86de9934a743fc9b0a5470e695"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_diff_1k.jpg",
+          "md5": "b7435527d9628527ce47d89fc1468e9a"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_arm_1k.jpg",
+          "md5": "e487f91bcb37a2a1109ef6234f1db27e"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_leaves_nor_gl_1k.jpg",
+          "md5": "a08ffb98b5ffb7dfa682e05a1639c642"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_leaves_diff_1k.jpg",
+          "md5": "1356cbb5a5dd1318f9f2a01eddbf03e1"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_leaves_arm_1k.jpg",
+          "md5": "27b06c4a53ff115ed7d51ee94e417257"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_branches_nor_gl_1k.jpg",
+          "md5": "789084affb01f4a22290a848558f5e12"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_branches_diff_1k.jpg",
+          "md5": "7792907fe2b2b748c129a2384192a579"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_branches_arm_1k.jpg",
+          "md5": "5b6f5b3838f4a8f60fea14fa3a3fef9f"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/island_tree_02/island_tree_02.bin",
+          "md5": "7fa9d6ee752b670cabb65053a5c6395b"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/island_tree_02/island_tree_02_leaves_alpha_1k.png",
+          "md5": "5ad9fb9a06e70c069bd3d3ba23577375",
+          "size": 57438
+        }
+      ]
+    }
+  ],
+  "output": {
+    "file": "woodland-trees.glb",
+    "sha256": "5f9e03860b1dfff664d4848111d2bfff2e51d756b4460f392d770459126e8a21",
+    "bytes": 16349892
+  },
+  "preparation": "Real trunk and branch geometry simplified with meshoptimizer. Each connected leaf surface fitted in its original UV space to an alpha-masked card; original species-specific atlases retained. Three levels preserve all leaves / one half / one eighth, with modest coverage compensation at distance. Albedo 1024, normal and packed AO/roughness/metallic 512; all embedded in glTF. Rooted Y-up geometry, scaled to approximately 7.5 metres before terrain scatter scaling.",
+  "costs": [
+    {
+      "name": "tree_small_02",
+      "lod": 0,
+      "material": "tree_small_02:tree_small_02_branches",
+      "triangles": 5794,
+      "vertices": 5777,
+      "error": 0.0013515069149434566
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 0,
+      "material": "tree_small_02:tree_small_02_leaves",
+      "triangles": 60500,
+      "vertices": 121000,
+      "error": 0
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 0,
+      "material": "tree_small_02:tree_small_02_trunk",
+      "triangles": 6500,
+      "vertices": 4058,
+      "error": 0.0013681391719728708
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 1,
+      "material": "tree_small_02:tree_small_02_branches",
+      "triangles": 2174,
+      "vertices": 2532,
+      "error": 0.002341172657907009
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 1,
+      "material": "tree_small_02:tree_small_02_leaves",
+      "triangles": 30250,
+      "vertices": 60500,
+      "error": 0
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 1,
+      "material": "tree_small_02:tree_small_02_trunk",
+      "triangles": 2496,
+      "vertices": 1695,
+      "error": 0.0026289073284715414
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 2,
+      "material": "tree_small_02:tree_small_02_branches",
+      "triangles": 744,
+      "vertices": 1082,
+      "error": 0.004659402649849653
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 2,
+      "material": "tree_small_02:tree_small_02_leaves",
+      "triangles": 7562,
+      "vertices": 15124,
+      "error": 0
+    },
+    {
+      "name": "tree_small_02",
+      "lod": 2,
+      "material": "tree_small_02:tree_small_02_trunk",
+      "triangles": 890,
+      "vertices": 644,
+      "error": 0.005200277082622051
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 0,
+      "material": "island_tree_02:island_tree_02",
+      "triangles": 6500,
+      "vertices": 3997,
+      "error": 0.0014646918280050159
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 0,
+      "material": "island_tree_02:island_tree_02_leaves",
+      "triangles": 59562,
+      "vertices": 119124,
+      "error": 0
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 0,
+      "material": "island_tree_02:island_tree_02_branches",
+      "triangles": 6399,
+      "vertices": 6417,
+      "error": 0.001712491735816002
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 1,
+      "material": "island_tree_02:island_tree_02",
+      "triangles": 2493,
+      "vertices": 1667,
+      "error": 0.003232390619814396
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 1,
+      "material": "island_tree_02:island_tree_02_leaves",
+      "triangles": 29780,
+      "vertices": 59560,
+      "error": 0
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 1,
+      "material": "island_tree_02:island_tree_02_branches",
+      "triangles": 2422,
+      "vertices": 2162,
+      "error": 0.0026175363454967737
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 2,
+      "material": "island_tree_02:island_tree_02",
+      "triangles": 898,
+      "vertices": 660,
+      "error": 0.00820765271782875
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 2,
+      "material": "island_tree_02:island_tree_02_leaves",
+      "triangles": 7444,
+      "vertices": 14888,
+      "error": 0
+    },
+    {
+      "name": "island_tree_02",
+      "lod": 2,
+      "material": "island_tree_02:island_tree_02_branches",
+      "triangles": 688,
+      "vertices": 737,
+      "error": 0.004878610838204622
+    }
+  ]
+}

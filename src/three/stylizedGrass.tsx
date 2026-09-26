@@ -484,12 +484,18 @@ export function StylizedGrass({
     matrices.forEach((matrix, index) => mesh.setMatrixAt(index, matrix));
     mesh.instanceMatrix.needsUpdate = true;
     mesh.computeBoundingSphere();
-  }, [matrices]);
+    let maxScale = 1;
+    for (const matrix of matrices) maxScale = Math.max(maxScale, matrix.getMaxScaleOnAxis());
+    if (mesh.boundingSphere) mesh.boundingSphere.radius += maxScale * maxScale * (
+      Math.hypot(windVec[0], windVec[2]) * 0.1 * windStrength + settings.perspectiveCorrection * 2
+      + settings.interactionStrength * interactStrength * (1 + settings.pushDownAmount) + 0.5
+    );
+  }, [matrices, windVec[0], windVec[2], windStrength, settings.perspectiveCorrection, settings.interactionStrength, settings.pushDownAmount, interactStrength]);
 
-  useFrame((_, delta) => {
+  useFrame((frame) => {
     const u = uniforms.current;
     const state = useEditorStore.getState();
-    u.uTime.value = state.isPlaying ? state.runtimeTime * (1 + turbulence) : u.uTime.value + Math.min(delta, 1 / 20) * (1 + turbulence);
+    u.uTime.value = state.isPlaying ? state.runtimeTime * (1 + turbulence) : frame.clock.elapsedTime * (1 + turbulence);
     u.uWind.value.set(windVec[0], 0, windVec[2]);
     // 0.03 maps a wind magnitude of ~10 to a believable tip lean; windStrength scales it per-terrain.
     u.uWindStrength.value = 0.03 * windStrength;

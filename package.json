@@ -48,6 +48,8 @@
     "cinematic:blackthorn:render": "node scripts/render-cinematic.mjs --template blackthorn",
     "cinematic:neon:assets": "node scripts/generate-neon-afterlight-assets.mjs && node scripts/generate-neon-afterlight-score.mjs",
     "cinematic:neon:preview": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic --preview",
+    "cinematic:verdant:preview": "node scripts/render-cinematic.mjs --template verdant --preview",
+    "cinematic:verdant:render": "node scripts/render-cinematic.mjs --template verdant",
     "cinematic:neon:render": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic"
   },
   "dependencies": {

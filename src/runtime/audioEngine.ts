@@ -24,6 +24,15 @@ type LoopHandle = {
   assetId: string;
 };
 
+type OneShotHandle = {
+  source: AudioBufferSourceNode | null;
+  gain: GainNode | null;
+  panner: PannerNode | null;
+  element: HTMLAudioElement | null;
+  removeFallbackListeners: (() => void) | null;
+  stopped: boolean;
+};
+
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -32,6 +41,8 @@ class AudioEngine {
   private buffers = new Map<string, AudioBuffer>();
   /** In-flight decodes so concurrent requests for the same asset share one fetch. */
   private pending = new Map<string, Promise<AudioBuffer | null>>();
+  /** Active and still-decoding one-shots, retained only until completion or explicit cancellation. */
+  private oneShots = new Set<OneShotHandle>();
   // Scratch vectors reused every frame to avoid per-frame allocation in updateListener.
   private vPos = new Vector3();
   private vFwd = new Vector3();
@@ -233,14 +244,24 @@ class AudioEngine {
     volume = 1,
     playbackRate = 1,
   ): void {
+    const handle: OneShotHandle = {
+      source: null,
+      gain: null,
+      panner: null,
+      element: null,
+      removeFallbackListeners: null,
+      stopped: false,
+    };
+    this.oneShots.add(handle);
     const ctx = this.ensureContext();
     if (!ctx) {
-      this.playFallback(url, volume);
+      this.playFallback(handle, url, volume);
       return;
     }
     void this.getBuffer(assetId, url).then((buffer) => {
+      if (handle.stopped) return;
       if (!buffer) {
-        this.playFallback(url, volume);
+        this.playFallback(handle, url, volume);
         return;
       }
       const source = ctx.createBufferSource();
@@ -249,18 +270,67 @@ class AudioEngine {
       source.playbackRate.value = rate;
       const gain = ctx.createGain();
       gain.gain.value = volume;
+      handle.source = source;
+      handle.gain = gain;
       if (position) {
         const panner = this.makePanner(ctx, position);
+        handle.panner = panner;
         source.connect(panner).connect(gain).connect(this.master!);
       } else {
         source.connect(gain).connect(this.master!);
       }
-      source.onended = () => {
-        source.disconnect();
-        gain.disconnect();
-      };
+      source.onended = () => this.finishOneShot(handle);
       source.start();
     });
+  }
+
+  /** Stop every transient from the current runtime generation, including requests still decoding. */
+  cancelOneShots(): void {
+    for (const handle of [...this.oneShots]) {
+      handle.stopped = true;
+      if (handle.source) {
+        handle.source.onended = null;
+        try {
+          handle.source.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      this.finishOneShot(handle, true);
+    }
+  }
+
+  private finishOneShot(handle: OneShotHandle, releaseElement = false): void {
+    this.oneShots.delete(handle);
+    handle.removeFallbackListeners?.();
+    handle.removeFallbackListeners = null;
+    if (handle.source) {
+      handle.source.onended = null;
+      try {
+        handle.source.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      handle.source = null;
+    }
+    try {
+      handle.panner?.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    try {
+      handle.gain?.disconnect();
+    } catch {
+      /* already disconnected */
+    }
+    handle.panner = null;
+    handle.gain = null;
+    if (handle.element && releaseElement) {
+      handle.element.pause();
+      handle.element.removeAttribute('src');
+      handle.element.load();
+    }
+    handle.element = null;
   }
 
   /**
@@ -330,13 +400,21 @@ class AudioEngine {
     noise.stop(t + decay);
   }
 
-  private playFallback(url: string, volume: number): void {
+  private playFallback(handle: OneShotHandle, url: string, volume: number): void {
     try {
       const audio = new Audio(url);
       audio.volume = Math.max(0, Math.min(1, volume));
-      void audio.play().catch(() => {});
+      const finish = () => this.finishOneShot(handle, true);
+      audio.addEventListener('ended', finish, { once: true });
+      audio.addEventListener('error', finish, { once: true });
+      handle.element = audio;
+      handle.removeFallbackListeners = () => {
+        audio.removeEventListener('ended', finish);
+        audio.removeEventListener('error', finish);
+      };
+      void audio.play().catch(finish);
     } catch {
-      /* ignore */
+      this.finishOneShot(handle);
     }
   }
 

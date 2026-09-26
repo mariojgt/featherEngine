@@ -60,6 +60,7 @@ import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
 import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createLastLightTemplate } from '../project/lastLightTemplate';
 import { createBlackthornTemplate } from '../project/blackthornTemplate';
+import { createVerdantTemplate } from '../project/verdantTemplate';
 import { createNeonAfterlightTemplate } from '../project/neonAfterlightTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createPhysicsLabTemplate } from '../project/physicsLabTemplate';
@@ -114,10 +115,17 @@ const terrainFoliagePatchSchema = z.object({
   maxScale: z.number().min(0.1).max(16).optional(),
   slopeLimit: z.number().min(0).max(1).optional().describe('Minimum normal Y for placement; higher avoids steep slopes.'),
   grassMesh: z
-    .enum(['clump', 'blade', 'cross', 'tuft'])
+    .enum(['natural', 'clump', 'blade', 'cross', 'tuft'])
     .optional()
-    .describe("'clump' (default) is the stylized painted-card grass with gradient/variation/interaction; the rest are simple legacy shapes."),
-  stylizedGrass: stylizedGrassPatchSchema.optional().describe("Look/motion of the 'clump' grass. Prefer set_grass_look for a whole look; use this to tweak single settings."),
+    .describe("'natural' uses curved, tapered individual blades; 'clump' (default) uses stylized painted cards; the rest are simple legacy shapes."),
+  stylizedGrass: stylizedGrassPatchSchema.optional().describe("Look/motion of 'natural' or 'clump' grass. Prefer set_grass_look for a whole look; use this to tweak single settings."),
+  treeSpecies: z.array(z.object({ specId: z.string(), weight: z.number().min(0.01).max(100) })).max(4).optional().describe('Weighted tree-library species mix for built-in forests. [] restores the single treeSpecId.'),
+  distribution: z.enum(['uniform', 'woodland']).optional().describe('Woodland clusters spaced trees into groves and reduces grass under their canopies. Uniform preserves the existing scatter.'),
+  understoryAssetId: z.string().optional().describe('Authored ground-cover library model id; apply_terrain_biome woodland supplies the bundled fern, rock and decayed-wood library.'),
+  understoryDensity: z.number().min(0).max(1).optional().describe('Ground-cover density; 0 disables. Respects foliage masks, slope, elevation and painted rock exclusions.'),
+  treeSpacing: z.number().min(0).max(64).optional().describe('Minimum separation in terrain-local units; 0 preserves legacy scattering.'),
+  minElevation: z.number().min(-512).max(512).nullable().optional().describe('Lowest vegetation elevation in terrain-local units. null clears the limit.'),
+  maxElevation: z.number().min(-512).max(512).nullable().optional().describe('Highest vegetation elevation in terrain-local units. null clears the limit.'),
   treeSpecId: z.string().optional().describe('Scatter a parametric tree ASSET from the project tree library (see list_tree_specs) instead of the simple crowns. "" clears it.'),
   treeMesh: z.enum(['cone', 'round', 'fir']).optional().describe("Built-in tree shape: 'fir' = stylized layered conifer (stacked tiers — the BOTW/stylized-nature look, best default), 'cone' = single cone, 'round' = single sphere crown."),
   grassSource: z.enum(['builtin', 'image', 'model']).optional().describe("Grass mesh source: 'builtin' high-quality wind-animated blades (default), 'image' a 2D billboard from grassImageAssetId, or 'model' from grassModelAssetId."),
@@ -134,6 +142,10 @@ const terrainFoliagePatchSchema = z.object({
   treeColor: z.string().optional(),
 });
 const terrainMaterialLayerPatchSchema = z.object({
+  textureScale: z.number().min(0.25).max(256).optional().describe('Terrain units per texture repeat (default 8).'),
+  textureVariation: z.number().min(0).max(1).optional().describe('Tile offset blending and macro tint variation; 0 preserves uniform tiling.'),
+  normalStrength: z.number().min(0).max(4).optional(),
+  roughness: z.number().min(0).max(1).optional(),
   id: z.string().optional(),
   name: z.string().optional(),
   color: z.string().optional(),
@@ -156,6 +168,7 @@ const terrainPatchSchema = z.object({
   persistence: z.number().min(0.05).max(0.95).optional(),
   lacunarity: z.number().min(1.1).max(4).optional(),
   editSpacing: z.number().min(0.5).max(16).optional().describe('World units between persistent sculpt/paint samples.'),
+  materialDistribution: z.enum(['height', 'ground']).optional().describe('Automatic layer placement: height bands (legacy) or grass on gentle ground with rock on steep/high terrain.'),
   lowColor: z.string().optional(),
   midColor: z.string().optional(),
   highColor: z.string().optional(),
@@ -1698,6 +1711,14 @@ const rawEngineTools = {
     },
   }),
 
+  apply_terrain_biome: tool({
+    description: 'Apply a natural woodland, wild meadow, or alpine grove to existing terrain. Adds bundled CC0 scanned ground textures and natural grass and authored textured tree models (woodland/meadow), or editable parametric species (alpine), changes vegetation settings, and preserves sculpting and painted masks.',
+    inputSchema: z.object({ objectId: z.string(), biome: z.enum(['woodland', 'meadow', 'alpine']) }),
+    execute: async ({ objectId, biome }) => await store().applyTerrainBiome(objectId, biome)
+      ? `Applied ${biome} to terrain ${objectId}.`
+      : `No terrain with id ${objectId} in the active scene.`,
+  }),
+
   list_tree_specs: tool({
     description: 'List the project\'s reusable parametric tree assets (the Tree Builder library) with their ids, so you can scatter one on terrain or restyle it.',
     inputSchema: z.object({}),
@@ -1725,7 +1746,9 @@ const rawEngineTools = {
       name: z.string().optional(),
       trunk: z.object({ height: z.number().optional(), baseRadius: z.number().optional(), taper: z.number().optional(), lean: z.number().optional(), curl: z.number().optional(), flare: z.number().optional(), gnarl: z.number().optional() }).optional(),
       branches: z.object({ levels: z.number().optional(), angle: z.number().optional(), gravity: z.number().optional(), lengthRatio: z.number().optional() }).optional(),
-      foliage: z.object({ strategy: z.enum(['clusters', 'blob', 'cards', 'skirt', 'fronds', 'strands', 'none']).optional(), size: z.number().optional(), density: z.number().optional(), droop: z.number().optional(), crownRadius: z.number().optional(), crownLift: z.number().optional(), crownFill: z.number().optional() }).optional(),
+      foliage: z.object({ strategy: z.enum(['clusters', 'blob', 'cards', 'leaves', 'skirt', 'fronds', 'strands', 'none']).optional(), size: z.number().optional(), density: z.number().optional(), droop: z.number().optional(), crownRadius: z.number().optional(), crownLift: z.number().optional(), crownFill: z.number().optional() }).optional(),
+      surface: z.object({ style: z.enum(['stylized', 'natural']).optional(), barkRoughness: z.number().min(0.2).max(1).optional(), foliageRoughness: z.number().min(0.2).max(1).optional(), alphaCutoff: z.number().min(0.05).max(0.95).optional() }).optional().describe('Natural uses PBR bark and cutout leaves; use foliage.strategy cards for leafy broadleaf trees.'),
+      lod: z.object({ levels: z.number().int().min(1).max(3).optional(), distances: z.array(z.number().min(1).max(4000)).min(1).max(3).optional() }).optional(),
       chop: z.object({
         enabled: z.boolean().optional(),
         breakPoints: z.array(z.object({ height: z.number(), hits: z.number(), label: z.string().optional() })).optional().describe('Heights up the trunk (0-1) where it can be severed, each with its hit count.'),
@@ -1740,6 +1763,8 @@ const rawEngineTools = {
         ...(patch.trunk ? { trunk: { ...spec.trunk, ...patch.trunk } } : {}),
         ...(patch.branches ? { branches: { ...spec.branches, ...patch.branches } } : {}),
         ...(patch.foliage ? { foliage: { ...spec.foliage, ...patch.foliage } } : {}),
+        ...(patch.surface ? { look: { ...spec.look, surface: { ...spec.look.surface, ...patch.surface } } } : {}),
+        ...(patch.lod ? { lod: { ...spec.lod, ...patch.lod } } : {}),
         ...(patch.chop ? { chop: { ...spec.chop, ...patch.chop } } : {}),
       });
       return `Updated tree asset ${specId}.`;
@@ -3371,6 +3396,15 @@ const rawEngineTools = {
     execute: async () => {
       const id = await createFilmModeTemplate();
       return id ? `Created "Resonance" with cinematicId ${id}. Press Play for the 32-second kinetic hall film: wind-driven cloth, real domino collisions, Lux lighting and a live reactor fracture at 24 seconds. Replay film or R resets the simulation. Open the Cinematic panel for eight named shots and beat markers; open the Resonance Physics & replay cues Blueprint to edit the event-driven physics. Scrubbing previews the edit; play from the start for the full simulation.` : `Couldn't build the Film Mode template.`;
+    },
+  }),
+
+  create_verdant_template: tool({
+    description: 'Build Verdant — A Woodland Study, an original 48-second woodland cinematic: rocky clearings, fern and shrub banks, natural blade grass, clustered authored trees, volumetric sunlight, six editable shots, an original generated score and ambience. Adds to the active scene; use a blank project. Play; R replays. Available as a local reusable project package.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createVerdantTemplate();
+      return id ? `Built Verdant — A Woodland Study, cinematicId ${id}. Press Play for the 48-second woodland film; R replays. Edit the six shots in Film Mode. Original generated score and ambience are governed by provider terms.` : 'No active scene to build Verdant into.';
     },
   }),
 

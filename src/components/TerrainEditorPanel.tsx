@@ -1,3 +1,4 @@
+import { TerrainVegetationControls } from './TerrainVegetationControls';
 import { useEffect, useMemo, useState } from 'react';
 import { Brush, Eraser, Mountain, Palette, Plus, Settings2, Sprout, Trash2 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
@@ -150,7 +151,12 @@ function PaintControls({
   return (
     <div className="terrain-paint-layout">
       <div className="terrain-layer-list">
-        {terrain.materialLayers.map((layer) => (
+        <label className="node-field"><span>Automatic surfaces</span>
+        <select value={terrain.materialDistribution ?? 'height'} onChange={(event) => useEditorStore.getState().updateTerrain(objectId, { materialDistribution: event.target.value as 'height' | 'ground' })}>
+          <option value="height">Elevation bands</option><option value="ground">Grass and rocky slopes</option>
+        </select>
+      </label>
+      {terrain.materialLayers.map((layer) => (
           <button
             key={layer.id}
             className={layer.id === activeLayerId ? 'active' : ''}
@@ -162,6 +168,11 @@ function PaintControls({
           </button>
         ))}
       </div>
+      <label className="node-field"><span>Automatic surfaces</span>
+        <select value={terrain.materialDistribution ?? 'height'} onChange={(event) => useEditorStore.getState().updateTerrain(objectId, { materialDistribution: event.target.value as 'height' | 'ground' })}>
+          <option value="height">Elevation bands</option><option value="ground">Grass and rocky slopes</option>
+        </select>
+      </label>
       {terrain.materialLayers.map((layer) =>
         layer.id === activeLayerId ? (
           <div key={layer.id} className="terrain-control-grid">
@@ -187,11 +198,38 @@ function PaintControls({
               emptyLabel="None"
               onChange={(normalMapAssetId) => updateLayer(objectId, layer.id, { normalMapAssetId })}
             />
+            <NumberField
+              label="Texture Scale"
+              value={layer.textureScale ?? 8}
+              min={0.25}
+              max={256}
+              step={0.25}
+              onChange={(textureScale) => updateLayer(objectId, layer.id, { textureScale })}
+            />
+            <NumberField label="Texture Variation" value={layer.textureVariation ?? 0} min={0} max={1} step={0.05}
+              onChange={(textureVariation) => updateLayer(objectId, layer.id, { textureVariation })} />
+            <NumberField
+              label="Normal Strength"
+              value={layer.normalStrength ?? 1}
+              min={0}
+              max={4}
+              step={0.05}
+              onChange={(normalStrength) => updateLayer(objectId, layer.id, { normalStrength })}
+            />
+            <NumberField
+              label="Roughness"
+              value={layer.roughness ?? 0.92}
+              min={0}
+              max={1}
+              step={0.02}
+              onChange={(roughness) => updateLayer(objectId, layer.id, { roughness })}
+            />
             <NumberField label="Brush Radius" value={brush.radius} min={0.5} step={0.5} onChange={(radius) => setTerrainBrush({ mode: 'paint', radius })} />
             <div className="terrain-button-row">
               <button
                 className="icon-button compact"
-                title="Add layer"
+                title={terrain.materialLayers.length >= 8 ? 'Maximum 8 layers' : 'Add layer'}
+                disabled={terrain.materialLayers.length >= 8}
                 onClick={() => {
                   const id = addLayer(objectId);
                   if (id) setTerrainBrush({ mode: 'paint', targetLayerId: id });
@@ -356,6 +394,7 @@ function FoliageControls({
         <label className="node-field">
           <span>Grass Mesh</span>
           <select value={foliage.grassMesh} onChange={(event) => setFoliage({ grassMesh: event.target.value as TerrainComponent['foliage']['grassMesh'] })}>
+            <option value="natural">Natural blades</option>
             <option value="clump">Stylized clump</option>
             <option value="blade">Blade</option>
             <option value="cross">Cross</option>
@@ -419,6 +458,7 @@ function FoliageControls({
       <p className="field-hint">Scatter small varied-color blooms through the grass. 0 = none.</p>
       <RangeField label="Grass Density" value={foliage.density} onChange={(density) => setFoliage({ density })} />
       <RangeField label="Tree Density" value={foliage.treeDensity} onChange={(treeDensity) => setFoliage({ treeDensity })} />
+      <TerrainVegetationControls objectId={objectId} terrain={terrain} />
       <RangeField label="Slope Limit" value={foliage.slopeLimit} onChange={(slopeLimit) => setFoliage({ slopeLimit })} />
       <NumberField label="Min Scale" value={foliage.minScale} min={0.1} step={0.1} onChange={(minScale) => setFoliage({ minScale })} />
       <NumberField label="Max Scale" value={foliage.maxScale} min={0.1} step={0.1} onChange={(maxScale) => setFoliage({ maxScale })} />
@@ -426,7 +466,7 @@ function FoliageControls({
         <span>Grass Color</span>
         <input type="color" value={foliage.grassColor} onChange={(event) => setFoliage({ grassColor: event.target.value })} />
       </label>
-      {grassSource === 'builtin' && foliage.grassMesh === 'clump' && (
+      {grassSource === 'builtin' && (foliage.grassMesh === 'clump' || foliage.grassMesh === 'natural') && (
         <StylizedGrassControls
           settings={foliage.stylizedGrass ?? defaultStylizedGrass()}
           onChange={(patch) => setFoliage({ stylizedGrass: { ...(foliage.stylizedGrass ?? defaultStylizedGrass()), ...patch } })}

@@ -1,4 +1,4 @@
-import type { TreeArchetype, TreeBreakPoint, TreePixelLeafArt, TreeSpec } from '../types';
+import type { TreeArchetype, TreeBreakPoint, TreeFoliageStrategy, TreePixelLeafArt, TreeSpec } from '../types';
 
 /**
  * Deterministic PRNG (mulberry32) — small, fast, well-distributed.
@@ -35,6 +35,20 @@ const PIXEL_LEAF_ART = new Set<TreePixelLeafArt>([
 
 const isPixelLeafArt = (value: unknown): value is TreePixelLeafArt =>
   typeof value === 'string' && PIXEL_LEAF_ART.has(value as TreePixelLeafArt);
+
+const FOLIAGE_STRATEGIES = new Set<TreeFoliageStrategy>([
+  'blob',
+  'cards',
+  'clusters',
+  'leaves',
+  'skirt',
+  'fronds',
+  'strands',
+  'none',
+]);
+
+const isFoliageStrategy = (value: unknown): value is TreeFoliageStrategy =>
+  typeof value === 'string' && FOLIAGE_STRATEGIES.has(value as TreeFoliageStrategy);
 
 /** The neutral tree every archetype is a partial override of. */
 export function baseTreeSpec(): TreeSpec {
@@ -87,6 +101,7 @@ export function baseTreeSpec(): TreeSpec {
       translucency: { color: '#9ed070', scale: 0.55, power: 2.4 },
       aoStrength: 0.45,
       pixelArt: { enabled: false, leafArt: 'broad', alphaCutoff: 0.45, billboard: true },
+      surface: { style: 'stylized', barkRoughness: 0.92, foliageRoughness: 0.82, alphaCutoff: 0.46 },
     },
     wind: {
       stiffnessCurve: 1.6,
@@ -314,6 +329,7 @@ export function normalizeTreeSpec(spec: Partial<TreeSpec> & { id: string }): Tre
     },
     foliage: {
       ...merged.foliage,
+      strategy: isFoliageStrategy(merged.foliage.strategy) ? merged.foliage.strategy : base.foliage.strategy,
       density: clamp(merged.foliage.density, 0, 12),
       size: clamp(merged.foliage.size, 0.05, 8),
       sizeVariance: clamp(merged.foliage.sizeVariance, 0, 1),
@@ -340,6 +356,16 @@ export function normalizeTreeSpec(spec: Partial<TreeSpec> & { id: string }): Tre
         alphaCutoff: clamp(merged.look.pixelArt?.alphaCutoff ?? base.look.pixelArt.alphaCutoff, 0.05, 0.95),
         billboard: merged.look.pixelArt?.billboard ?? base.look.pixelArt.billboard,
       },
+      surface: {
+        style: merged.look.surface?.style === 'natural' ? 'natural' : 'stylized',
+        barkRoughness: clamp(merged.look.surface?.barkRoughness ?? base.look.surface.barkRoughness, 0.2, 1),
+        foliageRoughness: clamp(
+          merged.look.surface?.foliageRoughness ?? base.look.surface.foliageRoughness,
+          0.2,
+          1,
+        ),
+        alphaCutoff: clamp(merged.look.surface?.alphaCutoff ?? base.look.surface.alphaCutoff, 0.05, 0.95),
+      },
     },
     wind: {
       ...merged.wind,
@@ -350,7 +376,9 @@ export function normalizeTreeSpec(spec: Partial<TreeSpec> & { id: string }): Tre
     lod: {
       ...merged.lod,
       levels: clampInt(merged.lod.levels, 1, 3),
-      distances: merged.lod.distances?.length ? merged.lod.distances : base.lod.distances,
+      distances: merged.lod.distances?.some((value) => Number.isFinite(value) && value > 0)
+        ? [...new Set(merged.lod.distances.filter((value) => Number.isFinite(value) && value > 0).map((value) => clamp(value, 1, 4000)))].sort((a, b) => a - b).slice(0, 3)
+        : base.lod.distances,
       billboardDistance: clamp(merged.lod.billboardDistance, 0, 4000),
     },
     chop: {

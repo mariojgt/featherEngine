@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { collectPackage, collectProjectPackage, remapPackageForImport, buildPackage } from '../package';
 import type { PackageSource } from '../package';
 import type { AssetItem, Scene, SceneObject } from '../../types';
+import { treeSpecFromArchetype } from '../../tree/treeSpec';
+import { blankProject } from '../serialize';
+import { validateRuntimeReferences } from '../runtimeCompatibility';
 
 /**
  * "Does a downloaded package contain everything it needs?"
@@ -77,6 +80,7 @@ function source(): PackageSource & { scenes: Scene[] } {
             grassModelAssetId: 'a-grass-model',
             grassImageAssetId: 'a-grass-img',
             treeImageAssetId: 'a-tree-img',
+            treeSpecId: 'tree-oak',
           },
         } as SceneObject['terrain'],
       }),
@@ -111,11 +115,26 @@ function source(): PackageSource & { scenes: Scene[] } {
     dataAssets: [],
     uiDocuments: [],
     variables: [],
+    treeSpecs: [treeSpecFromArchetype('broadleaf', 'tree-oak', 'Oak')],
     assets,
   };
 }
 
 describe('package dependency closure — everything referenced ships', () => {
+  it('validates terrain-only tree library references at runtime', () => {
+    const project = blankProject('Terrain Trees');
+    project.scenes[0].objects.push(object('terrain-tree', {
+      terrain: { enabled: true, foliage: { treeSpecId: 'missing-tree' } } as SceneObject['terrain'],
+    }));
+    expect(validateRuntimeReferences(project, project.activeSceneId).errors).toContain(
+      'Object "terrain-tree" terrain foliage references missing tree spec missing-tree.',
+    );
+    project.treeSpecs.push(treeSpecFromArchetype('conifer', 'missing-tree'));
+    expect(validateRuntimeReferences(project, project.activeSceneId).errors).not.toContain(
+      'Object "terrain-tree" terrain foliage references missing tree spec missing-tree.',
+    );
+  });
+
   it('collects every image, model and sound a scene reaches, and nothing it does not', () => {
     const collected = collectProjectPackage(source());
 
@@ -142,6 +161,7 @@ describe('package dependency closure — everything referenced ships', () => {
     // Unreferenced assets are NOT dragged along — the package stays as small as it can be.
     expect(collected.assetIds).not.toContain('a-unused');
     expect(collected.content.materials.map((m) => m.id)).toEqual(['mat-1']);
+    expect(collected.content.treeSpecs?.map((spec) => spec.id)).toEqual(['tree-oak']);
   });
 
   it('keeps every one of those references resolvable after import re-ids everything', () => {
@@ -176,6 +196,8 @@ describe('package dependency closure — everything referenced ships', () => {
     expect(available.has(foliage.grassModelAssetId!)).toBe(true);
     expect(available.has(foliage.grassImageAssetId!)).toBe(true);
     expect(available.has(foliage.treeImageAssetId!)).toBe(true);
+    expect(content.treeSpecs?.some((spec) => spec.id === foliage.treeSpecId)).toBe(true);
+    expect(foliage.treeSpecId).not.toBe('tree-oak');
     const layer = scene.objects[3].terrain!.materialLayers![0];
     expect(available.has(layer.textureAssetId!)).toBe(true);
     expect(available.has(layer.normalMapAssetId!)).toBe(true);

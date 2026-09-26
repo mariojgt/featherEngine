@@ -529,6 +529,7 @@ export function GameHud() {
           Meshes glide through the recorded motion (see replayRecorder.ts); the sim is frozen meanwhile. */}
       {!replayPlayback && !driving && (
         <button
+          data-capture-ui
           onClick={() => startReplay()}
           title="Instant replay of the last few seconds"
           style={{

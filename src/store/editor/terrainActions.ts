@@ -18,9 +18,30 @@ import {
 import { syncTerrainLayerColors } from './defaults';
 import { makeId, stripUndefined } from './ids';
 import { mapActiveSceneObjects, selectActiveObjects } from './storeHelpers';
+import { biomeSurfaceAssets, biomeTreeAssets, biomeTreeSpecs, terrainBiomePatch, type TerrainBiomeId } from '../../terrain/biomes';
 
 type SetState = StoreApi<EditorState>['setState'];
 type GetState = StoreApi<EditorState>['getState'];
+
+/** One authored change: references, species, and embedded surfaces become available together. */
+export const applyTerrainBiome = async (set: SetState, get: GetState, id: string, biome: TerrainBiomeId): Promise<boolean> => {
+  const sceneId = get().activeSceneId;
+  if (!selectActiveObjects(get()).some((object) => object.id === id && object.terrain)) return false;
+  const [surfaces, treeAssets] = await Promise.all([biomeSurfaceAssets(), biomeTreeAssets(biome)]);
+  const assets = [...surfaces, ...treeAssets];
+  if (get().activeSceneId !== sceneId || !selectActiveObjects(get()).some((object) => object.id === id && object.terrain)) return false;
+  const species = biomeTreeSpecs(biome);
+  set((state) => ({
+    ...mapActiveSceneObjects(state, (objects) => objects.map((object) => {
+      if (object.id !== id || !object.terrain) return object;
+      const current = withTerrainDefaults(object.terrain);
+      return { ...object, terrain: { ...syncTerrainLayerColors(terrainBiomePatch(current, biome, surfaces.length === 6)), editVersion: (current.editVersion ?? 0) + 1 } };
+    })),
+    assets: [...state.assets, ...assets.filter((asset) => !state.assets.some((existing) => existing.id === asset.id))],
+    treeSpecs: [...state.treeSpecs, ...species.filter((spec) => !state.treeSpecs.some((existing) => existing.id === spec.id))],
+  }));
+  return true;
+};
 
 export const applyUpdateTerrain = (set: SetState, id: string, patch: Partial<TerrainComponent>): void => {
   set((state) =>

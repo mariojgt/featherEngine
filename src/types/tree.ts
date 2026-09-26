@@ -19,8 +19,10 @@ export type TreeArchetype = 'conifer' | 'broadleaf' | 'birch' | 'willow' | 'palm
  *
  * `clusters` is the stylized Unreal/Fortnite path: overlapping soft blobs packed into a crown
  * ellipsoid so the silhouette reads as one volume rather than confetti on branch tips.
+ * `leaves` is the natural path: small cutout leaves (or needle sprays) grow directly from terminal
+ * twigs. Unlike `cards`, `size` is the length of one leaf in world units, not a canopy-card size.
  */
-export type TreeFoliageStrategy = 'blob' | 'cards' | 'clusters' | 'skirt' | 'fronds' | 'strands' | 'none';
+export type TreeFoliageStrategy = 'blob' | 'cards' | 'clusters' | 'leaves' | 'skirt' | 'fronds' | 'strands' | 'none';
 
 /**
  * Painted leaf silhouettes available to pixel-art canopies.
@@ -48,6 +50,20 @@ export interface TreePixelArtSpec {
   alphaCutoff: number;
   /** Rebuild cards in camera space so no part of the canopy turns edge-on. */
   billboard: boolean;
+}
+
+export type TreeSurfaceStyle = 'stylized' | 'natural';
+
+/** Rendering-only surface controls. Geometry and seeds stay unchanged when the surface changes. */
+export interface TreeSurfaceSpec {
+  /** `stylized` preserves the original painted Lambert look; `natural` opts into PBR + cutout leaves. */
+  style: TreeSurfaceStyle;
+  /** PBR bark roughness used by the natural path. */
+  barkRoughness: number;
+  /** PBR leaf roughness used by the natural path. */
+  foliageRoughness: number;
+  /** Alpha-test threshold for the deterministic procedural leaf texture. */
+  alphaCutoff: number;
 }
 
 export interface TreeTrunkSpec {
@@ -129,6 +145,8 @@ export interface TreeLookSpec {
   aoStrength: number;
   /** Optional-looking in old project files, but normalization always supplies a complete value. */
   pixelArt: TreePixelArtSpec;
+  /** Optional-looking in legacy files; normalization supplies the original stylized path. */
+  surface: TreeSurfaceSpec;
 }
 
 export interface TreeWindSpec {
@@ -191,15 +209,14 @@ export interface TreeSpec {
  * A tree placed in a scene. Geometry comes from `spec` + `seed` and is never stored — a whole forest costs
  * a few hundred bytes, and the same seed always rebuilds the identical mesh.
  *
- * The spec is currently held INLINE (the ParticleSystemComponent shape, before its `systemId` existed).
- * `specId` is reserved for the shared project-level tree-asset library: once that lands, a set id resolves
- * against it and inline `spec` becomes the per-object override, so nothing authored now has to change.
+ * The inline spec is a serialized fallback. When `specId` resolves in the project tree library, the shared
+ * asset is authoritative so editing one asset updates every placement without rewriting scene objects.
  */
 export interface TreeComponent {
   enabled: boolean;
   spec: TreeSpec;
   seed: number;
-  /** Reserved — id of a shared project tree asset once the tree-asset library exists. */
+  /** Id of the authoritative shared project tree asset. */
   specId?: string;
   /** 0–1 per-instance hue/value jitter so a stand of one spec still varies. */
   tintJitter?: number;

@@ -58,6 +58,8 @@ class MeshBuilder {
   /** Card-space half-offset; zero for geometry that should keep its authored orientation. */
   cardOffset: number[] = [];
   indices: number[] = [];
+  /** Complete topology islands (one branch, lobe, card, ring, frond or strand) for stable LOD selection. */
+  pieces: Array<{ start: number; count: number }> = [];
 
   get vertexCount(): number {
     return this.positions.length / 3;
@@ -118,6 +120,7 @@ class MeshBuilder {
       billboard?: { center: THREE.Vector3; size: number };
     },
   ): void {
+    const pieceStart = this.indices.length;
     const pos = geo.getAttribute('position');
     const nor = geo.getAttribute('normal');
     const uv = geo.getAttribute('uv');
@@ -164,6 +167,12 @@ class MeshBuilder {
     } else {
       for (let i = 0; i < pos.count; i += 1) this.indices.push(base + i);
     }
+    this.finishPiece(pieceStart);
+  }
+
+  finishPiece(start: number): void {
+    const count = this.indices.length - start;
+    if (count > 0) this.pieces.push({ start, count });
   }
 
   toGeometry(): THREE.BufferGeometry {
@@ -177,6 +186,7 @@ class MeshBuilder {
     g.setAttribute('aCardDelta', new THREE.Float32BufferAttribute(this.cardDelta, 3));
     g.setAttribute('aCardOffset', new THREE.Float32BufferAttribute(this.cardOffset, 2));
     g.setIndex(this.indices);
+    g.userData.treePieces = this.pieces.map((piece) => ({ ...piece }));
     g.computeBoundingBox();
     g.computeBoundingSphere();
     return g;
@@ -307,8 +317,12 @@ function sweepBark(branches: TreeBranch[], spec: TreeSpec, maxDist: number, rand
   const normal = new THREE.Vector3();
 
   for (const branch of branches) {
+    const pieceStart = builder.indices.length;
     const radial = Math.max(3, Math.round(spec.trunk.radialSegments / (branch.level + 1)));
-    const rings = branch.level === 0 ? spec.trunk.heightSegments : Math.max(3, Math.round(spec.trunk.heightSegments / 2));
+    const rings = branch.level === 0 ? spec.trunk.heightSegments
+      : spec.foliage.strategy === 'leaves'
+        ? Math.max(2, Math.round(spec.trunk.heightSegments / (branch.level + 2)))
+        : Math.max(3, Math.round(spec.trunk.heightSegments / 2));
     const frames = branch.path.computeFrenetFrames(rings, false);
     const ringStart: number[] = [];
     const gnarlAmount = branch.level === 0 ? spec.trunk.gnarl : spec.trunk.gnarl * 0.45;
@@ -357,6 +371,7 @@ function sweepBark(branches: TreeBranch[], spec: TreeSpec, maxDist: number, rand
     const apex = builder.vertex(tip, tipDir, 0.5, 1, color, tipWind, tipTrunkT);
     const last = ringStart[rings];
     for (let s = 0; s < radial; s += 1) builder.tri(last + s, last + ((s + 1) % radial), apex);
+    builder.finishPiece(pieceStart);
   }
 }
 
@@ -365,6 +380,7 @@ function sweepBark(branches: TreeBranch[], spec: TreeSpec, maxDist: number, rand
 const BLOB_GEO = new THREE.IcosahedronGeometry(1, 1);
 const CLUSTER_GEO = new THREE.IcosahedronGeometry(1, 0); // chunkier, reads more stylized at distance
 const CARD_GEO = new THREE.PlaneGeometry(1, 1);
+const GOLDEN_ANGLE = THREE.MathUtils.degToRad(137.5);
 
 /**
  * Radially lump a unit-sphere geometry so no two lobes share the same perfect-ball silhouette.
@@ -502,6 +518,10 @@ function emitFoliage(branches: TreeBranch[], spec: TreeSpec, maxDist: number, ra
     emitStrands(anchors, spec, maxDist, rand, builder, shade);
     return;
   }
+  if (f.strategy === 'leaves') {
+    emitLeaves(anchors, spec, maxDist, rand, builder, shade, matrix, quat, scale);
+    return;
+  }
   if (f.strategy === 'cards') {
     emitCards(anchors, volume, spec, maxDist, rand, builder, shade, matrix, quat, scale, scratch, centroid);
     return;
@@ -605,7 +625,9 @@ function emitStrands(anchors: TreeBranch[], spec: TreeSpec, maxDist: number, ran
       const dist = branch.distFromRoot + branch.length * t;
       // A strand may sweep low, but never through the ground it stands on.
       const length = Math.min(f.strandLength ?? 3.2, Math.max(0.3, anchor.y - 0.12));
+      const pieceStart = builder.indices.length;
       emitStrand(builder, spec, anchor, length, jitterColor(shade(anchor), rand), windWeight(spec, branch.level + 1, dist, maxDist), tipTrunkT, rand);
+      builder.finishPiece(pieceStart);
     }
   }
 }
@@ -800,6 +822,72 @@ function emitCards(
   }
 }
 
+/**
+ * Natural foliage: small leaves grow from sampled points on terminal twigs. Each card is one leaf
+ * (or one compact conifer needle spray), so `foliage.size` remains a physical leaf length and never
+ * turns into the metre-wide cards used by the legacy `cards` canopy.
+ */
+function emitLeaves(
+  anchors: TreeBranch[],
+  spec: TreeSpec,
+  maxDist: number,
+  rand: () => number,
+  builder: MeshBuilder,
+  shade: ShadeFn,
+  matrix: THREE.Matrix4,
+  quat: THREE.Quaternion,
+  scale: THREE.Vector3,
+): void {
+  const f = spec.foliage;
+  const conifer = spec.archetype === 'conifer';
+  const nodes = Math.max(2, Math.round(f.density));
+  const capped = capAnchors(anchors, 320);
+  const point = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const leafDirection = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  const roll = new THREE.Quaternion();
+
+  for (const branch of capped) {
+    const tipTrunkT = branch.level === 0 ? 1 : branch.trunkT;
+    for (let node = 0; node < nodes; node += 1) {
+      // Even coverage along the leafy portion of the twig; the small seeded offset prevents rows.
+      const t = 0.26 + 0.72 * ((node + 0.3 + rand() * 0.4) / nodes);
+      branch.path.getPoint(t, point);
+      branch.path.getTangent(t, tangent).normalize();
+      const dist = branch.distFromRoot + branch.length * t;
+      // A leaf and the twig under it should travel together. Natural presets keep the underlying
+      // branch weights low; this cap also prevents authored outliers from producing metre-scale flutter.
+      const wind = Math.min(0.82, windWeight(spec, branch.level, dist, maxDist));
+
+      for (let side = 0; side < 3; side += 1) {
+        const yaw = node * GOLDEN_ANGLE + side * Math.PI * 2 / 3 + (rand() - 0.5) * 0.3;
+        const pitch = THREE.MathUtils.degToRad((conifer ? 34 : 42) + rand() * (conifer ? 34 : 24));
+        leafDirection.copy(offsetDirection(tangent, pitch, yaw));
+        leafDirection.y -= f.droop * (conifer ? 0.16 : 0.24);
+        leafDirection.normalize();
+
+        const authoredLength = f.size * (1 + (rand() - 0.5) * 2 * f.sizeVariance);
+        const length = authoredLength * (conifer ? 1.35 : 1);
+        const width = length * (conifer ? 0.72 : spec.archetype === 'birch' ? 0.46 : 0.58);
+        center.copy(point).addScaledVector(leafDirection, length * 0.48);
+        quat.setFromUnitVectors(UP, leafDirection);
+        // Roll around the leaf's own midrib; this breaks specular repetition without moving its stem.
+        roll.setFromAxisAngle(UP, (rand() - 0.5) * Math.PI * 0.9);
+        quat.multiply(roll);
+        matrix.compose(center, quat, scale.set(width, length, 1));
+        builder.addGeometry(
+          CARD_GEO,
+          matrix,
+          jitterColor(shade(point, 0.12), rand),
+          wind,
+          tipTrunkT,
+        );
+      }
+    }
+  }
+}
+
 /** Palm frond: tapered plane bent downward, serrated silhouette in geometry. */
 function buildFrond(size: number, droop: number, rand: () => number): THREE.BufferGeometry {
   const segments = 6;
@@ -857,26 +945,35 @@ function emitStrand(
 // --- entry point --------------------------------------------------------------------------------------
 
 export interface GenerateTreeOptions {
-  /** LOD level. 1 and 2 re-run the SAME seed with reduced params so the silhouette stays put. */
+  /** LOD level. Complete pieces are retained from the same authored tree; natural leaves preserve distant coverage. */
   lod?: number;
 }
 
 export function generateTree(spec: TreeSpec, seed: number, options: GenerateTreeOptions = {}): GeneratedTree {
   const lod = options.lod ?? 0;
-  const effective = lod === 0 ? spec : reduceForLod(spec, lod);
   const rand = treeRng(seed);
 
-  const branches = buildSkeleton(effective, rand);
+  // Always build the authored tree first. LOD then keeps complete topology islands from this exact tree,
+  // so a branch/lobe never jumps to a different random position when distance crosses a threshold.
+  const branches = buildSkeleton(spec, rand);
   let maxDist = 0;
   for (const b of branches) maxDist = Math.max(maxDist, b.distFromRoot + b.length);
 
   const barkBuilder = new MeshBuilder();
-  sweepBark(branches, effective, maxDist, rand, barkBuilder);
+  sweepBark(branches, spec, maxDist, rand, barkBuilder);
   const foliageBuilder = new MeshBuilder();
-  emitFoliage(branches, effective, maxDist, rand, foliageBuilder);
+  emitFoliage(branches, spec, maxDist, rand, foliageBuilder);
 
   const bark = barkBuilder.toGeometry();
   const foliage = foliageBuilder.vertexCount > 0 ? foliageBuilder.toGeometry() : null;
+
+  if (lod > 0) {
+    applyStablePieceLod(bark, lod, true);
+    if (foliage) {
+      applyStablePieceLod(foliage, lod, false);
+      if (spec.foliage.strategy === 'leaves') preserveLeafCoverage(foliage, lod);
+    }
+  }
 
   const bounds = bark.boundingBox?.clone() ?? new THREE.Box3();
   if (foliage?.boundingBox) bounds.union(foliage.boundingBox);
@@ -885,40 +982,62 @@ export function generateTree(spec: TreeSpec, seed: number, options: GenerateTree
     bark,
     foliage,
     bounds,
-    triangles: (barkBuilder.indices.length + foliageBuilder.indices.length) / 3,
-    trunkHeight: effective.trunk.height,
+    triangles: ((bark.getIndex()?.count ?? 0) + (foliage?.getIndex()?.count ?? 0)) / 3,
+    trunkHeight: spec.trunk.height,
   };
 }
 
-/** LOD re-runs the generator with cheaper params — not a decimator. Same seed keeps the silhouette. */
-function reduceForLod(spec: TreeSpec, lod: number): TreeSpec {
-  if (lod >= 2) {
-    return {
-      ...spec,
-      trunk: { ...spec.trunk, radialSegments: Math.max(3, Math.round(spec.trunk.radialSegments / 2)), heightSegments: 4, gnarl: 0 },
-      branches: { ...spec.branches, levels: 0, countPerLevel: [] },
-      foliage: {
-        ...spec.foliage,
-        // Pixel trees must keep card UVs at distance; mapping the cutout atlas onto a solid LOD
-        // cluster would punch arbitrary holes through it. Ordinary trees still collapse to blobs.
-        strategy:
-          spec.foliage.strategy === 'none'
-            ? 'none'
-            : spec.look.pixelArt.enabled
-              ? 'cards'
-              : 'clusters',
-        density: 1,
-        size: spec.foliage.size * (spec.look.pixelArt.enabled ? 1.25 : 2.4),
-        sizeVariance: 0,
-        crownFill: 1,
-        cardsPerCluster: spec.look.pixelArt.enabled ? 3 : spec.foliage.cardsPerCluster,
-      },
-    };
+/** Keep whole authored pieces rather than rerunning a cheaper RNG topology (which visibly pops). */
+function applyStablePieceLod(geometry: THREE.BufferGeometry, lod: number, bark: boolean): void {
+  const source = geometry.getIndex();
+  const pieces = geometry.userData.treePieces as Array<{ start: number; count: number }> | undefined;
+  if (!source || !pieces?.length) return;
+  const stride = 2 ** Math.min(3, Math.max(1, lod));
+  const selected: number[] = [];
+  for (let pieceIndex = 0; pieceIndex < pieces.length; pieceIndex += 1) {
+    // The first bark island is the trunk and is always retained. Other complete branches/canopy pieces
+    // are selected at a stable stride; retained pieces keep their exact high-detail vertices and shape.
+    if ((bark && pieceIndex === 0) || pieceIndex % stride === 0) {
+      const piece = pieces[pieceIndex];
+      for (let offset = 0; offset < piece.count; offset += 1) selected.push(source.getX(piece.start + offset));
+    }
   }
-  return {
-    ...spec,
-    trunk: { ...spec.trunk, radialSegments: Math.max(3, Math.round(spec.trunk.radialSegments / 2)), gnarl: spec.trunk.gnarl * 0.5 },
-    branches: { ...spec.branches, levels: Math.min(spec.branches.levels, 1), countPerLevel: spec.branches.countPerLevel.slice(0, 1) },
-    foliage: { ...spec.foliage, density: Math.max(1, spec.foliage.density * 0.45), crownFill: Math.min(1, spec.foliage.crownFill + 0.15) },
-  };
+  // Compact every attribute with the same map. Surviving vertices retain exact positions, while
+  // distant meshes actually reduce vertex memory/uploads as well as submitted triangles.
+  const remap = new Map<number, number>();
+  const originals: number[] = [];
+  const compact = selected.map((index) => {
+    let mapped = remap.get(index);
+    if (mapped === undefined) { mapped = originals.length; remap.set(index, mapped); originals.push(index); }
+    return mapped;
+  });
+  for (const [name, sourceAttribute] of Object.entries(geometry.attributes)) {
+    const attribute = sourceAttribute as THREE.BufferAttribute;
+    const data = new Float32Array(originals.length * attribute.itemSize);
+    for (let i = 0; i < originals.length; i++) for (let c = 0; c < attribute.itemSize; c++) {
+      data[i * attribute.itemSize + c] = attribute.array[originals[i] * attribute.itemSize + c];
+    }
+    geometry.setAttribute(name, new THREE.BufferAttribute(data, attribute.itemSize, attribute.normalized));
+  }
+  geometry.setIndex(compact);
+  delete geometry.userData.treePieces;
+}
+
+/** Keep a distant natural crown leafy as its card count falls. Centres remain fixed; leaf area grows
+ * with the retained-card stride. Legacy geometry keeps its exact authored vertices at every LOD. */
+function preserveLeafCoverage(geometry: THREE.BufferGeometry, lod: number): void {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const scale = Math.sqrt(2 ** Math.min(3, Math.max(1, lod)));
+  const center = new THREE.Vector3(), point = new THREE.Vector3();
+  for (let first = 0; first < position.count; first += 4) {
+    center.set(0, 0, 0);
+    for (let corner = 0; corner < 4; corner++) center.add(point.fromBufferAttribute(position, first + corner));
+    center.multiplyScalar(0.25);
+    for (let corner = 0; corner < 4; corner++) {
+      point.fromBufferAttribute(position, first + corner).sub(center).multiplyScalar(scale).add(center);
+      position.setXYZ(first + corner, point.x, point.y, point.z);
+    }
+  }
+  position.needsUpdate = true;
+  geometry.computeBoundingBox(); geometry.computeBoundingSphere();
 }

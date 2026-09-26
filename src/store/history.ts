@@ -3,6 +3,7 @@ import type {
   MaterialDefinition,
   ModelSpec,
   ParticleSystemDefinition,
+  Prefab,
   ProjectGraph,
   ProjectVariable,
   Scene,
@@ -43,6 +44,7 @@ type HistoryEntry = {
   materials: MaterialDefinition[];
   particleSystems: ParticleSystemDefinition[];
   treeSpecs: TreeSpec[];
+  prefabs: Prefab[];
   uiDocuments: UIDocument[];
   activeSceneId: string;
   activeBlueprintId: string;
@@ -101,6 +103,7 @@ const snapshotFrom = (state: {
   materials: MaterialDefinition[];
   particleSystems: ParticleSystemDefinition[];
   treeSpecs: TreeSpec[];
+  prefabs: Prefab[];
   uiDocuments: UIDocument[];
   activeSceneId: string;
   activeBlueprintId: string;
@@ -118,6 +121,7 @@ const snapshotFrom = (state: {
   materials: state.materials,
   particleSystems: state.particleSystems,
   treeSpecs: state.treeSpecs,
+  prefabs: state.prefabs,
   uiDocuments: state.uiDocuments,
   activeSceneId: state.activeSceneId,
   activeBlueprintId: state.activeBlueprintId,
@@ -252,6 +256,7 @@ const apply = (entry: HistoryEntry) => {
     materials: entry.materials,
     particleSystems: entry.particleSystems,
     treeSpecs: entry.treeSpecs,
+    prefabs: entry.prefabs,
     uiDocuments: entry.uiDocuments,
     activeSceneId: entry.activeSceneId,
     activeBlueprintId: entry.activeBlueprintId,
@@ -315,6 +320,7 @@ export const initHistory = () => {
       state.materials === prev.materials &&
       state.particleSystems === prev.particleSystems &&
       state.treeSpecs === prev.treeSpecs &&
+      state.prefabs === prev.prefabs &&
       state.uiDocuments === prev.uiDocuments &&
       !blueprintContentChanged(state.blueprints, prev.blueprints) &&
       !graphContentChanged(state.graphs, prev.graphs)

@@ -13,7 +13,7 @@ import type {
 } from '../../types';
 import { GRASS_PRESETS, defaultStylizedGrass, highestTerrainWorldHeight, type GrassPresetId } from '../../terrain/terrain';
 import { chopTree } from '../../runtime/treeChop';
-import { normalizeTreeSpec, treeRng, treeSpecFromArchetype } from '../../tree/treeSpec';
+import { normalizeTreeSpec, resolveTreeSpec, treeRng, treeSpecFromArchetype } from '../../tree/treeSpec';
 import { getStylizedPreset, stylizedTreeSpec } from '../../tree/stylizedPresets';
 import { makeModelPart, modelSpecFromStarter, normalizeModelSpec } from '../../model/modelSpec';
 import { cloneMesh, extrudeMeshFaces, subdivideMeshFaces, type MeshBooleanOp } from '../../model/modelMesh';
@@ -67,18 +67,32 @@ export const applyDuplicateTreeSpec = (set: SetState, specId: string): string =>
 };
 
 export const applyDeleteTreeSpec = (set: SetState, specId: string): void => {
-  set((state) => ({
-    treeSpecs: state.treeSpecs.filter((spec) => spec.id !== specId),
-    activeTreeSpecId:
-      state.activeTreeSpecId === specId ? state.treeSpecs.find((s) => s.id !== specId)?.id ?? '' : state.activeTreeSpecId,
-    // Objects keep their inline spec copy — dropping the library entry must never delete their tree.
-    ...mapActiveSceneObjects(state, (objects) =>
-      objects.map((object) =>
-        object.tree?.specId === specId ? { ...object, tree: { ...object.tree, specId: undefined } } : object,
-      ),
-    ),
-    isDirty: true,
-  }));
+  set((state) => {
+    const source = state.treeSpecs.find((spec) => spec.id === specId);
+    if (!source) return state;
+    // Terrain foliage has no inline TreeSpec fallback. Until that component owns one, deleting its
+    // library entry would silently change a forest's species, so keep the asset while it is referenced.
+    const terrainUsesSpec = [...state.scenes.flatMap((scene) => scene.objects), ...state.prefabs.flatMap((p) => p.objects)]
+      .some((object) => (object.terrain?.foliage?.treeSpecId === specId || object.terrain?.foliage?.treeSpecies?.some((entry) => entry.specId === specId)));
+    if (terrainUsesSpec) return state;
+
+    const detach = (object: SceneObject): SceneObject =>
+      object.tree?.specId === specId
+        ? { ...object, tree: { ...object.tree, specId: undefined, spec: source } }
+        : object;
+    return {
+      treeSpecs: state.treeSpecs.filter((spec) => spec.id !== specId),
+      activeTreeSpecId:
+        state.activeTreeSpecId === specId
+          ? state.treeSpecs.find((spec) => spec.id !== specId)?.id ?? ''
+          : state.activeTreeSpecId,
+      // Detach every scene and prefab, not only the active scene. Stamp the current shared asset so
+      // linked edits are preserved even when an object's older inline fallback is stale.
+      scenes: state.scenes.map((scene) => ({ ...scene, objects: scene.objects.map(detach) })),
+      prefabs: state.prefabs.map((prefab) => ({ ...prefab, objects: prefab.objects.map(detach) })),
+      isDirty: true,
+    };
+  });
 };
 
 export const applySetActiveTreeSpec = (set: SetState, specId: string): void => {
@@ -253,7 +267,13 @@ export const applyChopTreeAt = (
   const object = selectActiveObjects(get()).find((item) => item.id === objectId);
   if (!object) return `No object with id ${objectId}.`;
   if (!object.tree?.enabled) return `Object ${objectId} is not a tree.`;
-  const result = chopTree(object, worldPoint, direction ?? [1, 0, 0]);
+  const state = get();
+  const resolved = resolveTreeSpec(object.tree, state.treeSpecs);
+  const result = chopTree(object, worldPoint, direction ?? [1, 0, 0], {
+    treeSpecs: state.treeSpecs,
+    objects: selectActiveObjects(state),
+    resolvedSpec: resolved,
+  });
   if (!result) return `That hit missed every break point on ${object.name}.`;
   if (!result.severed) {
     return `Hit ${object.name} — ${result.hitsLeft} more to sever.`;

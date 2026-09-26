@@ -1,0 +1,106 @@
+{
+  "license": "CC0-1.0",
+  "sources": [
+    {
+      "asset": "fern_02",
+      "url": "https://polyhaven.com/a/fern_02",
+      "authors": [
+        "Rico Cilliers",
+        "Rob Tuytel"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf",
+          "md5": "cf276874d37bfb73c299504a6b355b77"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_arm_1k.jpg",
+          "md5": "1bbb2b22951f450720d28e17d93a2987"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_diff_1k.jpg",
+          "md5": "82c18a6cfd5ae91c37c0e078f591181c"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_nor_gl_1k.jpg",
+          "md5": "43aed63dff79554f6064627515afd9d7"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/fern_02/fern_02.bin",
+          "md5": "c061e9255f7d36ae9ce0e92ef3e100b2"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/fern_02/fern_02_alpha_1k.png",
+          "md5": "1421e5e36946c23a7ddcc907de89025c"
+        }
+      ]
+    },
+    {
+      "asset": "rock_moss_set_01",
+      "url": "https://polyhaven.com/a/rock_moss_set_01",
+      "authors": [
+        "Kless Gyzen"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_01/rock_moss_set_01_1k.gltf",
+          "md5": "75113cc1c21806cca5d8badad4737af7"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_nor_gl_1k.jpg",
+          "md5": "eb7ebd31ad08e78d0497900652ff1568"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_moss_set_01/rock_moss_set_01.bin",
+          "md5": "207a51c9f56d34732e9814bbf9cc07b1"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_rough_1k.jpg",
+          "md5": "ed9d8a2c863262f76f881346e8047c6a"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_diff_1k.jpg",
+          "md5": "b8742301e6b4bc5683d2de712e83f772"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_arm_1k.jpg",
+          "md5": "c2a8f95a78d036b0a732009eb773c29d"
+        }
+      ]
+    },
+    {
+      "asset": "tree_stump_01",
+      "url": "https://polyhaven.com/a/tree_stump_01",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tree_stump_01/tree_stump_01_1k.gltf",
+          "md5": "fedfc620634a8dbaf6345413b13abe1a"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/tree_stump_01/tree_stump_01.bin",
+          "md5": "acb292727949126b92e58217fd50fca9"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_stump_01/tree_stump_01_diff_1k.jpg",
+          "md5": "c71fe60400276a37b8847048cbec3720"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_stump_01/tree_stump_01_nor_gl_1k.jpg",
+          "md5": "cc2a3c6e4682a521b15cccc61a416bbf"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_stump_01/tree_stump_01_arm_1k.jpg",
+          "md5": "09b7aa228dccb93f5cf4188ba5530578"
+        }
+      ]
+    }
+  ],
+  "output": {
+    "file": "woodland-ground-cover.glb",
+    "bytes": 3217732,
+    "sha256": "ed0c99f6a1ec0278991bda47f80e60d3d3385d2621f036e8451a5474c87b488f"
+  }
+}

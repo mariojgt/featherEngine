@@ -11,7 +11,9 @@ const arg = (key, fallback) => { const i = process.argv.indexOf(`--${key}`); ret
 const bundlePath = arg('bundle', '');
 const template = arg('template', bundlePath ? 'custom-film' : 'last-light');
 const fps = Number(arg('fps', '24')), width = Number(arg('width', '1920')), height = Number(arg('height', '1080'));
-const quality = arg('quality', 'High');
+// Verdant's canopy shafts rely on the full volumetric/shadow budget; other films retain their
+// established High default unless the caller explicitly chooses a tier.
+const quality = arg('quality', template === 'verdant' ? 'Epic' : 'High');
 assert.ok(['Low','Medium','High','Epic'].includes(quality), 'Unknown quality preset');
 assert.ok(/^[a-z0-9-]+$/.test(template), 'Invalid template key');
 assert.ok([24, 25, 30, 60].includes(fps), 'Use 24, 25, 30 or 60 fps');
@@ -61,18 +63,24 @@ try {
   })()`);
   console.log(JSON.stringify({ stage: 'built', ...info }));
   // Preserve a portable game bundle before physics alters the authored scene.
-  const bundle = await app.evaluate(`(async () => (await import('/src/project/exportGame.ts')).buildGameBundle(window.__featherStore.exportProject()))()`);
+  const bundle = await app.evaluate(`(async () => {
+    const project=window.__featherStore.exportProject();
+    project.name=window.__featherProject?.projectName ?? ${JSON.stringify(info.name)};
+    return (await import('/src/project/exportGame.ts')).buildGameBundle(project);
+  })()`);
   if (!bundlePath) copyFileSync(resolve(`public/store/packages/projects/template-${template}.nfpack`), resolve(out, `${template}.nfpack`));
   else {
     const archive = await app.evaluate(`(async () => {
       const s=window.__featherStore;
       const {buildPackage}=await import('/src/project/package.ts');
       const {writePackageArchive}=await import('/src/project/packageArchive.ts');
-      const {sha256Hex}=await import('/src/utils/contentHash.ts');
+      const {toPackagedAsset}=await import('/src/dev/exportTemplate.ts');
       const collected=s.buildProjectPackage(), bytes=new Map(), assets=[];
-      for(const a of s.assets.filter(a=>collected.assetIds.includes(a.id))) {
-        const data=new Uint8Array(await(await fetch(a.url)).arrayBuffer());
-        assets.push({...a,hash:await sha256Hex(data)});bytes.set(a.id,data);
+      for(const id of collected.assetIds) {
+        const a=s.assets.find(a=>a.id===id);
+        if(!a) throw new Error('Missing referenced package asset: '+id);
+        const entry=await toPackagedAsset(a,new Map());
+        assets.push(entry.asset);bytes.set(id,entry.bytes);
       }
       const pkg=buildPackage('project',collected.content,assets,{id:'pkg-cinematic-export',name:${JSON.stringify(info.name)},version:'1.0.0'});
       const blob=new Blob([writePackageArchive(pkg,bytes)]);
@@ -84,8 +92,9 @@ try {
   for (const asset of bundle.project.assets) {
     asset.data = await app.evaluate(`(async () => {
       const a=window.__featherStore.assets.find(a=>a.id===${JSON.stringify(asset.id)});
-      if(!a?.url) throw new Error('Missing bundle asset');
-      const response=await fetch(a.url);if(!response.ok)throw new Error('Could not load bundle asset');
+      const source=a?.url ?? a?.data;
+      if(!source) throw new Error('Missing bundle asset: '+${JSON.stringify(asset.id)});
+      const response=await fetch(source);if(!response.ok)throw new Error('Could not load bundle asset: '+a.id+' (HTTP '+response.status+')');
       const blob=await response.blob();
       return await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)});
     })()`);
@@ -109,7 +118,7 @@ try {
     const zone=document.querySelector('.scene-drop-zone');
     document.body.appendChild(zone);
     zone.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;z-index:10000;background:#050b10';
-    const style=document.createElement('style');style.textContent='.perf-overlay,.runtime-console,.minimap-overlay{display:none!important}';document.head.appendChild(style);
+    const style=document.createElement('style');style.textContent='.perf-overlay,.runtime-console,.minimap-overlay,[data-capture-ui]{display:none!important}';document.head.appendChild(style);
     s.updateRenderSettings({quality:${JSON.stringify(quality)},autoQuality:false});s.setPlaying(true);s.setPlayPaused(true);
   })()`);
   await app.waitFor('window.__featherStore.isPlaying && document.querySelector(".scene-drop-zone canvas")', { timeout: 90_000 });
@@ -117,17 +126,28 @@ try {
   console.log('Renderer mounted; sampling live simulation.');
   // Start the autoplay sequence while paused between every sample; wall time cannot advance it.
   await app.evaluate(`(() => { const s=window.__featherStore; s.setPlayPaused(false); s.tickRuntime(0); s.setPlayPaused(true); })()`);
-  // Compile the auxiliary passes and wait for model/texture uploads at time zero. A fixed wall-clock
-  // sleep alone can capture partially initialized reflections on a cold browser or busy GPU.
-  let warmupSignature = '', stableFrames = 0;
-  for (let i = 0; i < 120 && stableFrames < 8; i++) {
-    await app.evaluate('window.__renderCinematicFrame()');
-    const metrics = await app.evaluate('window.__featherCaptureMetrics');
-    const signature = JSON.stringify(metrics);
-    stableFrames = !metrics.assetsLoading && signature === warmupSignature ? stableFrames + 1 : 0;
-    warmupSignature = signature;
+  // Rendering stays paused: extra draws settle streamed chunks, vegetation LODs and GPU uploads
+  // without advancing physics, weather or the score. Require both a minimum run and stable metrics
+  // so a brief plateau while a chunk/model is queued cannot look like a fully populated forest.
+  async function settleRenderer(reason) {
+    let previous = '', stable = 0, metrics;
+    for (let i = 0; i < 240; i++) {
+      await app.evaluate('window.__renderCinematicFrame()');
+      metrics = await app.evaluate('window.__featherCaptureMetrics');
+      assert.ok(metrics, 'Capture driver must publish scene metrics');
+      const signature = JSON.stringify({
+        cameraPosition: metrics.cameraPosition,
+        authoredTreeParts: metrics.authoredTreeParts,
+        groundCoverParts: metrics.groundCoverParts,
+        textures: metrics.textures, geometries: metrics.geometries, programs: metrics.programs,
+      });
+      stable = !metrics.assetsLoading && signature === previous ? stable + 1 : 0;
+      previous = signature;
+      if (i >= 23 && stable >= 12) return metrics;
+    }
+    throw new Error(`Renderer did not settle (${reason}): ${JSON.stringify(metrics)}`);
   }
-  assert.ok(stableFrames >= 8, 'Models, textures and reflection passes must settle before capture');
+  await settleRenderer('initial scene');
   const frames = Math.round(info.duration * fps);
   const requestedTimes = arg('times', '');
   assert.ok(!requestedTimes || preview, '--times is for preview stills; movies always render every frame');
@@ -143,7 +163,7 @@ try {
     // Attach a rejection handler while frames are being produced, then await the same promise below.
     encoderDone.catch(() => {});
   }
-  let simulationTime = 0;
+  let simulationTime = 0, previousCinematicTime = 0;
   const samples = [];
   for (let i = 0; i < times.length; i++) {
     const time = times[i];
@@ -155,10 +175,23 @@ try {
       return {time:s.runtimeCinematic?.time,physicsScale:s.runtimeTimeScale,shards:s.activeScene().objects.filter(o=>o.name.endsWith(' Chunk')&&o.physics?.bodyType==='dynamic').length,weather:{rain:s.activeScene().environment?.rainIntensity??0,clouds:s.activeScene().environment?.cloudCoverage??0,lightning:s.activeScene().environment?.lightningFlash??0},runtimeTime:s.runtimeTime};
     })()`);
     simulationTime += steps / 120;
-    await app.evaluate('window.__renderCinematicFrame()');
-    sample.gpu = await app.evaluate('window.__featherCaptureMetrics');
+    const cinematicTime = sample.time ?? simulationTime;
+    const crossedShot = info.shots.some(shot => shot.time > previousCinematicTime + 1e-6 && shot.time <= cinematicTime + 1e-6);
+    previousCinematicTime = cinematicTime;
+    if (preview || crossedShot) {
+      sample.gpu = await settleRenderer(preview ? `preview at ${time}` : `camera cut at ${time}`);
+    } else {
+      // Ordinary continuous motion keeps the normal single-frame cost.
+      await app.evaluate('window.__renderCinematicFrame()');
+      sample.gpu = await app.evaluate('window.__featherCaptureMetrics');
+    }
     const image = await app.page.call('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true, clip: { x: 0, y: 0, width, height, scale: 1 } });
     const bytes = Buffer.from(image.data, 'base64');
+    if (preview && template === 'verdant' && i === 0) {
+      const previews = resolve('public/store/previews');
+      mkdirSync(previews, { recursive: true });
+      writeFileSync(resolve(previews, 'verdant.png'), bytes);
+    }
     if (preview || i % (fps * 7) === 0) {
       writeFileSync(resolve(out, `frame-${time.toFixed(2).padStart(5, '0')}.png`), bytes);
       samples.push({ frame: i, seconds: time, ...sample });

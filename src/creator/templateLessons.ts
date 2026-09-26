@@ -9,6 +9,18 @@ export interface TemplateLesson {
 
 /** Shared by the launcher, catalog builder, and learning documentation. */
 export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
+  'template-verdant': {
+    version: 1, difficulty: 'Beginner', minutes: 15,
+    goal: 'Watch a woodland film, then make your own landscape cinematic.',
+    controls: 'Play watches the 48-second film · R restarts it · Stop returns to editing',
+    lessons: [
+      'Open Cinematic and select Verdant · A Woodland Study; edit any of the six named camera shots.',
+      'Select Woodland in the scene and adjust trees, grass and understorey in Foliage.',
+      'Change the sun angle, wind or fog in the scene environment.',
+      'Replace the opening sound cue with your own audio; the two non-autoplay stem sequences are available for audition.',
+      'Save a project package to share the editable scene. Check the audio provider terms before redistributing generated stems.',
+    ],
+  },
   'template-cinematic': {
     version: 1, difficulty: 'Beginner', minutes: 10,
     goal: 'Watch Resonance, then remix its cameras, lighting and real physics cues.',

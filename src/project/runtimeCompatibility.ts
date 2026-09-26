@@ -384,6 +384,13 @@ export function validateRuntimeReferences(
     if (object.animator?.animationId && !animations.has(object.animator.animationId)) errors.push(`${label} references missing animation ${object.animator.animationId}.`);
     if (object.animator?.skeletalMeshId && !skeletalMeshes.has(object.animator.skeletalMeshId)) errors.push(`${label} references missing skeletal mesh ${object.animator.skeletalMeshId}.`);
     if (object.tree?.specId && !treeSpecs.has(object.tree.specId)) errors.push(`${label} references missing tree spec ${object.tree.specId}.`);
+    const terrainTreeSpecId = object.terrain?.foliage?.treeSpecId;
+    if (terrainTreeSpecId && !treeSpecs.has(terrainTreeSpecId)) {
+      errors.push(`${label} terrain foliage references missing tree spec ${terrainTreeSpecId}.`);
+    }
+    for (const species of object.terrain?.foliage?.treeSpecies ?? []) {
+      if (!treeSpecs.has(species.specId)) errors.push(`${label} terrain species mix references missing tree spec ${species.specId}.`);
+    }
     for (const slot of object.inventory?.slots ?? []) {
       if (slot.weaponAssetId && !assets.has(slot.weaponAssetId)) errors.push(`${label} inventory references missing weapon asset ${slot.weaponAssetId}.`);
       if (slot.equipAnimId && !animations.has(slot.equipAnimId)) errors.push(`${label} inventory references missing equip animation ${slot.equipAnimId}.`);

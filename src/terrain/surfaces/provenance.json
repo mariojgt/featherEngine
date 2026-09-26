@@ -1,0 +1,81 @@
+{
+  "license": "CC0-1.0",
+  "licenseUrl": "https://polyhaven.com/license",
+  "preparation": "Albedo 1024 WebP (moss/litter and mud quality 92; rock quality 88). OpenGL normals 512 lossless WebP. Actual 2k source maps for moss/mud, 1k for rock; no website previews.",
+  "sources": [
+    {
+      "file": "grass-albedo.webp",
+      "asset": "forest_leaves_02",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "page": "https://polyhaven.com/a/forest_leaves_02",
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_leaves_02/forest_leaves_02_diffuse_2k.jpg",
+      "sourceMD5": "b7837ba1c51fb0e11af36d6b4e225c20",
+      "sha256": "fb602acba3303b38effbb71ce590aa26f67792676576bb7d266abc2dfbdb970d",
+      "physicalSizeMetres": 3
+    },
+    {
+      "file": "grass-normal.webp",
+      "asset": "forest_leaves_02",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "page": "https://polyhaven.com/a/forest_leaves_02",
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_leaves_02/forest_leaves_02_nor_gl_2k.jpg",
+      "sourceMD5": "f974000a2ddc7dcd22bc84c37aa5d7ce",
+      "sha256": "0288686fc8f2f73ea068c91e2bfc278133e7a931192af851c89f0e40eb4827be",
+      "physicalSizeMetres": 3
+    },
+    {
+      "file": "soil-albedo.webp",
+      "asset": "mud_forest",
+      "authors": [
+        "eye-candy.xyz"
+      ],
+      "page": "https://polyhaven.com/a/mud_forest",
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/mud_forest/mud_forest_diff_2k.jpg",
+      "sourceMD5": "e78c6eae192daae3d00a677a588d1739",
+      "sha256": "c16d78afa81c0db8da138050e2cdfbe80dee9f8549ae5dccd10b1e6feb2ea971",
+      "physicalSizeMetres": 2.3
+    },
+    {
+      "file": "soil-normal.webp",
+      "asset": "mud_forest",
+      "authors": [
+        "eye-candy.xyz"
+      ],
+      "page": "https://polyhaven.com/a/mud_forest",
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/mud_forest/mud_forest_nor_gl_2k.jpg",
+      "sourceMD5": "17635ab324ff50542465d7a4284502e3",
+      "sha256": "577c5d3471145739c69b7f996ee6f227366dc5371b860dcac79c763e49e5b24e",
+      "physicalSizeMetres": 2.3
+    },
+    {
+      "file": "rock-albedo.webp",
+      "asset": "rock_boulder_dry",
+      "authors": [
+        "Dimitrios Savva",
+        "Rico Cilliers"
+      ],
+      "page": "https://polyhaven.com/a/rock_boulder_dry",
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_diff_1k.jpg",
+      "sourceMD5": "da794cd9be3db91e3160cf081109f322",
+      "sha256": "0ae2c190973fc54ec8f5108249b87ecfbb2f6c3d723495f8dc0669a898cb9c7a",
+      "physicalSizeMetres": 1.8
+    },
+    {
+      "file": "rock-normal.webp",
+      "asset": "rock_boulder_dry",
+      "authors": [
+        "Dimitrios Savva",
+        "Rico Cilliers"
+      ],
+      "page": "https://polyhaven.com/a/rock_boulder_dry",
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_nor_gl_1k.jpg",
+      "sourceMD5": "6f1c575ceed560ae253f65518cf748e2",
+      "sha256": "a48a8aa0b2f375b410e31cf4e8b35a221d7db72a87de0eb63882ab8bbc12bb87",
+      "physicalSizeMetres": 1.8
+    }
+  ]
+}

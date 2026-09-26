@@ -37,8 +37,8 @@ export interface MeshRendererComponent {
 }
 
 export type TerrainFoliageMode = 'grass' | 'trees' | 'mixed';
-/** `clump` is the stylized painted-card grass (the default look); the others are the legacy simple shapes. */
-export type TerrainGrassMeshStyle = 'clump' | 'blade' | 'cross' | 'tuft';
+/** `natural` uses geometric blades; `clump` is the default painted-card look; others are legacy shapes. */
+export type TerrainGrassMeshStyle = 'natural' | 'clump' | 'blade' | 'cross' | 'tuft';
 /** How grass dissolves as it approaches the render distance. */
 export type GrassFadeMode = 'off' | 'smooth' | 'dither';
 
@@ -96,6 +96,14 @@ export interface TerrainMaterialLayer {
   color: string;
   textureAssetId?: string;
   normalMapAssetId?: string;
+  /** World-space size of one texture repeat. Omitted legacy layers use 8 units. */
+  textureScale?: number;
+  /** 0..1 variation across tiles; offsets and macro tint reduce repeating patterns. */
+  textureVariation?: number;
+  /** Strength of this layer's normal map (0 disables it, 1 is authored strength). */
+  normalStrength?: number;
+  /** PBR surface roughness. Omitted legacy layers preserve the previous 0.92 terrain finish. */
+  roughness?: number;
 }
 
 export type TerrainSculptOperation = 'raise' | 'lower' | 'flatten' | 'smooth';
@@ -116,7 +124,13 @@ export interface TerrainBrushSettings {
   foliageErase?: boolean;
 }
 
-/** Procedural foliage scattered on terrain chunks. MVP intentionally uses built-in instanced shapes. */
+export interface TerrainTreeSpecies {
+  specId: string;
+  /** Relative probability, normalized across the enabled species. */
+  weight: number;
+}
+
+/** Deterministic vegetation streamed and rendered in bounded spatial regions. */
 export interface TerrainFoliageComponent {
   enabled: boolean;
   mode: TerrainFoliageMode;
@@ -150,7 +164,19 @@ export interface TerrainFoliageComponent {
    * Requires treeSource 'builtin'. Empty/undefined falls back to the simple built-in crowns.
    */
   treeSpecId?: string;
-  /** Look/motion settings for the stylized `clump` grass. Ignored by the other grass mesh styles. */
+  /** Optional weighted library species mix. Empty retains the single-spec forest. */
+  treeSpecies?: TerrainTreeSpecies[];
+  /** Minimum tree separation in terrain-local units. Zero retains the legacy scatter pattern. */
+  treeSpacing?: number;
+  /** Woodland creates clustered groves and grass openings; uniform preserves existing layouts. */
+  distribution?: 'uniform' | 'woodland';
+  /** Embedded authored fern/rock/wood library and density. Disabled in existing projects. */
+  understoryAssetId?: string;
+  understoryDensity?: number;
+  /** Optional terrain-local elevation band; useful for shorelines and alpine tree lines. */
+  minElevation?: number;
+  maxElevation?: number;
+  /** Look/motion settings for `natural` and stylized `clump` grass. */
   stylizedGrass?: StylizedGrassSettings;
   /** Multiplier on the global scene wind for foliage sway (0 = stiff/no sway, the blades just stand). */
   windStrength?: number;
@@ -178,6 +204,8 @@ export interface TerrainFoliageComponent {
  * height array so projects/export bundles stay small and the same world can be rebuilt deterministically.
  */
 export interface TerrainComponent {
+  /** Automatic material placement; ground keeps grass on gentle terrain and rock on cliffs. */
+  materialDistribution?: 'height' | 'ground';
   enabled: boolean;
   /** Total authored terrain width/depth in world units. */
   size: number;

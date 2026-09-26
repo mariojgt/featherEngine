@@ -119,6 +119,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Built ${String(input.name ?? 'block wall')}`;
     case 'create_terrain':
       return 'Created terrain';
+    case 'apply_terrain_biome':
+      return `Applied ${String(input.biome ?? '')} landscape`;
     case 'update_terrain':
       return 'Updated terrain';
     case 'sculpt_terrain':
@@ -299,6 +301,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built "Resonance" cinematic showcase';
     case 'create_last_light_template':
       return 'Built "Last Light" 70-second film';
+    case 'create_verdant_template':
+      return 'Built “Verdant — A Woodland Study” 48-second film';
     case 'create_blackthorn_template':
       return 'Built "Blackthorn Keep" dark fantasy film';
     case 'create_timeline_showcase_template':

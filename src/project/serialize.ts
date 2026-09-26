@@ -41,7 +41,10 @@ export function splitProject(project: NodeForgeProject): {
     ),
     scenes: realScenes.map((scene) => ({ id: scene.id, name: scene.name, file: sceneFile(scene.id) })),
     // Never persist runtime-only / bundle-only fields (url, unresolved, embedded data).
-    assets: project.assets.map(({ url: _url, unresolved: _unresolved, data: _data, ...asset }) => asset),
+    // Imported disk assets keep their external path. Authored procedural assets have no backing
+    // file, so their embedded bytes are the source of truth and must survive a desktop save.
+    assets: project.assets.map(({ url: _url, unresolved: _unresolved, data, ...asset }) =>
+      !asset.path && data ? { ...asset, data } : asset),
     folders: project.folders,
     variables: project.variables,
     dataAssets: project.dataAssets,

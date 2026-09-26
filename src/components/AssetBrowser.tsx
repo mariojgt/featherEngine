@@ -1002,7 +1002,7 @@ export function AssetBrowser() {
         Icon: assetGlyph(asset.type),
         thumbnail:
           asset.type === 'image' && !asset.unresolved
-            ? asset.url
+            ? asset.url ?? asset.data
             : asset.type === 'model'
               ? modelThumbnails[asset.id] || undefined // '' (failed) → fall back to the icon
               : undefined,

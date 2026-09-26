@@ -1,0 +1,100 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { openEditor } from './harness.mjs';
+process.env.FEATHER_CHROME_ANGLE ??= process.platform === 'darwin' ? 'metal' : 'swiftshader';
+process.env.FEATHER_CDP_TIMEOUT_MS ??= '90000';
+const output = process.env.E2E_OUTPUT_DIR ?? '/tmp/feather-terrain-vegetation';
+mkdirSync(output, { recursive: true });
+const app=await openEditor({baseUrl:process.env.E2E_BASE_URL ?? 'http://127.0.0.1:17427',query:'cinematic-capture.html',readySelector:'[data-cinematic-capture]',width:1280,height:800});
+const errors = [];
+app.page.socket.on('message', raw => {
+ const m = JSON.parse(raw.toString());
+ if (m.method === 'Runtime.exceptionThrown') errors.push(m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text);
+ if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') errors.push(m.params.args.map(a => a.value ?? a.description ?? '').join(' '));
+});
+try {
+await app.waitFor('window.__featherStore');
+console.log(await app.evaluate(`(async()=>{
+const s=window.__featherStore; const {blankProject}=await import('/src/project/serialize.ts');
+const p=blankProject('Natural Woodland'); p.scenes[0].objects=[]; s.loadProject(p);
+window.terrainId=s.createObjectWithProps('terrain',{name:'Woodland Terrain',terrain:{size:320,chunkSize:48,resolution:32,streamRadius:3,physicsRadius:1,heightScale:38,frequency:0.01,domainWarp:18,ridgeStrength:0.16,seed:1431}});
+const tools=await import('/src/ai/tools.ts'); await tools.engineTools.apply_terrain_biome.execute({objectId:window.terrainId,biome:'woodland'});
+if(s.activeScene().objects.find(o=>o.id===window.terrainId).terrain.foliage.treeModelAssetId!=='feather-woodland-trees-v3') throw Error('Biome tool did not update the running store; restart Vite to clear old HMR module instances.');
+s.applyRenderPreset(s.activeSceneId,'realistic');
+s.updateRenderSettings({quality:'High',autoQuality:false,bloomEnabled:false,colorGrade:{grade:'neutral',gradeIntensity:0}});
+s.updateSceneEnvironment(s.activeSceneId,{skyMode:'procedural',skyTopColor:'#5785b6',skyHorizonColor:'#aec4d8',skyGroundColor:'#44483a',skyLighting:'sky',cloudCoverage:0.3,environmentIntensity:0.8,ambientMode:'hemisphere',ambientIntensity:0.28,sunColor:'#fffcf5',sunIntensity:3.3,sunAzimuth:325,sunElevation:38,sunShadowExtent:55,fogEnabled:true,fogColor:'#a5b8c0',fogNear:85,fogFar:290,atmosphericFog:false,toneMappingExposure:1,wind:[1.2,0,0.6],windTurbulence:0.25,contactShadows:false});
+const terrain=s.activeScene().objects.find(o=>o.id===window.terrainId).terrain;
+const {sampleTerrainLocalHeight}=await import('/src/terrain/terrain.ts');
+window.ground=sampleTerrainLocalHeight(terrain,4,38);
+const cameraId=s.createObjectWithProps('camera',{name:'Forest camera',position:[4,window.ground+3.2,38]});
+s.updateTransform(cameraId,'rotation',[-0.0027356,0.054739,0]);
+const bundle=(await import('/src/project/exportGame.ts')).buildGameBundle(s.exportProject());
+window.forestBundle=bundle;
+const {splitProject,joinProject}=await import('/src/project/serialize.ts');
+const split=splitProject(JSON.parse(JSON.stringify(s.exportProject())));
+const restored=joinProject(split.manifest,split.sceneFiles.map(file=>file.scene));
+if(restored.assets.length!==8 || restored.assets.some(a=>!a.data?.startsWith(a.type==='model'?'data:model/gltf-binary;base64,':'data:image/webp;base64,')))throw Error('Saved surfaces lost their embedded image bytes');
+const {collectProjectPackage,buildPackage,remapPackageForImport}=await import('/src/project/package.ts');
+const closure=collectProjectPackage(restored);
+const pkg=buildPackage('project',closure.content,restored.assets.filter(a=>closure.assetIds.includes(a.id)),{id:'forest',name:'Forest',version:'1.0.0'});
+const imported=remapPackageForImport(JSON.parse(JSON.stringify(pkg)),[],[]);
+const modelId=imported.content.scenes[0].objects.find(o=>o.terrain).terrain.foliage.treeModelAssetId;
+const understoryId=imported.content.scenes[0].objects.find(o=>o.terrain).terrain.foliage.understoryAssetId;
+if(!imported.assets.some(a=>a.id===understoryId && a.type==='model'))throw Error('Ground-cover library lost in package');
+if(imported.assets.length!==8 || !imported.assets.some(a=>a.id===modelId && a.type==='model'))throw Error('Forest dependencies lost in package');
+s.loadProject(restored);
+s.setPlaying(true);s.setPlayPaused(true);
+const entry=await (await fetch('/src/dev/cinematicCaptureEntry.tsx')).text(); const storePath=entry.match(new RegExp('from "([^"]*editorStore.ts[^"]*)"'))[1]; const {useEditorStore}=await import(storePath);
+useEditorStore.setState({runtimeCinematicCamera:{position:[4,window.ground+3.2,38],lookAt:[0,window.ground+3,-35],fov:58}});
+window.frame=(await import('/src/runtime/cinematicCapture.ts')).renderCinematicCaptureFrame;
+return {species:terrain.foliage.treeSpecies,assets:s.assets.length,ground:window.ground};})()`));
+await app.waitFor('document.querySelector("canvas")');
+await app.evaluate('new Promise(r=>setTimeout(r,1500))');
+for(let i=0;i<40;i++) await app.evaluate('window.frame()');
+writeFileSync(output+'/forest.png',Buffer.from((await app.page.call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+// A second actual-player view makes blade shape and surface detail inspectable at walking height.
+await app.evaluate(`(async()=>{const entry=await(await fetch('/src/dev/cinematicCaptureEntry.tsx')).text();const url=entry.match(new RegExp('from "([^"]*editorStore.ts[^"]*)"'))[1];const {useEditorStore}=await import(url);useEditorStore.setState({runtimeCinematicCamera:{position:[4,window.ground+1.65,38],lookAt:[1,window.ground+0.15,27],fov:58}});})()`);
+for(let i=0;i<5;i++) await app.evaluate('window.frame()');
+writeFileSync(output+'/grass.png',Buffer.from((await app.page.call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+// Inspect a real nearby fern at walking height, without changing the exported reference camera.
+await app.evaluate(`(async()=>{
+ const terrain=window.__featherStore.activeScene().objects.find(o=>o.terrain).terrain;
+ const {generateVegetationChunk}=await import('/src/terrain/vegetation.ts');
+ const {sampleTerrainLocalHeight}=await import('/src/terrain/terrain.ts');
+ const plants=[{x:0,z:0,id:'0:0'},{x:-1,z:0,id:'-1:0'},{x:0,z:1,id:'0:1'}].flatMap(c=>generateVegetationChunk(terrain,c,{grass:false,flowers:false,trees:false}).groundCover.fern);
+ plants.sort((a,b)=>Math.hypot(a.elements[12]-4,a.elements[14]-38)-Math.hypot(b.elements[12]-4,b.elements[14]-38));
+ const e=plants[0].elements, x=e[12], z=e[14], h=sampleTerrainLocalHeight(terrain,x-1.4,z+3.2);
+ const entry=await(await fetch('/src/dev/cinematicCaptureEntry.tsx')).text();const url=entry.match(new RegExp('from "([^"]*editorStore.ts[^"]*)"'))[1];const {useEditorStore}=await import(url);
+ useEditorStore.setState({runtimeCinematicCamera:{position:[x-1.4,h+1.2,z+3.2],lookAt:[x,e[13]+.35,z],fov:55}});
+})()`);
+for(let i=0;i<20;i++) await app.evaluate('window.frame()');
+writeFileSync(output+'/understory.png',Buffer.from((await app.page.call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+const samples=[];
+for(const x of [80,0,80,0]) {
+ await app.evaluate(`(async()=>{const entry=await(await fetch('/src/dev/cinematicCaptureEntry.tsx')).text();const url=entry.match(new RegExp('from "([^"]*editorStore.ts[^"]*)"'))[1];const {useEditorStore}=await import(url);useEditorStore.setState({runtimeCinematicCamera:{position:[${x+4},window.ground+3.2,38],lookAt:[${x},window.ground+3,-35],fov:58}});})()`);
+ for(let i=0;i<30;i++)await app.evaluate('window.frame()');
+ const sample=await app.evaluate('window.__featherCaptureMetrics');
+ assert.ok(sample.groundCoverParts.reduce((n,p)=>n+p.count,0)<=1100,'Streaming must keep empty detail batches at count zero after buffer resizing');
+ assert.equal(sample.cameraPosition[0],x+4,'The camera must actually travel between streamed regions');
+ samples.push(sample);
+}
+console.log({streaming:samples});
+const metrics=await app.evaluate('window.__featherCaptureMetrics');
+const bundle=await app.evaluate('window.forestBundle');writeFileSync(output+'/forest-game.json',JSON.stringify(bundle));
+assert.equal(samples[1].textures,samples[3].textures,'Returning to the same region must stabilize textures');
+assert.equal(samples[1].geometries,samples[3].geometries,'Returning to the same region must stabilize GPU geometry');
+const cacheBefore = await app.evaluate(`(async()=>{const {treeGeometryCacheStats}=await import('/src/three/treeRenderResources.ts');return treeGeometryCacheStats();})()`);
+assert.ok(['fern','rock','wood'].every(kind => samples.some(s => s.groundCoverParts.some(p => p.kind === kind && p.count > 0))), 'All three ground-cover families must render');
+assert.ok(metrics.authoredTreeParts.length>0, 'The authored tree library must render');
+assert.ok(new Set(samples.flatMap(s=>s.authoredTreeParts.map(p=>p.variant))).size===2, 'Both tree variants must render');
+assert.ok(new Set(samples.flatMap(s=>s.authoredTreeParts.map(p=>p.lod))).size>=2, 'Camera travel must exercise authored detail levels');
+await app.evaluate('window.__featherStore.setPlaying(false)');
+await app.evaluate('new Promise(r=>setTimeout(r,150))');
+const cache=await app.evaluate(`(async()=>{const {treeGeometryCacheStats}=await import('/src/three/treeRenderResources.ts');return treeGeometryCacheStats();})()`);
+assert.equal(cache.referenced,0,'Unmount must release every shared geometry lease');
+assert.ok(cache.entries<=48,JSON.stringify(cache));
+assert.deepEqual(errors,[]);
+const report={result:'passed',metrics,streaming:samples,cacheBeforeUnmount:cacheBefore,cacheAfterUnmount:cache,errors};
+writeFileSync(output+'/report.json',JSON.stringify(report,null,2));
+console.log(JSON.stringify(report));
+} finally {await app.dispose();}

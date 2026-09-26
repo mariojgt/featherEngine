@@ -437,6 +437,7 @@ import {
 } from './editor/uiActions';
 import {
   applyAddTerrainMaterialLayer,
+  applyTerrainBiome,
   applyApplyTerrainBrush,
   applyClearTerrainEdits,
   applyPaintFoliageAt,
@@ -1062,6 +1063,7 @@ export interface EditorState {
   setObjectModel: (id: string, modelAssetId?: string) => void;
   replaceObjectAppearance: (objectId: string, assetId: string | null) => { ok: boolean; objectId?: string; error?: string };
   updateTerrain: (id: string, patch: Partial<TerrainComponent>) => void;
+  applyTerrainBiome: (id: string, biome: import('../terrain/biomes').TerrainBiomeId) => Promise<boolean>;
   /** Add a tree asset to the project library (copied from an archetype). Returns its id. */
   createTreeSpec: (archetype: TreeArchetype, name?: string) => string;
   /** Patch a library tree asset. Every object and scattered instance referencing it updates. */
@@ -1786,6 +1788,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   replaceObjectAppearance: (objectId, assetId) => applyReplaceObjectAppearance(set, get, objectId, assetId),
   setObjectMaterialSlot: (objectId, slotIndex, materialId) => applySetObjectMaterialSlot(set, objectId, slotIndex, materialId),
   updateTerrain: (id, patch) => applyUpdateTerrain(set, id, patch),
+  applyTerrainBiome: (id, biome) => applyTerrainBiome(set, get, id, biome),
   createTreeSpec: (archetype, name) => applyCreateTreeSpec(set, archetype, name),
   updateTreeSpec: (specId, patch) => applyUpdateTreeSpec(set, specId, patch),
   duplicateTreeSpec: (specId) => applyDuplicateTreeSpec(set, specId),

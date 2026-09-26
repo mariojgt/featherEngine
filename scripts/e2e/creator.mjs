@@ -33,10 +33,12 @@ async function launcherSmoke() {
   try {
     await page.call('Page.navigate', { url: `${BASE_URL}/` });
     await waitFor(`document.querySelector('.launcher')`, 'Creator launcher');
-    assert.equal(await evaluate(`document.querySelector('#launcher-title')?.textContent.trim()`), 'What do you want to make?');
-    assert.equal(await evaluate(`document.querySelectorAll('.launcher-quick-card').length`), 5);
+    assert.equal(await evaluate(`document.querySelector('#launcher-title')?.textContent.trim()`), "Let's make something.");
+    assert.equal(await evaluate(`document.querySelectorAll('.launcher-quick-card').length`), 2);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="platformer"]')?.disabled`), false);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="platformer"]')?.textContent.includes('Coming soon')`), false);
+    assert.equal(await evaluate(`document.querySelector('.hub-ai').open`), false);
+    await evaluate(`document.querySelector('.hub-ai > summary').click()`);
     assert.ok(await evaluate(`document.querySelector('#launcher-game-description')?.placeholder.includes('third-person adventure')`));
     await screenshot(page, 'launcher');
   } finally {
@@ -150,5 +152,5 @@ async function editorSmoke() {
 }
 
 await launcherSmoke();
-await editorSmoke();
+if (!process.argv.includes('--launcher-only')) await editorSmoke();
 console.log('✓ Creator Mode browser smoke passed');

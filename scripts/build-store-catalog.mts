@@ -1150,6 +1150,7 @@ const TEMPLATE_THUMBNAILS = {
   'template-driving': ['#FF9F3D', '#5A2E08', '\u{1F697}'],
   'template-sim-racing': ['#E84B3C', '#4A120C', '\u{1F3C1}'],
   'template-cinematic': ['#8C7BFF', '#241C52', '\u{1F3AC}'],
+  'template-verdant': ['#70954F', '#142A20', '\u{1F332}'],
   'template-meadows': ['#63C46A', '#1E4B2C', '\u{1F33F}'],
   'template-cube-realm': ['#3DD6C0', '#0E4A45', '\u{1F9CA}'],
   'template-platformer': ['#FF7196', '#236784', '\u{2600}\u{FE0F}'],
@@ -1206,7 +1207,7 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
     version: pkg.meta.version,
     kind: pkg.kind,
     tags: pkg.meta.tags ?? [],
-    license: ['template-last-light', 'template-blackthorn', 'template-neon-afterlight'].includes(slug) ? 'MIT' : 'CC0-1.0',
+    license: slug === 'template-verdant' ? 'Custom / mixed: code MIT; terrain assets CC0-1.0; original generated audio subject to provider terms (no additional grant)' : ['template-last-light', 'template-blackthorn', 'template-neon-afterlight'].includes(slug) ? 'MIT' : 'CC0-1.0',
     priceCents: 0,
     thumbnail: thumbnail ?? pkg.meta.thumbnail,
     sizeBytes: installFootprint(archiveBytes),
@@ -1270,10 +1271,10 @@ async function main() {
     const slug = name.replace(/\.nfpack$/, '');
     const [from, to, glyph] = TEMPLATE_THUMBNAILS[slug] ?? ['#5B8CFF', '#1B2C63', '\u{1F5FA}'];
     let cover = thumbnail(from, to, glyph);
-    if (['template-cinematic', 'template-last-light', 'template-blackthorn', 'template-neon-afterlight'].includes(slug)) {
-      // A capture of the shipped scene, produced by scripts/e2e/resonance.mjs. Inline like the
+    if (['template-cinematic', 'template-last-light', 'template-blackthorn', 'template-neon-afterlight', 'template-verdant'].includes(slug)) {
+      // A real engine capture, produced by render-cinematic.mjs (or e2e/resonance.mjs). Inline like the
       // other covers so the catalog remains portable/offline, even when served from another host.
-      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-neon-afterlight' ? 'neon-afterlight.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : slug === 'template-last-light' ? 'last-light.png' : 'resonance.png')).catch(() => null);
+      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-verdant' ? 'verdant.png' : slug === 'template-neon-afterlight' ? 'neon-afterlight.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : slug === 'template-last-light' ? 'last-light.png' : 'resonance.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
     entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }));

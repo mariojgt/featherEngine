@@ -1,0 +1,176 @@
+{
+  "license": "CC0-1.0",
+  "source": "src/terrain/models/woodland-ground-cover.glb",
+  "sourceSha256": "ed0c99f6a1ec0278991bda47f80e60d3d3385d2621f036e8451a5474c87b488f",
+  "treeSourceSha256": "5f9e03860b1dfff664d4848111d2bfff2e51d756b4460f392d770459126e8a21",
+  "sources": [
+    {
+      "asset": "fern_02",
+      "url": "https://polyhaven.com/a/fern_02",
+      "authors": [
+        "Rico Cilliers",
+        "Rob Tuytel"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf",
+          "md5": "cf276874d37bfb73c299504a6b355b77"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_arm_1k.jpg",
+          "md5": "1bbb2b22951f450720d28e17d93a2987"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_diff_1k.jpg",
+          "md5": "82c18a6cfd5ae91c37c0e078f591181c"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_nor_gl_1k.jpg",
+          "md5": "43aed63dff79554f6064627515afd9d7"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/fern_02/fern_02.bin",
+          "md5": "c061e9255f7d36ae9ce0e92ef3e100b2"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/fern_02/fern_02_alpha_1k.png",
+          "md5": "1421e5e36946c23a7ddcc907de89025c"
+        }
+      ]
+    },
+    {
+      "asset": "rock_moss_set_01",
+      "url": "https://polyhaven.com/a/rock_moss_set_01",
+      "authors": [
+        "Kless Gyzen"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_01/rock_moss_set_01_1k.gltf",
+          "md5": "75113cc1c21806cca5d8badad4737af7"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_nor_gl_1k.jpg",
+          "md5": "eb7ebd31ad08e78d0497900652ff1568"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_moss_set_01/rock_moss_set_01.bin",
+          "md5": "207a51c9f56d34732e9814bbf9cc07b1"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_rough_1k.jpg",
+          "md5": "ed9d8a2c863262f76f881346e8047c6a"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_diff_1k.jpg",
+          "md5": "b8742301e6b4bc5683d2de712e83f772"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_arm_1k.jpg",
+          "md5": "c2a8f95a78d036b0a732009eb773c29d"
+        }
+      ]
+    },
+    {
+      "asset": "island_tree_02",
+      "page": "https://polyhaven.com/a/island_tree_02",
+      "authors": [
+        "Rob Tuytel",
+        "Rico Cilliers"
+      ],
+      "files": [
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/island_tree_02/island_tree_02_1k.gltf",
+          "md5": "825057164e987894cbfc6c462977fa71"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_nor_gl_1k.jpg",
+          "md5": "d8b8bc86de9934a743fc9b0a5470e695"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_diff_1k.jpg",
+          "md5": "b7435527d9628527ce47d89fc1468e9a"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_arm_1k.jpg",
+          "md5": "e487f91bcb37a2a1109ef6234f1db27e"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_leaves_nor_gl_1k.jpg",
+          "md5": "a08ffb98b5ffb7dfa682e05a1639c642"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_leaves_diff_1k.jpg",
+          "md5": "1356cbb5a5dd1318f9f2a01eddbf03e1"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_leaves_arm_1k.jpg",
+          "md5": "27b06c4a53ff115ed7d51ee94e417257"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_branches_nor_gl_1k.jpg",
+          "md5": "789084affb01f4a22290a848558f5e12"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_branches_diff_1k.jpg",
+          "md5": "7792907fe2b2b748c129a2384192a579"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/island_tree_02/island_tree_02_branches_arm_1k.jpg",
+          "md5": "5b6f5b3838f4a8f60fea14fa3a3fef9f"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/island_tree_02/island_tree_02.bin",
+          "md5": "7fa9d6ee752b670cabb65053a5c6395b"
+        },
+        {
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/1k/island_tree_02/island_tree_02_leaves_alpha_1k.png",
+          "md5": "5ad9fb9a06e70c069bd3d3ba23577375",
+          "size": 57438
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "file": "verdant-rock-shelf.glb",
+      "bytes": 453372,
+      "sha256": "ee4807716882e47c310d3ecb8df16fe72aa6c7d4e29792d34d48134876fc8051",
+      "triangles": 1800,
+      "meshes": 1,
+      "textures": 3
+    },
+    {
+      "file": "verdant-rock-crag.glb",
+      "bytes": 452288,
+      "sha256": "e97231cf5c458861fa997ed758c323a65e2e3c62665c9a7a77efaa5fd34087b6",
+      "triangles": 1800,
+      "meshes": 1,
+      "textures": 3
+    },
+    {
+      "file": "verdant-rock-boulder.glb",
+      "bytes": 451692,
+      "sha256": "37e4aaff43aef9281286c9bc3711198684b814217127014ee22f1d1c8686febd",
+      "triangles": 1800,
+      "meshes": 1,
+      "textures": 3
+    },
+    {
+      "file": "verdant-fern-bank.glb",
+      "bytes": 1316264,
+      "sha256": "35a3450cdb64197563a5fca805c3d3d6583b6a8eeffce9be01a2c9cbc0560afb",
+      "triangles": 4614,
+      "meshes": 3,
+      "textures": 3
+    },
+    {
+      "file": "verdant-shrub.glb",
+      "bytes": 2456148,
+      "sha256": "dfe1dd59090226bd170bdf5c73a4bc4f43a28ebec102887a0d78be252e488a06",
+      "triangles": 9030,
+      "meshes": 1,
+      "textures": 9
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { Copy, Plus, TreePine, Trash2 } from 'lucide-react';
@@ -44,11 +44,10 @@ function previewObject(spec: TreeSpec, seed: number): SceneObject {
   } as SceneObject;
 }
 
-function TreePreview({ spec, seed }: { spec: TreeSpec; seed: number }) {
+function TreePreview({ spec, seed, bounds }: { spec: TreeSpec; seed: number; bounds: THREE.Box3 }) {
   const object = useMemo(() => previewObject(spec, seed), [spec, seed]);
   // Frame off the generated BOUNDS, not the trunk height: a broadleaf's canopy is far wider than its
   // trunk is tall, and trunk-height framing parks the camera inside the leaves.
-  const bounds = useMemo(() => generateTree(spec, seed).bounds, [spec, seed]);
   const size = bounds.getSize(new THREE.Vector3());
   // Average the axes so one stray limb doesn't shrink the tree to a miniature.
   const radius = Math.max(1.5, Math.max(size.y, (size.x + size.z) * 0.5) * 0.62);
@@ -79,10 +78,21 @@ export function TreeBuilderPanel() {
   const duplicateTreeSpec = useEditorStore((state) => state.duplicateTreeSpec);
   const deleteTreeSpec = useEditorStore((state) => state.deleteTreeSpec);
   const createTree = useEditorStore((state) => state.createTree);
+  const activeSpecUsedByTerrain = useEditorStore((state) =>
+    [...state.scenes.flatMap((scene) => scene.objects), ...state.prefabs.flatMap((prefab) => prefab.objects)]
+      .some((object) => (object.terrain?.foliage?.treeSpecId === state.activeTreeSpecId || object.terrain?.foliage?.treeSpecies?.some((entry) => entry.specId === state.activeTreeSpecId))),
+  );
   const [seed, setSeed] = useState(1);
 
   const spec = treeSpecs.find((entry) => entry.id === activeTreeSpecId) ?? treeSpecs[0];
   const generated = useMemo(() => (spec ? generateTree(spec, seed) : null), [spec, seed]);
+  useEffect(
+    () => () => {
+      generated?.bark.dispose();
+      generated?.foliage?.dispose();
+    },
+    [generated],
+  );
 
   if (!spec) {
     return (
@@ -127,7 +137,12 @@ export function TreeBuilderPanel() {
           <button className="full-button" onClick={() => duplicateTreeSpec(spec.id)}>
             <Copy size={13} aria-hidden /> Duplicate
           </button>
-          <button className="full-button danger-soft" onClick={() => deleteTreeSpec(spec.id)}>
+          <button
+            className="full-button danger-soft"
+            disabled={activeSpecUsedByTerrain}
+            title={activeSpecUsedByTerrain ? 'This asset is used by terrain foliage. Choose another terrain tree before deleting it.' : 'Delete tree asset'}
+            onClick={() => deleteTreeSpec(spec.id)}
+          >
             <Trash2 size={13} aria-hidden /> Delete
           </button>
           <button className="full-button" onClick={() => createTree(spec.archetype)}>
@@ -137,7 +152,7 @@ export function TreeBuilderPanel() {
 
         <div className="terrain-preview-column">
           <div className="tree-preview-canvas">
-            <TreePreview spec={spec} seed={seed} />
+            <TreePreview spec={spec} seed={seed} bounds={generated?.bounds ?? new THREE.Box3()} />
           </div>
           <div className="tree-preview-meta">
             <span>seed {seed}</span>
@@ -203,6 +218,7 @@ export function TreeBuilderPanel() {
                   <option value="clusters">Stylized clusters</option>
                   <option value="blob">Soft blobs</option>
                   <option value="cards">Leaf cards</option>
+                  <option value="leaves">Natural leaves / needles</option>
                   <option value="skirt">Conifer skirt</option>
                   <option value="fronds">Palm fronds</option>
                   <option value="strands">Hanging strands</option>
@@ -259,6 +275,52 @@ export function TreeBuilderPanel() {
                 <input type="color" value={spec.look.foliageRamp[1] ?? spec.look.foliageRamp[0]} onChange={(event) => patch({ look: { ...spec.look, foliageRamp: [spec.look.foliageRamp[0], event.target.value] } })} />
               </label>
               <RangeField label="Canopy AO" value={spec.look.aoStrength} min={0} max={1} step={0.01} onChange={(aoStrength) => patch({ look: { ...spec.look, aoStrength } })} />
+
+              <h4 className="inspector-subhead">Surface</h4>
+              <label className="node-field row">
+                <span>Natural PBR Look</span>
+                <input
+                  type="checkbox"
+                  checked={spec.look.surface.style === 'natural'}
+                  onChange={(event) =>
+                    patch({
+                      look: {
+                        ...spec.look,
+                        surface: { ...spec.look.surface, style: event.target.checked ? 'natural' : 'stylized' },
+                      },
+                    })
+                  }
+                />
+              </label>
+              {spec.look.surface.style === 'natural' && (
+                <>
+                  <RangeField
+                    label="Bark Roughness"
+                    value={spec.look.surface.barkRoughness}
+                    min={0.2}
+                    max={1}
+                    step={0.01}
+                    onChange={(barkRoughness) => patch({ look: { ...spec.look, surface: { ...spec.look.surface, barkRoughness } } })}
+                  />
+                  <RangeField
+                    label="Leaf Roughness"
+                    value={spec.look.surface.foliageRoughness}
+                    min={0.2}
+                    max={1}
+                    step={0.01}
+                    onChange={(foliageRoughness) => patch({ look: { ...spec.look, surface: { ...spec.look.surface, foliageRoughness } } })}
+                  />
+                  <RangeField
+                    label="Leaf Cutout"
+                    value={spec.look.surface.alphaCutoff}
+                    min={0.05}
+                    max={0.95}
+                    step={0.01}
+                    onChange={(alphaCutoff) => patch({ look: { ...spec.look, surface: { ...spec.look.surface, alphaCutoff } } })}
+                  />
+                  <p className="field-hint">Uses deterministic procedural bark grain and alpha-cut leaves; no texture assets are added to the project.</p>
+                </>
+              )}
 
               <h4 className="inspector-subhead">Pixel Canopy</h4>
               <label className="node-field row">

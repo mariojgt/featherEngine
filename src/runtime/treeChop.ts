@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { SceneObject, TreeChopState, TreeSpec, Vector3Tuple } from '../types';
 import { generateTree } from '../tree/generateTree';
-import { normalizeTreeSpec } from '../tree/treeSpec';
+import { normalizeTreeSpec, resolveTreeSpec } from '../tree/treeSpec';
 import { registerRawGeometry } from './meshGeometryCache';
 import { defaultPhysics } from '../store/editor/defaults';
 
@@ -57,44 +57,81 @@ export interface ChopResult {
  * Picks the nearest INTACT break point within tolerance. Nearest-not-lowest matters: bucking a felled
  * trunk means hitting the upper cut specifically, and snapping to the lowest would make that impossible.
  */
-function resolveBreakPoint(spec: TreeSpec, tree: SceneObject, worldPoint: Vector3Tuple, state: TreeChopState): number {
-  const baseY = tree.transform.position[1];
-  const scaleY = tree.transform.scale[1] || 1;
-  const trunkWorldHeight = spec.trunk.height * scaleY;
+function objectLocalMatrix(object: SceneObject): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(...object.transform.position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(...object.transform.rotation)),
+    new THREE.Vector3(...object.transform.scale),
+  );
+}
+
+/** Resolve the authored hierarchy without relying on a mounted Three scene graph. */
+export function treeWorldMatrix(tree: SceneObject, objects: SceneObject[] = [tree]): THREE.Matrix4 {
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const chain: SceneObject[] = [];
+  const seen = new Set<string>();
+  let current: SceneObject | undefined = tree;
+  while (current && !seen.has(current.id)) {
+    chain.push(current);
+    seen.add(current.id);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  const world = new THREE.Matrix4().identity();
+  for (let index = chain.length - 1; index >= 0; index -= 1) world.multiply(objectLocalMatrix(chain[index]));
+  return world;
+}
+
+function resolveBreakPoint(spec: TreeSpec, localPoint: THREE.Vector3, state: TreeChopState): number {
   let best = -1;
   let bestDist = Infinity;
   for (let i = 0; i < spec.chop.breakPoints.length; i += 1) {
     if (state.severedAt !== undefined && i >= state.severedAt) continue; // already gone with the log
-    const pointY = baseY + spec.chop.breakPoints[i].height * trunkWorldHeight;
-    const dist = Math.abs(worldPoint[1] - pointY);
+    const pointY = spec.chop.breakPoints[i].height * spec.trunk.height;
+    const dist = Math.abs(localPoint.y - pointY);
     if (dist < bestDist) {
       bestDist = dist;
       best = i;
     }
   }
-  return bestDist <= spec.chop.tolerance * scaleY ? best : -1;
+  return bestDist <= spec.chop.tolerance ? best : -1;
+}
+
+export interface ChopTreeOptions {
+  /** Shared project library. Used when the caller has not already resolved the component. */
+  treeSpecs?: TreeSpec[];
+  /** Scene objects used to resolve parent/group transforms. */
+  objects?: SceneObject[];
+  /** Optional pre-resolved spec for hot call sites. */
+  resolvedSpec?: TreeSpec;
 }
 
 /**
  * Land one axe hit on a tree. Returns null when the hit misses every break point (or the tree is not
  * choppable), so the caller can fall back to a generic "thunk" response.
  */
-export function chopTree(tree: SceneObject, worldPoint: Vector3Tuple, hitDirection: Vector3Tuple): ChopResult | null {
+export function chopTree(
+  tree: SceneObject,
+  worldPoint: Vector3Tuple,
+  hitDirection: Vector3Tuple,
+  options: ChopTreeOptions = {},
+): ChopResult | null {
   const component = tree.tree;
   if (!component?.enabled || component.choppable === false) return null;
-  const spec = normalizeTreeSpec(component.spec);
+  const spec = normalizeTreeSpec(options.resolvedSpec ?? resolveTreeSpec(component, options.treeSpecs ?? []));
   if (!spec.chop.enabled || spec.chop.breakPoints.length === 0) return null;
 
+  const worldMatrix = treeWorldMatrix(tree, options.objects ?? [tree]);
+  const localPoint = new THREE.Vector3(...worldPoint).applyMatrix4(worldMatrix.clone().invert());
   const state = chopStates.get(tree.id) ?? { hitsLeft: {} };
-  const index = resolveBreakPoint(spec, tree, worldPoint, state);
+  const index = resolveBreakPoint(spec, localPoint, state);
   if (index < 0) return null;
 
   const breakPoint = spec.chop.breakPoints[index];
   const remaining = (state.hitsLeft[index] ?? breakPoint.hits) - 1;
   state.hitsLeft = { ...state.hitsLeft, [index]: Math.max(0, remaining) };
 
-  const scaleY = tree.transform.scale[1] || 1;
-  const cutWorldY = tree.transform.position[1] + breakPoint.height * spec.trunk.height * scaleY;
+  const cutWorldY = new THREE.Vector3(0, breakPoint.height * spec.trunk.height, 0)
+    .applyMatrix4(worldMatrix).y;
 
   if (remaining > 0) {
     chopStates.set(tree.id, state);
@@ -110,7 +147,7 @@ export function chopTree(tree: SceneObject, worldPoint: Vector3Tuple, hitDirecti
     breakPointIndex: index,
     hitsLeft: 0,
     cutWorldY,
-    logs: makeFelledLog(tree, spec, index, hitDirection),
+    logs: makeFelledLog(tree, spec, index, hitDirection, worldMatrix),
   };
 }
 
@@ -126,6 +163,7 @@ function makeFelledLog(
   spec: TreeSpec,
   breakIndex: number,
   hitDirection: Vector3Tuple,
+  worldMatrix: THREE.Matrix4,
 ): SceneObject[] {
   const cutHeight = spec.chop.breakPoints[breakIndex].height;
   const generated = generateTree(spec, tree.tree?.seed ?? 1);
@@ -135,8 +173,23 @@ function makeFelledLog(
   // The canopy rides along as a physics-less child of the bark body.
   const barkSlice = sliceAboveTrunkT(generated.bark, null, cutHeight);
   const foliageSlice = generated.foliage ? sliceAboveTrunkT(generated.foliage, null, cutHeight) : null;
+  generated.bark.dispose();
+  generated.foliage?.dispose();
 
   const key = `treelog_${tree.id}_${breakIndex}_${version}`;
+  const worldPosition = new THREE.Vector3().setFromMatrixPosition(worldMatrix);
+  const linear = worldMatrix.clone().setPosition(0, 0, 0);
+  const point = new THREE.Vector3();
+  for (const slice of [barkSlice, foliageSlice]) {
+    if (!slice) continue;
+    for (let i = 0; i < slice.vertices.length; i += 3) {
+      point.fromArray(slice.vertices, i).applyMatrix4(linear).toArray(slice.vertices, i);
+    }
+    // Mirrored transforms reverse winding; keep the root mesh front faces outward.
+    if (linear.determinant() < 0) for (let i = 0; i < slice.indices.length; i += 3) {
+      [slice.indices[i + 1], slice.indices[i + 2]] = [slice.indices[i + 2], slice.indices[i + 1]];
+    }
+  }
   registerRawGeometry(key, barkSlice.vertices, barkSlice.indices);
 
   // Topple AWAY from the swing, with a shove proportional to how much tree is above the cut — felling a
@@ -154,11 +207,10 @@ function makeFelledLog(
     kind: 'empty',
     parentId: undefined,
     transform: {
-      // The sliced geometry is authored in the tree's local space, so the log spawns on the tree's origin
-      // and its own vertices place it at the cut — no offset maths to get subtly wrong.
-      position: [...tree.transform.position] as Vector3Tuple,
-      rotation: [...tree.transform.rotation] as Vector3Tuple,
-      scale: [...tree.transform.scale] as Vector3Tuple,
+      // The full linear world transform is baked into vertices, including hierarchical shear.
+      position: [worldPosition.x, worldPosition.y, worldPosition.z],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
     },
     renderer: {
       enabled: true,

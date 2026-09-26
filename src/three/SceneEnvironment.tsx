@@ -155,7 +155,7 @@ export function SceneEnvironment({
     const t = isPlaying ? dayCycleTime : (resolved.dayCycleTime ?? 0.35);
     return withDayCycleVisuals(resolved, t);
   }, [environment, dayCycleTime, isPlaying]);
-  const sunPosition = useMemo(() => sunPositionFromEnvironment(env, Math.max(18, (env.sunShadowExtent ?? 9) * 2)), [env]);
+  const sunPosition = useMemo(() => sunPositionFromEnvironment(env, Math.max(18, (env.sunShadowExtent ?? 80) * 2)), [env]);
   const lightIntensity = Math.max(0, env.environmentIntensity);
   // IBL cubemap resolution follows the quality preset — sharper reflections at High/Epic.
   const profile = qualityProfile(useEditorStore((state) => state.renderSettings?.quality));
@@ -235,7 +235,7 @@ export function SceneEnvironment({
         shadow-normalBias={SHADOW_NORMAL_BIAS}
         shadow-radius={profile.shadowMapSize >= 2048 ? 2.25 : 1.25}
         shadow-camera-near={0.5}
-        shadow-camera-far={Math.max(200, (env.sunShadowExtent ?? 0) * 4)}
+        shadow-camera-far={Math.max(200, (env.sunShadowExtent ?? 80) * 4)}
         shadow-camera-left={-(env.sunShadowExtent ?? 80)}
         shadow-camera-right={env.sunShadowExtent ?? 80}
         shadow-camera-top={env.sunShadowExtent ?? 80}

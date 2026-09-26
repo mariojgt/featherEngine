@@ -1,0 +1,345 @@
+{
+  "schema_version": 1,
+  "title": "Verdant — A Woodland Study",
+  "generated_date": "2026-09-25",
+  "asset_type": "AI-generated audio stems and an offline audio mix; not an engine-rendered film or recording",
+  "generation": [
+    {
+      "file": "verdant-score.mp3",
+      "tool": "mcp__devmcp__elevenlabs_music_compose",
+      "arguments": {
+        "force_instrumental": true,
+        "model_id": "music_v1",
+        "music_length_ms": 48000,
+        "output_format": "mp3_44100_192",
+        "prompt": "Compose an original 48-second instrumental cinematic score titled 'Verdant — A Woodland Study'. Intimate woodland dawn: restrained tactile felt piano, warm chamber strings, delicate organic plucks and soft breathy woodwind textures. Spacious, graceful and unhurried, approximately 72 BPM feel, natural acoustic dynamics and room for forest ambience. No vocals, voices, choir, words, speech, bombastic trailer drums, sharp impacts or aggressive percussion. Precise musical arc: 0–8 seconds quiet tactile opening with sparse felt piano; 8–24 gentle developing interwoven piano, organic plucks and warm strings; 24–36 airy lift with soft woodwind color and widening harmony; 36–44 broad hopeful forest reveal, warmly luminous but restrained; 44–48 clear soft harmonic resolution with a natural decaying tail fully ending at 48 seconds. Compose as a complete miniature with an intentional ending, not an abruptly cut excerpt. Original melody and arrangement, no artist imitation."
+      },
+      "seed_used": null,
+      "tool_response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Generated music saved to: generated-audio/music-2026-09-25_21-42-22-c9if.mp3\nSong ID: UbsW0TFybl9a7ptpiJRE\nModel: music_v1\nFormat: mp3_44100_192\nPrompt: Compose an original 48-second instrumental cinematic score titled 'Verdant — A Woodland Study'. Intimate woodland dawn: restrained tactile felt piano, warm chamber strings, delicate organic plucks and soft breathy woodwind textures. Spacious, graceful and unhurried, approximately 72 BPM feel, natural acoustic dynamics and room for forest ambience. No vocals, voices, choir, words, speech, bombastic trailer drums, sharp impacts or aggressive percussion. Precise musical arc: 0–8 seconds quiet tactile opening with sparse felt piano; 8–24 gentle developing interwoven piano, organic plucks and warm strings; 24–36 airy lift with soft woodwind color and widening harmony; 36–44 broad hopeful forest reveal, warmly luminous but restrained; 44–48 clear soft harmonic resolution with a natural decaying tail fully ending at 48 seconds. Compose as a complete miniature with an intentional ending, not an abruptly cut excerpt. Original melody and arrangement, no artist imitation.\nRequested length: 48000ms"
+          }
+        ]
+      }
+    },
+    {
+      "file": "woodland-ambience.mp3",
+      "tool": "mcp__devmcp__elevenlabs_sound_effect",
+      "arguments": {
+        "duration_seconds": 24,
+        "loop": true,
+        "output_format": "mp3_44100_192",
+        "prompt_influence": 0.8,
+        "text": "Seamless 24-second stereo woodland dawn loop: gentle breeze through broadleaf canopies, soft detailed leaf rustles near and far, occasional quiet distant songbirds with natural space between calls. Calm, spacious realistic forest air with a steady subtle background. End joins start smoothly at consistent level, no fades. No speech, voices, music, water, rain, traffic, machinery, footsteps, sharp impacts or dramatic gusts."
+      },
+      "seed_used": null,
+      "tool_response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Generated sound effect saved to: generated-audio/sfx-2026-09-25_21-42-13-c4pd.mp3\nPrompt: Seamless 24-second stereo woodland dawn loop: gentle breeze through broadleaf canopies, soft detailed leaf rustles near and far, occasional quiet distant songbirds with natural space between calls. Calm, spacious realistic forest air with a steady subtle background. End joins start smoothly at consistent level, no fades. No speech, voices, music, water, rain, traffic, machinery, footsteps, sharp impacts or dramatic gusts.\nDuration: 24s\nLooping: yes"
+          }
+        ]
+      }
+    }
+  ],
+  "generation_notes": [
+    "Both stems were newly generated through connected Dev MCP ElevenLabs tools for this request; no existing song, recording, or reference artist was supplied.",
+    "Successful tool outputs were local MP3 files, copied byte-for-byte into this directory. No source stem processing or re-encoding was applied.",
+    "Initial requests produced no audio: music API rejected seed with prompt (422), and sound-effect API rejected a prompt longer than 450 characters (400). The music request was retried without a seed and the ambience prompt shortened.",
+    "The music tool returned song ID UbsW0TFybl9a7ptpiJRE. Sound-effect tool confirmed Looping: yes.",
+    "No licensing or redistribution terms were supplied by either tool. No CC0, public-domain, unrestricted-use, or repository-license coverage claim is made."
+  ],
+  "licensing": {
+    "tool_supplied_license": "not supplied",
+    "tool_supplied_redistribution_information": "not supplied",
+    "independent_rights_verification": false,
+    "terms_reviewed": [
+      "https://elevenlabs.io/music-terms",
+      "https://elevenlabs.io/eleven-music-model-specific-terms"
+    ],
+    "account_entitlements_verified": false,
+    "redistribution_note": "Provider terms depend on the generating account and intended use. No additional audio license is granted by this repository. A separate music-free visual template is provided for sharing the scene without the generated tracks."
+  },
+  "mix": {
+    "file": "verdant-mix.wav",
+    "method": "FFmpeg offline decode, trim, sample-counted ambience loop, sum, fades and constant gain",
+    "filter_complex": "[0:a]atrim=duration=48,asetpts=PTS-STARTPTS,aformat=sample_rates=44100:channel_layouts=stereo[score];[1:a]atrim=end_sample=1058400,asetpts=PTS-STARTPTS,aloop=loop=1:size=1058400,atrim=duration=48,volume=6dB[ambience];[score][ambience]amix=inputs=2:duration=first:normalize=0,afade=t=in:st=0:d=0.6:curve=hsin,afade=t=out:st=46.5:d=1.5:curve=hsin,volume=-1.49dB",
+    "score_gain_db": 0,
+    "ambience_gain_db": 6,
+    "master_gain_db": -1.49,
+    "ambience_rationale": "Generated ambience measures -41.76 LUFS before gain; +6 dB keeps it approximately 20 dB beneath the score overall.",
+    "ambience_loop_frames": 1058400,
+    "ambience_loop_seconds": 24,
+    "ambience_repetitions": 2,
+    "fade_in": {
+      "start_seconds": 0,
+      "duration_seconds": 0.6,
+      "curve": "hsin"
+    },
+    "fade_out": {
+      "start_seconds": 46.5,
+      "duration_seconds": 1.5,
+      "curve": "hsin"
+    },
+    "output": {
+      "codec": "pcm_s24le",
+      "sample_rate_hz": 44100,
+      "channels": 2,
+      "duration_seconds": 48
+    },
+    "mastering": "Constant gain preserves score dynamics; no dynamic normalization, compression or limiter was needed.",
+    "measured": {
+      "integrated_lufs": -17,
+      "true_peak_dbtp": -2.57,
+      "loudness_range_lu": 7.8
+    },
+    "measurement_method": "FFmpeg loudnorm analysis of final WAV; input_i, input_tp and input_lra describe the delivered file, not analysis-filter output.",
+    "measurement_log": "Input #0, wav, from 'public/templates/verdant/verdant-mix.wav':\n  Metadata:\n    encoder         : Lavf62.12.100\n  Duration: 00:00:48.00, bitrate: 2116 kb/s\n  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s\nStream mapping:\n  Stream #0:0 -> #0:0 (pcm_s24le (native) -> pcm_s16le (native))\nPress [q] to stop, [?] for help\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf62.12.100\n  Stream #0:0: Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s\n    Metadata:\n      encoder         : Lavc62.28.100 pcm_s16le\n[Parsed_loudnorm_0 @ 0xc8f038900] \n{\n\t\"input_i\" : \"-17.00\",\n\t\"input_tp\" : \"-2.57\",\n\t\"input_lra\" : \"7.80\",\n\t\"input_thresh\" : \"-27.96\",\n\t\"output_i\" : \"-15.58\",\n\t\"output_tp\" : \"-1.50\",\n\t\"output_lra\" : \"5.80\",\n\t\"output_thresh\" : \"-26.29\",\n\t\"normalization_type\" : \"dynamic\",\n\t\"target_offset\" : \"-1.42\"\n}\n[out#0/null @ 0xc8f038180] video:0KiB audio:36000KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nsize=N/A time=00:00:48.00 bitrate=N/A speed=37.8x elapsed=0:00:01.27    \n"
+  },
+  "integration": {
+    "timeline_sound": "verdant-mix.wav",
+    "timeline_start_seconds": 0,
+    "timeline_duration_seconds": 48,
+    "timeline_gain": 1,
+    "loop": false,
+    "stem_usage": "Embed both MP3 stems as editable reusable assets. Do not also play them alongside the mix."
+  },
+  "quality_caveats": [
+    "Validation is technical; no human listening audition or in-engine playback review was performed in this worker.",
+    "Requested instrumentation, absent vocals/speech, artistic timing and perceptual loop transparency are generation instructions, not independently listening-verified claims.",
+    "The original score decodes to 48.013061 seconds (MP3 frame padding); the mix trims to exactly 48 seconds.",
+    "Score energy analysis shows an almost silent first second and a decay beginning around 42 seconds, earlier than the requested 44-second resolution.",
+    "The ambience decodes to exactly 24 seconds; raw wrap discontinuity is approximately -53 dBFS at worst. Looping is sample-counted in the mix; codec-aware gapless playback is required when reusing the MP3 stem."
+  ],
+  "validated_at_utc": "2026-09-25T21:44:15.709815+00:00",
+  "ffmpeg_version": "ffmpeg version 8.1 Copyright (c) 2000-2026 the FFmpeg developers",
+  "files": [
+    {
+      "file": "verdant-score.mp3",
+      "size_bytes": 1152358,
+      "sha256": "3fdaac722aacf128733dd0d907692eeb1359b1944b9e6a38123cde94e2050efa",
+      "decoded_sample_frames": 2117376,
+      "decoded_duration_seconds": 48.013061224489796,
+      "decode_valid": true,
+      "probe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "mp3",
+            "codec_long_name": "MP3 (MPEG audio layer 3)",
+            "codec_type": "audio",
+            "codec_tag_string": "[0][0][0][0]",
+            "codec_tag": "0x0000",
+            "mime_codec_string": "mp4a.40.34",
+            "sample_fmt": "fltp",
+            "sample_rate": "44100",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bits_per_sample": 0,
+            "initial_padding": 0,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/14112000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 677560044,
+            "duration": "48.013042",
+            "bit_rate": "192000",
+            "disposition": {
+              "default": 0,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0,
+              "non_diegetic": 0,
+              "captions": 0,
+              "descriptions": 0,
+              "metadata": 0,
+              "dependent": 0,
+              "still_image": 0,
+              "multilayer": 0
+            }
+          }
+        ],
+        "format": {
+          "filename": "public/templates/verdant/verdant-score.mp3",
+          "nb_streams": 1,
+          "nb_programs": 0,
+          "nb_stream_groups": 0,
+          "format_name": "mp3",
+          "format_long_name": "MP2/3 (MPEG audio layer 2/3)",
+          "start_time": "0.000000",
+          "duration": "48.013042",
+          "size": "1152358",
+          "bit_rate": "192007",
+          "probe_score": 51,
+          "tags": {
+            "encoder": "Lavf60.16.101"
+          }
+        }
+      }
+    },
+    {
+      "file": "woodland-ambience.mp3",
+      "size_bytes": 577454,
+      "sha256": "89e09f472c046c658ef616d2a5f1f0d52ce60bea8905f3d4159ab692451520c6",
+      "decoded_sample_frames": 1058400,
+      "decoded_duration_seconds": 24.0,
+      "decode_valid": true,
+      "probe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "mp3",
+            "codec_long_name": "MP3 (MPEG audio layer 3)",
+            "codec_type": "audio",
+            "codec_tag_string": "[0][0][0][0]",
+            "codec_tag": "0x0000",
+            "mime_codec_string": "mp4a.40.34",
+            "sample_fmt": "fltp",
+            "sample_rate": "44100",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bits_per_sample": 0,
+            "initial_padding": 0,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/14112000",
+            "start_pts": 353600,
+            "start_time": "0.025057",
+            "duration_ts": 338688000,
+            "duration": "24.000000",
+            "bit_rate": "192000",
+            "disposition": {
+              "default": 0,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0,
+              "non_diegetic": 0,
+              "captions": 0,
+              "descriptions": 0,
+              "metadata": 0,
+              "dependent": 0,
+              "still_image": 0,
+              "multilayer": 0
+            },
+            "tags": {
+              "encoder": "Lavf"
+            }
+          }
+        ],
+        "format": {
+          "filename": "public/templates/verdant/woodland-ambience.mp3",
+          "nb_streams": 1,
+          "nb_programs": 0,
+          "nb_stream_groups": 0,
+          "format_name": "mp3",
+          "format_long_name": "MP2/3 (MPEG audio layer 2/3)",
+          "start_time": "0.025057",
+          "duration": "24.000000",
+          "size": "577454",
+          "bit_rate": "192484",
+          "probe_score": 51,
+          "tags": {
+            "encoder": "Lavf60.16.101"
+          }
+        }
+      }
+    },
+    {
+      "file": "verdant-mix.wav",
+      "size_bytes": 12700902,
+      "sha256": "3820ddcdb84696a0525d6c8703ba7e52ef5a291416085c0afae695d49dec5ff9",
+      "decoded_sample_frames": 2116800,
+      "decoded_duration_seconds": 48.0,
+      "decode_valid": true,
+      "probe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "pcm_s24le",
+            "codec_long_name": "PCM signed 24-bit little-endian",
+            "codec_type": "audio",
+            "codec_tag_string": "[1][0][0][0]",
+            "codec_tag": "0x0001",
+            "sample_fmt": "s32",
+            "sample_rate": "44100",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "bits_per_sample": 24,
+            "initial_padding": 0,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/44100",
+            "duration_ts": 2116800,
+            "duration": "48.000000",
+            "bit_rate": "2116800",
+            "bits_per_raw_sample": "24",
+            "disposition": {
+              "default": 0,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0,
+              "non_diegetic": 0,
+              "captions": 0,
+              "descriptions": 0,
+              "metadata": 0,
+              "dependent": 0,
+              "still_image": 0,
+              "multilayer": 0
+            }
+          }
+        ],
+        "format": {
+          "filename": "public/templates/verdant/verdant-mix.wav",
+          "nb_streams": 1,
+          "nb_programs": 0,
+          "nb_stream_groups": 0,
+          "format_name": "wav",
+          "format_long_name": "WAV / WAVE (Waveform Audio)",
+          "duration": "48.000000",
+          "size": "12700902",
+          "bit_rate": "2116817",
+          "probe_score": 99,
+          "tags": {
+            "encoder": "Lavf62.12.100"
+          }
+        }
+      },
+      "first_stereo_frame": [
+        0.0,
+        0.0
+      ],
+      "last_stereo_frame": [
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

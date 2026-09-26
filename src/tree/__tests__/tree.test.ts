@@ -1,7 +1,9 @@
+import * as THREE from 'three';
+import { getModelGeometry } from '../../runtime/meshGeometryCache';
 import { describe, it, expect, afterEach } from 'vitest';
 import type { SceneObject } from '../../types';
 import { generateTree } from '../generateTree';
-import { treeSpecFromArchetype, normalizeTreeSpec, treeRng } from '../treeSpec';
+import { treeSpecFromArchetype, normalizeTreeSpec, resolveTreeSpec, treeRng } from '../treeSpec';
 import { chopTree, clearTreeChops, getTreeChopState } from '../../runtime/treeChop';
 
 const ARCHETYPES = ['conifer', 'broadleaf', 'birch', 'willow', 'palm', 'shrub', 'snag'] as const;
@@ -39,6 +41,34 @@ describe('tree generation', () => {
     const pa = Array.from(a.bark.getAttribute('position').array.slice(0, 60));
     const pb = Array.from(b.bark.getAttribute('position').array.slice(0, 60));
     expect(pa).not.toEqual(pb);
+  });
+
+  it('builds LODs as stable subsets of the authored tree instead of rerolling its topology', () => {
+    const spec = treeSpecFromArchetype('broadleaf', 'oak');
+    const full = generateTree(spec, 314);
+    const medium = generateTree(spec, 314, { lod: 1 });
+    const far = generateTree(spec, 314, { lod: 2 });
+    expect(medium.triangles).toBeLessThan(full.triangles);
+    expect(far.triangles).toBeLessThan(medium.triangles);
+    // Buffers shrink, but every surviving vertex remains at an exact authored position.
+    const positions = (geometry: THREE.BufferGeometry) => {
+      const p = geometry.getAttribute('position');
+      return Array.from({ length: p.count }, (_, i) => [p.getX(i), p.getY(i), p.getZ(i)].join(','));
+    };
+    for (const [original, reduced] of [[full.bark, medium.bark], [full.foliage!, far.foliage!]]) {
+      const authored = new Set(positions(original));
+      expect(positions(reduced).every((point) => authored.has(point))).toBe(true);
+      expect(reduced.getAttribute('position').count).toBeLessThan(original.getAttribute('position').count);
+    }
+    const furthest = generateTree(spec, 314, { lod: 3 });
+    expect(furthest.triangles).toBeLessThan(far.triangles);
+    furthest.bark.dispose(); furthest.foliage?.dispose();
+    expect(medium.bounds.equals(full.bounds)).toBe(true);
+    expect(far.bounds.equals(full.bounds)).toBe(true);
+    for (const tree of [full, medium, far]) {
+      tree.bark.dispose();
+      tree.foliage?.dispose();
+    }
   });
 
   it('builds every archetype with the attributes the tree material and chop system need', () => {
@@ -140,6 +170,14 @@ describe('tree spec normalization', () => {
     expect(painted.look.pixelArt.leafArt).toBe('broad');
     expect(painted.look.pixelArt.alphaCutoff).toBe(0.95);
     expect(painted.look.pixelArt.billboard).toBe(false);
+    expect(legacy.look.surface.style).toBe('stylized');
+  });
+
+  it('uses a linked library asset while retaining inline fallback compatibility', () => {
+    const inline = treeSpecFromArchetype('broadleaf', 'inline');
+    const linked = treeSpecFromArchetype('conifer', 'shared');
+    expect(resolveTreeSpec({ specId: linked.id, spec: inline }, [linked])).toBe(linked);
+    expect(resolveTreeSpec({ specId: 'missing', spec: inline }, [linked])).toBe(inline);
   });
 });
 
@@ -194,4 +232,51 @@ describe('tree chopping', () => {
     clearTreeChops();
     expect(getTreeChopState('regrow')).toBeUndefined();
   });
+
+  it('chops with the resolved library spec and a parent group world transform', () => {
+    const tree = makeTreeObject('linked');
+    const inline = tree.tree!.spec;
+    const linked = normalizeTreeSpec({
+      ...inline,
+      id: 'shared',
+      trunk: { ...inline.trunk, height: 10 },
+      chop: { ...inline.chop, breakPoints: [{ height: 0.2, hits: 1 }] },
+    });
+    tree.tree!.specId = linked.id;
+    tree.parentId = 'group';
+    tree.transform.position = [0, 1, 0];
+    const group = {
+      id: 'group',
+      name: 'Group',
+      kind: 'empty',
+      transform: { position: [5, 3, -2], rotation: [0, 0, 0], scale: [2, 2, 2] },
+    } as SceneObject;
+    // local cut y = 2, tree local offset = 1, group scale/translation => world y = 9.
+    const result = chopTree(tree, [5, 9, -2], [1, 0, 0], { treeSpecs: [linked], objects: [group, tree] });
+    expect(result?.severed).toBe(true);
+    expect(result?.cutWorldY).toBeCloseTo(9);
+    expect(result?.logs?.[0].transform.position).toEqual([5, 5, -2]);
+    expect(result?.logs?.[0].transform.scale).toEqual([1, 1, 1]);
+  });
+  it('bakes sheared parent transforms into felled vertices without a visual jump', () => {
+    const tree = makeTreeObject('sheared');
+    tree.parentId = 'parent'; tree.transform.rotation = [0, 0, 0.6];
+    tree.tree!.spec.chop.breakPoints = [{ height: 0.2, hits: 1 }];
+    const parent: SceneObject = { id: 'parent', name: 'Parent', kind: 'empty', transform: { position: [7, 2, -4], rotation: [0, 0.4, 0], scale: [3, 1, 2] } };
+    const local = new THREE.Matrix4().makeRotationZ(0.6);
+    const world = new THREE.Matrix4().compose(new THREE.Vector3(7, 2, -4), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.4, 0)), new THREE.Vector3(3, 1, 2)).multiply(local);
+    const hit = new THREE.Vector3(0, tree.tree!.spec.trunk.height * 0.2, 0).applyMatrix4(world).toArray() as [number, number, number];
+    const result = chopTree(tree, hit, [1, 0, 0], { objects: [parent, tree] })!;
+    expect(result.severed).toBe(true);
+    const log = result.logs![0], raw = getModelGeometry(log.renderer!.fragmentKey)!;
+    const full = generateTree(tree.tree!.spec, tree.tree!.seed);
+    const points = full.bark.getAttribute('position');
+    const vertex = new THREE.Vector3(raw.vertices[0], raw.vertices[1], raw.vertices[2]).add(new THREE.Vector3(...log.transform.position));
+    let minimum = Infinity;
+    for (let i = 0; i < points.count; i++) minimum = Math.min(minimum, vertex.distanceTo(new THREE.Vector3().fromBufferAttribute(points, i).applyMatrix4(world)));
+    expect(minimum).toBeLessThan(0.00001);
+    expect(log.transform.rotation).toEqual([0, 0, 0]);
+    full.bark.dispose(); full.foliage?.dispose();
+  });
+
 });

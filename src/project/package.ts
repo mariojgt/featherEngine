@@ -298,6 +298,8 @@ export function collectPackage(
   const scanObject = (object: SceneObject) => {
     add.modelSpec(object.model?.specId);
     add.treeSpec(object.tree?.specId);
+    add.treeSpec(object.terrain?.foliage?.treeSpecId);
+    object.terrain?.foliage?.treeSpecies?.forEach((entry) => add.treeSpec(entry.specId));
     // A nested prefab INSTANCE inside this prefab pulls its source prefab into the closure too —
     // without this, exporting a prefab-of-prefabs shipped ghosts.
     add.prefab(object.prefabSourceId);
@@ -325,6 +327,7 @@ export function collectPackage(
     }
     add.asset(object.terrain?.foliage?.grassModelAssetId);
     add.asset(object.terrain?.foliage?.treeModelAssetId);
+    add.asset(object.terrain?.foliage?.understoryAssetId);
     // Billboard foliage uses images rather than models — missing these shipped untextured grass.
     add.asset(object.terrain?.foliage?.grassImageAssetId);
     add.asset(object.terrain?.foliage?.treeImageAssetId);
@@ -708,8 +711,11 @@ export function remapPackageForImport(
       if (o.terrain.foliage) {
         o.terrain.foliage.grassModelAssetId = remap(maps.asset, o.terrain.foliage.grassModelAssetId);
         o.terrain.foliage.treeModelAssetId = remap(maps.asset, o.terrain.foliage.treeModelAssetId);
+        o.terrain.foliage.understoryAssetId = remap(maps.asset, o.terrain.foliage.understoryAssetId);
         o.terrain.foliage.grassImageAssetId = remap(maps.asset, o.terrain.foliage.grassImageAssetId);
         o.terrain.foliage.treeImageAssetId = remap(maps.asset, o.terrain.foliage.treeImageAssetId);
+        o.terrain.foliage.treeSpecId = remap(maps.treeSpec, o.terrain.foliage.treeSpecId);
+        o.terrain.foliage.treeSpecies = o.terrain.foliage.treeSpecies?.map((entry) => ({ ...entry, specId: remap(maps.treeSpec, entry.specId) ?? entry.specId }));
       }
     }
     if (o.inventory) {

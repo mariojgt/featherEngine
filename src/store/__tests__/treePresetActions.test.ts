@@ -1,6 +1,9 @@
+import { initHistory, clearHistory, undo, redo } from '../history';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { selectActiveObjects, useEditorStore } from '../editorStore';
 import { getStylizedPreset } from '../../tree/stylizedPresets';
+import { treeSpecFromArchetype } from '../../tree/treeSpec';
+import type { Scene, SceneObject } from '../../types';
 
 /**
  * The store actions behind the Arbor Forge plugin and the AI's apply_tree_preset / plant_grove
@@ -86,5 +89,73 @@ describe('tree preset + grove store actions', () => {
     expect(useEditorStore.getState().plantGrove({ presetId: 'nope' })).toBeNull();
     expect(useEditorStore.getState().plantGrove({ specId: 'tree-nope' })).toBeNull();
     expect(useEditorStore.getState().plantGrove({})).toBeNull();
+  });
+
+  it('deleting a shared spec detaches linked trees in every scene with the latest asset fallback', () => {
+    const original = useEditorStore.getState();
+    const shared = treeSpecFromArchetype('conifer', 'delete-shared', 'Latest Pine');
+    const stale = treeSpecFromArchetype('broadleaf', 'stale-inline', 'Old Inline');
+    const linked = (id: string): SceneObject => ({
+      id,
+      name: id,
+      kind: 'empty',
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+      tree: { enabled: true, specId: shared.id, spec: stale, seed: 1 },
+    } as SceneObject);
+    try {
+      useEditorStore.setState({
+        treeSpecs: [...original.treeSpecs, shared],
+        activeTreeSpecId: shared.id,
+        scenes: [
+          { id: 'scene-a', name: 'A', objects: [linked('a')] },
+          { id: 'scene-b', name: 'B', objects: [linked('b')] },
+        ] as Scene[],
+        activeSceneId: 'scene-a',
+      });
+      useEditorStore.setState({ prefabs: [{ id: 'prefab', name: 'Prefab', objects: [linked('prefab-tree')], rootId: 'prefab-tree', createdAt: 0 }], isPlaying: false });
+      initHistory(); clearHistory();
+      useEditorStore.getState().deleteTreeSpec(shared.id);
+      const next = useEditorStore.getState();
+      expect(next.treeSpecs.some((entry) => entry.id === shared.id)).toBe(false);
+      for (const scene of next.scenes) {
+        expect(scene.objects[0].tree?.specId).toBeUndefined();
+        expect(scene.objects[0].tree?.spec.name).toBe('Latest Pine');
+      }
+      expect(next.prefabs[0].objects[0].tree?.specId).toBeUndefined();
+      undo();
+      expect(useEditorStore.getState().prefabs[0].objects[0].tree?.specId).toBe(shared.id);
+      redo();
+      expect(useEditorStore.getState().prefabs[0].objects[0].tree?.specId).toBeUndefined();
+      clearHistory();
+    } finally {
+      useEditorStore.setState(original, true);
+    }
+  });
+
+  it('keeps a tree asset while terrain foliage still references it', () => {
+    const original = useEditorStore.getState();
+    const shared = treeSpecFromArchetype('conifer', 'terrain-shared');
+    try {
+      useEditorStore.setState({
+        treeSpecs: [...original.treeSpecs, shared],
+        activeTreeSpecId: shared.id,
+        scenes: [{
+          id: 'scene-terrain',
+          name: 'Terrain',
+          objects: [{
+            id: 'terrain',
+            name: 'Terrain',
+            kind: 'empty',
+            transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+            terrain: { foliage: { treeSpecId: shared.id } } as SceneObject['terrain'],
+          } as SceneObject],
+        }] as Scene[],
+        activeSceneId: 'scene-terrain',
+      });
+      useEditorStore.getState().deleteTreeSpec(shared.id);
+      expect(useEditorStore.getState().treeSpecs.some((entry) => entry.id === shared.id)).toBe(true);
+    } finally {
+      useEditorStore.setState(original, true);
+    }
   });
 });

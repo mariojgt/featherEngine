@@ -1,14 +1,27 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { SceneObject, TreePixelArtSpec, TreeSpec } from '../types';
 import { useEditorStore, selectActiveSceneEnvironment } from '../store/editorStore';
 import { sunDirectionFromEnvironment } from './environmentSettings';
-import { generateTree } from '../tree/generateTree';
-import { normalizeTreeSpec } from '../tree/treeSpec';
+import { normalizeTreeSpec, resolveTreeSpec } from '../tree/treeSpec';
 import { pixelCanopyTexture } from '../tree/pixelCanopy';
+import {
+  naturalBarkTexture,
+  naturalBirchBarkTexture,
+  naturalFoliageTexture,
+  naturalLeafTexture,
+  naturalNeedleTexture,
+} from '../tree/surfaceTextures';
 import { MAX_FOLIAGE_INTERACTORS, foliageInteractorUniforms } from './foliageInteractors';
 import { getTreeChopState, treeChopVersion } from '../runtime/treeChop';
+import {
+  acquireTreeGeometry,
+  batchTreePlacements,
+  releaseTreeGeometry,
+  selectTreeLod,
+  type TreeGeometryLease,
+} from './treeRenderResources';
 
 /**
  * Renders one parametric tree: bark + canopy, regenerated from the object's spec + seed.
@@ -30,10 +43,12 @@ const ignoreFoliageRaycast = () => null;
 
 interface TreeUniforms {
   uTime: { value: number };
+  uViewerViewMatrix: { value: THREE.Matrix4 };
   uWind: { value: THREE.Vector3 };
   /** World-unit sway amplitude at full weight — scaled from the spec's trunk height per tree. */
   uSwayAmplitude: { value: number };
   uSwaySpeed: { value: number };
+  uTurbulence: { value: number };
   /** x = sever height in aTrunkT space, y = 1 when this draw is the FALLING half, z = 1 when severed. */
   uSever: { value: THREE.Vector3 };
   uInteractors: { value: THREE.Vector4[] };
@@ -50,9 +65,11 @@ interface TreeUniforms {
 function makeTreeUniforms(): TreeUniforms {
   return {
     uTime: { value: 0 },
+    uViewerViewMatrix: { value: new THREE.Matrix4() },
     uWind: { value: new THREE.Vector3() },
     uSwayAmplitude: { value: 0.25 },
     uSwaySpeed: { value: 1 },
+    uTurbulence: { value: 1 },
     uSever: { value: new THREE.Vector3(1, 0, 0) },
     uInteractors: foliageInteractorUniforms.uInteractors,
     uInteractorCount: foliageInteractorUniforms.uInteractorCount,
@@ -71,9 +88,11 @@ attribute float aTrunkT;
 attribute vec3  aCardDelta;
 attribute vec2  aCardOffset;
 uniform float uTime;
+uniform mat4 uViewerViewMatrix;
 uniform vec3  uWind;
 uniform float uSwayAmplitude;
 uniform float uSwaySpeed;
+uniform float uTurbulence;
 uniform vec3  uSever;
 uniform vec4  uInteractors[${MAX_FOLIAGE_INTERACTORS}];
 uniform int   uInteractorCount;
@@ -87,9 +106,9 @@ const VERTEX_BODY = `
   // has zeroes in both attributes, making this an exact no-op for every existing tree.
   {
     #ifdef USE_INSTANCING
-      mat3 nfCardM = mat3(modelViewMatrix) * mat3(instanceMatrix);
+      mat3 nfCardM = mat3(uViewerViewMatrix * modelMatrix) * mat3(instanceMatrix);
     #else
-      mat3 nfCardM = mat3(modelViewMatrix);
+      mat3 nfCardM = mat3(uViewerViewMatrix * modelMatrix);
     #endif
     float nfCardX = max(dot(nfCardM[0], nfCardM[0]), 1e-8);
     float nfCardY = max(dot(nfCardM[1], nfCardM[1]), 1e-8);
@@ -127,14 +146,14 @@ const VERTEX_BODY = `
   // The gust phase travels ALONG the wind, so a grove ripples in sequence instead of pulsing as one.
   float nfPhase = uTime * uSwaySpeed + dot(nfWorld.xz, nfWindDir) * 0.22 + nfWorld.z * 0.07;
   // Two frequencies so the canopy never reads as a single rocking rigid body.
-  float nfGust = sin(nfPhase) * 0.65 + sin(nfPhase * 2.33 + 1.7) * 0.35;
+  float nfGust = sin(nfPhase) * 0.65 + sin(nfPhase * (1.65 + uTurbulence * 0.68) + 1.7) * 0.35;
   // Idle breathing even at zero wind (grass has the same baseSway); authored wind scales on top.
   float nfAmp = uSwayAmplitude * (0.3 + min(nfWindMag, 2.5) * 0.7);
   vec2 nfLean = nfWindDir * nfAmp * nfGust * aWind;
   transformed.x += nfLean.x;
   transformed.z += nfLean.y;
   // A weaker cross-wind figure-eight keeps limbs from tracing one straight line back and forth.
-  transformed.xz += vec2(-nfWindDir.y, nfWindDir.x) * sin(nfPhase * 3.1 + aTrunkT * 9.3) * aWind * nfAmp * 0.22;
+  transformed.xz += vec2(-nfWindDir.y, nfWindDir.x) * sin(nfPhase * (2.1 + uTurbulence) + aTrunkT * 9.3) * aWind * nfAmp * 0.22;
   // Twigs also flutter across the wind, which is most of what sells foliage as light and separate.
   transformed.y += sin(nfPhase * 1.9 + aTrunkT * 6.0 + transformed.x * 0.6) * aWind * nfAmp * 0.35;
 
@@ -190,18 +209,57 @@ const FOLIAGE_FRAGMENT_BODY = `
 function makeTreeMaterial(
   kind: 'bark' | 'foliage',
   uniforms: TreeUniforms,
-  pixelArt?: TreePixelArtSpec,
-): THREE.MeshLambertMaterial {
-  const paintedCards = kind === 'foliage' && pixelArt?.enabled;
-  const material = new THREE.MeshLambertMaterial({
+  spec: TreeSpec,
+): THREE.MeshLambertMaterial | THREE.MeshStandardMaterial {
+  const pixelArt: TreePixelArtSpec = spec.look.pixelArt;
+  const paintedCards = kind === 'foliage' && pixelArt.enabled;
+  const individualLeaves = kind === 'foliage' && spec.foliage.strategy === 'leaves' && !paintedCards;
+  const natural = spec.look.surface.style === 'natural' && !paintedCards;
+  const naturalBirchBark = natural && kind === 'bark' && spec.foliage.strategy === 'leaves' && spec.archetype === 'birch';
+  const map = paintedCards
+    ? pixelCanopyTexture()
+    : individualLeaves
+      ? spec.archetype === 'conifer'
+        ? naturalNeedleTexture()
+        : naturalLeafTexture()
+      : natural
+      ? kind === 'bark'
+        ? naturalBirchBark
+          ? naturalBirchBarkTexture()
+          : naturalBarkTexture()
+        : naturalFoliageTexture()
+      : null;
+  const alphaTest = paintedCards
+    ? pixelArt.alphaCutoff
+    : individualLeaves || (natural && kind === 'foliage')
+      ? spec.look.surface.alphaCutoff
+      : 0;
+  const parameters: THREE.MeshLambertMaterialParameters & THREE.MeshStandardMaterialParameters = {
     vertexColors: true,
-    map: paintedCards ? pixelCanopyTexture() : null,
-    alphaTest: paintedCards ? pixelArt.alphaCutoff : 0,
+    map,
+    alphaTest,
     side: kind === 'foliage' ? THREE.DoubleSide : THREE.FrontSide,
     // Foliage normals are baked radial/canopy blends from the generator; flat shading would throw
     // them away and re-derive hard facet normals — the old "plastic rock pile" look.
     flatShading: false,
-  });
+    // Keep legacy cutouts byte-for-byte in the old material path; multisample smoothing is opt-in
+    // with the new small-leaf strategy only.
+    alphaToCoverage: individualLeaves,
+    dithering: individualLeaves,
+  };
+  const material = natural
+    ? new THREE.MeshStandardMaterial({
+        ...parameters,
+        metalness: 0,
+        bumpMap: kind === 'bark'
+          ? naturalBirchBark
+            ? naturalBirchBarkTexture()
+            : naturalBarkTexture()
+          : null,
+        bumpScale: kind === 'bark' ? 0.045 : 0,
+        roughness: kind === 'bark' ? spec.look.surface.barkRoughness : spec.look.surface.foliageRoughness,
+      })
+    : new THREE.MeshLambertMaterial(parameters);
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader =
@@ -214,39 +272,93 @@ function makeTreeMaterial(
     shader.fragmentShader = fragmentHead + fragment;
   };
   // Must distinguish the variants or three reuses one compiled program for both.
-  material.customProgramCacheKey = () => `nf-tree-${kind}-v3-${paintedCards ? 'pixel' : 'solid'}`;
+  material.customProgramCacheKey = () =>
+    `nf-tree-${kind}-v6-${paintedCards ? 'pixel' : individualLeaves ? spec.archetype === 'conifer' ? 'needles' : 'leaves' : natural ? 'natural' : 'solid'}`;
   return material;
 }
 
-const pixelMaterialKey = (spec: TreeSpec | null): string => {
-  const pixel = spec?.look.pixelArt;
-  return pixel?.enabled ? `on:${pixel.alphaCutoff}` : 'off';
+function makeTreeShadowMaterial(
+  kind: 'bark' | 'foliage',
+  uniforms: TreeUniforms,
+  spec: TreeSpec,
+  distance: boolean,
+): THREE.MeshDepthMaterial | THREE.MeshDistanceMaterial {
+  const paintedCards = kind === 'foliage' && spec.look.pixelArt.enabled;
+  const individualLeaves = kind === 'foliage' && spec.foliage.strategy === 'leaves' && !paintedCards;
+  const naturalLeaves = kind === 'foliage' && spec.look.surface.style === 'natural' && !paintedCards;
+  const map = paintedCards
+    ? pixelCanopyTexture()
+    : individualLeaves
+      ? spec.archetype === 'conifer'
+        ? naturalNeedleTexture()
+        : naturalLeafTexture()
+      : naturalLeaves
+        ? naturalFoliageTexture()
+        : null;
+  const alphaTest = paintedCards
+    ? spec.look.pixelArt.alphaCutoff
+    : individualLeaves || naturalLeaves
+      ? spec.look.surface.alphaCutoff
+      : 0;
+  const material = distance
+    ? new THREE.MeshDistanceMaterial({ map, alphaTest, side: kind === 'foliage' ? THREE.DoubleSide : THREE.FrontSide })
+    : new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        map,
+        alphaTest,
+        side: kind === 'foliage' ? THREE.DoubleSide : THREE.FrontSide,
+      });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader =
+      VERTEX_HEAD + shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERTEX_BODY}`);
+    shader.fragmentShader = FRAGMENT_HEAD + shader.fragmentShader.replace(
+      '#include <clipping_planes_fragment>',
+      `#include <clipping_planes_fragment>\n${FRAGMENT_BODY}`,
+    );
+  };
+  material.customProgramCacheKey = () =>
+    `nf-tree-shadow-${kind}-v4-${distance ? 'distance' : 'depth'}-${paintedCards ? 'pixel' : individualLeaves ? spec.archetype === 'conifer' ? 'needles' : 'leaves' : naturalLeaves ? 'natural' : 'solid'}`;
+  return material;
+}
+
+const treeMaterialKey = (spec: TreeSpec | null): string => {
+  if (!spec) return 'none';
+  const pixel = spec.look.pixelArt;
+  const surface = spec.look.surface;
+  return `${spec.archetype}:${spec.foliage.strategy}:${pixel.enabled}:${pixel.alphaCutoff}:${surface.style}:${surface.alphaCutoff}:${surface.barkRoughness}:${surface.foliageRoughness}`;
 };
 
 /** Per-frame uniform update shared by single trees and scattered forests. */
 function updateTreeUniforms(
   u: TreeUniforms,
-  delta: number,
+  _delta: number,
   windVec: readonly number[],
   env: ReturnType<typeof selectActiveSceneEnvironment>,
   camera: THREE.Camera,
   spec: TreeSpec | null,
+  options: { windStrength?: number; interactStrength?: number; turbulence?: number } = {},
 ): void {
   const state = useEditorStore.getState();
-  u.uTime.value = state.isPlaying ? state.runtimeTime : u.uTime.value + Math.min(delta, 1 / 20);
-  u.uWind.value.set(windVec[0], 0, windVec[2]);
-  const windMag = Math.hypot(windVec[0], windVec[2]);
+  u.uTime.value = state.isPlaying ? state.runtimeTime : performance.now() / 1000;
+  u.uViewerViewMatrix.value.copy(camera.matrixWorldInverse);
+  const windStrength = options.windStrength ?? 1;
+  u.uWind.value.set(windVec[0] * windStrength, 0, windVec[2] * windStrength);
+  const windMag = Math.hypot(windVec[0], windVec[2]) * windStrength;
   // Amplitude scales with the tree, not a constant: a 15-unit spruce leans farther than a shrub.
   const height = spec?.trunk.height ?? 7;
   u.uSwayAmplitude.value = THREE.MathUtils.clamp(height * 0.045, 0.05, 0.65);
   u.uSwaySpeed.value = 1 + windMag * 0.55;
+  u.uTurbulence.value = THREE.MathUtils.clamp(options.turbulence ?? 1, 0, 3);
+  u.uInteractStrength.value = THREE.MathUtils.clamp(options.interactStrength ?? 1, 0, 3);
   u.uInteractorCount.value = foliageInteractorUniforms.uInteractorCount.value;
   if (env) u.uSunDirView.value.copy(sunDirectionFromEnvironment(env));
   else u.uSunDirView.value.set(0.35, 0.75, 0.4).normalize();
   u.uSunDirView.value.transformDirection(camera.matrixWorldInverse);
   if (spec) {
     u.uTransColor.value.set(spec.look.translucency.color);
-    u.uTransScale.value = spec.look.translucency.scale;
+    u.uTransScale.value = spec.look.translucency.scale * (spec.look.surface.style === 'natural' ? Math.max(0, env?.sunIntensity ?? 1) : 1);
+    u.uRimStrength.value = spec.look.surface.style === 'natural' ? 0 : 0.16;
     u.uTransPower.value = spec.look.translucency.power;
   }
 }
@@ -255,36 +367,28 @@ function updateTreeUniforms(
 export function TreeMesh({ object }: { object: SceneObject }) {
   const tree = object.tree;
   const env = useEditorStore(selectActiveSceneEnvironment);
+  const treeSpecs = useEditorStore((state) => state.treeSpecs);
   // Re-read when a chop lands. The chop bus bumps a version rather than living in the store, so felling
   // never triggers a scene-wide React re-render.
   const chopVersion = treeChopVersion();
   const windVec = env?.wind ?? [0, 0, 0];
 
-  const spec = useMemo(() => (tree ? normalizeTreeSpec(tree.spec) : null), [tree]);
-  const generated = useMemo(() => (spec ? generateTree(spec, tree?.seed ?? 1) : null), [spec, tree?.seed]);
+  const spec = useMemo(
+    () => (tree ? normalizeTreeSpec(resolveTreeSpec(tree, treeSpecs)) : null),
+    [tree, treeSpecs],
+  );
+  const [leases, setLeases] = useState<TreeGeometryLease[]>([]);
+  useLayoutEffect(() => {
+    const next = spec ? Array.from({ length: spec.lod.levels + 1 }, (_, lod) => acquireTreeGeometry(spec, tree?.seed ?? 1, lod)) : [];
+    setLeases(next);
+    return () => next.forEach(releaseTreeGeometry);
+  }, [spec, tree?.seed]);
 
   const uniforms = useRef<TreeUniforms>(makeTreeUniforms());
-  const barkMaterial = useMemo(() => makeTreeMaterial('bark', uniforms.current), []);
-  const paintedMaterialKey = pixelMaterialKey(spec);
-  const foliageMaterial = useMemo(
-    () => makeTreeMaterial('foliage', uniforms.current, spec?.look.pixelArt),
-    // Leaf-art choice lives in geometry UVs; only enablement/cutoff changes the material program.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [paintedMaterialKey],
-  );
-
-  // generateTree builds fresh geometry per spec/seed and makeTreeMaterial a fresh material per
-  // instance, both imperatively, so nothing else frees them. Editing a tree in the inspector rebuilds
-  // them on every change and abandoned the previous set each time.
-  useEffect(() => {
-    if (!generated) return;
-    return () => {
-      generated.bark.dispose();
-      generated.foliage?.dispose();
-    };
-  }, [generated]);
-  useEffect(() => () => barkMaterial.dispose(), [barkMaterial]);
-  useEffect(() => () => foliageMaterial.dispose(), [foliageMaterial]);
+  const materials = useTreeMaterials(spec, uniforms.current);
+  const rootRef = useRef<THREE.Group>(null);
+  const lodRefs = useRef<Array<THREE.Group | null>>([]);
+  const currentLod = useRef(0);
 
   useFrame((state, delta) => {
     const u = uniforms.current;
@@ -292,7 +396,7 @@ export function TreeMesh({ object }: { object: SceneObject }) {
     // Per-instance tint: a stand of one spec still varies leaf hue/value tree to tree.
     // 0.5 is the NEUTRAL value — an unjittered tree must render its authored colors exactly.
     const jitter = tree?.tintJitter ?? 0.5;
-    foliageMaterial.color.setRGB(1, 1, 1).offsetHSL((jitter - 0.5) * 0.05, 0, (jitter - 0.5) * 0.08);
+    materials?.foliage.color.setRGB(1, 1, 1).offsetHSL((jitter - 0.5) * 0.05, 0, (jitter - 0.5) * 0.08);
     const chop = getTreeChopState(object.id);
     const severedIndex = chop?.severedAt;
     if (severedIndex !== undefined && spec) {
@@ -300,16 +404,30 @@ export function TreeMesh({ object }: { object: SceneObject }) {
     } else {
       u.uSever.value.set(1, 0, 0);
     }
+    if (rootRef.current && spec) {
+      const distance = rootRef.current.getWorldPosition(TREE_WORLD_POSITION).distanceTo(state.camera.position);
+      const scale = rootRef.current.getWorldScale(TREE_WORLD_SCALE);
+      const quality = useEditorStore.getState().renderSettings.quality;
+      const qualityScale = quality === 'Low' ? 0.65 : quality === 'Medium' ? 0.85 : quality === 'Epic' ? 1.25 : 1;
+      const lod = selectTreeLod(distance, spec, currentLod.current, Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)), qualityScale);
+      currentLod.current = lod;
+      lodRefs.current.forEach((group, index) => {
+        if (group) group.visible = index === lod;
+      });
+    }
   });
 
-  if (!tree?.enabled || !generated) return null;
+  if (!tree?.enabled || !spec || !materials || leases.length === 0) return null;
   // chopVersion is read so the memo above re-evaluates on a chop; referencing it keeps the lint honest.
   void chopVersion;
 
   return (
-    <group>
-      <mesh geometry={generated.bark} material={barkMaterial} castShadow receiveShadow />
-      {generated.foliage && <mesh geometry={generated.foliage} material={foliageMaterial} castShadow receiveShadow />}
+    <group ref={rootRef}>
+      {leases.map((lease, lod) => (
+        <group key={lease.key} ref={(node) => { lodRefs.current[lod] = node; }} visible={lod === 0}>
+          <TreeGeometryMeshes tree={lease.tree} materials={materials} />
+        </group>
+      ))}
     </group>
   );
 }
@@ -325,76 +443,198 @@ export function ScatteredTrees({
   spec,
   matrices,
   seedVariants = 4,
+  windStrength = 1,
+  interactStrength = 1,
+  turbulence = 1,
+  batchCellSize = 32,
 }: {
   spec: TreeSpec;
   matrices: THREE.Matrix4[];
   seedVariants?: number;
+  windStrength?: number;
+  interactStrength?: number;
+  turbulence?: number;
+  batchCellSize?: number;
 }) {
   const normalized = useMemo(() => normalizeTreeSpec(spec), [spec]);
-  const variants = useMemo(
-    () => Array.from({ length: seedVariants }, (_, i) => generateTree(normalized, 1013 + i * 7717)),
-    [normalized, seedVariants],
+  const variantCount = Math.max(1, Math.trunc(seedVariants));
+  const seeds = useMemo(() => Array.from({ length: variantCount }, (_, i) => 1013 + i * 7717), [variantCount]);
+  const [variants, setVariants] = useState<TreeGeometryLease[][]>([]);
+  useLayoutEffect(() => {
+    const next = seeds.map((seed) => Array.from({ length: normalized.lod.levels + 1 }, (_, lod) => acquireTreeGeometry(normalized, seed, lod)));
+    setVariants(next);
+    return () => next.flat().forEach(releaseTreeGeometry);
+  }, [normalized, seeds]);
+  const batches = useMemo(
+    () => batchTreePlacements(matrices, variantCount, batchCellSize),
+    [matrices, variantCount, batchCellSize],
   );
-  // Split the placements round-robin so each variant gets a roughly even share.
-  const buckets = useMemo(() => {
-    const out: THREE.Matrix4[][] = Array.from({ length: seedVariants }, () => []);
-    matrices.forEach((m, i) => out[i % seedVariants].push(m));
-    return out;
-  }, [matrices, seedVariants]);
 
   const uniforms = useRef<TreeUniforms>(makeTreeUniforms());
-  const barkMaterial = useMemo(() => makeTreeMaterial('bark', uniforms.current), []);
-  const paintedMaterialKey = pixelMaterialKey(normalized);
-  const foliageMaterial = useMemo(
-    () => makeTreeMaterial('foliage', uniforms.current, normalized.look.pixelArt),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [paintedMaterialKey],
-  );
-  // One geometry pair per seed variant, rebuilt whenever the spec or variant count changes.
-  useEffect(
-    () => () => {
-      for (const variant of variants) {
-        variant.bark.dispose();
-        variant.foliage?.dispose();
-      }
-    },
-    [variants],
-  );
-  useEffect(() => () => barkMaterial.dispose(), [barkMaterial]);
-  useEffect(() => () => foliageMaterial.dispose(), [foliageMaterial]);
+  const materials = useTreeMaterials(normalized, uniforms.current);
 
   const env = useEditorStore(selectActiveSceneEnvironment);
   const windVec = env?.wind ?? [0, 0, 0];
 
   useFrame((state, delta) => {
     const u = uniforms.current;
-    updateTreeUniforms(u, delta, windVec, env, state.camera, normalized);
+    updateTreeUniforms(u, delta, windVec, env, state.camera, normalized, {
+      windStrength,
+      interactStrength,
+      turbulence,
+    });
     // Scattered trees are scenery — they are never individually felled, so the sever uniform stays off.
     u.uSever.value.set(1, 0, 0);
   });
 
-  if (matrices.length === 0) return null;
+  if (matrices.length === 0 || !materials || variants.length !== variantCount) return null;
   return (
     <>
-      {variants.map((variant, i) =>
-        buckets[i].length === 0 ? null : (
-          <group key={i}>
-            <TreeInstances geometry={variant.bark} material={barkMaterial} matrices={buckets[i]} />
-            {variant.foliage && <TreeInstances geometry={variant.foliage} material={foliageMaterial} matrices={buckets[i]} />}
-          </group>
-        ),
+      {batches.map((batch) => (
+        <TreePlacementLod
+          key={batch.key}
+          leases={variants[batch.variant]}
+          materials={materials}
+          matrices={batch.matrices}
+          spec={normalized}
+        />
+      ))}
+    </>
+  );
+}
+
+const TREE_WORLD_POSITION = new THREE.Vector3();
+const TREE_WORLD_SCALE = new THREE.Vector3();
+
+interface TreeMaterialSet {
+  bark: THREE.MeshLambertMaterial | THREE.MeshStandardMaterial;
+  foliage: THREE.MeshLambertMaterial | THREE.MeshStandardMaterial;
+  barkDepth: THREE.MeshDepthMaterial;
+  barkDistance: THREE.MeshDistanceMaterial;
+  foliageDepth: THREE.MeshDepthMaterial;
+  foliageDistance: THREE.MeshDistanceMaterial;
+}
+
+function useTreeMaterials(spec: TreeSpec | null, uniforms: TreeUniforms): TreeMaterialSet | null {
+  const key = treeMaterialKey(spec);
+  const materials = useMemo(() => {
+    if (!spec) return null;
+    return {
+      bark: makeTreeMaterial('bark', uniforms, spec),
+      foliage: makeTreeMaterial('foliage', uniforms, spec),
+      barkDepth: makeTreeShadowMaterial('bark', uniforms, spec, false) as THREE.MeshDepthMaterial,
+      barkDistance: makeTreeShadowMaterial('bark', uniforms, spec, true) as THREE.MeshDistanceMaterial,
+      foliageDepth: makeTreeShadowMaterial('foliage', uniforms, spec, false) as THREE.MeshDepthMaterial,
+      foliageDistance: makeTreeShadowMaterial('foliage', uniforms, spec, true) as THREE.MeshDistanceMaterial,
+    };
+    // `key` captures every setting that changes shader/material construction.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  useEffect(
+    () => () => {
+      if (!materials) return;
+      Object.values(materials).forEach((material) => material.dispose());
+    },
+    [materials],
+  );
+  return materials;
+}
+
+function TreeGeometryMeshes({ tree, materials }: { tree: TreeGeometryLease['tree']; materials: TreeMaterialSet }) {
+  return (
+    <>
+      <mesh
+        geometry={tree.bark}
+        material={materials.bark}
+        customDepthMaterial={materials.barkDepth}
+        customDistanceMaterial={materials.barkDistance}
+        castShadow
+        receiveShadow
+      />
+      {tree.foliage && (
+        <mesh
+          geometry={tree.foliage}
+          material={materials.foliage}
+          customDepthMaterial={materials.foliageDepth}
+          customDistanceMaterial={materials.foliageDistance}
+          castShadow
+          receiveShadow
+        />
       )}
     </>
+  );
+}
+
+function TreePlacementLod({
+  leases,
+  materials,
+  matrices,
+  spec,
+}: {
+  leases: TreeGeometryLease[];
+  materials: TreeMaterialSet;
+  matrices: THREE.Matrix4[];
+  spec: TreeSpec;
+}) {
+  const rootRef = useRef<THREE.Group>(null);
+  const lodRefs = useRef<Array<THREE.Group | null>>([]);
+  const currentLod = useRef(0);
+  const instanceScale = useMemo(() => matrices.reduce((largest, matrix) => Math.max(largest, matrix.getMaxScaleOnAxis()), 0.001), [matrices]);
+  const localCenter = useMemo(() => {
+    const center = new THREE.Vector3();
+    const point = new THREE.Vector3();
+    for (const matrix of matrices) center.add(point.setFromMatrixPosition(matrix));
+    return matrices.length ? center.multiplyScalar(1 / matrices.length) : center;
+  }, [matrices]);
+  useFrame((state) => {
+    if (!rootRef.current) return;
+    const distance = rootRef.current.localToWorld(TREE_WORLD_POSITION.copy(localCenter)).distanceTo(state.camera.position);
+    const scale = rootRef.current.getWorldScale(TREE_WORLD_SCALE);
+    const quality = useEditorStore.getState().renderSettings.quality;
+    const qualityScale = quality === 'Low' ? 0.65 : quality === 'Medium' ? 0.85 : quality === 'Epic' ? 1.25 : 1;
+    const lod = selectTreeLod(distance, spec, currentLod.current, instanceScale * Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)), qualityScale);
+    currentLod.current = lod;
+    lodRefs.current.forEach((group, index) => {
+      if (group) group.visible = index === lod;
+    });
+  });
+  return (
+    <group ref={rootRef}>
+      {leases.map((lease, lod) => (
+        <group key={lease.key} ref={(node) => { lodRefs.current[lod] = node; }} visible={lod === 0}>
+          <TreeInstances
+            geometry={lease.tree.bark}
+            material={materials.bark}
+            depthMaterial={materials.barkDepth}
+            distanceMaterial={materials.barkDistance}
+            matrices={matrices}
+          />
+          {lease.tree.foliage && (
+            <TreeInstances
+              geometry={lease.tree.foliage}
+              material={materials.foliage}
+              depthMaterial={materials.foliageDepth}
+              distanceMaterial={materials.foliageDistance}
+              matrices={matrices}
+            />
+          )}
+        </group>
+      ))}
+    </group>
   );
 }
 
 function TreeInstances({
   geometry,
   material,
+  depthMaterial,
+  distanceMaterial,
   matrices,
 }: {
   geometry: THREE.BufferGeometry;
   material: THREE.Material;
+  depthMaterial: THREE.MeshDepthMaterial;
+  distanceMaterial: THREE.MeshDistanceMaterial;
   matrices: THREE.Matrix4[];
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
@@ -409,6 +649,8 @@ function TreeInstances({
     <instancedMesh
       ref={ref}
       args={[geometry, material, matrices.length]}
+      customDepthMaterial={depthMaterial}
+      customDistanceMaterial={distanceMaterial}
       castShadow
       receiveShadow
       raycast={ignoreFoliageRaycast}
