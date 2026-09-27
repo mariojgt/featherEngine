@@ -39,6 +39,7 @@ export const SUPPORTED_RUNTIME_FEATURES = [
   'timelines',
   'post-processing',
   'titan-realm',
+  'sproutwatch-tower-defense',
 ] as const;
 
 export type RuntimeFeatureId = (typeof SUPPORTED_RUNTIME_FEATURES)[number];
@@ -71,6 +72,8 @@ export function detectRuntimeFeatures(project: NodeForgeProject): RuntimeFeature
   if (project.scenes.some((scene) => scene.environment?.lux?.enabled && scene.environment.lux.mode === 'rooms')) features.add('lux-rooms');
   const objects = allObjects(project);
   if (isTitanScene(objects)) features.add('titan-realm');
+  // Serialized game-director marker. Older players must reject this template, not show inert scenery.
+  if (objects.some(object => object.variables?.gameTemplate === 'sproutwatch-v1')) features.add('sproutwatch-tower-defense');
   if ((project.uiDocuments ?? []).some(doc => doc.logicScope === 'project')) features.add('ui-button-actions');
   const nodes = (project.graphs ?? []).flatMap((graph) => graph.nodes ?? []);
   if (nodes.some(node => node.data.nodeKind === 'action.loadScene' || node.data.restartScene || node.data.hideUIDocumentId)) features.add('ui-button-actions');

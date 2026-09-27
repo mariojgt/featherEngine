@@ -3,6 +3,8 @@ import { SceneLight } from '../three/SceneLight';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PlayerReady } from './PlayerReady';
 import { TitanWorld } from '../titan/TitanWorld';
+import { TowerDefenseWorld } from '../towerDefense/TowerDefenseWorld';
+import { useTowerDefenseActive } from '../towerDefense/settings';
 import { useTitanActive } from '../titan/TitanHUD';
 import {
   ContactShadows,
@@ -484,6 +486,7 @@ function GameScene() {
   const focusId = useEditorStore((state) => state.runtimeInteractFocusId);
   const cinematicCamera = useEditorStore((state) => state.runtimeCinematicCamera);
   const titanActive = useTitanActive();
+  const towerDefenseActive = useTowerDefenseActive();
   // Objects holstered/hidden at runtime (action.setVisible) aren't rendered.
   const objects = allObjects.filter((object) => !object.viewModel && !runtimeHidden.includes(object.id) && !hideInRuntime(object));
 
@@ -524,7 +527,7 @@ function GameScene() {
 
       {/* Marker over the player's lock-on target — renders nothing while no lock is held. */}
       <LockOnMarker />
-      {titanActive ? <TitanWorld /> : cinematicCamera ? (
+      {towerDefenseActive ? <TowerDefenseWorld /> : titanActive ? <TitanWorld /> : cinematicCamera ? (
         <CinematicCamera />
       ) : followTarget ? (
         <FollowCamera />

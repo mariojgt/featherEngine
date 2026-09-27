@@ -21,6 +21,12 @@ export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
       'Save a project package to share the editable scene. Check the audio provider terms before redistributing generated stems.',
     ],
   },
+  'template-tower-defense': {
+    version: 1, difficulty: 'Beginner', minutes: 15,
+    goal: 'Protect a mushroom garden from ten waves of cartoon zombies.',
+    controls: 'Click a defender and a numbered pad · 1/2/3 select · Space sends a wave · P pauses',
+    lessons: ['Build near bends so defenders cover more of the path.', 'Mix rapid Pea Sprouts, slowing Snowdrops and splash-damage Pumpkin Mortars.', 'Click a planted defender to upgrade or sell between waves.', 'Edit the garden scenery and shared materials. The built-in game rules live in src/towerDefense/game.ts.', 'Each new Tower Defense project gets a generated layout; use create_tower_defense_template with a seed for reproducible maps. Save and export to play outside the editor.'],
+  },
   'template-platformer': {
     version: 1, difficulty: 'Beginner', minutes: 10,
     goal: 'Collect sun seeds and reach Sunny at the end of the cloud course.',

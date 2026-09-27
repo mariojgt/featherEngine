@@ -313,6 +313,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built Timeline Mechanics showcase';
     case 'create_spline_studio_template':
       return 'Built Spline Studio showcase';
+    case 'create_tower_defense_template':
+      return 'Built Sproutwatch tower defense';
     case 'create_platformer_template':
       return 'Built Cloudstep Garden platformer';
     case 'create_moba_template':

@@ -410,7 +410,7 @@ export function Launcher() {
                 <div className="hub-catalog-message hub-catalog-error" role="alert">
                   <div>
                     <strong>Starter worlds couldn't load.</strong>
-                    <p>Blank, Platformer, Parcel Panic and Lumen Lane are ready to use offline.</p>
+                    <p>Blank, Platformer, Parcel Panic, Lumen Lane and Tower Defense are ready to use offline.</p>
                     <details>
                       <summary>Error details</summary>
                       <p>{catalogError}</p>
@@ -431,7 +431,7 @@ export function Launcher() {
                       </button>
                     </>
                   ) : (
-                    'More starter worlds will appear here. Blank, Platformer, Parcel Panic and Lumen Lane are ready above.'
+                    'More starter worlds will appear here. Blank, Platformer, Parcel Panic, Lumen Lane and Tower Defense are ready above.'
                   )}
                 </div>
               )}
@@ -490,7 +490,7 @@ export function Launcher() {
                   <span aria-live="polite">
                     {query.trim()
                       ? `${filteredWorlds.length} matching world${filteredWorlds.length === 1 ? '' : 's'}`
-                      : `${visibleWorlds.length} of ${library.length} worlds · plus Blank, Platformer, Parcel Panic & Lumen Lane above`}
+                      : `${visibleWorlds.length} of ${library.length} worlds · plus Blank, Platformer, Parcel Panic, Lumen Lane & Tower Defense above`}
                   </span>
                 </div>
               )}

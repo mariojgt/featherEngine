@@ -532,6 +532,9 @@ export const useProjectStore = create<ProjectState>()(
             } else if (template === 'moba') {
               const { createMobaTemplate } = await import('../project/mobaTemplate');
               await createMobaTemplate();
+            } else if (template === 'tower-defense') {
+              const { createTowerDefenseTemplate } = await import('../project/towerDefenseTemplate');
+              await createTowerDefenseTemplate(Math.floor(Math.random() * 1_000_000));
             }
             return true;
           } catch (error) {

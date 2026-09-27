@@ -4,11 +4,12 @@ export const CREATOR_QUICK_START_IDS = [
   'platformer',
   'parcel-panic',
   'moba',
+  'tower-defense',
   'blank',
 ] as const;
 
 export type CreatorQuickStartId = (typeof CREATOR_QUICK_START_IDS)[number];
-export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba';
+export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense';
 
 export interface CreatorQuickStart {
   id: CreatorQuickStartId;
@@ -63,6 +64,15 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
     templateSlug: 'template-moba',
     builtInTemplate: 'moba',
     projectTitle: 'Lumen Lane',
+  },
+  {
+    id: 'tower-defense',
+    label: 'Tower Defense',
+    description: 'A cozy cartoon garden, procedural maps, upgradeable plant defenders and ten waves of goofy zombies.',
+    icon: '🌱',
+    templateSlug: 'template-tower-defense',
+    builtInTemplate: 'tower-defense',
+    projectTitle: 'Sproutwatch',
   },
   {
     id: 'blank',

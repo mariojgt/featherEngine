@@ -191,6 +191,7 @@ export const LOCAL_TOOL_GROUPS: Record<LocalToolGroup, readonly EngineToolName[]
     'create_platformer_template',
     'create_parcel_panic_template',
     'create_moba_template',
+    'create_tower_defense_template',
     'create_driving_template',
     'create_sim_racing_template',
     'set_vehicle',

@@ -28,6 +28,7 @@ type TemplateKey =
   | 'platformer'
   | 'parcel-panic'
   | 'moba'
+  | 'tower-defense'
   | 'physics-lab'
   | 'timeline-mechanics'
   | 'spline-studio';
@@ -132,6 +133,13 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
       'A sunny delivery game with an animated robot courier and a seeded procedural village. Throw weighted, tumbling parcels into solid baskets; push crates, roll drums and bounce rubber balls. Generate a new village or retry the same route in relaxed or timed play. Includes a skippable opening cinematic and eleven reusable editable prefabs.',
     tags: ['template', 'world', 'delivery', 'arcade', 'beginner', 'primitives', 'robot'],
     build: async () => (await import('../project/parcelPanicTemplate')).createParcelPanicTemplate(),
+  },
+  'tower-defense': {
+    slug: 'template-tower-defense',
+    title: 'Sproutwatch · Garden Defense',
+    description: 'A cozy procedural garden defense game with animated cartoon zombies, three upgradeable plant defenders, ten waves, a responsive HUD, pause and replay. Original editable scenery, no external assets.',
+    tags: ['template', 'world', 'tower-defense', 'zombies', 'strategy', 'procedural', 'cartoon'],
+    build: async () => (await import('../project/towerDefenseTemplate')).createTowerDefenseTemplate(),
   },
   platformer: {
     slug: 'template-platformer',

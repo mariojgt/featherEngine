@@ -1012,6 +1012,7 @@ const TEMPLATE_THUMBNAILS = {
   'template-platformer': ['#FF7196', '#236784', '\u{2600}\u{FE0F}'],
   'template-moba': ['#69D5B2', '#243B52', '⚔️'],
   'template-parcel-panic': ['#FFD166', '#269DAB', '\u{1F4E6}'],
+  'template-tower-defense': ['#9CBD81', '#315347', '\u{1F331}'],
   'template-physics-lab': ['#7A8CFF', '#232C5C', '\u{1F9EA}'],
   'template-timeline-mechanics': ['#40DFFF', '#10283A', '\u{23F1}'],
   'template-spline-studio': ['#9B7BFF', '#241A38', '\u{2728}'],
@@ -1127,6 +1128,10 @@ async function main() {
     const slug = name.replace(/\.nfpack$/, '');
     const [from, to, glyph] = TEMPLATE_THUMBNAILS[slug] ?? ['#5B8CFF', '#1B2C63', '\u{1F5FA}'];
     let cover = thumbnail(from, to, glyph);
+    if (slug === 'template-tower-defense') {
+      const preview = await readFile(join(OUT_DIR, 'previews', 'sproutwatch.png')).catch(() => null);
+      if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
+    }
     if (['template-last-light', 'template-blackthorn', 'template-verdant', 'template-parcel-panic', 'template-moba'].includes(slug)) {
       // A real engine capture, produced by render-cinematic.mjs (or e2e/resonance.mjs). Inline like the
       // other covers so the catalog remains portable/offline, even when served from another host.

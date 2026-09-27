@@ -64,6 +64,7 @@ import { createTimelineShowcaseTemplate } from '../project/timelineShowcaseTempl
 import { createSimRacingTemplate } from '../project/simRacingTemplate';
 import { createSplineStudioTemplate } from '../project/splineStudioTemplate';
 import { createPlatformerTemplate } from '../project/platformerTemplate';
+import { createTowerDefenseTemplate } from '../project/towerDefenseTemplate';
 import { createStoryboardCinematic, polishCinematicLook, STORYBOARD_PRESETS } from '../project/cinematicStoryboard';
 import { addLibraryShot, SHOT_LIBRARY, type ShotLibraryType } from '../project/cinematicShotLibrary';
 import { findLightingPreset, findMaterialPreset, findRenderPreset, lightingPresetIds, materialPresetIds, materialPresetPatch, renderPresetIds } from '../three/presets';
@@ -3439,6 +3440,15 @@ const rawEngineTools = {
       const { createParcelPanicTemplate } = await import('../project/parcelPanicTemplate');
       const id = await createParcelPanicTemplate({ seed });
       return `Created Parcel Panic — courier objectId ${id}. Enter skips the intro. WASD move, Space jump, Shift sprint, E pick up, Q throw, R recall, P pause. Deliver five parcels to matching baskets. New village changes the layout; Retry keeps the same seed. Pause/results offer relaxed play and a 90-second rush. Edit the Courier animation, Village generation, Parcel physics, Cinematic shots and HUD to remix the game.`;
+    },
+  }),
+
+  create_tower_defense_template: tool({
+    description: 'Build Sproutwatch, an offline cartoon zombie tower-defense game. A seed generates a winding route, build pads and editable garden scenery. The built-in runtime supplies three upgradeable plant defenders, three zombie types, ten waves, rewards, victory/defeat, pause, replay, speed and sound controls. Available in editor Play and exported games. Run in a fresh project; existing Sproutwatch scenes return their current director without duplicating content. Returns the game director objectId.',
+    inputSchema: z.object({ seed: z.number().int().min(0).max(4294967295).optional().describe('Reproducible garden seed. Defaults to 2718.') }),
+    execute: async ({ seed }) => {
+      const id = await createTowerDefenseTemplate(seed);
+      return `Created Sproutwatch — director objectId ${id}. Press Play, then Let’s grow. Select a defender (1/2/3), click a numbered pad, and send waves with Space. Build and upgrade between waves; P pauses. Scenery and materials are editable. Combat and HUD use Feather’s built-in Sproutwatch runtime; rules are in src/towerDefense/game.ts. Use a fresh project with another seed for a new garden.`;
     },
   }),
 

@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readPackageFile } from '../../project/packageArchive';
+import { buildGameBundle } from '../../project/exportGame';
+import { gardenController, gardenSeed, DEFAULT_GARDEN_SEED } from '../../towerDefense/settings';
+import { generateMap } from '../../towerDefense/game';
 import type { SceneObject, UIElement } from '../../types';
 import { useEditorStore } from '../editorStore';
 import { useProjectStore } from '../projectStore';
@@ -226,6 +229,35 @@ describe('bundled asset store — catalog to installed content', () => {
     expect(editor.variables.map((variable) => variable.name)).toEqual(
       expect.arrayContaining(['Score', 'Checkpoint', 'LevelComplete', 'PipHearts', 'FallOut', 'PipBoost']),
     );
+  });
+
+  it('installs Sproutwatch from the shipped catalog with its garden and required game runtime', async () => {
+    await useMarketplaceStore.getState().load();
+    const template = useMarketplaceStore.getState().packages.find((entry) => entry.slug === 'template-tower-defense');
+    expect(template).toMatchObject({
+      title: 'Sproutwatch · Garden Defense',
+      kind: 'project',
+      tags: expect.arrayContaining(['template', 'tower-defense', 'zombies', 'procedural']),
+      contents: { scenes: 1, assets: 0 },
+    });
+    expect(template!.thumbnail).toMatch(/^data:image\/png;base64,/);
+
+    await useMarketplaceStore.getState().install(template!);
+
+    const editor = useEditorStore.getState();
+    const objects = editor.activeScene()!.objects;
+    expect(useMarketplaceStore.getState().error).toBeNull();
+    expect(useMarketplaceStore.getState().installedIds).toContain(template!.id);
+    expect(editor.activeScene()?.name).toBe('Sproutwatch · Garden Outpost');
+    expect(gardenController(objects)).toBeDefined();
+    expect(gardenSeed(objects)).toBe(DEFAULT_GARDEN_SEED);
+    expect(objects.filter((object) => object.name.startsWith('Defense pad '))).toHaveLength(generateMap(DEFAULT_GARDEN_SEED).plots.length);
+    expect(objects.some((object) => object.name === 'Garden HQ · mushroom roof')).toBe(true);
+    const materials = new Set(editor.materials.map((material) => material.id));
+    const references = objects.flatMap((object) => object.renderer?.materialId ? [object.renderer.materialId] : []);
+    expect(references.length).toBeGreaterThan(20);
+    expect(references.every((id) => materials.has(id))).toBe(true);
+    expect(buildGameBundle(editor.exportProject()).runtimeContract.requiredFeatures).toContain('sproutwatch-tower-defense');
   });
 
   it('keeps every material reference inside an installed prefab resolvable', async () => {
