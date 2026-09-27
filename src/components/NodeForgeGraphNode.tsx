@@ -720,7 +720,7 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
     (data.nodeKind === 'query.overlapSphere' ? 3 : 0) +
     (data.nodeKind === 'logic.cast' ? 1 : 0) +
     (data.nodeKind === 'event.receiveDamage' ? 1 : 0) +
-    (data.nodeKind === 'event.land' ? 1 : 0) +
+    (data.nodeKind === 'event.land' || data.nodeKind === 'event.update' ? 1 : 0) +
     (data.nodeKind === 'event.collisionEnter' ? 4 : 0) +
     (data.nodeKind === 'event.collisionExit' || data.nodeKind === 'event.triggerEnter' || data.nodeKind === 'event.triggerExit' ? 2 : 0) +
     (data.nodeKind === 'event.collisionStay' || data.nodeKind === 'event.triggerStay' ? 1 : 0) +
@@ -977,6 +977,14 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
             </span>
           </span>
         ))}
+
+      {/* Update: scaled simulation frame duration in seconds. */}
+      {data.nodeKind === 'event.update' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>Delta time</span>
+          <Handle id="value-out" className="node-port value-port source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
+        </>
+      )}
 
       {/* On Land: Speed = impact speed (u/s). */}
       {data.nodeKind === 'event.land' && (

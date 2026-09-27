@@ -1,5 +1,6 @@
 import { parseTemplateLesson, type TemplateLesson } from '../creator/templateLessons';
 import { normalizePackageKind, type PackageKind } from '../project/package';
+import { isRetiredStoreSlug } from './retiredPackages';
 
 /**
  * Asset-store catalog client.
@@ -133,7 +134,10 @@ export async function fetchCatalog(baseUrl: string = STORE_BASE_URL, signal?: Ab
   }
 
   const packages = Array.isArray(raw.packages)
-    ? raw.packages.map((entry) => parseListing(entry, base)).filter((entry): entry is StoreListing => !!entry)
+    ? raw.packages
+        .filter((entry) => !isRecord(entry) || !isRetiredStoreSlug(entry.slug))
+        .map((entry) => parseListing(entry, base))
+        .filter((entry): entry is StoreListing => !!entry)
     : [];
 
   return { updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : undefined, packages };

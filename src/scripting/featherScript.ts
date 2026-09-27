@@ -473,6 +473,8 @@ class FeatherScriptPrinter {
         return `apply_force_at_point(${this.targetArgument(node)}, vector: ${this.valueInput(node, 'vector', raw(this.axisVector(node)))}, point: ${this.valueInput(node, 'point', node.data.localPoint ?? [0, 0, 0])}, amount: ${this.valueInput(node, 'amount', Number(node.data.amount ?? 8))})`;
       case 'action.applyTorque':
         return `apply_torque(${this.targetArgument(node)}, vector: ${this.valueInput(node, 'vector', raw(this.axisVector(node, 'y')))}, amount: ${this.valueInput(node, 'amount', Number(node.data.amount ?? 4))})`;
+      case 'action.setAngularVelocity':
+        return `set_angular_velocity(${this.targetArgument(node)}, ${this.valueInput(node, 'vector', [0, 0, 0])})`;
       case 'action.setVelocity':
         return `set_velocity(${this.targetArgument(node)}, ${this.valueInput(node, 'vector', [0, 0, 0])})`;
       case 'action.setPhysics':
@@ -736,6 +738,9 @@ class FeatherScriptPrinter {
         break;
       case 'event.functionEntry':
         result = sourceHandle === 'arg-b' ? 'b' : sourceHandle === 'arg-c' ? 'c' : 'a';
+        break;
+      case 'event.update':
+        result = 'dt';
         break;
       case 'event.custom':
         result = 'payload';

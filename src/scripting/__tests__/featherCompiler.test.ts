@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { graphToFeatherScript } from '../featherScript';
 import { compileFeatherScriptToGraph } from '../featherCompiler';
 import type { ProjectGraph, ProjectVariable, ScriptBlueprint } from '../../types';
 
@@ -29,6 +30,61 @@ const score: ProjectVariable = {
 };
 
 describe('compileFeatherScriptToGraph', () => {
+  it('preserves arithmetic between complete function calls, including quoted parentheses', () => {
+    const result = compileFeatherScriptToGraph({ blueprint, graph, variables: [], source: `blueprint Armor
+on start:
+    self.total = get_var(self, "incoming)") + max(0, 30 - get_var(self, "armor"))` });
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    const nodes = result.graph!.nodes;
+    const add = nodes.find(n => n.data.nodeKind === 'math.add')!;
+    expect(add).toBeDefined();
+    const inputs = result.graph!.edges.filter(e => e.target === add.id)
+      .map(e => nodes.find(n => n.id === e.source)!.data);
+    expect(inputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeKind: 'variable.getObject', objectKey: 'incoming)' }),
+      expect.objectContaining({ nodeKind: 'math.max' }),
+    ]));
+    expect(nodes.some(n => n.data.nodeKind === 'math.subtract')).toBe(true);
+    expect(nodes.some(n => n.data.objectKey === 'armor')).toBe(true);
+  });
+
+  it('round-trips frame delta and angular velocity as typed graph operations', () => {
+    const result = compileFeatherScriptToGraph({ blueprint, graph, variables: [], source: `blueprint Motion
+var clock: number = 0
+on update(dt):
+    self.clock = self.clock + dt
+    set_angular_velocity(self, vec3(0, 2, 0))` });
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    const update = result.graph!.nodes.find(node => node.data.nodeKind === 'event.update')!;
+    expect(result.graph!.edges.some(edge => edge.source === update.id && edge.sourceHandle === 'value-out')).toBe(true);
+    expect(result.graph!.nodes.some(node => node.data.nodeKind === 'action.setAngularVelocity')).toBe(true);
+    const printed = graphToFeatherScript({ blueprint: result.blueprint!, graph: result.graph!, variables: [] });
+    expect(printed).toContain('dt');
+    expect(printed).toContain('set_angular_velocity(self, vec3(0, 2, 0))');
+    const roundtrip = compileFeatherScriptToGraph({ blueprint, graph, variables: [], source: printed });
+    expect(roundtrip.ok).toBe(true);
+    expect(roundtrip.diagnostics).toEqual([]);
+  });
+
+  it('keeps computed vector components as expressions instead of replacing them with zero', () => {
+    const result = compileFeatherScriptToGraph({ blueprint, graph, variables: [], source: [
+      'blueprint Throw_Direction',
+      'var yaw: number = 90',
+      'on start:',
+      '    set_velocity(self, vec3(sin(self.yaw), 4, cos(self.yaw)))',
+    ].join('\n') });
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    const makeVector = result.graph!.nodes.find(n => n.data.nodeKind === 'math.makeVector')!;
+    expect(makeVector).toBeDefined();
+    for (const [component, kind] of [['x', 'math.sin'], ['z', 'math.cos']]) {
+      const source = result.graph!.nodes.find(n => n.data.nodeKind === kind)!;
+      expect(result.graph!.edges).toContainEqual(expect.objectContaining({ source: source.id, target: makeVector.id, targetHandle: component }));
+    }
+  });
+
   it('applies script events, variables, calls, and conditions to a graph', () => {
     const result = compileFeatherScriptToGraph({
       blueprint,

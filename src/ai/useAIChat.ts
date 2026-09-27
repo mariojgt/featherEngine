@@ -301,14 +301,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Added ${String(input.kit ?? 'gameplay')} kit`;
     case 'create_third_person_template':
       return 'Built third-person template';
-    case 'create_meadow_template':
-      return 'Built Meadows template';
-    case 'create_cube_realm_template':
-      return 'Built Cube Realm template';
     case 'create_first_person_template':
       return 'Built FPS template';
-    case 'create_film_mode_template':
-      return 'Built "Resonance" cinematic showcase';
     case 'create_last_light_template':
       return 'Built "Last Light" 70-second film';
     case 'create_verdant_template':
@@ -321,6 +315,10 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built Spline Studio showcase';
     case 'create_platformer_template':
       return 'Built Cloudstep Garden platformer';
+    case 'create_moba_template':
+      return 'Built Lumen Lane mini MOBA';
+    case 'create_parcel_panic_template':
+      return 'Built Parcel Panic delivery game';
     case 'create_cinematic':
       return `Created cinematic${input.name ? ` "${String(input.name)}"` : ''}`;
     case 'inspect_cinematic':

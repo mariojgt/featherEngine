@@ -106,7 +106,7 @@ const statement = (id: string, signature: string, insertText: string, descriptio
 
 export const FEATHER_API_ENTRIES: FeatherApiEntry[] = [
   event('event.start', 'on start:', 'on start:\n    ', 'Runs once when the Blueprint starts.', ['begin', 'ready']),
-  event('event.update', 'on update(dt):', 'on update(dt):\n    ', 'Runs every frame while Play is active.', ['tick', 'frame']),
+  event('event.update', 'on update(dt):', 'on update(dt):\n    ', 'Runs every frame while Play is active. dt is the scaled simulation frame duration in seconds; use it for frame-rate-independent animation.', ['tick', 'frame']),
   event('event.update.timer', 'on update every 1s:', 'on update every 1s:\n    ', 'Runs Update on an interval.', ['timer', 'interval']),
   event('event.key_down', 'on key_down("KeyW"):', 'on key_down("KeyW"):\n    ', 'Runs while a key is pressed.', ['input', 'keyboard']),
   event('event.key_pressed', 'on key_pressed("KeyP"):', 'on key_pressed("KeyP"):\n    ', 'Runs once per press, including a short tap between frames. Use for pause and other toggles.', ['input', 'keyboard']),
@@ -152,6 +152,7 @@ export const FEATHER_API_ENTRIES: FeatherApiEntry[] = [
   call('call.set_scale', 'set_scale(target, vec3)', 'set_scale(self, vec3(1, 1, 1))', 'Sets an actor scale.', 'action.setScale', ['transform']),
   call('call.look_at', 'look_at(target, point)', 'look_at(self, Player.location)', 'Yaws an actor to face a world position.', 'action.lookAt', ['aim', 'face']),
   call('call.set_velocity', 'set_velocity(target, vec3)', 'set_velocity(self, vec3(0, 0, 8))', "Hard-sets a dynamic body's velocity.", 'action.setVelocity', ['physics']),
+  call('call.set_angular_velocity', 'set_angular_velocity(target, vec3)', 'set_angular_velocity(self, vec3(0, 0, 0))', 'Sets a dynamic body’s spin in radians per second; zero stops tumbling on reset.', 'action.setAngularVelocity', ['physics', 'spin', 'reset']),
   call('call.spawn_object', 'spawn_object(kind)', 'spawn_object("cube")', 'Spawns a primitive at the owner.', 'action.spawnObject', ['create']),
   call('call.spawn_prefab', 'spawn_prefab(prefabId, location)', 'spawn_prefab("prefab-id", location: self.position)', 'Instantiates a prefab during Play.', 'action.spawnPrefab', ['create', 'wave']),
   call('call.explode', 'explode(location, radius, damage)', 'explode(location: self.position, radius: 6, damage: 40)', 'Detonates a physics blast with damage.', 'action.explode', ['blast', 'grenade']),

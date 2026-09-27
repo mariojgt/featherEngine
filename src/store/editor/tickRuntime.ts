@@ -370,6 +370,8 @@ export const applyRuntimeTick = (
       const physicsAngularImpulses: Record<string, Vector3Tuple> = {};
       // Hard velocity sets requested by action.setVelocity this frame (dynamic bodies), applied in physics.frame.
       const setVelocities: Record<string, Vector3Tuple> = {};
+      // Explicit Set Position is a teleport, unlike continuous Translate / controller motion.
+      const physicsTeleports = new Set<string>();
       // Hard spin sets requested by action.setAngularVelocity this frame (dynamic bodies), same path.
       const setAngularVelocities: Record<string, Vector3Tuple> = {};
       // Momentum hand-off for freshly torn-off car parts: their dynamic body is created during THIS
@@ -1054,6 +1056,9 @@ export const applyRuntimeTick = (
 
             // Spawn Prefab's value-out = a reference to the actor it most recently spawned.
             case 'action.spawnPrefab': return lastSpawnedByNode.get(nodeId);
+
+            // Update exposes the scaled simulation frame delta, including zero while paused.
+            case 'event.update': return delta;
 
             // Custom Event's value-out = the payload the firing Fire Event carried (last one per name).
             case 'event.custom': {
@@ -2097,6 +2102,7 @@ export const applyRuntimeTick = (
               if (Array.isArray(p)) {
                 const next: Vector3Tuple = [Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0];
                 const tid = objectVarTarget(node);
+                physicsTeleports.add(tid);
                 if (tid === object.id) {
                   position[0] = next[0];
                   position[1] = next[1];
@@ -4858,6 +4864,7 @@ export const applyRuntimeTick = (
           vehicleInputs,
           gravityZones,
           stayListeners,
+          physicsTeleports,
         );
         if (result.renderTransforms.size) {
           // The buffer's BufferedTransform needs a scale; physics never changes scale, so reuse each
@@ -5425,6 +5432,36 @@ export const applyRuntimeTick = (
           }
         }
         groundedIds = [...groundedSet];
+      }
+      // Script-driven characters bypass the auto-input acceleration path, so hVelX/Z above intentionally
+      // start at zero. Publish their REAL horizontal velocity from the collision-resolved displacement
+      // instead: animator/query consumers then see accepted movement (including wall blocking), not the
+      // zero accumulator. Keep vertical velocity owned by the jump/gravity pass, and never turn an explicit
+      // Set Position teleport into a one-frame locomotion spike.
+      if (delta > 0) {
+        for (const object of resolvedObjects) {
+          if (
+            !object.character?.enabled ||
+            !object.script?.enabled ||
+            resolveCharacter(object.character).autoInputWithScript ||
+            nextDisabled.has(object.id) ||
+            isRagdoll(object.id)
+          ) {
+            continue;
+          }
+          const verticalVelocity = nextVelocities[object.id]?.[1] ?? state.runtimeVelocities[object.id]?.[1] ?? 0;
+          const previous = prevTransforms.get(object.id)?.position;
+          if (!previous || physicsTeleports.has(object.id)) {
+            nextVelocities[object.id] = [0, verticalVelocity, 0];
+            continue;
+          }
+          const current = object.transform.position;
+          nextVelocities[object.id] = [
+            (current[0] - previous[0]) / delta,
+            verticalVelocity,
+            (current[2] - previous[2]) / delta,
+          ];
+        }
       }
       recordRuntimeSection('physics', performance.now() - physicsStart);
       // RACE LIGHT TREE (name convention, like "Checkpoint <n>"): cubes named "Start Light 1..3" follow the

@@ -1,3 +1,4 @@
+import { PointerCommands } from '../three/PointerCommands';
 import { SceneLight } from '../three/SceneLight';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { PlayerReady } from './PlayerReady';
@@ -427,9 +428,8 @@ const GameObjectView = memo(
 
 /**
  * Render the running game's objects as a parent/child scene graph — children sit inside their
- * parent's <group> so they inherit its transform (matches the editor viewport). Physics/character
- * objects render at the world root: the simulation owns their world transform, so they must not
- * also inherit a parent's matrix.
+ * parent's <group> so they inherit its transform (matches the editor viewport). The simulation
+ * writes local transforms for parented bodies, so physics and character objects stay in the tree.
  */
 function renderGameTree(objects: SceneObject[], focusId: string | null): ReactNode {
   const visible = new Set(objects.map((o) => o.id));
@@ -437,7 +437,7 @@ function renderGameTree(objects: SceneObject[], focusId: string | null): ReactNo
   const roots: SceneObject[] = [];
   for (const object of objects) {
     const detached =
-      !object.parentId || !visible.has(object.parentId) || object.physics?.enabled || object.character?.enabled;
+      !object.parentId || !visible.has(object.parentId);
     if (detached) {
       roots.push(object);
     } else {
@@ -605,6 +605,7 @@ export function GameView() {
       <ShadowLOD />
       <MeshLOD />
       <GameScene />
+      <PointerCommands />
       <PlayerReady />
     </Canvas>
   );

@@ -63,15 +63,16 @@ describe('store plugin install', () => {
     expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === listing!.pluginId)).toBe(true);
   });
 
-  it.each([PIXEL_ART_TREES_PLUGIN_ID, 'feather.titan'])('ships and activates %s as a removable store plugin', async (pluginId) => {
+  it.each([PIXEL_ART_TREES_PLUGIN_ID, 'feather.titan'])('keeps an existing %s installation working after its store listing is retired', async (pluginId) => {
     await useMarketplaceStore.getState().load();
     const listing = useMarketplaceStore.getState().packages.find(
       (entry) => entry.pluginId === pluginId,
     );
-    expect(listing?.kind).toBe('plugin');
+    expect(listing).toBeUndefined();
     expect(AVAILABLE_PLUGINS.some((plugin) => plugin.id === pluginId)).toBe(true);
 
-    await useMarketplaceStore.getState().install(listing!);
+    usePluginStore.setState({ enabledIds: [pluginId] });
+    usePluginStore.getState().restore();
     expect(extensionRegistry.hasPlugin(pluginId)).toBe(true);
     expect(extensionRegistry.getSnapshot().panels.some((panel) => panel.pluginId === pluginId)).toBe(true);
     expect(usePluginStore.getState().disable(pluginId)).toBe(true);

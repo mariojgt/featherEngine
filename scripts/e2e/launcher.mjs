@@ -78,31 +78,28 @@ try {
   await app.evaluate(`document.querySelector('.launcher').scrollTop = 0`);
   assert.equal(await app.count('.hub-world--featured'), 1);
   assert.equal(
-    await app.count('[data-template-slug="template-platformer"]'),
+    await app.count('.hub-world[data-template-slug="template-platformer"]'),
     0,
     'Platformer has one offline entry',
   );
+  assert.equal(await app.count('[data-quick-start="parcel-panic"]'), 1, 'Parcel Panic has one offline entry');
+  assert.equal(await app.count('.hub-world[data-template-slug="template-parcel-panic"]'), 0);
+  assert.ok(!(await app.text('[data-quick-start="parcel-panic"]')).includes('Cloudstep'));
   assert.equal(await app.count('.hub-world'), 4);
   await reveal('.hub-library-toggle');
   await app.realClick('.hub-library-toggle');
   assert.equal(
     await app.count('.hub-world'),
     await app.evaluate(
-      `market.getState().packages.filter(p => p.kind === 'project' && p.slug !== 'template-platformer').length`,
+      `market.getState().packages.filter(p => p.kind === 'project' && !['template-platformer', 'template-parcel-panic', 'template-moba'].includes(p.slug)).length`,
     ),
   );
-  assert.equal(await app.count('[data-quick-start]'), 5, 'every quick start has a single route');
+  assert.equal(await app.count('[data-quick-start]'), 6, 'every quick start has a single route');
   assert.equal(
     await app.evaluate(
       `[...document.querySelectorAll('.hub-world-image img')].every(img => img.complete && img.naturalWidth > 0)`,
     ),
     true,
-  );
-  await fill('.hub-search input', 'top down');
-  await app.waitFor(`document.querySelectorAll('.hub-world').length === 1`);
-  assert.equal(
-    await app.evaluate(`document.querySelector('.hub-world').dataset.quickStart`),
-    'top-down-action',
   );
   await fill('.hub-search input', 'VeRdAnT');
   await app.waitFor(`document.querySelector('.hub-world')?.dataset.templateSlug === 'template-verdant'`);
@@ -113,7 +110,7 @@ try {
   assert.equal(await app.count('.hub-world'), 0);
   await app.realClick('.hub-search button');
   check(
-    'All catalog starters accessible once; aliases, case-insensitive search, empty results and clear search',
+    'All catalog starters accessible once; case-insensitive search, empty results and clear search',
   );
 
   // Quick-start cards retain their existing package route and the shared project name.
@@ -135,12 +132,32 @@ try {
   await app.waitFor(`document.querySelector('.hub-catalog-error')`);
   assert.equal(
     await app.evaluate(
-      `document.querySelector('[data-quick-start="blank"]').disabled || document.querySelector('[data-quick-start="platformer"]').disabled`,
+      `['blank', 'platformer', 'parcel-panic', 'moba'].some(id => document.querySelector('[data-quick-start="' + id + '"]').disabled)`,
     ),
     false,
   );
   await app.evaluate(`document.querySelector('.launcher').scrollTop = 0`);
   await screenshot('launcher-catalog-error');
+  await fill('#launcher-project-name', 'Offline Deliveries');
+  await app.evaluate(
+    `window.starterAction = projects.getState().newProjectFromStarter; projects.setState({ newProjectFromStarter: async (name, template) => { window.starterHandoff = { name, template }; return true; } });`,
+  );
+  await reveal('[data-quick-start="parcel-panic"]');
+  await app.realClick('[data-quick-start="parcel-panic"]');
+  assert.equal(await app.evaluate(`starterHandoff.name`), 'Offline Deliveries');
+  assert.equal(await app.evaluate(`starterHandoff.template`), 'parcel-panic');
+  await app.evaluate(`projects.setState({ newProjectFromStarter: window.starterAction });`);
+  check('Parcel Panic routes to its built-in starter with catalog fetch blocked');
+  await fill('#launcher-project-name', 'Offline MOBA');
+  await reveal('[data-quick-start="moba"]');
+  await app.realClick('[data-quick-start="moba"]');
+  await app.waitFor(
+    `projects.getState().hasProject && !projects.getState().busy && editor.getState().scenes.some(s => s.name.includes('Lumen'))`,
+    { label: 'offline MOBA created', timeout: 90_000 },
+  );
+  assert.equal(await app.evaluate(`projects.getState().projectName`), 'Offline MOBA');
+  check('Lumen Lane creates its actual scene with catalog fetch blocked');
+  await back();
   await fill('#launcher-project-name', 'Offline Platformer');
   await app.realClick('[data-quick-start="platformer"]');
   await app.waitFor(

@@ -26,13 +26,11 @@ import { CommandPalette } from './components/CommandPalette';
 import { initHistory } from './store/history';
 import { initAutosave } from './store/autosave';
 import { initFeatherExternalSync } from './store/featherExternalStore';
-import { createMeadowTemplate } from './project/meadowTemplate';
 import { createTimelineShowcaseTemplate } from './project/timelineShowcaseTemplate';
 import { createSplineStudioTemplate } from './project/splineStudioTemplate';
 import { createPlatformerTemplate } from './project/platformerTemplate';
 
 /** DEV-only headless screenshot QA hooks. No-op in production builds and for any other query.
- *  - `?demo=meadows` auto-builds the Meadows template and enters Play (vegetation look).
  *  - `?demo=timeline` builds the Timeline Mechanics gallery for interaction/rendering QA.
  *  - `?demo=spline` builds the asset-free Spline Studio showcase for render QA.
  *  - `?demo=platformer` builds Cloudstep Garden and enters Play for course/HUD QA; add `&qa=motion`
@@ -48,7 +46,7 @@ function useDemoAutoload() {
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     const demo = new URLSearchParams(window.location.search).get('demo');
-    if (demo !== 'meadows' && demo !== 'timeline' && demo !== 'spline' && demo !== 'platformer' && demo !== 'store' && demo !== 'script' && demo !== 'uikit') return;
+    if (demo !== 'timeline' && demo !== 'spline' && demo !== 'platformer' && demo !== 'store' && demo !== 'script' && demo !== 'uikit') return;
     // StrictMode double-invokes effects; for the multi-await demos that means two racing setups
     // (the second sees installingId already set and no-ops, then reads a project the first is
     // still building). Once is once.
@@ -70,7 +68,7 @@ function useDemoAutoload() {
                   ? 'Spline Studio Preview'
                   : demo === 'platformer'
                     ? 'Cloudstep Garden Preview'
-                    : 'Meadows Preview',
+                    : 'Feather Preview',
       );
       if (!useProjectStore.getState().hasProject) return;
       if (demo === 'store') return;
@@ -159,9 +157,6 @@ function useDemoAutoload() {
         }, 1200);
         return;
       }
-      await createMeadowTemplate();
-      // Auto-enter Play so a screenshot shows the eye-level third-person game camera (reference framing).
-      setTimeout(() => useEditorStore.getState().setPlaying(true), 2000);
     })();
   }, []);
 }

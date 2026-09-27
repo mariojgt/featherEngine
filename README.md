@@ -4,8 +4,6 @@
 
 <h1 align="center">Feather Engine</h1>
 
-**New: [Sunlit Reach — Mini MMO template](docs/SUNLIT_REACH_MMO.md)** and the smaller [Ember Meadow starter](docs/TITAN_MMO_STARTER.md). Install Titan from the Asset Store, open the free three-zone fantasy MMO (classes, quests, a boss, cinematics) and play solo immediately. Use the plugin’s Connect → Test → Publish panel to save your key, start a local realm and include the configured server in online builds.
-
 <p align="center">
   <strong>A visual-first 3D game engine for building, playing, and shipping interactive worlds.</strong>
 </p>
@@ -90,24 +88,22 @@ exported player share the same React, Three.js, and Rapier foundation.
 
 ## What you can build
 
-Start with a blank project or launch one of nine playable templates:
+Start with a blank project or launch an editable template:
 
 | Template | Focus |
 | --- | --- |
 | **Third-person** | Character movement, a follow camera, combat, and an explorable tutorial world. |
-| **Meadows** | A stylized outdoor scene with interactive grass and nature rendering. |
-| **Cube Realm** | An action slice with combos, a day cycle, and a shrine encounter. |
+| **[Lumen Lane](docs/LUMEN_LANE.md)** | A three-lane solo MOBA with five champions, click commands, a following camera, minimap, gold, an item shop, jungle camps, towers and cores. Included offline. |
+| **[Parcel Panic](docs/PARCEL_PANIC.md)** | An animated robot courier, seeded villages, playful physics, and five-delivery rounds. Included in launcher quick starts. |
 | **First-person shooter** | A neon FPS sandbox with multiple weapons, grenades, targets, and HUD logic. |
 | **Driving** | An arcade-style neon cruise with vehicle controls, chase cameras, and a garage. |
 | **Sim racing** | Tuned vehicle physics, laps, rivals, traffic, and race presentation. |
-| **Cinematic** | “The Summit,” a timeline-driven flythrough with cameras, wind, cloth, music, and VFX. |
+| **Verdant — A Woodland Study** | An editable woodland film with six camera shots, living foliage and atmospheric lighting. |
 | **Physics Lab** | Axis locks, stay events, angular velocity, and runtime gravity controls. |
 | **Timeline Mechanics** | Curve-driven Vault Door, elevator, drawbridge, gate, crusher, and chest examples. |
 
 Templates are editable projects, not videos or hard-coded demos. Open their scenes, inspect their
 Blueprints, replace assets, and reuse the systems in your own game.
-
-The **[Neon Afterlight showcase](docs/NEON_AFTERLIGHT.md)** is a complete 70-second cyberpunk Asset Store project: a rain-soaked city canyon, emissive signs, wet street and water reflections, colored volumetric mist, steam, sparks, cooling-water spray and an animated searchlight drone. It adds reusable local-light fog scattering with quality budgets and includes all city assets, ten editable shots and an original synth score.
 
 The **[Blackthorn Keep showcase](docs/BLACKTHORN_KEEP.md)** is a complete 70-second dark fantasy Asset Store project: a castle beyond a wind-swept field, storm clouds, rain, lightning, simulated banners, live destruction and original sound design. Its [lighting and weather systems](docs/CINEMATIC_LIGHTING.md) include rectangular lights, live sky reflections, rain-driven wet materials and puddle ripples, shared editor/player light controls, adjustable AO and simulation-timed effects.
 
@@ -155,7 +151,7 @@ server.
 
 ### Your first five minutes
 
-1. Choose **Third-person** or **First-person shooter** in the launcher.
+1. Choose **Parcel Panic** for a small delivery game, or **Third-person** or **First-person shooter** in the launcher. Follow the [Parcel Panic beginner guide](docs/PARCEL_PANIC.md) to play and remix it.
 2. Select an object in the **Hierarchy** and edit its components in the **Inspector**.
 3. Open **Scripting**, add an event and an action, then connect their execution pins.
 4. Press **Play** to test the result in the same viewport.
@@ -338,6 +334,7 @@ verify the workflow end to end. The complete checklist is in
 
 ## Documentation
 
+- [Parcel Panic](docs/PARCEL_PANIC.md) — play, remix, save and export a beginner delivery game
 - [Lux 1.0](docs/LUX.md) — dynamic local lighting, reflections, quality budgets, authoring and limits
 - [Animation System](docs/ANIMATION.md) — animator controllers, blend spaces, animation layers, bone masking, root motion, IK, and the debug readout
 - [Live Collaboration](docs/COLLABORATION.md) — start/join workflow, authority model, security, and limitations

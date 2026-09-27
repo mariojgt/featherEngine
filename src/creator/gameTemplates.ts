@@ -1,12 +1,14 @@
 export const CREATOR_QUICK_START_IDS = [
   'third-person',
   'first-person',
-  'top-down-action',
   'platformer',
+  'parcel-panic',
+  'moba',
   'blank',
 ] as const;
 
 export type CreatorQuickStartId = (typeof CREATOR_QUICK_START_IDS)[number];
+export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba';
 
 export interface CreatorQuickStart {
   id: CreatorQuickStartId;
@@ -14,7 +16,8 @@ export interface CreatorQuickStart {
   description: string;
   icon: string;
   templateSlug?: string;
-  builtInTemplate?: 'platformer';
+  builtInTemplate?: BuiltInTemplate;
+  projectTitle?: string;
   gameplayKitId?: import('./gameplayKits').CreatorGameplayKitId;
   comingSoon?: boolean;
 }
@@ -36,19 +39,30 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
     templateSlug: 'template-first-person',
   },
   {
-    id: 'top-down-action',
-    label: 'Top Down',
-    description: 'An editable action starter with combos, a day cycle and objectives.',
-    icon: '🗺️',
-    templateSlug: 'template-cube-realm',
-  },
-  {
     id: 'platformer',
     label: 'Platformer',
     description: 'A stylized sky course with an animated cartoon hero, moving clouds, collectibles and a polished HUD.',
     icon: '🏃',
     templateSlug: 'template-platformer',
     builtInTemplate: 'platformer',
+    projectTitle: 'Cloudstep Garden',
+  },
+  {
+    id: 'parcel-panic',
+    label: 'Parcel Panic',
+    description: 'A cheerful robot delivery game with animated movement, tumbling parcels and playful physics. Deliver five parcels, then explore a new village.',
+    icon: '📦',
+    templateSlug: 'template-parcel-panic',
+    builtInTemplate: 'parcel-panic',
+  },
+  {
+    id: 'moba',
+    label: 'Lumen Lane',
+    description: 'Five champions, three lanes, point-and-click combat, a forest battlefield and an item shop. Lead your AI allies and shatter the enemy core.',
+    icon: '⚔️',
+    templateSlug: 'template-moba',
+    builtInTemplate: 'moba',
+    projectTitle: 'Lumen Lane',
   },
   {
     id: 'blank',

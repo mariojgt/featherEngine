@@ -10,8 +10,7 @@
  * Run: npm run build:store  (vite-node, so it can share the container code in src/)
  */
 import { TEMPLATE_LESSONS } from '../src/creator/templateLessons';
-import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Run through vite-node so the container format has ONE implementation. A hand-rolled copy of the
@@ -21,9 +20,7 @@ import { readPackageFile, writePackageArchive } from '../src/project/packageArch
 // Kept as data so this catalog stays byte-stable — re-running the capture is a deliberate act, not
 // a side effect of building the store.
 import uiKits from '../src/store-assets/uiKits.json';
-import { emberMeadowContent } from '../src/titan/starter';
-import { sunlitReachContent } from '../src/titan/sunlitReach';
-import { zipSync } from 'fflate';
+import { isRetiredStoreSlug } from '../src/marketplace/retiredPackages';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'public', 'store');
@@ -121,31 +118,6 @@ const thumbnail = (from, to, glyph) => {
     `</svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`;
 };
-
-/**
- * Read a file from public/ into the package. Its bytes go INTO the archive, and a `source` URL is
- * kept as a fallback for manifest-only packages. Hash-verified on install either way.
- */
-async function externalAsset(id, publicPath, type) {
-  const absolute = join(ROOT, 'public', publicPath);
-  const bytes = await readFile(absolute);
-  const { size } = await stat(absolute);
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-  return {
-    asset: {
-      id,
-      name: publicPath.split('/').pop(),
-      type,
-      size,
-      hash: sha256,
-      createdAt: EPOCH,
-      // Kept alongside the archived bytes as a fallback: if a future package ships manifest-only,
-      // the installer can still fetch from here.
-      source: { url: publicPath, sha256, bytes: size },
-    },
-    bytes: new Uint8Array(bytes),
-  };
-}
 
 /** Wrap authored content in the NodeForgePackage envelope (mirrors buildPackage in package.ts). */
 const buildPackage = (meta, content, assets = [], kind = 'asset') => ({
@@ -986,100 +958,6 @@ const PACKS = [
 ];
 
 /**
- * A pack whose model bytes live OUTSIDE the package. Built async because it hashes the real file.
- * The prefab references the asset by id exactly as an inlined one would — the only difference is
- * where the bytes come from at install time.
- */
-async function buildWeaponPack() {
-  const { asset: sword, bytes } = await externalAsset('asset-store-sword', 'templates/Sword.glb', 'model');
-  return {
-    assetBytes: new Map([[sword.id, bytes]]),
-    slug: 'blade-prop',
-    meta: {
-      id: 'pkg-feather-blade-prop',
-      name: 'Blade Prop',
-      description:
-        'A sword model you can place, parent to a character, or attach to a weapon socket. The mesh downloads separately, so the package itself stays tiny.',
-      author: 'Feather',
-      version: '1.0.0',
-      tags: ['props', 'weapons', 'model'],
-      thumbnail: thumbnail('#6E7A8F', '#2B3140', '\u{1F5E1}'),
-    },
-    assets: [sword],
-    content: {
-      prefabs: [
-        prefab('prefab-store-sword', 'Sword', [
-          {
-            id: 'obj-sword',
-            name: 'Sword',
-            kind: 'cube',
-            transform: transform(),
-            renderer: { ...renderer('cube'), modelAssetId: sword.id },
-          },
-        ]),
-      ],
-    },
-  };
-}
-
-/**
- * A `kind: 'project'` package — a whole world, not a component. Installing one creates a NEW project
- * and its scenes replace the blank starter, which is how templates ship through the store.
- */
-const SANDBOX_TEMPLATE = {
-  slug: 'sandbox-world',
-  kind: 'project',
-  meta: {
-    id: 'pkg-feather-sandbox-world',
-    name: 'Sandbox World',
-    description:
-      'A ready-to-play starter world: a ground plane, a stack of physics crates and a lit sky. Creates a new project you can build on.',
-    author: 'Feather',
-    version: '1.0.0',
-    tags: ['template', 'world', 'physics'],
-    thumbnail: thumbnail('#4C9F5A', '#1E5230', '\u{1F3DE}'),
-  },
-  content: {
-    materials: [woodMat, stoneMat],
-    scenes: [
-      {
-        id: 'scene-sandbox',
-        name: 'Sandbox',
-        objects: [
-          object('obj-ground', 'Ground', 'plane', {
-            scale: [40, 1, 40],
-            materialId: stoneMat.id,
-            color: '#6F7A6A',
-            physics: { bodyType: 'fixed', collider: 'box' },
-          }),
-          object('obj-sun', 'Sun', 'empty', { position: [8, 12, 6] }),
-          object('obj-crate-1', 'Crate', 'cube', {
-            position: [0, 1, 0],
-            materialId: woodMat.id,
-            color: woodMat.color,
-            physics: { collider: 'box', mass: 12 },
-          }),
-          object('obj-crate-2', 'Crate', 'cube', {
-            position: [0.2, 2.05, -0.1],
-            rotation: [0, 0.3, 0],
-            materialId: woodMat.id,
-            color: woodMat.color,
-            physics: { collider: 'box', mass: 12 },
-          }),
-          object('obj-crate-3', 'Crate', 'cube', {
-            position: [1.6, 1, 0.8],
-            rotation: [0, -0.4, 0],
-            materialId: woodMat.id,
-            color: woodMat.color,
-            physics: { collider: 'box', mass: 12 },
-          }),
-        ],
-      },
-    ],
-  },
-};
-
-/**
  * A `kind: 'plugin'` package — it ships NO code. The archive is only a manifest whose
  * `meta.pluginId` names a plugin module compiled into the engine
  * (src/extensions/availablePlugins.ts); installing it activates that module and persists the
@@ -1124,39 +1002,16 @@ const MODEL_FORGE_PLUGIN = {
   content: {},
 };
 
-/**
- * Pixel Art Trees adapts the deterministic painted-canopy work from RPG Mania to Feather's native
- * tree recipes. No bitmap assets ship in the package: the leaf atlas is generated by the engine and
- * the plugin only authors compact specs that remain editable, collaborative and export-safe.
- */
-const PIXEL_ART_TREES_PLUGIN = {
-  slug: 'pixel-art-trees',
-  kind: 'plugin',
-  meta: {
-    id: 'pkg-feather-plugin-pixel-art-trees',
-    pluginId: 'feather.pixel-art-trees',
-    name: 'Pixel Art Trees — Procedural Vegetation Studio',
-    description:
-      'Create game-ready pixel vegetation without importing sprites: nine procedural leaf languages, five growth habits, live 3D seed previews, custom palettes and one-click terrain-snapped groves. Every result is a tiny deterministic Feather tree recipe, so forests stay editable, wind-animated, choppable, collaboration-safe and ready for export.',
-    author: 'Feather',
-    version: '1.0.0',
-    tags: ['plugin', 'pixel-art', 'trees', 'vegetation', 'forest', 'rpg', 'environment'],
-    thumbnail: thumbnail('#83D66B', '#183A2A', '\u{1F332}'),
-  },
-  content: {},
-};
-
 /** Card art for the browser-exported starter templates, which carry no thumbnail of their own. */
 const TEMPLATE_THUMBNAILS = {
   'template-third-person': ['#5B8CFF', '#1B2C63', '\u{1F3C3}'],
   'template-first-person': ['#FF3D6E', '#3A0C22', '\u{1F52B}'],
   'template-driving': ['#FF9F3D', '#5A2E08', '\u{1F697}'],
   'template-sim-racing': ['#E84B3C', '#4A120C', '\u{1F3C1}'],
-  'template-cinematic': ['#8C7BFF', '#241C52', '\u{1F3AC}'],
   'template-verdant': ['#70954F', '#142A20', '\u{1F332}'],
-  'template-meadows': ['#63C46A', '#1E4B2C', '\u{1F33F}'],
-  'template-cube-realm': ['#3DD6C0', '#0E4A45', '\u{1F9CA}'],
   'template-platformer': ['#FF7196', '#236784', '\u{2600}\u{FE0F}'],
+  'template-moba': ['#69D5B2', '#243B52', '⚔️'],
+  'template-parcel-panic': ['#FFD166', '#269DAB', '\u{1F4E6}'],
   'template-physics-lab': ['#7A8CFF', '#232C5C', '\u{1F9EA}'],
   'template-timeline-mechanics': ['#40DFFF', '#10283A', '\u{23F1}'],
   'template-spline-studio': ['#9B7BFF', '#241A38', '\u{2728}'],
@@ -1210,7 +1065,7 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
     version: pkg.meta.version,
     kind: pkg.kind,
     tags: pkg.meta.tags ?? [],
-    license: slug === 'template-verdant' ? 'Custom / mixed: code MIT; terrain assets CC0-1.0; original generated audio subject to provider terms (no additional grant)' : pkg.meta.license ?? (['template-last-light', 'template-blackthorn', 'template-neon-afterlight'].includes(slug) ? 'MIT' : 'CC0-1.0'),
+    license: slug === 'template-verdant' ? 'Custom / mixed: code MIT; terrain assets CC0-1.0; original generated audio subject to provider terms (no additional grant)' : pkg.meta.license ?? (['template-last-light', 'template-blackthorn'].includes(slug) ? 'MIT' : 'CC0-1.0'),
     priceCents: 0,
     thumbnail: thumbnail ?? pkg.meta.thumbnail,
     sizeBytes: installFootprint(archiveBytes),
@@ -1232,37 +1087,6 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
 
 // ------------------------------------------------------------------------------------------------
 
-async function buildEmberMeadowPack() {
-  const avatar = await externalAsset('ember-avatar', 'templates/UAL1.glb', 'model');
-  const sword = await externalAsset('ember-sword', 'templates/Sword.glb', 'model');
-  const content = emberMeadowContent();
-  const zipFiles = {};
-  for (const path of ['package.json', 'README.md', '.env.example', 'LICENSE', 'server/launch.mjs', 'server/server.mjs', 'server/world.mjs', 'server/valley.mjs', 'server/appearance.mjs', 'server/server.test.mjs', 'server/valley.test.mjs']) {
-    zipFiles[`ember-meadow-server/${path}`] = [new Uint8Array(await readFile(join(ROOT, 'examples/titan-mmo', path))), { mtime: new Date(EPOCH) }];
-  }
-  await mkdir(join(OUT_DIR, 'downloads'), { recursive: true });
-  await writeFile(join(OUT_DIR, 'downloads/ember-meadow-server.zip'), zipSync(zipFiles));
-  return { slug: 'ember-meadow', kind: 'project', content,
-    assets: [avatar.asset, sword.asset], assetBytes: new Map([[avatar.asset.id, avatar.bytes], [sword.asset.id, sword.bytes]]),
-    meta: { id: 'pkg-feather-ember-meadow', name: 'Ember Meadow — MMO Starter', version: '1.0.0', author: 'Feather / TheDevRealm', license: 'MIT + bundled asset licenses',
-      description: 'A free fantasy RPG integration example: login, an animated adventurer, a Pixel Art Trees woodland, a quest, combat, loot, equipment and saved progress. Play solo immediately, or run the included authoritative realm server and explore with friends. Supports Titan guest and email accounts. One zone; 32-player connection cap, not a production-scale MMO.',
-      tags: ['project', 'mmo', 'rpg', 'multiplayer', 'titan', 'beginner'], thumbnail: thumbnail('#d7b36c', '#22564c', '✧') } };
-}
-
-/**
- * The continuous-valley template embeds its terrain, scenery, animated avatar and sword.
- * The Titan panel starts the managed realm; online exports also include the matching server.
- */
-async function buildSunlitReachPack() {
-  const avatar = await externalAsset('sunlit-avatar', 'templates/UAL1.glb', 'model');
-  const sword = await externalAsset('sunlit-sword', 'templates/Sword.glb', 'model');
-  return { slug: 'sunlit-reach', kind: 'project', content: sunlitReachContent(),
-    assets: [avatar.asset, sword.asset], assetBytes: new Map([[avatar.asset.id, avatar.bytes], [sword.asset.id, sword.bytes]]),
-    meta: { id: 'pkg-feather-sunlit-reach', name: 'Sunlit Reach — Mini MMO', version: '1.1.0', author: 'Feather / TheDevRealm', license: 'MIT + bundled asset licenses',
-      description: 'A continuous 192 m valley with a village, woodland and ruined keep. Create an armored adventurer with color and headpiece choices; play Warrior, Ranger or Mage with animated attacks, a class skill and Second Wind. Shared terrain and solid collisions, three quests, a boss, realm chat, saved appearance and progress, and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.',
-      tags: ['project', 'mmo', 'rpg', 'multiplayer', 'titan', 'classes', 'boss', 'cinematic'], thumbnail: thumbnail('#e0803f', '#2b1b3d', '\u265B') } };
-}
-
 async function main() {
   // One folder per kind, so what a package IS is obvious from where it lives — both here and in
   // whatever bucket this is eventually mirrored into.
@@ -1270,19 +1094,8 @@ async function main() {
 
   const packs = [
     ...PACKS,
-    await buildWeaponPack(),
-    SANDBOX_TEMPLATE,
     ARBOR_FORGE_PLUGIN,
     MODEL_FORGE_PLUGIN,
-    PIXEL_ART_TREES_PLUGIN,
-    {
-      slug: 'titan-backend', kind: 'plugin', content: {},
-      meta: { id: 'pkg-feather-plugin-titan', pluginId: 'feather.titan', name: 'Titan — Game Backend', version: '1.1.0', author: 'Feather / TheDevRealm',
-        description: 'Connect Feather to the Titan backend used by the Unreal plugin. Connect, test and publish from a guided panel. Includes managed local realms, configured production server packages, a typed REST client and the free Ember Meadow MMO starter.',
-        tags: ['plugin', 'backend', 'mmo', 'multiplayer', 'login', 'titan'], license: 'MIT', thumbnail: thumbnail('#a28b4c', '#153e3b', 'T') },
-    },
-    await buildEmberMeadowPack(),
-    await buildSunlitReachPack(),
   ];
   const entries = [];
   for (const pack of packs) {
@@ -1302,6 +1115,7 @@ async function main() {
   const projectsDir = join(PACKAGES_DIR, KIND_DIRS.project);
   const exported = (await readdir(projectsDir))
     .filter((file) => file.startsWith('template-') && file.endsWith('.nfpack'))
+    .filter((file) => !isRetiredStoreSlug(file.replace(/\.nfpack$/, '')))
     .sort();
   const doubled = [];
   for (const name of exported) {
@@ -1313,10 +1127,10 @@ async function main() {
     const slug = name.replace(/\.nfpack$/, '');
     const [from, to, glyph] = TEMPLATE_THUMBNAILS[slug] ?? ['#5B8CFF', '#1B2C63', '\u{1F5FA}'];
     let cover = thumbnail(from, to, glyph);
-    if (['template-cinematic', 'template-last-light', 'template-blackthorn', 'template-neon-afterlight', 'template-verdant'].includes(slug)) {
+    if (['template-last-light', 'template-blackthorn', 'template-verdant', 'template-parcel-panic', 'template-moba'].includes(slug)) {
       // A real engine capture, produced by render-cinematic.mjs (or e2e/resonance.mjs). Inline like the
       // other covers so the catalog remains portable/offline, even when served from another host.
-      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-verdant' ? 'verdant.png' : slug === 'template-neon-afterlight' ? 'neon-afterlight.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : slug === 'template-last-light' ? 'last-light.png' : 'resonance.png')).catch(() => null);
+      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-moba' ? 'moba.png' : slug === 'template-parcel-panic' ? 'parcel-panic.png' : slug === 'template-verdant' ? 'verdant.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : 'last-light.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
     entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }));

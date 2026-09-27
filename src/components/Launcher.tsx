@@ -313,6 +313,7 @@ export function Launcher() {
                     key={quickStart.id}
                     className="launcher-quick-card hub-basic"
                     data-quick-start={quickStart.id}
+                    data-template-slug={quickStart.templateSlug}
                     disabled={busy || quickStart.comingSoon}
                     onClick={() => void createQuickStart(quickStart)}
                   >
@@ -327,7 +328,7 @@ export function Launcher() {
                       <strong>{quickStart.label}</strong>
                       <small>
                         {quickStart.builtInTemplate
-                          ? 'Cloudstep Garden · Playable, included offline'
+                          ? `${quickStart.projectTitle ?? quickStart.label} · Playable, included offline`
                           : 'A fresh scene. Make it your own.'}
                       </small>
                     </span>
@@ -409,7 +410,7 @@ export function Launcher() {
                 <div className="hub-catalog-message hub-catalog-error" role="alert">
                   <div>
                     <strong>Starter worlds couldn't load.</strong>
-                    <p>Blank and Platformer are ready to use offline.</p>
+                    <p>Blank, Platformer, Parcel Panic and Lumen Lane are ready to use offline.</p>
                     <details>
                       <summary>Error details</summary>
                       <p>{catalogError}</p>
@@ -430,7 +431,7 @@ export function Launcher() {
                       </button>
                     </>
                   ) : (
-                    'More starter worlds will appear here. Blank and Platformer are ready above.'
+                    'More starter worlds will appear here. Blank, Platformer, Parcel Panic and Lumen Lane are ready above.'
                   )}
                 </div>
               )}
@@ -489,7 +490,7 @@ export function Launcher() {
                   <span aria-live="polite">
                     {query.trim()
                       ? `${filteredWorlds.length} matching world${filteredWorlds.length === 1 ? '' : 's'}`
-                      : `${visibleWorlds.length} of ${library.length} worlds · plus Blank & Platformer above`}
+                      : `${visibleWorlds.length} of ${library.length} worlds · plus Blank, Platformer, Parcel Panic & Lumen Lane above`}
                   </span>
                 </div>
               )}

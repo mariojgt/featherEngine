@@ -75,7 +75,7 @@ interface ValueRef {
 /** Bare-identifier callees the language/printer owns — never treated as user Call Function targets. */
 const RESERVED_CALLEES = new Set([
   'print', 'wait', 'destroy', 'fire_event', 'apply_damage', 'apply_force', 'apply_impulse', 'apply_torque',
-  'set_var', 'get_var', 'set_position', 'set_rotation', 'set_scale', 'look_at', 'set_velocity', 'set_physics',
+  'set_var', 'get_var', 'set_position', 'set_rotation', 'set_scale', 'look_at', 'set_velocity', 'set_angular_velocity', 'set_physics',
   'set_visible', 'set_active', 'set_joint_motor', 'set_ragdoll', 'tween', 'timeline', 'timeline_control', 'fracture',
   'burst_particles', 'set_particles', 'spawn_particles', 'play_animation', 'set_movement_mode',
   'enter_vehicle', 'exit_vehicle', 'spawn_projectile', 'spawn_attached', 'cut_cable', 'set_cable_length',
@@ -289,6 +289,11 @@ const parseCall = (raw: string): ParsedCall | undefined => {
   const open = trimmed.indexOf('(');
   if (open <= 0 || !trimmed.endsWith(')')) return undefined;
   const callee = trimmed.slice(0, open).trim();
+  // A call must occupy the whole expression. Without this, f(x) + g(y) is
+  // mistaken for one f(...) call, silently dropping the arithmetic/right side.
+  const argumentsWithParens = trimmed.slice(open);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(callee) ||
+      stripOuterParens(argumentsWithParens) === argumentsWithParens) return undefined;
   const args = splitTopLevel(trimmed.slice(open + 1, -1));
   const named = new Map<string, string>();
   const positional: string[] = [];
@@ -323,8 +328,11 @@ const parseLiteral = (raw: string | undefined): GraphValue | undefined => {
   if (Number.isFinite(number)) return number;
   const vector = trimmed.match(/^vec3\((.*)\)$/);
   if (vector) {
-    const [x = '0', y = '0', z = '0'] = splitTopLevel(vector[1]);
-    return [Number(x) || 0, Number(y) || 0, Number(z) || 0] as Vector3Tuple;
+    const parts = splitTopLevel(vector[1]);
+    // Expressions must reach Make Vector3 below, rather than silently becoming zero literals.
+    if (parts.length === 3 && parts.every(part => part.trim() !== '' && Number.isFinite(Number(part)))) {
+      return parts.map(Number) as Vector3Tuple;
+    }
   }
   return undefined;
 };
@@ -825,8 +833,9 @@ class FeatherGraphBuilder {
         this.attachWiredValue(node, 'point', rawArg('point', 1), 'vector3');
         return node;
       }
-      case 'set_velocity': {
-        const node = this.addNode('action.setVelocity', {}, 1);
+      case 'set_velocity':
+      case 'set_angular_velocity': {
+        const node = this.addNode(call.callee === 'set_velocity' ? 'action.setVelocity' : 'action.setAngularVelocity', {}, 1);
         this.applyTargetArg(node, rawArg('target', 0));
         this.attachWiredValue(node, 'vector', rawArg('vector', 1), 'vector3');
         return node;
@@ -1234,6 +1243,7 @@ class FeatherGraphBuilder {
       if (bound) return bound.ref;
       if (this.currentRoot) {
         const rootKind = this.currentRoot.data.nodeKind;
+        if (trimmed === 'dt' && rootKind === 'event.update') return { nodeId: this.currentRoot.id, sourceHandle: 'value-out' };
         if (trimmed === 'payload' && rootKind === 'event.custom') return { nodeId: this.currentRoot.id, sourceHandle: 'value-out' };
         if (trimmed === 'amount' && rootKind === 'event.receiveDamage') return { nodeId: this.currentRoot.id, sourceHandle: 'value-out' };
         if (trimmed === 'speed' && rootKind === 'event.land') return { nodeId: this.currentRoot.id, sourceHandle: 'value-out' };

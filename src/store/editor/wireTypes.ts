@@ -20,6 +20,7 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'query.vehicleSpeed': 'number',
   'event.receiveDamage': 'number',
   'event.land': 'number',
+  'event.update': 'number',
   'value.string': 'string',
   'animator.getState': 'string',
   'value.boolean': 'boolean',
@@ -157,6 +158,11 @@ const inputTypeOverrides: Partial<
   'action.setVisible': { visible: 'boolean' },
   'ui.setVisible': { visible: 'boolean' },
   'action.fireEvent': { payload: 'any' },
+  // This factor is scalar; transform Scale pins use a Vector3 with the same handle name.
+  'math.vectorScale': { scale: 'number' },
+  'math.normalize': { value: 'vector3' },
+  // Timeline targets accept vectors for transforms and scalar values for material properties.
+  'action.tweenProperty': { to: 'any' },
 };
 
 /** Resolve the data type leaving a specific source handle (multi-out nodes differ per pin). */

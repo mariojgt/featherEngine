@@ -660,17 +660,15 @@ type TreeRenderOpts = {
  * its parent's group, so a child's stored transform is LOCAL (relative to the parent) and moving /
  * rotating / scaling a parent carries every descendant with it.
  *
- * Two objects render at the world root even when parented:
- *  - their parent isn't in the visible set (e.g. a hidden parent) — so the child still shows;
- *  - during Play, a physics/character object — the Rapier world owns its WORLD transform, so it
- *    must not also inherit a parent's matrix (which would double-transform it).
+ * A child renders at the world root only when its parent is absent from the visible set.
+ * Physics writes parent-relative LOCAL transforms too, including its interpolated render poses;
+ * detaching a body during Play would lose the parent's translation, rotation and scale.
  */
 function renderObjectTree(objects: SceneObject[], opts: TreeRenderOpts): ReactNode {
   const visible = new Set(objects.map((o) => o.id));
   const detached = (o: SceneObject) =>
     !o.parentId ||
-    !visible.has(o.parentId) ||
-    (opts.isPlaying && (o.physics?.enabled || o.character?.enabled));
+    !visible.has(o.parentId);
 
   const childrenByParent = new Map<string, SceneObject[]>();
   const roots: SceneObject[] = [];

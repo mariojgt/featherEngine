@@ -25,6 +25,7 @@ import { useEditorStore } from './editorStore';
 import { clearHistory } from './history';
 import { clearRecovery, type RecoverySnapshot } from './autosave';
 import { canUseHostOnlyFeatures, collaborationAccess } from '../collaboration/access';
+import type { BuiltInTemplate } from '../creator/gameTemplates';
 
 /** Caller-supplied package metadata; the rest (id, createdAt, engineVersion) is filled in. */
 export type PackageMetaInput = Partial<Omit<PackageMeta, 'engineVersion' | 'createdAt'>>;
@@ -267,7 +268,7 @@ interface ProjectState {
   /** Confirm the Build Report dialog with an immutable profile snapshot. */
   confirmPendingExport: (stripUnused: boolean, profile?: ExportProfile) => Promise<void>;
   newProject: (name: string) => Promise<void>;
-  newProjectFromStarter: (name: string, template: 'platformer') => Promise<boolean>;
+  newProjectFromStarter: (name: string, template: BuiltInTemplate) => Promise<boolean>;
   openProject: () => Promise<void>;
   openRecent: (dir: string) => Promise<void>;
   /** Drop a recent project from the launcher list (does not delete files on disk). */
@@ -525,6 +526,12 @@ export const useProjectStore = create<ProjectState>()(
             if (template === 'platformer') {
               const { createPlatformerTemplate } = await import('../project/platformerTemplate');
               await createPlatformerTemplate();
+            } else if (template === 'parcel-panic') {
+              const { createParcelPanicTemplate } = await import('../project/parcelPanicTemplate');
+              await createParcelPanicTemplate();
+            } else if (template === 'moba') {
+              const { createMobaTemplate } = await import('../project/mobaTemplate');
+              await createMobaTemplate();
             }
             return true;
           } catch (error) {

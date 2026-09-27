@@ -34,7 +34,7 @@ async function launcherSmoke() {
     await page.call('Page.navigate', { url: `${BASE_URL}/` });
     await waitFor(`document.querySelector('.launcher')`, 'Creator launcher');
     assert.equal(await evaluate(`document.querySelector('#launcher-title')?.textContent.trim()`), "Let's make something.");
-    assert.equal(await evaluate(`document.querySelectorAll('.launcher-quick-card').length`), 2);
+    assert.equal(await evaluate(`document.querySelectorAll('.launcher-quick-card').length`), 3);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="platformer"]')?.disabled`), false);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="platformer"]')?.textContent.includes('Coming soon')`), false);
     assert.equal(await evaluate(`document.querySelector('.hub-ai').open`), false);

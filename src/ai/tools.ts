@@ -54,14 +54,10 @@ import { CREATOR_ROLE_IDS, findCreatorRole } from '../creator/roles';
 import type { SimpleInteractionAction } from '../creator/simpleInteractions';
 import { CREATOR_GAMEPLAY_KIT_IDS, findCreatorGameplayKit } from '../creator/gameplayKits';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
-import { createMeadowTemplate } from '../project/meadowTemplate';
-import { createCubeRealmTemplate } from '../project/cubeRealmTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
-import { createFilmModeTemplate } from '../project/filmModeTemplate';
 import { createLastLightTemplate } from '../project/lastLightTemplate';
 import { createBlackthornTemplate } from '../project/blackthornTemplate';
 import { createVerdantTemplate } from '../project/verdantTemplate';
-import { createNeonAfterlightTemplate } from '../project/neonAfterlightTemplate';
 import { createDrivingTemplate } from '../project/drivingTemplate';
 import { createPhysicsLabTemplate } from '../project/physicsLabTemplate';
 import { createTimelineShowcaseTemplate } from '../project/timelineShowcaseTemplate';
@@ -3353,30 +3349,6 @@ const rawEngineTools = {
     },
   }),
 
-  create_meadow_template: tool({
-    description:
-      'Build the "Meadows" playable slice — the BOTW-style interactive-vegetation showcase. Spawns the bundled third-person character rig on a big rolling PROCEDURAL-hills terrain carpeted in dense grass + scattered wildflowers (varied red/yellow/white/purple blooms) that PART and flatten around the player as you walk, plus scattered swaying trees and mossy boulders, all under a gentle breeze, sky-dissolving atmospheric fog, and the Stylized Nature render look. Returns the player objectId. Use this when the user wants a lush outdoor/nature scene, a grass-interaction demo, or a starting point for a BOTW/Zelda/Genshin-like game.',
-    inputSchema: z.object({}),
-    execute: async () => {
-      const id = await createMeadowTemplate();
-      return id
-        ? `Created Meadows — player objectId ${id}. Press Play and walk (WASD, Shift sprint, mouse look) through the field: the grass and flowers part and flatten around you and spring back, travelling wind gusts sweep across the blades, the trees sway in the breeze, and distant hills dissolve into the sky. Tune the terrain's Foliage tab (Player Interaction, Wildflowers, density) to taste.`
-        : `Couldn't build the meadow template.`;
-    },
-  }),
-
-  create_cube_realm_template: tool({
-    description:
-      'Build the "Cube Realm" Cubelands-inspired action slice. Spawns a third-person hero with melee combo (3-hit buffer), hitstop, and roll i-frames; enables a 6-minute day/night cycle; places smashable crates, chase enemies (grunts + a Warden), and a shrine pressure-plate → gate puzzle. All combat/day-cycle knobs are Inspector-editable after creation. Use for Zelda-like / action-adventure starters.',
-    inputSchema: z.object({}),
-    execute: async () => {
-      const id = await createCubeRealmTemplate();
-      return id
-        ? `Created Cube Realm — hero objectId ${id}. Press Play: WASD move, Q roll (i-frames), LMB melee combo (3 hits + hitstop), T lock-on. Smash crates, fight grunts, stand on the cyan shrine plate to lift the gate, then challenge the Warden. Tune Combo/Hitstop/I-frames on the Character Controller and Day Cycle in Scene Settings.`
-        : `Couldn't build the Cube Realm template.`;
-    },
-  }),
-
   create_first_person_template: tool({
     description:
       'Build a complete cyberpunk-neon FPS engine showcase from bundled assets across TWO scenes. Scene 1 = a room-based first-person template: Room 1 movement/mouse-look/sprint/jump, Room 2 crawl/slow movement plus a real [E] interaction console, Room 3 physics + shooting with dynamic boxes, breakable range targets, moving target, bounce pad, and physics tower, Room 4 bound screen UI plus a trigger/interaction-driven Film Mode cinematic finale. Includes an invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles (each gun a distinct fire rate/damage/knockback/sound, grenade lobs an explosive orb), neon HUD (crosshair/weapon/ammo), proximity tutorial signs, night environment, bloom, vignette, and ambient bed. Scene 2 = a Call-of-Duty-style "Breach & Clear" MISSION reached from a DEPLOY pad: a neon facility where you breach, eliminate line-of-sight enemy guards across 3 rooms, then reach the extraction zone — with glowing green MEDKIT pickups (one per room, +35 integrity, consumed only when hurt, a reusable trigger→heal→destroy-self Blueprint), an objective banner, an INTEGRITY (health) bar, MISSION FAILED/COMPLETE overlays, and ENTER to redeploy/return. Weapon swaps play a click; the HUD controls strip covers move/sprint/jump/fire/aim/reload/weapons/interact. Returns pawn objectId.',
@@ -3389,31 +3361,12 @@ const rawEngineTools = {
     },
   }),
 
-  create_film_mode_template: tool({
-    description:
-      'Build RESONANCE, the built-in 32-second cinematic showcase: an editable brass-and-stone kinetic hall, four real wind-driven cloth banners, a heavy ball and 12 Rapier dominoes, three rotating gyroscope rings, Lux local lighting and reflections, atmospheric fog and staged emissive/light cues. Eight camera shots lead into a real 32-piece reactor fracture on the music hit at 24 seconds. A Blueprint slows physics to quarter speed while a reciprocal cinematic timeDilation keeps camera and score in real time. The final frame holds behind an editable Replay film button; R also restarts the entire authored scene. Six optional bundled audio cues, named markers and clearly laid-out Physics & replay cues Blueprint. No external models or baked video. Returns cinematicId. Scrubbing previews cameras/materials; use Play from the start to see the physics and event-driven fracture.',
-    inputSchema: z.object({}),
-    execute: async () => {
-      const id = await createFilmModeTemplate();
-      return id ? `Created "Resonance" with cinematicId ${id}. Press Play for the 32-second kinetic hall film: wind-driven cloth, real domino collisions, Lux lighting and a live reactor fracture at 24 seconds. Replay film or R resets the simulation. Open the Cinematic panel for eight named shots and beat markers; open the Resonance Physics & replay cues Blueprint to edit the event-driven physics. Scrubbing previews the edit; play from the start for the full simulation.` : `Couldn't build the Film Mode template.`;
-    },
-  }),
-
   create_verdant_template: tool({
     description: 'Build Verdant — A Woodland Study, an original 48-second woodland cinematic: rocky clearings, fern and shrub banks, natural blade grass, clustered authored trees, volumetric sunlight, six editable shots, an original generated score and ambience. Adds to the active scene; use a blank project. Play; R replays. Available as a local reusable project package.',
     inputSchema: z.object({}),
     execute: async () => {
       const id = await createVerdantTemplate();
       return id ? `Built Verdant — A Woodland Study, cinematicId ${id}. Press Play for the 48-second woodland film; R replays. Edit the six shots in Film Mode. Original generated score and ambience are governed by provider terms.` : 'No active scene to build Verdant into.';
-    },
-  }),
-
-  create_neon_afterlight_template: tool({
-    description: 'Build Neon Afterlight, a complete 70-second cyberpunk film: dense city canyon, neon signs, wet street and water reflections, local-light volumetric fog, steam, live sparks, cooling-water particles and an animated searchlight drone. Includes all original models, maps, synth score, ten shots and editable weather Blueprint. Adds to the active scene; use a blank project. R replays.',
-    inputSchema: z.object({}),
-    execute: async () => {
-      const id = await createNeonAfterlightTemplate();
-      return id ? `Built Neon Afterlight, cinematicId ${id}. Play the 70-second film; R replays. Edit shots and drone/VFX cues in Film Mode, weather in the Afterlight Director Blueprint. Epic enables screen-space reflections.` : 'No active scene to build Neon Afterlight into.';
     },
   }),
 
@@ -3466,6 +3419,26 @@ const rawEngineTools = {
     execute: async () => {
       const id = await createSplineStudioTemplate();
       return `Created Spline Studio — animated sculpture root objectId ${id}. Press Play to see the slow rotation and looping float; edit the candy materials, World Settings, or Kinetic Sculpture Blueprint to art-direct it.`;
+    },
+  }),
+
+  create_moba_template: tool({
+    description: 'Build Lumen Lane — Astral Rift, an editable three-lane solo MOBA against AI. Includes five selectable champions with different roles and abilities, click movement/attacks, follow camera, minimap, jungle camps, upgrades, minion waves, towers, cores, recall and replay. Use in a fresh project; returns hero objectId. No online backend required.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const { createMobaTemplate } = await import('../project/mobaTemplate');
+      const id = await createMobaTemplate();
+      return `Created Lumen Lane — hero objectId ${id}. Press Play, then Start match. Lead your minion wave, destroy the enemy tower, then its core. Read the on-screen movement and ability controls. Characters, arena, rules and UI remain editable.`;
+    },
+  }),
+
+  create_parcel_panic_template: tool({
+    description: 'Build Parcel Panic, an editable robot delivery game in a seeded procedural village. Includes a skippable nine-second cinematic, articulated courier animation, weighted tumbling parcels, solid baskets, pushable crates, rolling drums, bouncy balls, a spinning gate and bounce pad. Relaxed and 90-second modes, new villages, same-seed retries, eleven reusable prefabs and original audio. Use in a fresh project; returns the courier objectId.',
+    inputSchema: z.object({ seed: z.number().int().min(1).max(999982).optional().describe('Optional reproducible village seed; omit for a random starting layout.') }),
+    execute: async ({ seed }) => {
+      const { createParcelPanicTemplate } = await import('../project/parcelPanicTemplate');
+      const id = await createParcelPanicTemplate({ seed });
+      return `Created Parcel Panic — courier objectId ${id}. Enter skips the intro. WASD move, Space jump, Shift sprint, E pick up, Q throw, R recall, P pause. Deliver five parcels to matching baskets. New village changes the layout; Retry keeps the same seed. Pause/results offer relaxed play and a 90-second rush. Edit the Courier animation, Village generation, Parcel physics, Cinematic shots and HUD to remix the game.`;
     },
   }),
 

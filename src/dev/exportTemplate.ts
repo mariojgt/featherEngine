@@ -22,14 +22,12 @@ type TemplateKey =
   | 'first-person'
   | 'driving'
   | 'sim-racing'
-  | 'cinematic'
   | 'last-light'
   | 'blackthorn'
-  | 'neon-afterlight'
   | 'verdant'
-  | 'meadows'
-  | 'cube-realm'
   | 'platformer'
+  | 'parcel-panic'
+  | 'moba'
   | 'physics-lab'
   | 'timeline-mechanics'
   | 'spline-studio';
@@ -51,14 +49,6 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     description: 'An original 48-second woodland cinematic: rocky clearings, fern and shrub banks, natural blade grass, clustered authored trees and volumetric sunlight. Six editable shots, an original generated score and ambience. A local reusable project package. Play; R replays.',
     tags: ['template', 'world', 'cinematic', 'film', 'woodland', 'forest', 'terrain', 'grass', 'trees', 'understory', 'nature'],
     build: async () => (await import('../project/verdantTemplate')).createVerdantTemplate(),
-  },
-  'neon-afterlight': {
-    slug: 'template-neon-afterlight',
-    title: 'Neon Afterlight',
-    version: '1.1.0',
-    description: 'A complete 70-second cyberpunk film in a rain-soaked city canyon. Neon signage, wet-street and water reflections, local-light volumetric fog, steam, live sparks, falling water and a moving searchlight drone. Includes all original city models, PBR maps, ten editable shots, weather Blueprint and synth soundtrack. Play; R replays.',
-    tags: ['template', 'world', 'cinematic', 'film', 'cyberpunk', 'neon', 'reflections', 'weather', 'lighting', 'particles'],
-    build: async () => (await import('../project/neonAfterlightTemplate')).createNeonAfterlightTemplate(),
   },
   'third-person': {
     slug: 'template-third-person',
@@ -89,13 +79,6 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     tags: ['template', 'world', 'racing', 'vehicle'],
     build: async () => (await import('../project/simRacingTemplate')).createSimRacingTemplate(),
   },
-  cinematic: {
-    slug: 'template-cinematic',
-    title: 'Resonance',
-    description: 'A 32-second kinetic hall film: real domino collisions, wind-driven cloth, Lux lighting, a live reactor fracture and eight cinematic shots. Play, replay and edit every cue.',
-    tags: ['template', 'world', 'cinematic', 'film', 'physics', 'lighting'],
-    build: async () => (await import('../project/filmModeTemplate')).createFilmModeTemplate(),
-  },
   'last-light': {
     slug: 'template-last-light',
     title: 'Last Light',
@@ -109,13 +92,6 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     description: 'A complete 70-second dark fantasy film: a wind-swept grassland, modular Gothic castle, storm clouds, rain, moonlight, gate fires, simulated heraldic cloth and lightning-driven live destruction. Includes all models, materials, original music and weather sound design, ten editable shots and the storm Director Blueprint. Play the film; R replays.',
     tags: ['template', 'world', 'cinematic', 'film', 'dark-fantasy', 'castle', 'weather', 'lighting', 'physics'],
     build: async () => (await import('../project/blackthornTemplate')).createBlackthornTemplate(),
-  },
-  meadows: {
-    slug: 'template-meadows',
-    title: 'Meadows',
-    description: 'Stylized BOTW-style grass, wildflowers and trees to walk through.',
-    tags: ['template', 'world', 'vegetation', 'outdoor'],
-    build: async () => (await import('../project/meadowTemplate')).createMeadowTemplate(),
   },
   'physics-lab': {
     slug: 'template-physics-lab',
@@ -140,12 +116,22 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     tags: ['template', 'world', 'design', 'spline', 'studio', 'animation'],
     build: async () => (await import('../project/splineStudioTemplate')).createSplineStudioTemplate(),
   },
-  'cube-realm': {
-    slug: 'template-cube-realm',
-    title: 'Cube Realm',
-    description: 'An action slice with a combo system, day cycle and a shrine to find.',
-    tags: ['template', 'world', 'action'],
-    build: async () => (await import('../project/cubeRealmTemplate')).createCubeRealmTemplate(),
+  moba: {
+    slug: 'template-moba',
+    title: 'Lumen Lane — Astral Rift MOBA',
+    version: '2.1.0',
+    description: 'An original three-lane MOBA with five selectable champions: tank, jungler, mage, ranged carry and support. Point-and-click movement and combat, following camera, clickable minimap, forest paths, river crossings, jungle sentinels, allied and enemy AI, minion waves, towers, cores, abilities, recall, gold income, a six-item shop and four-slot inventory. Fully editable and playable offline.',
+    tags: ['template', 'world', 'moba', 'strategy', 'heroes', 'three-lanes'],
+    build: async () => (await import('../project/mobaTemplate')).createMobaTemplate(),
+  },
+  'parcel-panic': {
+    slug: 'template-parcel-panic',
+    title: 'Parcel Panic',
+    version: '1.1.0',
+    description:
+      'A sunny delivery game with an animated robot courier and a seeded procedural village. Throw weighted, tumbling parcels into solid baskets; push crates, roll drums and bounce rubber balls. Generate a new village or retry the same route in relaxed or timed play. Includes a skippable opening cinematic and eleven reusable editable prefabs.',
+    tags: ['template', 'world', 'delivery', 'arcade', 'beginner', 'primitives', 'robot'],
+    build: async () => (await import('../project/parcelPanicTemplate')).createParcelPanicTemplate(),
   },
   platformer: {
     slug: 'template-platformer',

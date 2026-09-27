@@ -34,6 +34,8 @@ function exporter(options: { assets?: AssetItem[]; ids?: string[]; build?: () =>
     '../project/packageArchive': { writePackageArchive },
     '../utils/contentHash': { sha256Hex },
     '../project/verdantTemplate': { createVerdantTemplate: options.build ?? (async () => {}) },
+    '../project/mobaTemplate': { createMobaTemplate: options.build ?? (async () => 'hero') },
+    '../project/parcelPanicTemplate': { createParcelPanicTemplate: options.build ?? (async () => 'courier') },
   };
   const context = {
     exports, require: (id: string) => {
@@ -50,6 +52,45 @@ function exporter(options: { assets?: AssetItem[]; ids?: string[]; build?: () =>
 }
 
 describe('standalone template asset export', () => {
+  it('exports the offline MOBA builder as a portable store project', async () => {
+    let archive: Uint8Array | undefined;
+    const build = vi.fn(async () => {});
+    const tool = exporter({ assets: [], ids: [], build, fetch: vi.fn(async (input, init) => {
+      expect(String(input)).toBe('/__feather/export-template?slug=template-moba');
+      archive = init!.body as Uint8Array;
+      return new Response('ok');
+    }) });
+    tool.runTemplateExport('moba');
+    await vi.waitFor(() => expect(tool.dataset.templateExport).toBeDefined());
+    expect(tool.dataset.templateExportError).toBeUndefined();
+    expect(build).toHaveBeenCalledOnce();
+    const { pkg } = readPackageFile(archive!);
+    expect(pkg.meta.name).toBe('Lumen Lane — Astral Rift MOBA');
+    expect(pkg.kind).toBe('project');
+    expect(pkg.assets).toHaveLength(0);
+  });
+
+  it('exports Parcel Panic through its builder as an editable store project', async () => {
+    let archive: Uint8Array | undefined;
+    const build = vi.fn(async () => {});
+    const fakeFetch = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe('/__feather/export-template?slug=template-parcel-panic');
+      archive = init!.body as Uint8Array;
+      return new Response('ok');
+    });
+    const tool = exporter({ assets: [], ids: [], build, fetch: fakeFetch });
+    tool.runTemplateExport('parcel-panic');
+    await vi.waitFor(() => expect(tool.dataset.templateExport).toBeDefined());
+    expect(tool.dataset.templateExportError).toBeUndefined();
+    expect(build).toHaveBeenCalledOnce();
+    const { pkg } = readPackageFile(archive!);
+    expect(pkg.kind).toBe('project');
+    expect(pkg.meta.id).toBe('pkg-feather-template-parcel-panic');
+    expect(pkg.meta.name).toBe('Parcel Panic');
+    expect(pkg.meta.tags).toContain('beginner');
+    expect(tool.context.fetch).toBe(fakeFetch);
+  });
+
   it('embeds data-only biome bytes without requiring source metadata', async () => {
     const entry = await exporter().toPackagedAsset(asset, new Map());
     expect(entry.bytes).toEqual(bytes);

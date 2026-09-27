@@ -1632,6 +1632,8 @@ class PhysicsRuntime {
     gravityZones: Record<string, number> = {},
     /** Object ids whose graph has a Collision Stay / Trigger Stay root. Empty = skip stay entirely. */
     stayListeners: ReadonlySet<string> = emptyStayListeners,
+    /** Explicit Set Position actions snap the body instead of synthesizing a one-frame velocity. */
+    teleports: ReadonlySet<string> = emptyStayListeners,
   ): PhysicsFrameResult {
     // Paused (Set Time Scale 0): skip the step entirely — the dt clamp below would otherwise creep the
     // world forward at 1/240s per frame. The empty result freezes every body exactly where it is; contact
@@ -1724,6 +1726,24 @@ class PhysicsRuntime {
     this.lastSyncCount = objects.length;
     this.lastSyncMeshVersion = meshGeometryVersion();
 
+    // A reset/recall must move the actual collider even when followed by Set Velocity(0).
+    // Preserve momentum unless a velocity command below explicitly replaces it. Clear old render
+    // history so high-refresh displays cannot interpolate across the entire teleport distance.
+    let teleportedBody = false;
+    for (const id of teleports) {
+      const object = byId.get(id);
+      if (!object) continue;
+      const body = this.entries.get(id)?.body ?? this.charEntries.get(id)?.body ?? this.vehicleEntries.get(id)?.body;
+      if (!body) continue;
+      const position = curWorld(object).position;
+      const translation = { x: position[0], y: position[1], z: position[2] };
+      body.setTranslation(translation, true);
+      if (body.isKinematic()) body.setNextKinematicTranslation(translation);
+      this.simPrev.delete(id);
+      teleportedBody = true;
+    }
+    if (teleportedBody) this.world.propagateModifiedBodyPositionsToColliders();
+
     // Gravity zones: override body gravityScale while overlapping a `gravityMultiplier` trigger.
     for (const object of objects) {
       if (!object.physics?.enabled || object.physics.isTrigger || object.physics.bodyType !== 'dynamic') continue;
@@ -1776,7 +1796,7 @@ class PhysicsRuntime {
         }
         // Per-axis: an axis a script touched becomes velocity-controlled this frame;
         // untouched axes keep their simulated velocity (gravity, momentum, knockback).
-        if (movedX || movedY || movedZ) {
+        if (!teleports.has(object.id) && (movedX || movedY || movedZ)) {
           const v = body.linvel();
           body.setLinvel(
             {

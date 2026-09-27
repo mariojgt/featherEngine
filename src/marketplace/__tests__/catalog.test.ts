@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { collectTags, fetchCatalog, formatSize, matchesQuery, type StoreListing } from '../catalog';
+import { RETIRED_STORE_SLUGS } from '../retiredPackages';
 
 /** Catalog JSON is untrusted remote input — these cover coercion, rejection and URL resolution. */
 
@@ -80,6 +81,20 @@ describe('fetchCatalog', () => {
     });
     const catalog = await fetchCatalog('store/');
     expect(catalog.packages.map((entry) => entry.id)).toEqual(['pkg-a']);
+  });
+
+  it('hides retired packages from stale hosted catalogs', async () => {
+    stubFetch({
+      json: async () => ({
+        ...CATALOG,
+        packages: [
+          ...CATALOG.packages,
+          ...RETIRED_STORE_SLUGS.map((slug) => ({ ...CATALOG.packages[0], id: `retired-${slug}`, slug })),
+        ],
+      }),
+    });
+    const catalog = await fetchCatalog('store/');
+    expect(catalog.packages.map((entry) => entry.slug)).toEqual(['props']);
   });
 
   it('coerces missing optional fields instead of trusting the payload', async () => {

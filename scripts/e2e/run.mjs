@@ -133,19 +133,17 @@ spec('asset store installs the Arbor Forge plugin and its studio plants a grove'
   }
 });
 
-spec('Pixel Art Trees installs, renders all species and plants deterministic vegetation', async () => {
+spec('existing Pixel Art Trees plugin remains compatible when enabled directly', async () => {
   const app = await openEditor({ baseUrl: BASE_URL, query: '?demo=store' });
   try {
     await app.evaluate(`localStorage.removeItem('nodeforge.plugins')`);
     await app.evaluate(`location.reload()`);
     await app.waitFor(`document.querySelector('.toolbar')`, { label: 'editor reloaded' });
 
-    await clickViewMenuEntry(app, 'Store');
-    await app.waitFor(`document.querySelector('.store-card')`, { label: 'catalog loaded' });
-    await app.evaluate(`(() => {
-      const card = [...document.querySelectorAll('.store-card')]
-        .find((candidate) => candidate.textContent.includes('Pixel Art Trees'));
-      card?.querySelector('.store-install-button')?.click();
+    await app.evaluate(`(async () => {
+      const { usePluginStore } = await import('/src/store/pluginStore.ts');
+      const error = usePluginStore.getState().enable('feather.pixel-art-trees');
+      if (error) throw new Error(error);
     })()`);
     await app.waitFor(
       `(JSON.parse(localStorage.getItem('nodeforge.plugins') ?? '{}').state?.enabledIds ?? []).includes('feather.pixel-art-trees')`,
