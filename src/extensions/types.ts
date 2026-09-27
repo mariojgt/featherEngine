@@ -87,7 +87,7 @@ export interface FeatherModelPlaceOptions {
   name?: string;
 }
 
-/** The Titan starters a plugin can open: the one-zone first quest, or the three-zone mini MMO. */
+/** The Titan starters a plugin can open: the one-zone first quest, or the continuous-valley mini MMO. */
 export type TitanStarterTemplate = 'ember-meadow' | 'sunlit-reach';
 
 export interface FeatherPluginAPI {

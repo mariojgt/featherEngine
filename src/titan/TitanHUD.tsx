@@ -1,3 +1,6 @@
+import { CharacterCreator } from './CharacterCreator';
+import { DEFAULT_APPEARANCE, type Appearance } from '../../examples/titan-mmo/server/appearance.mjs';
+import { VALLEY_ID } from '../../examples/titan-mmo/server/valley.mjs';
 import { useEffect, useRef, useState } from 'react';
 import { useEditorStore, selectActiveObjects } from '../store/editorStore';
 import {
@@ -26,6 +29,7 @@ export function TitanHUD() {
 function RealmHUD() {
   const { snapshot, status, mode, message } = useRealm();
   const [name, setName] = useState('Wayfarer');
+  const [appearance, setAppearance] = useState<Appearance>({ ...DEFAULT_APPEARANCE });
   const [characterClass, setCharacterClass] = useState<ClassId>('warrior');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -52,7 +56,7 @@ function RealmHUD() {
   const solo = editor || settings.publishMode === 'practice';
   const hero = snapshot?.players.find(p => p.id === snapshot.selfId);
   const playing = status === 'playing' && hero;
-  const zone = (snapshot?.zone ?? TITAN_HOME_ZONE) as ZoneId;
+  const zone = (snapshot?.zone ?? zoneOfScene(selectActiveObjects(useEditorStore.getState())) ?? TITAN_HOME_ZONE) as ZoneId;
   const cinematic = Boolean(cinematicId);
   useEffect(() => () => disconnectRealm(), []);
 
@@ -103,7 +107,7 @@ function RealmHUD() {
     const held = (...codes: string[]) => (codes.some(code => keys.has(code)) ? 1 : 0);
     const down = (event: KeyboardEvent) => {
       if (typing(event)) return;
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyE', 'KeyI', 'KeyL', 'Digit1', 'Digit2', 'Digit3', 'Enter'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); }
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'KeyE', 'KeyI', 'KeyL', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Enter'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); }
       keys.add(event.code);
       if (event.repeat) return;
       if (event.code === 'Escape') {
@@ -119,6 +123,7 @@ function RealmHUD() {
       if (event.code === 'KeyE') realmCommand({ type: 'interact' });
       if (event.code === 'Space' || event.code === 'Digit1') realmCommand({ type: 'attack' });
       if (event.code === 'Digit2') realmCommand({ type: 'ability' });
+      if (event.code === 'Digit4') realmCommand({ type: 'recover' });
       if (event.code === 'Digit3') realmCommand({ type: 'potion' });
       if (event.code === 'KeyI') setBag(v => !v);
       if (event.code === 'KeyL') setQuestLog(v => !v);
@@ -130,7 +135,7 @@ function RealmHUD() {
     // WASD is screen-relative: forward always means "away from the camera", so the held keys are
     // rotated into world space by the live orbit yaw before the intention is sent.
     const tick = setInterval(() => {
-      if (useEditorStore.getState().runtimeCinematic) { realmCommand({ type: 'move', x: 0, z: 0 }); return; }
+      if (useEditorStore.getState().runtimeCinematic || document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')) { keys.clear(); realmCommand({ type: 'move', x: 0, z: 0 }); return; }
       const direction = worldMoveDirection(held('KeyW', 'ArrowUp') - held('KeyS', 'ArrowDown'), held('KeyD', 'ArrowRight') - held('KeyA', 'ArrowLeft'));
       realmCommand({ type: 'move', ...direction });
     }, 100);
@@ -138,21 +143,21 @@ function RealmHUD() {
   }, [Boolean(playing)]);
 
   const buildZones = () => Object.keys(titanZoneScenes(useEditorStore.getState().scenes));
-  const begin = () => startSolo(name, gameId, { class: characterClass, zones: buildZones() });
+  const begin = () => startSolo(name, gameId, { class: characterClass, appearance, zones: buildZones() });
   const join = () => {
     const secret = password; setPassword('');
     void connectRealm(realmUrl, { name, email, password: secret, mode: titanAccounts ? authMode : 'guest' },
-      local ? preview.storageId : undefined, { class: characterClass, zones: buildZones() });
+      local ? preview.storageId : undefined, { class: characterClass, appearance, zones: buildZones() });
   };
 
   if (!playing) return <div className="titan-hud" data-testid="titan-hud">
-    <div className="titan-login" data-cinematic={cinematic ? 'true' : undefined}>
-      <div className="titan-title"><span className="titan-eyebrow">{editor ? 'FEATHER × TITAN · GAME PREVIEW' : 'THE SUNLIT REACH'}</span><span className="titan-crest" aria-hidden>✧</span><h1>The Sunlit<br /><em>Reach</em></h1><p>Three zones, three classes. The start of your adventure.</p><div className="titan-features"><span>Explore together</span><span>Earn your equipment</span><span>Keep your progress</span></div></div>
+    <div className="titan-login" data-cinematic={cinematic ? 'true' : undefined} data-valley={zone === VALLEY_ID ? 'true' : undefined}>
+      <div className="titan-title"><span className="titan-eyebrow">{editor ? 'FEATHER × TITAN · GAME PREVIEW' : 'THE SUNLIT REACH'}</span><span className="titan-crest" aria-hidden>✧</span><h1>The Sunlit<br /><em>Reach</em></h1><p>One open valley. Three classes. Your own adventure.</p><div className="titan-features"><span>Explore together</span><span>Earn your equipment</span><span>Keep your progress</span></div></div>
       <form className="titan-card titan-login-card" onSubmit={e => { e.preventDefault(); if (online) join(); else begin(); }}>
         <span className="titan-eyebrow">YOUR ADVENTURE BEGINS HERE</span><h2>Enter the Reach</h2>
         <label>Character name<input value={name} onChange={e => setName(e.target.value)} maxLength={24} required autoComplete="nickname" /></label>
         <TitanClassPicker value={characterClass} onChange={setCharacterClass} />
-        <small>Your class is saved with your character.</small>
+        <CharacterCreator value={appearance} onChange={setAppearance} />
         {solo && <><button className="titan-primary" type="button" disabled={status === 'connecting' || !name.trim()} onClick={begin}>{editor ? 'Play solo practice' : 'Begin adventure'} <span>→</span></button>
         <small>Progress is saved on this device.</small></>}
         {solo && online && <div className="titan-divider">OR JOIN YOUR REALM</div>}
@@ -179,6 +184,7 @@ function RealmHUD() {
   const ceiling = xpToNextLevel(hero.level);
   const maxLevel = hero.level >= MAX_LEVEL;
   const xpPercent = maxLevel ? 100 : Math.max(0, Math.min(100, ((hero.xp - floor) / Math.max(1, ceiling - floor)) * 100));
+  const recovering = Math.max(0, 14 - (snapshot!.time - hero.recoveryAt));
   const cooling = Math.max(0, cls.ability.cooldown - (snapshot!.time - hero.abilityAt));
   const vendor = hero.vendor ? ZONES[zone].npcs.find(npc => npc.id === hero.vendor) : undefined;
   const boss = snapshot!.enemies.find(enemy => enemy.boss && enemy.health > 0
@@ -200,6 +206,7 @@ function RealmHUD() {
       </div>
       <button className="titan-menu" onClick={() => { disconnectRealm(); setBag(false); setQuestLog(false); }}>Leave realm</button>
     </header>
+    {zone === VALLEY_ID && <aside className="titan-valley-map" aria-label="Valley map"><strong>THE NORTH ROAD</strong><svg viewBox="-96 -96 192 192" role="img" aria-label="Your position in Sunlit Vale"><path d="M0 85V-85" stroke="#ac9567" strokeWidth="5" /><text x="8" y="65" fill="#e6dabc" fontSize="13">Village</text><text x="8" y="-4" fill="#9bb58f" fontSize="13">Woodland</text><text x="8" y="-70" fill="#d1a691" fontSize="13">Keep</text><circle cx={hero.x} cy={hero.z} r="5" fill="#fff0ae" /></svg><small>Follow the road north.<br />Elara → Wren → Idris</small></aside>}
     {boss && <TitanBossFrame boss={boss} />}
     <TitanQuestTracker hero={hero} zone={zone} log={questLog} onToggleLog={() => setQuestLog(v => !v)} />
     {bag && <TitanBag hero={hero} solo={mode === 'solo'} vendor={vendor} onClose={() => setBag(false)} />}
@@ -217,6 +224,7 @@ function RealmHUD() {
         <button onClick={() => realmCommand({ type: 'potion' })}><kbd>3</kbd><span>✚ <small>{hero.inventory.potion ?? 0}</small></span>Tonic</button>
         <button aria-pressed={bag} onClick={() => setBag(v => !v)}><kbd>I</kbd><span>▣</span>Inventory</button>
         <button onClick={() => realmCommand({ type: 'save' })}><kbd>CHECKPOINT</kbd><span>↥</span>Save progress</button>
+      <button className="titan-ability" disabled={recovering > 0 || hero.health >= hero.maxHealth} onClick={() => realmCommand({ type: 'recover' })}><kbd>4</kbd><span>❋</span>Second wind{recovering > 0 && <em className="titan-cooldown"><b>{recovering.toFixed(1)}s</b></em>}</button>
       </nav>
       <small className="titan-controls">WASD / ARROWS TO MOVE <span>·</span> RIGHT-DRAG TO LOOK <span>·</span> WHEEL TO ZOOM <span>·</span> E TO TALK &amp; GATHER <span>·</span> ENTER TO CHAT</small>
     </div>

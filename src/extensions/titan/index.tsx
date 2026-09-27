@@ -13,7 +13,7 @@ const steps = ['Connect', 'Test', 'Publish'] as const;
 /** The two shipped starters, in the order the panel offers them. */
 const STARTERS: { id: TitanStarterTemplate; title: string; blurb: string; zones: string[]; recommended?: boolean }[] = [
   { id: 'ember-meadow', title: 'Ember Meadow — first quest', blurb: 'One zone, about 15 minutes. A complete first quest, ready to make your own.', zones: ['1 zone', 'Quest', 'Loot'] },
-  { id: 'sunlit-reach', title: 'Sunlit Reach — Mini MMO', blurb: 'Three zones, three classes, waystone travel, zone chat and a telegraphed boss, with an intro cinematic per zone.', zones: ['3 zones', 'Classes', 'Boss', 'Cinematics'], recommended: true },
+  { id: 'sunlit-reach', title: 'Sunlit Reach — Mini MMO', blurb: 'One continuous valley, a character creator, three classes, animated skills, realm chat and a boss.', zones: ['Open valley', 'Customize', 'Skills', 'Boss'], recommended: true },
 ];
 const setupDraft = (settings: TitanProjectSettings) => ({ ...settings, baseUrl: settings.baseUrl || TITAN_DEFAULT_API_URL });
 
@@ -152,7 +152,7 @@ export const titanPlugin = defineFeatherPlugin({ id: TITAN_PLUGIN_ID, name: 'Tit
     api.tools.register({ id: 'configure', title: 'Configure Titan', description: 'Save Titan account and publication settings. The plugin manages local realms and includes a configured server in online production exports. Never supply player passwords, tokens, or Supabase secret keys.',
       inputSchema: z.object({ realmUrl: z.string(), baseUrl: z.string().default(''), gameKey: z.string().default(''), publishMode: z.enum(['practice', 'online']).default('practice'), gameOrigin: z.string().default('') }),
       execute: async input => { api.titan.configure({ realmUrl: String(input.realmUrl), baseUrl: String(input.baseUrl ?? ''), gameKey: String(input.gameKey ?? ''), publishMode: input.publishMode === 'online' ? 'online' : 'practice', gameOrigin: String(input.gameOrigin ?? '') }); return 'Titan connection and release settings saved in the project.'; } });
-    api.tools.register({ id: 'open-starter', title: 'Open an MMO starter', description: 'Open a Titan starter as a NEW project, with unsaved-changes confirmation. sunlit-reach is the three-zone Sunlit Reach mini MMO (classes, waystone travel, a boss, one intro cinematic per zone); ember-meadow is the smaller single-zone first quest. Configure either in Titan Backend.',
+    api.tools.register({ id: 'open-starter', title: 'Open an MMO starter', description: 'Open a Titan starter as a NEW project, with unsaved-changes confirmation. sunlit-reach is the Sunlit Reach mini MMO (one 192 m valley, saved armor/trim/headpiece customization, three classes, combat and healing skills, chat, quests and a boss); ember-meadow is the smaller single-zone first quest. Configure either in Titan Backend.',
       inputSchema: z.object({ template: z.enum(['ember-meadow', 'sunlit-reach']).default('sunlit-reach') }),
       execute: async input => { const template = input.template === 'ember-meadow' ? 'ember-meadow' : 'sunlit-reach'; const name = template === 'ember-meadow' ? 'Ember Meadow' : 'Sunlit Reach';
         return await api.titan.openStarter(template) ? `${name} is ready.` : 'Starter opening was cancelled or failed.'; } });

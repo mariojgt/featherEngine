@@ -1,6 +1,6 @@
 # Ember Meadow / Sunlit Reach realm server
 
-A free, original fantasy RPG starter for Feather Engine and Titan. The same server runs the single-zone Ember Meadow starter and the three-zone Sunlit Reach — Mini MMO template (see the engine's docs/SUNLIT_REACH_MMO.md). The local server is a single-zone learning example with a 32-player connection cap, authoritative movement/combat/rewards, and disk persistence. This is not a tested production MMO service.
+A free, original fantasy RPG starter for Feather Engine and Titan. The same server runs the single-zone Ember Meadow starter and the continuous-valley Sunlit Reach — Mini MMO template (see the engine's docs/SUNLIT_REACH_MMO.md). The local server is a learning example with a 32-player connection cap, authoritative movement/combat/rewards, and disk persistence. This is not a tested production MMO service.
 
 ## First five minutes
 

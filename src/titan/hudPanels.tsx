@@ -15,7 +15,7 @@ const rewardLine = (questId: QuestId) => {
 
 /** Story tracker: this zone's chapter in full, then a compact line for every other active quest. */
 export function TitanQuestTracker({ hero, zone, log, onToggleLog }: { hero: Hero; zone: ZoneId; log: boolean; onToggleLog: () => void }) {
-  const questId = questOfZone(zone);
+  const questId = zone === 'sunlit-valley' ? QUEST_IDS.find(id => hero.quests[id]?.state !== 'complete') ?? QUEST_IDS[2] : questOfZone(zone);
   const quest = QUESTS[questId];
   const entry = hero.quests[questId];
   const objectives = questObjectives(hero, questId);
@@ -111,7 +111,8 @@ export function TitanClassPicker({ value, onChange }: { value: ClassId; onChange
   return <div className="titan-classes" role="group" aria-label="Choose a class">
     {(Object.keys(CLASSES) as ClassId[]).map(id => <button key={id} type="button" className="titan-class-option"
       aria-pressed={value === id} onClick={() => onChange(id)}>
-      <span>{CLASSES[id].icon}</span><strong>{CLASSES[id].name}</strong><small>{CLASSES[id].description}</small>
+      <span>{CLASSES[id].icon}</span><strong>{CLASSES[id].name}</strong>
     </button>)}
+    <p className="titan-class-description">{CLASSES[value].description}</p>
   </div>;
 }

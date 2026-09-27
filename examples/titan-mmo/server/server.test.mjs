@@ -119,7 +119,7 @@ test('the Ashen Warden telegraphs bursts, rewards every participant and drops th
   const world = new RealmWorld();
   const a = world.join('a', 'A', { version: 2, xp: 3000, zone: 'cinder-keep', class: 'warrior' }); const b = world.join('b', 'B', { version: 2, xp: 3000, zone: 'cinder-keep', class: 'mage' });
   assert.equal(a.zone, 'cinder-keep'); assert.equal(a.level, 8);
-  const boss = world.enemies.find(e => e.kind === 'boss');
+  const boss = world.enemies.find(e => e.kind === 'boss' && e.zone === a.zone);
   at(a, { x: boss.x, z: boss.z + 1.5 }); at(b, { x: boss.x, z: boss.z + 6 });
   world.command('a', { type: 'attack' }); world.command('b', { type: 'attack' });
   settle(world, ENEMIES.boss.burst.telegraph + .3);

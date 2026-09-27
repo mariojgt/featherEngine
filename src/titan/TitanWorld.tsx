@@ -1,8 +1,10 @@
+import { zoneOfScene } from './settings';
+import { groundHeight } from '../../examples/titan-mmo/server/valley.mjs';
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { ZONES, type ZoneDef } from '../../examples/titan-mmo/server/world.mjs';
-import { useEditorStore } from '../store/editorStore';
+import { ZONES, type ZoneDef, type ZoneId } from '../../examples/titan-mmo/server/world.mjs';
+import { useEditorStore, selectActiveObjects } from '../store/editorStore';
 import { CinematicCamera } from '../three/CinematicCamera';
 import { useAssetUrl } from '../three/ModelAsset';
 import { useTitanActive } from './TitanHUD';
@@ -35,19 +37,20 @@ function RealmActors() {
   const url = useAssetUrl(assetId);
   const swordId = useEditorStore(s => s.assets.find(a => a.name === 'Sword.glb')?.id);
   const swordUrl = useAssetUrl(swordId);
-  const zone: ZoneDef = ZONES[snapshot?.zone ?? 'ember-meadow'];
+  const zoneId = (snapshot?.zone ?? zoneOfScene(selectActiveObjects(useEditorStore.getState()))) as ZoneId;
+  const zone: ZoneDef = ZONES[zoneId] ?? ZONES['ember-meadow'];
   const hero = snapshot?.players.find(p => p.id === snapshot.selfId);
   const heals = useMemo(() => snapshot?.effects.filter(effect => effect.kind === 'heal') ?? [], [snapshot?.effects]);
   return <>
     {/* An authored sweep owns the camera outright; ours resumes behind the hero when it ends. */}
     {cinematic ? <CinematicCamera /> : <RealmCamera zone={zone} />}
-    {zone.npcs.map(npc => <NpcView key={npc.id} npc={npc} hero={hero} url={url} />)}
-    {zone.gatherables.filter(node => !hero?.gathered.includes(node.id)).map(node => <GatherableView key={node.id} node={node} />)}
+    {zone.npcs.filter(npc => Math.hypot(npc.x - (hero?.x ?? zone.spawn.x), npc.z - (hero?.z ?? zone.spawn.z)) < 55).map(npc => <NpcView key={npc.id} npc={npc} hero={hero} url={url} zone={zoneId} />)}
+    {zone.gatherables.filter(node => !hero?.gathered.includes(node.id) && Math.hypot(node.x - (hero?.x ?? zone.spawn.x), node.z - (hero?.z ?? zone.spawn.z)) < 50).map(node => <GatherableView key={node.id} node={node} zone={zoneId} showLabel={Boolean(hero && Math.hypot(node.x - hero.x, node.z - hero.z) < 18)} />)}
     {zone.portals.map(portal => <WaystoneView key={portal.id} portal={portal} hero={hero} />)}
-    {snapshot?.enemies.filter(enemy => enemy.health > 0).map(enemy => <EnemyView key={enemy.id} enemy={enemy} time={snapshot.time} url={url} />)}
+    {snapshot?.enemies.filter(enemy => enemy.health > 0).map(enemy => <EnemyView key={enemy.id} enemy={enemy} time={snapshot.time} url={url} showLabel={Boolean(hero && Math.hypot(enemy.x - hero.x, enemy.z - hero.z) < 24)} />)}
     {snapshot?.players.map(player => <HeroView key={player.id} hero={player} local={player.id === snapshot.selfId} time={snapshot.time}
       url={url} swordUrl={swordUrl} healAt={heals.find(effect => Math.hypot(effect.x - player.x, effect.z - player.z) < 1.5)?.at ?? -100} />)}
-    {snapshot && <TitanEffects effects={snapshot.effects} />}
+    {snapshot && <TitanEffects effects={snapshot.effects} zone={zoneId} />}
   </>;
 }
 
@@ -126,10 +129,11 @@ function RealmCamera({ zone }: { zone: ZoneDef }) {
       camera.lookAt(focus.current);
       return;
     }
-    if (!state.seeded) { state.yaw = player.yaw + Math.PI; state.seeded = true; focus.current.set(player.x, EYE_HEIGHT, player.z); }
-    focus.current.lerp(scratch.set(player.x, EYE_HEIGHT, player.z), 1 - Math.exp(-dt * 10));
+    if (!state.seeded) { state.yaw = player.yaw + Math.PI; state.seeded = true; focus.current.set(player.x, (player.y ?? 0) + EYE_HEIGHT, player.z); }
+    focus.current.lerp(scratch.set(player.x, (player.y ?? 0) + EYE_HEIGHT, player.z), 1 - Math.exp(-dt * 10));
     const flat = Math.cos(state.pitch) * state.distance;
     camera.position.set(focus.current.x + Math.sin(state.yaw) * flat, focus.current.y + Math.sin(state.pitch) * state.distance, focus.current.z + Math.cos(state.yaw) * flat);
+    camera.position.y = Math.max(camera.position.y, groundHeight(player.zone, camera.position.x, camera.position.z) + .7);
     camera.lookAt(scratch.set(focus.current.x, focus.current.y + 0.45, focus.current.z));
     setTitanCameraYaw(state.yaw);
   });

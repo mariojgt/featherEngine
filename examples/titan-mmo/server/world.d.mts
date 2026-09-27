@@ -1,5 +1,6 @@
+import type { Appearance } from './appearance.mjs';
 export type ClassId = 'warrior' | 'ranger' | 'mage';
-export type ZoneId = 'ember-meadow' | 'thornwood' | 'cinder-keep';
+export type ZoneId = 'ember-meadow' | 'thornwood' | 'cinder-keep' | 'sunlit-valley';
 export type ItemId = 'training-blade' | 'warden-blade' | 'ashen-greatblade' | 'thornwood-cloak' | 'crown-of-embers' | 'sun-shard' | 'moonpetal' | 'ember-core' | 'potion';
 export type SlotId = 'weapon' | 'armor' | 'trinket';
 export type EnemyKind = 'wisp' | 'briar-wisp' | 'boar' | 'cinder-wisp' | 'boss';
@@ -19,24 +20,24 @@ export interface QuestDef { name: string; zone: ZoneId; giver: string; level: nu
 export interface QuestProgress { state: 'active' | 'complete'; progress: number[] }
 
 export interface Hero {
-  id: string; name: string; class: ClassId; zone: ZoneId; x: number; z: number; yaw: number;
+  id: string; name: string; class: ClassId; appearance: Appearance; zone: ZoneId; x: number; y: number; z: number; yaw: number;
   level: number; xp: number; health: number; maxHealth: number; gold: number;
   inventory: Partial<Record<ItemId, number>>; equipped: { weapon: ItemId; armor: ItemId | null; trinket: ItemId | null };
   quests: Partial<Record<QuestId, QuestProgress>>; gathered: string[]; deaths: number;
-  attackAt: number; abilityAt: number; hurtAt: number; vendor: string | null; arrivedAt: number; message: string;
+  attackAt: number; abilityAt: number; recoveryAt: number; hurtAt: number; vendor: string | null; arrivedAt: number; message: string;
 }
-export interface Enemy { id: string; zone: ZoneId; kind: EnemyKind; name: string; boss: boolean; x: number; z: number; yaw: number; health: number; maxHealth: number; respawnAt: number; hitAt: number; attackAt: number; burstAt: number; nextBurstAt: number; engaged: number }
+export interface Enemy { id: string; zone: ZoneId; kind: EnemyKind; name: string; boss: boolean; x: number; y: number; z: number; yaw: number; health: number; maxHealth: number; respawnAt: number; hitAt: number; attackAt: number; burstAt: number; nextBurstAt: number; engaged: number }
 export interface Effect { id: number; kind: EffectKind; at: number; x: number; z: number; tx?: number; tz?: number; radius?: number; class?: ClassId }
 export interface RealmSnapshot { version: number; time: number; selfId: string; zone: ZoneId; online: number; players: Hero[]; enemies: Enemy[]; effects: Effect[] }
 export type RealmCommand =
   | { type: 'move'; x: number; z: number }
-  | { type: 'attack' | 'ability' | 'interact' | 'potion' | 'save' }
+  | { type: 'attack' | 'ability' | 'interact' | 'recover' | 'potion' | 'save' }
   | { type: 'equip'; item: ItemId }
   | { type: 'unequip'; slot: SlotId }
   | { type: 'buy'; item: ItemId }
   | { type: 'say'; text: string };
 export interface ChatMessage { type: 'chat'; id: number; from: string; text: string; at: number; zone: ZoneId; self?: boolean }
-export interface JoinOptions { class?: ClassId; zones?: string[] }
+export interface JoinOptions { class?: ClassId; appearance?: Appearance; zones?: string[] }
 
 export const REALM_VERSION: number;
 export const HOME_ZONE: ZoneId;

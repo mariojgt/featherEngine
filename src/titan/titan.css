@@ -81,9 +81,39 @@
 .titan-locked{color:#a9b5ad}
 .titan-locked small{color:#93a49b}
 /* Keep the middle of the frame free for a cinematic's own title cards. */
-.titan-login[data-cinematic=true]{background:linear-gradient(270deg,#081c21e8 30%,transparent);justify-content:flex-end}
-.titan-login[data-cinematic=true] .titan-title,.titan-login[data-cinematic=true] .titan-login-footer{display:none}
+.titan-login[data-cinematic=true]:not([data-valley=true]){background:linear-gradient(270deg,#081c21e8 30%,transparent);justify-content:flex-end}
+.titan-login[data-cinematic=true]:not([data-valley=true]) .titan-title,.titan-login[data-cinematic=true]:not([data-valley=true]) .titan-login-footer{display:none}
 @container (max-width:800px){.titan-chat{width:216px;bottom:14px;left:14px}.titan-chat-log{max-height:74px}.titan-boss{width:270px;top:104px}.titan-class-option small{display:none!important}.titan-zone-title strong{font-size:34px}}
 @container (max-height:650px){.titan-chat{max-height:150px;overflow:hidden}.titan-chat-log{max-height:56px}.titan-boss{top:96px;padding:7px 12px}}
 @container (max-width:550px){.titan-chat{display:none}.titan-classes{gap:4px}.titan-hud .titan-class-option{padding:7px 5px}.titan-zone-title{bottom:34%}}
 .titan-label-hint{color:#e7f0d7!important;opacity:.85}
+
+/* Character creation stays within the scrollable login card at small viewport heights. */
+.titan-login-card{max-height:calc(100% - 44px);overflow-y:auto;scrollbar-width:thin}
+.titan-creator{border:1px solid #bba57135;border-radius:10px;margin:12px 0;padding:12px;min-width:0}
+.titan-creator legend{color:#e6d3a7;font-size:12px;padding:0 7px}
+.titan-creator-row{display:flex;gap:12px;align-items:center}
+.titan-creator-options{flex:1;min-width:0}
+.titan-creator-options>div{display:flex;align-items:center;gap:5px;margin-bottom:9px}
+.titan-creator-options>div>span{font-size:10px;width:32px;flex:none;color:#bdb6a2}
+.titan-creator .titan-swatch{width:22px;height:22px;min-width:22px;padding:0;border-radius:50%;border:2px solid transparent;box-shadow:0 0 0 1px #ffffff25}
+.titan-creator .titan-swatch[aria-pressed=true]{border-color:#fff;box-shadow:0 0 0 2px #bea568}
+.titan-creator button:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.titan-creator label{margin:0;font-size:11px}.titan-creator select{padding:6px 9px!important}
+.titan-creator>small{display:block;margin-top:10px;line-height:1.5}
+.titan-portrait{width:60px;height:108px;position:relative;flex:none;background:radial-gradient(ellipse,#e2cb7930,transparent 70%)}
+.titan-portrait i{position:absolute;display:block;background:var(--armor);border:2px solid var(--trim)}
+.titan-portrait-head{width:23px;height:25px;left:25px;top:10px;border-radius:9px 9px 7px 7px}
+.titan-portrait-head.crest:before{content:'';position:absolute;left:7px;top:-12px;width:7px;height:17px;background:var(--trim);border-radius:7px 7px 0 0}
+.titan-portrait-head.crown:before{content:'♛';position:absolute;color:var(--trim);left:-3px;top:-22px;font-size:28px}
+.titan-portrait-body{width:43px;height:35px;left:15px;top:38px;border-radius:12px 12px 5px 5px}
+.titan-portrait-legs{width:29px;height:30px;left:22px;top:72px;border-radius:3px}
+.titan-valley-map{position:absolute;left:24px;top:145px;width:142px;padding:10px;background:#172520db;border:1px solid #bca76b55;border-radius:12px;color:#dfd5bb;font-size:10px}
+.titan-valley-map svg{display:block;width:100%;height:112px;margin:5px 0}.titan-valley-map small{display:block;line-height:1.5}
+@media(max-width:900px){.titan-valley-map{display:none}.titan-creator-row{gap:8px}.titan-portrait{width:60px}.titan-creator .titan-swatch{width:21px;height:21px;min-width:21px}.titan-creator-options>div{gap:5px}}
+
+@container(max-width:1000px){.titan-valley-map{display:none}}
+@container(max-width:550px){.titan-actions{max-width:100%;flex-wrap:wrap;justify-content:center}.titan-login-card{max-height:none}.titan-creator-row{gap:8px}}
+
+.titan-class-description{grid-column:1/-1;font-size:11px;line-height:1.5;color:#b9c5ae;margin:3px 0 0}
+.titan-creator .titan-headpieces{gap:4px;flex-wrap:wrap}.titan-headpieces button{font-size:10px;padding:5px 7px}.titan-headpieces button[aria-pressed=true]{border-color:#e6c477;background:#485443}

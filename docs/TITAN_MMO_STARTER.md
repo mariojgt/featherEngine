@@ -1,6 +1,6 @@
 # Titan and Ember Meadow
 
-Looking for the bigger world? The three-zone **Sunlit Reach — Mini MMO** template (classes, quests, a boss, per-zone cinematics, zone chat) builds on everything below and has its own tutorial: [Sunlit Reach — Mini MMO](SUNLIT_REACH_MMO.md). Ember Meadow stays the smallest possible integration example.
+Looking for the bigger world? The **Sunlit Reach — Mini MMO** template (one continuous valley, character customization, classes, skills, quests, a boss and realm chat) builds on everything below and has its own tutorial: [Sunlit Reach — Mini MMO](SUNLIT_REACH_MMO.md). Ember Meadow stays the smallest possible integration example.
 
 Install **Asset Store → Titan — Game Backend** (`feather.titan`). Open **View → Extensions → Titan Backend**, or search **Open Titan Backend** in the command palette. Choose **Ember Meadow → Open** (or **Sunlit Reach → Open** for the full template) to create the project. The separate **Ember Meadow — MMO Starter** store listing also opens it directly.
 

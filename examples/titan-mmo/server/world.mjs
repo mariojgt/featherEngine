@@ -1,3 +1,5 @@
+import { VALLEY_ID, groundHeight, moveOnGround, clearSight } from './valley.mjs';
+import { normalizeAppearance } from './appearance.mjs';
 /**
  * The Sunlit Reach — authoritative game rules shared by solo practice and the realm server.
  *
@@ -48,6 +50,21 @@ export const ENEMIES = Object.freeze({
 
 /** Zones are separate coordinate spaces. `level` gates travel; `sanctuary` heals and repels enemies. */
 export const ZONES = Object.freeze({
+  'sunlit-valley': { name: 'Sunlit Vale', subtitle: 'One world · Three adventures', chapter: 1, level: 1,
+    bounds: { minX: -94, maxX: 94, minZ: -94, maxZ: 94 }, spawn: { x: 0, z: 62, yaw: Math.PI }, sanctuary: { x: 0, z: 62, radius: 18 },
+    npcs: [
+      { id: 'elara', name: 'Warden Elara', role: 'quest', quest: 'light-in-the-meadow', x: 0, z: 54, title: 'Keeper of the beacon' },
+      { id: 'bram', name: 'Quartermaster Bram', role: 'vendor', sells: ['potion'], x: -6, z: 61, title: 'Supplies for the road' },
+      { id: 'wren', name: 'Hermit Wren', role: 'quest', quest: 'briar-and-bone', x: 4, z: -4, title: 'Guardian of the woodland' },
+      { id: 'idris', name: 'Captain Idris', role: 'quest', quest: 'ashes-of-the-keep', x: -4, z: -48, title: 'Last of the keep guard' },
+    ],
+    gatherables: [{ id: 'vale-shard-1', item: 'sun-shard', x: -6, z: 40 }, { id: 'vale-shard-2', item: 'sun-shard', x: 8, z: 32 }, { id: 'vale-shard-3', item: 'sun-shard', x: -3, z: 23 },
+      ...[[-9, -12], [12, -19], [-13, -26], [8, -33]].map(([x,z], i) => ({ id: `vale-petal-${i}`, item: 'moonpetal', x, z }))],
+    spawns: [{ id: 'vale-wisp-1', kind: 'wisp', x: -8, z: 30 }, { id: 'vale-wisp-2', kind: 'wisp', x: 10, z: 22 }, { id: 'vale-wisp-3', kind: 'wisp', x: -8, z: 16 },
+      ...[[-10,-17],[13,-25],[-8,-34]].map(([x,z],i)=>({id:`vale-boar-${i}`,kind:'boar',x,z})),
+      { id: 'vale-briar', kind: 'briar-wisp', x: 15, z: -10 },
+      { id: 'vale-cinder-1', kind: 'cinder-wisp', x: -7, z: -57 }, { id: 'vale-cinder-2', kind: 'cinder-wisp', x: 7, z: -57 },
+      { id: 'vale-warden', kind: 'boss', x: 0, z: -71 }], portals: [] },
   'ember-meadow': { name: 'Ember Meadow', subtitle: 'The Sunlit Reach · Chapter 01', chapter: 1, level: 1,
     bounds: { minX: -23, maxX: 23, minZ: -24, maxZ: 11 }, spawn: { x: 0, z: 3, yaw: Math.PI }, sanctuary: { x: 0, z: 3, radius: 9 },
     npcs: [
@@ -79,7 +96,7 @@ export const QUESTS = Object.freeze({
     accept: 'A light in the meadow: gather 3 sun shards and defeat 2 wild wisps.',
     remind: 'Find the golden shards and defeat 2 wisps, then return to me.',
     complete: 'Quest complete! +50 gold, +100 XP, and Warden’s blade. Open your bag to equip it.',
-    after: 'The meadow remembers your kindness, Warden. The waystone north of the trail is open to you.',
+    after: 'The meadow remembers your kindness, Warden. Hermit Wren awaits you in the woodland.',
     objectives: [{ type: 'gather', item: 'sun-shard', count: 3, label: 'Gather sun shards' }, { type: 'kill', kind: 'wisp', count: 2, label: 'Defeat wild wisps' }],
     reward: { gold: 50, xp: 100, items: { 'warden-blade': 1 } } },
   'briar-and-bone': { name: 'Briar and bone', zone: 'thornwood', giver: 'wren', level: 2,
@@ -87,7 +104,7 @@ export const QUESTS = Object.freeze({
     accept: 'Briar and bone: gather 4 moonpetals and defeat 3 thornback boars.',
     remind: 'The petals open in the dark under the canopy. The boars will find you first.',
     complete: 'Quest complete! +90 gold, +220 XP, a Thornwood cloak and two tonics.',
-    after: 'The wood breathes easier. Follow the road south to the keep when you are strong enough.',
+    after: 'The wood breathes easier. Seek Captain Idris near the ruined keep when you are strong enough.',
     objectives: [{ type: 'gather', item: 'moonpetal', count: 4, label: 'Gather moonpetals' }, { type: 'kill', kind: 'boar', count: 3, label: 'Defeat thornback boars' }],
     reward: { gold: 90, xp: 220, items: { 'thornwood-cloak': 1, potion: 2 } } },
   'ashes-of-the-keep': { name: 'Ashes of the keep', zone: 'cinder-keep', giver: 'idris', level: 4,
@@ -127,9 +144,9 @@ export function migrateSave(saved) {
 
 export function newHero(id, name, saved, options = {}) {
   const data = migrateSave(saved);
-  const zones = Array.isArray(options.zones) && options.zones.length ? options.zones.filter(zone => ZONES[zone]) : ZONE_IDS;
-  const cls = CLASSES[data.class] ? data.class : CLASSES[options.class] ? options.class : 'warrior';
-  const zoneId = ZONES[data.zone] && zones.includes(data.zone) ? data.zone : HOME_ZONE;
+  const zones = Array.isArray(options.zones) && options.zones.length ? options.zones.filter(zone => Object.hasOwn(ZONES, zone)) : [HOME_ZONE, 'thornwood', 'cinder-keep'];
+  const cls = Object.hasOwn(CLASSES, data.class) ? data.class : Object.hasOwn(CLASSES, options.class) ? options.class : 'warrior';
+  const zoneId = Object.hasOwn(ZONES, data.zone) && zones.includes(data.zone) ? data.zone : zones[0] ?? HOME_ZONE;
   const inventory = { 'training-blade': 1, potion: 3 };
   if (data.inventory && typeof data.inventory === 'object') {
     for (const item of Object.keys(ITEMS)) if (data.inventory[item] !== undefined) inventory[item] = number(data.inventory[item], inventory[item] ?? 0, 999);
@@ -152,11 +169,11 @@ export function newHero(id, name, saved, options = {}) {
   const xp = number(data.xp, 0, 999999);
   const level = levelForXp(xp);
   const spawn = ZONES[zoneId].spawn;
-  return { id, name: String(name || 'Wayfarer').trim().slice(0, 24) || 'Wayfarer', class: cls, zone: zoneId, zones,
-    x: spawn.x, z: spawn.z, yaw: spawn.yaw, level, xp, health: maxHealthFor(cls, level), maxHealth: maxHealthFor(cls, level),
+  return { id, name: String(name || 'Wayfarer').trim().slice(0, 24) || 'Wayfarer', class: cls, appearance: normalizeAppearance(data.appearance ?? options.appearance), zone: zoneId, zones,
+    x: spawn.x, y: groundHeight(zoneId, spawn.x, spawn.z), z: spawn.z, yaw: spawn.yaw, level, xp, health: maxHealthFor(cls, level), maxHealth: maxHealthFor(cls, level),
     gold: number(data.gold, 0, 999999), inventory, equipped, quests, gathered, deaths: number(data.deaths, 0, 999999),
-    attackAt: -100, abilityAt: -100, hurtAt: -100, vendor: null, arrivedAt: 0, input: { x: 0, z: 0 }, inputAt: 0,
-    message: `Welcome to ${ZONES[zoneId].name}. ${zoneId === HOME_ZONE ? 'Speak to Warden Elara beside the beacon.' : 'Your journey continues.'}` };
+    attackAt: -100, abilityAt: -100, recoveryAt: -100, hurtAt: -100, vendor: null, arrivedAt: 0, input: { x: 0, z: 0 }, inputAt: 0,
+    message: `Welcome to ${ZONES[zoneId].name}. ${zoneId === HOME_ZONE || zoneId === VALLEY_ID ? 'Speak to Warden Elara beside the beacon.' : 'Your journey continues.'}` };
 }
 export const maxHealthFor = (cls, level) => (CLASSES[cls]?.health ?? 100) + (level - 1) * 10;
 export function heroDamage(hero) {
@@ -167,7 +184,7 @@ export function heroDamage(hero) {
 export const heroArmor = hero => ITEMS[hero.equipped.armor]?.armor ?? 0;
 export function saveHero(hero) {
   const { gold, xp, inventory, equipped, quests, gathered, deaths } = hero;
-  return structuredClone({ version: REALM_VERSION, class: hero.class, zone: hero.zone, gold, xp, inventory, equipped, quests, gathered, deaths });
+  return structuredClone({ version: REALM_VERSION, class: hero.class, appearance: hero.appearance, zone: hero.zone, gold, xp, inventory, equipped, quests, gathered, deaths });
 }
 /** Objective progress for the HUD: label, current, count. */
 export function questObjectives(hero, questId) {
@@ -183,7 +200,7 @@ export class RealmWorld {
   effectId = 0;
   enemies = Object.entries(ZONES).flatMap(([zoneId, zone]) => zone.spawns.map(spawn => ({
     id: spawn.id, zone: zoneId, kind: spawn.kind, name: ENEMIES[spawn.kind].name, boss: Boolean(ENEMIES[spawn.kind].boss),
-    x: spawn.x, z: spawn.z, yaw: 0, spawnX: spawn.x, spawnZ: spawn.z, health: ENEMIES[spawn.kind].health, maxHealth: ENEMIES[spawn.kind].health,
+    x: spawn.x, y: groundHeight(zoneId, spawn.x, spawn.z), z: spawn.z, yaw: 0, spawnX: spawn.x, spawnZ: spawn.z, health: ENEMIES[spawn.kind].health, maxHealth: ENEMIES[spawn.kind].health,
     respawnAt: 0, hitAt: -100, attackAt: -100, burstAt: 0, nextBurstAt: 0, targetId: null, hurtBy: new Set(),
   })));
   join(id, name, saved, options) {
@@ -214,7 +231,7 @@ export class RealmWorld {
     if (inSanctuary(zone, hero)) return;
     hero.health = Math.max(0, hero.health - Math.max(1, amount - heroArmor(hero))); hero.hurtAt = this.time;
     if (hero.health > 0) return;
-    hero.deaths++; hero.x = zone.spawn.x; hero.z = zone.spawn.z; hero.yaw = zone.spawn.yaw; hero.health = hero.maxHealth; hero.input = { x: 0, z: 0 };
+    hero.deaths++; hero.x = zone.spawn.x; hero.z = zone.spawn.z; hero.y = groundHeight(hero.zone, hero.x, hero.z); hero.yaw = zone.spawn.yaw; hero.health = hero.maxHealth; hero.input = { x: 0, z: 0 };
     hero.message = `${source} struck you down. The waystone light carried you back. Your items are safe.`;
     this.effect(hero.zone, 'death', { x: hero.x, z: hero.z });
     for (const enemy of this.enemies) if (enemy.targetId === hero.id) enemy.targetId = null;
@@ -247,6 +264,12 @@ export class RealmWorld {
       const length = Math.max(1, Math.hypot(x, z));
       hero.input = { x: x / length, z: z / length }; hero.inputAt = this.time; return;
     }
+    if (command.type === 'recover') {
+      if (this.time - hero.recoveryAt < 14) { hero.message = 'Second wind is recharging.'; return; }
+      if (hero.health >= hero.maxHealth) { hero.message = 'You are already at full health.'; return; }
+      hero.recoveryAt = this.time; hero.health = Math.min(hero.maxHealth, hero.health + hero.maxHealth * .3);
+      this.effect(hero.zone, 'heal', { x: hero.x, z: hero.z }); hero.message = 'Second wind restored 30% health.'; return;
+    }
     if (command.type === 'equip') {
       const item = ITEMS[command.item];
       if (!item?.slot || !(hero.inventory[command.item] > 0)) { hero.message = 'You do not own that.'; return; }
@@ -274,7 +297,7 @@ export class RealmWorld {
     if (command.type === 'interact') return this.interact(hero, zone);
     if (command.type === 'attack') {
       if (this.time - hero.attackAt < cls.basic.cooldown) return;
-      const target = this.zoneEnemies(hero.zone).filter(enemy => distance(hero, enemy) < cls.range + .6).sort((a, b) => distance(hero, a) - distance(hero, b))[0];
+      const target = this.zoneEnemies(hero.zone).filter(enemy => clearSight(hero.zone, hero, enemy) && distance(hero, enemy) < cls.range + .6).sort((a, b) => distance(hero, a) - distance(hero, b))[0];
       if (!target) { hero.message = cls.range > 3 ? `No enemy within range of ${cls.basic.name}.` : `Move within reach of an enemy to ${cls.basic.name.toLowerCase()}.`; return; }
       hero.attackAt = this.time; hero.yaw = Math.atan2(target.x - hero.x, target.z - hero.z);
       const damage = heroDamage(hero);
@@ -286,10 +309,10 @@ export class RealmWorld {
       if (this.time - hero.abilityAt < cls.ability.cooldown) { hero.message = `${cls.ability.name} is recharging.`; return; }
       let center = hero;
       if (cls.ability.shape === 'target') {
-        center = this.zoneEnemies(hero.zone).filter(enemy => distance(hero, enemy) < cls.range + .6).sort((a, b) => distance(hero, a) - distance(hero, b))[0];
+        center = this.zoneEnemies(hero.zone).filter(enemy => clearSight(hero.zone, hero, enemy) && distance(hero, enemy) < cls.range + .6).sort((a, b) => distance(hero, a) - distance(hero, b))[0];
         if (!center) { hero.message = `No enemy within range of ${cls.ability.name}.`; return; }
       }
-      const targets = this.zoneEnemies(hero.zone).filter(enemy => distance(center, enemy) < cls.ability.radius);
+      const targets = this.zoneEnemies(hero.zone).filter(enemy => clearSight(hero.zone, hero, enemy) && distance(center, enemy) < cls.ability.radius);
       if (!targets.length) { hero.message = `No enemies close enough for ${cls.ability.name}.`; return; }
       hero.abilityAt = this.time; hero.attackAt = this.time;
       if (center !== hero) hero.yaw = Math.atan2(center.x - hero.x, center.z - hero.z);
@@ -332,11 +355,11 @@ export class RealmWorld {
   }
   travel(hero, portal) {
     const target = ZONES[portal.to];
-    if (!hero.zones.includes(portal.to)) { hero.message = `${portal.name}: this world does not include ${target.name} yet. Open the Sunlit Reach template for every zone.`; return; }
+    if (!hero.zones.includes(portal.to)) { hero.message = `${portal.name}: this build does not include ${target.name}.`; return; }
     if (hero.level < target.level) { hero.message = `${portal.name}: reach level ${target.level} before travelling to ${target.name}.`; return; }
     const back = target.portals.find(p => p.to === hero.zone);
     const arrival = back ? { x: back.x, z: back.z + (back.z > target.spawn.z ? -2.5 : 2.5) } : target.spawn;
-    hero.zone = portal.to; hero.x = arrival.x; hero.z = arrival.z; hero.yaw = Math.atan2(target.spawn.x - arrival.x, target.spawn.z - arrival.z);
+    hero.zone = portal.to; hero.x = arrival.x; hero.z = arrival.z; hero.y = groundHeight(hero.zone, hero.x, hero.z); hero.yaw = Math.atan2(target.spawn.x - arrival.x, target.spawn.z - arrival.z);
     hero.input = { x: 0, z: 0 }; hero.vendor = null; hero.arrivedAt = this.time; hero.message = `Entering ${target.name}.`;
     for (const enemy of this.enemies) if (enemy.targetId === hero.id) enemy.targetId = null;
   }
@@ -345,8 +368,8 @@ export class RealmWorld {
     for (const hero of this.players.values()) {
       const zone = ZONES[hero.zone]; const speed = CLASSES[hero.class].speed;
       if (this.time - hero.inputAt > .4) hero.input = { x: 0, z: 0 };
-      hero.x = clamp(hero.x + hero.input.x * dt * speed, zone.bounds.minX, zone.bounds.maxX);
-      hero.z = clamp(hero.z + hero.input.z * dt * speed, zone.bounds.minZ, zone.bounds.maxZ);
+      moveOnGround(hero, hero.input.x * dt * speed, hero.input.z * dt * speed, zone.bounds);
+      hero.y = groundHeight(hero.zone, hero.x, hero.z);
       if (hero.input.x || hero.input.z) hero.yaw = Math.atan2(hero.input.x, hero.input.z);
       if (inSanctuary(zone, hero)) hero.health = Math.min(hero.maxHealth, hero.health + dt * 7);
       else if (this.time - hero.hurtAt > 6) hero.health = Math.min(hero.maxHealth, hero.health + dt * 1.5);
@@ -354,6 +377,7 @@ export class RealmWorld {
     }
     for (const enemy of this.enemies) {
       const kind = ENEMIES[enemy.kind]; const zone = ZONES[enemy.zone];
+      enemy.y = groundHeight(enemy.zone, enemy.x, enemy.z);
       if (enemy.health <= 0) {
         if (this.time >= enemy.respawnAt) Object.assign(enemy, { x: enemy.spawnX, z: enemy.spawnZ, health: kind.health, targetId: null, burstAt: 0, nextBurstAt: 0 });
         continue;
@@ -369,14 +393,14 @@ export class RealmWorld {
         // Leash: walk home and recover.
         enemy.targetId = null; enemy.burstAt = 0;
         const d = distance(enemy, home);
-        if (d > .2) { enemy.x += (home.x - enemy.x) / d * dt * kind.speed * 1.5; enemy.z += (home.z - enemy.z) / d * dt * kind.speed * 1.5; enemy.yaw = Math.atan2(home.x - enemy.x, home.z - enemy.z); }
+        if (d > .2) { moveOnGround(enemy, (home.x - enemy.x) / d * dt * kind.speed * 1.5, (home.z - enemy.z) / d * dt * kind.speed * 1.5, zone.bounds); enemy.yaw = Math.atan2(home.x - enemy.x, home.z - enemy.z); }
         else if (enemy.health < enemy.maxHealth) { enemy.health = Math.min(enemy.maxHealth, enemy.health + dt * enemy.maxHealth * .1); if (enemy.health === enemy.maxHealth) enemy.hurtBy.clear(); }
         continue;
       }
       const d = distance(target, enemy);
       enemy.yaw = Math.atan2(target.x - enemy.x, target.z - enemy.z);
-      if (d > kind.attackRange * .8) { enemy.x += (target.x - enemy.x) / d * dt * kind.speed; enemy.z += (target.z - enemy.z) / d * dt * kind.speed; }
-      if (d < kind.attackRange && this.time - enemy.attackAt > kind.attackCooldown) {
+      if (d > kind.attackRange * .8) { moveOnGround(enemy, (target.x - enemy.x) / d * dt * kind.speed, (target.z - enemy.z) / d * dt * kind.speed, zone.bounds); }
+      if (d < kind.attackRange && clearSight(enemy.zone, enemy, target) && this.time - enemy.attackAt > kind.attackCooldown) {
         enemy.attackAt = this.time; this.effect(enemy.zone, 'enemyhit', { x: target.x, z: target.z });
         this.hurtHero(target, kind.damage, kind.name);
       }
@@ -394,8 +418,8 @@ export class RealmWorld {
   snapshot(id) {
     const self = this.players.get(id); const zone = self?.zone ?? HOME_ZONE;
     return { version: REALM_VERSION, time: this.time, selfId: id, zone, online: this.players.size,
-      players: [...this.players.values()].filter(p => p.zone === zone).map(({ input, inputAt, zones, ...p }) => structuredClone(p)),
-      enemies: this.enemies.filter(e => e.zone === zone).map(({ hurtBy, targetId, spawnX, spawnZ, ...e }) => ({ ...e, engaged: hurtBy.size })),
-      effects: this.effects.filter(e => e.zone === zone).map(({ zone: _zone, ...e }) => ({ ...e })) };
+      players: [...this.players.values()].filter(p => p.zone === zone && (!self || p.id === id || distance(p, self) < 65)).map(({ input, inputAt, zones, ...p }) => structuredClone(p)),
+      enemies: this.enemies.filter(e => e.zone === zone && (!self || distance(e, self) < 75)).map(({ hurtBy, targetId, spawnX, spawnZ, ...e }) => ({ ...e, y: groundHeight(e.zone, e.x, e.z), engaged: hurtBy.size })),
+      effects: this.effects.filter(e => e.zone === zone && (!self || distance(e, self) < 75)).map(({ zone: _zone, ...e }) => ({ ...e })) };
   }
 }

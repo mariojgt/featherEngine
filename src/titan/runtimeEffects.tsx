@@ -1,3 +1,4 @@
+import { groundHeight } from '../../examples/titan-mmo/server/valley.mjs';
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -30,8 +31,8 @@ function setGroupOpacity(group: THREE.Group | null, opacity: number) {
 /** Seconds since the effect was created, read live so visuals stay smooth between 20 Hz snapshots. */
 const sinceEffect = (at: number) => (useRealm.getState().snapshot?.time ?? at) - at;
 
-export function TitanEffects({ effects }: { effects: readonly Effect[] }) {
-  return <>{effects.map(effect => <EffectView key={effect.id} effect={effect} />)}</>;
+export function TitanEffects({ effects, zone = 'ember-meadow' }: { effects: readonly Effect[]; zone?: string }) {
+  return <>{effects.map(effect => <group key={effect.id} position={[0, groundHeight(zone, effect.x, effect.z), 0]}><EffectView effect={effect} /></group>)}</>;
 }
 
 function EffectView({ effect }: { effect: Effect }) {

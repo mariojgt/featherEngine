@@ -1237,7 +1237,7 @@ async function buildEmberMeadowPack() {
   const sword = await externalAsset('ember-sword', 'templates/Sword.glb', 'model');
   const content = emberMeadowContent();
   const zipFiles = {};
-  for (const path of ['package.json', 'README.md', '.env.example', 'LICENSE', 'server/launch.mjs', 'server/server.mjs', 'server/world.mjs', 'server/server.test.mjs']) {
+  for (const path of ['package.json', 'README.md', '.env.example', 'LICENSE', 'server/launch.mjs', 'server/server.mjs', 'server/world.mjs', 'server/valley.mjs', 'server/appearance.mjs', 'server/server.test.mjs', 'server/valley.test.mjs']) {
     zipFiles[`ember-meadow-server/${path}`] = [new Uint8Array(await readFile(join(ROOT, 'examples/titan-mmo', path))), { mtime: new Date(EPOCH) }];
   }
   await mkdir(join(OUT_DIR, 'downloads'), { recursive: true });
@@ -1250,17 +1250,16 @@ async function buildEmberMeadowPack() {
 }
 
 /**
- * The three-zone template. Same two bundled assets as Ember Meadow (one animated adventurer, one
- * sword) — the extra content is scenes, not megabytes — and no server ZIP: the Titan panel starts
- * a managed realm, so nobody needs the source server to play all three zones.
+ * The continuous-valley template embeds its terrain, scenery, animated avatar and sword.
+ * The Titan panel starts the managed realm; online exports also include the matching server.
  */
 async function buildSunlitReachPack() {
   const avatar = await externalAsset('sunlit-avatar', 'templates/UAL1.glb', 'model');
   const sword = await externalAsset('sunlit-sword', 'templates/Sword.glb', 'model');
   return { slug: 'sunlit-reach', kind: 'project', content: sunlitReachContent(),
     assets: [avatar.asset, sword.asset], assetBytes: new Map([[avatar.asset.id, avatar.bytes], [sword.asset.id, sword.bytes]]),
-    meta: { id: 'pkg-feather-sunlit-reach', name: 'Sunlit Reach — Mini MMO', version: '1.0.0', author: 'Feather / TheDevRealm', license: 'MIT + bundled asset licenses',
-      description: 'A free three-zone MMO template: Warrior, Ranger and Mage classes with their own abilities, a hub village with a vendor, the Thornwood, and Cinder Keep with a telegraphed boss. Three chapter quests, waystone travel between zones, zone chat, an intro cinematic per zone, saved progress and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.',
+    meta: { id: 'pkg-feather-sunlit-reach', name: 'Sunlit Reach — Mini MMO', version: '1.1.0', author: 'Feather / TheDevRealm', license: 'MIT + bundled asset licenses',
+      description: 'A continuous 192 m valley with a village, woodland and ruined keep. Create an armored adventurer with color and headpiece choices; play Warrior, Ranger or Mage with animated attacks, a class skill and Second Wind. Shared terrain and solid collisions, three quests, a boss, realm chat, saved appearance and progress, and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.',
       tags: ['project', 'mmo', 'rpg', 'multiplayer', 'titan', 'classes', 'boss', 'cinematic'], thumbnail: thumbnail('#e0803f', '#2b1b3d', '\u265B') } };
 }
 

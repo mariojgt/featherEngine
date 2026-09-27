@@ -420,9 +420,9 @@
         ]
       },
       "title": "Sunlit Reach — Mini MMO",
-      "description": "A free three-zone MMO template: Warrior, Ranger and Mage classes with their own abilities, a hub village with a vendor, the Thornwood, and Cinder Keep with a telegraphed boss. Three chapter quests, waystone travel between zones, zone chat, an intro cinematic per zone, saved progress and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.",
+      "description": "A continuous 192 m valley with a village, woodland and ruined keep. Create an armored adventurer with color and headpiece choices; play Warrior, Ranger or Mage with animated attacks, a class skill and Second Wind. Shared terrain and solid collisions, three quests, a boss, realm chat, saved appearance and progress, and Titan guest or email accounts. One realm per build, 32-player connection cap; not a production-scale MMO.",
       "author": "Feather / TheDevRealm",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "kind": "project",
       "tags": [
         "project",
@@ -437,7 +437,7 @@
       "license": "MIT + bundled asset licenses",
       "priceCents": 0,
       "thumbnail": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZTA4MDNmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMmIxYjNkIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjEyOCIgaGVpZ2h0PSIxMjgiIHJ4PSIxNiIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjY0IiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjU2IiBmb250LXdlaWdodD0iNzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjZmZmZmZmIiBmaWxsLW9wYWNpdHk9IjAuOTIiPuKZmzwvdGV4dD48L3N2Zz4=",
-      "sizeBytes": 8698238,
+      "sizeBytes": 8712472,
       "downloadUrl": "packages/projects/sunlit-reach.nfpack",
       "engineVersion": "0.8.0",
       "contents": {
@@ -445,7 +445,7 @@
         "materials": 0,
         "blueprints": 0,
         "assets": 2,
-        "scenes": 3,
+        "scenes": 1,
         "uiDocuments": 0
       }
     },

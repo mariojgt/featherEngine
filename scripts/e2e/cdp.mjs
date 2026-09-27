@@ -209,6 +209,10 @@ export async function launch({ width = 1600, height = 1000, hostResolverRules, i
           delay(2_000),
         ]);
       }
+      // Chrome helpers can inherit these diagnostic pipes and outlive the browser process.
+      // Release our ends after shutdown so an otherwise-finished spec can exit normally.
+      chrome.stdout?.destroy();
+      chrome.stderr?.destroy();
       // A leftover temp dir is never worth failing a test over — the OS reaps it.
       try {
         rmSync(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });

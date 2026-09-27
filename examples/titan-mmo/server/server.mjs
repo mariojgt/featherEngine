@@ -123,7 +123,7 @@ export async function startRealm(options = {}) {
           session = ticket; clearTimeout(authTimer);
           // The client may state its class for a new character and which zone scenes its build contains.
           const zones = Array.isArray(command.zones) ? command.zones.filter(zone => typeof zone === 'string').slice(0, 16) : undefined;
-          world.join(session.id, session.name, records[session.id]?.progress, { class: typeof command.class === 'string' ? command.class : undefined, zones }); peers.set(session.id, ws);
+          world.join(session.id, session.name, records[session.id]?.progress, { class: typeof command.class === 'string' ? command.class : undefined, appearance: command.appearance, zones }); peers.set(session.id, ws);
           send({ type: 'snapshot', data: world.snapshot(session.id) }); return;
         }
         if (command?.type === 'save') {

@@ -68,7 +68,7 @@ export async function connectRealm(url: string, details: { name: string; mode: '
     const joinTimeout = setTimeout(() => { socket.close(); if (generation === run) useRealm.setState({ status: 'disconnected', message: 'The realm did not respond. Try again.' }); }, 10000);
     // The class picked on the login screen only applies to a brand new character; `zones` tells the
     // server which zone scenes this build actually contains so it never offers an unreachable waystone.
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'join', ticket: data.ticket, class: options.class, zones: options.zones }));
+    socket.onopen = () => socket.send(JSON.stringify({ type: 'join', ticket: data.ticket, class: options.class, appearance: options.appearance, zones: options.zones }));
     socket.onmessage = event => {
       if (generation !== run) return;
       try {

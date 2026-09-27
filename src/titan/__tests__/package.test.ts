@@ -31,29 +31,29 @@ describe('Ember Meadow starter', () => {
 });
 
 describe('Sunlit Reach starter', () => {
-  it('survives the archive with three zone scenes, their cinematics and the shared assets', async () => {
+  it('survives the archive with one continuous valley, its cinematic and the shared assets', async () => {
     const bytes = await readFile('public/store/packages/projects/sunlit-reach.nfpack');
     const archive = await readPackageFile(new Uint8Array(bytes));
     const remapped = remapPackageForImport(archive.pkg);
     const scenes = remapped.content.scenes!;
-    expect(scenes).toHaveLength(3);
+    expect(scenes).toHaveLength(1);
     expect(scenes.every(scene => isTitanScene(scene.objects))).toBe(true);
     // The `Realm zone · <id>` markers are plain object names, so import remapping cannot lose them.
-    expect(Object.keys(titanZoneScenes(scenes)).sort()).toEqual(['cinder-keep', 'ember-meadow', 'thornwood']);
+    expect(Object.keys(titanZoneScenes(scenes)).sort()).toEqual(['sunlit-valley']);
     expect(Object.values(titanZoneScenes(scenes))).toEqual(expect.arrayContaining(scenes.map(scene => scene.id)));
     for (const scene of scenes) {
       expect(scene.cinematics).toHaveLength(1);
       const [cinematic] = scene.cinematics!;
       expect(cinematic.autoplay).toBe(true);
       // Ids are remapped on import, so the authored ones must NOT survive verbatim.
-      expect(cinematic.id.startsWith('sunlit-cine-')).toBe(false);
+      expect(cinematic.id.startsWith('sunlit-vale-')).toBe(false);
       expect(cinematic.actions.some(action => action.type === 'camera' && (action.keyframes?.length ?? 0) >= 3)).toBe(true);
     }
     expect(readTitanSettings(remapped.content.variables)).toMatchObject({ realmUrl: 'http://127.0.0.1:8787', baseUrl: '', gameKey: '', publishMode: 'practice', gameOrigin: '' });
     expect(archive.bytes.size).toBe(2);
     expect(remapped.assets.map(a => a.name)).toEqual(expect.arrayContaining(['UAL1.glb', 'Sword.glb']));
     const project = { ...blankProject('Sunlit Reach'), ...remapped.content, assets: remapped.assets, scenes };
-    expect(detectRuntimeFeatures(project)).toEqual(expect.arrayContaining(['titan-realm', 'multi-scene']));
+    expect(detectRuntimeFeatures(project)).toEqual(expect.arrayContaining(['titan-realm']));
     expect(collectReferencedAssetIds(project).referenced.size).toBe(2);
   });
 });

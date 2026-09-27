@@ -1,3 +1,5 @@
+import { ARMOR_COLORS, TRIM_COLORS, normalizeAppearance, type Appearance } from '../../examples/titan-mmo/server/appearance.mjs';
+import { groundHeight } from '../../examples/titan-mmo/server/valley.mjs';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html, useGLTF } from '@react-three/drei';
@@ -43,15 +45,47 @@ function resolveClip(animations: readonly THREE.AnimationClip[], name: string) {
   return animations[0];
 }
 
-export function Avatar({ url, pose, height = 1.8, override }: { url: string; pose: AvatarPose; height?: number; override?: THREE.Material }) {
+export function Avatar({ url, pose, height = 1.8, override, appearance }: { url: string; pose: AvatarPose; height?: number; override?: THREE.Material; appearance?: Appearance }) {
   const model = useGLTF(url);
   const clone = useMemo(() => SkeletonUtils.clone(model.scene), [model.scene]);
   const mixer = useMemo(() => new THREE.AnimationMixer(clone), [clone]);
   const size = useMemo(() => { const box = new THREE.Box3().setFromObject(clone); return { scale: height / Math.max(0.1, box.max.y - box.min.y), minY: box.min.y }; }, [clone, height]);
   useEffect(() => {
-    if (!override) return;
-    clone.traverse(child => { if ((child as THREE.Mesh).isMesh) (child as THREE.Mesh).material = override; });
-  }, [clone, override]);
+    const owned: THREE.Material[] = [];
+    const originals = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+    const look = normalizeAppearance(appearance);
+    clone.traverse(child => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      originals.set(mesh, mesh.material);
+      if (override) { mesh.material = override; return; }
+      if (!appearance) return;
+      const tint = (source: THREE.Material) => {
+        const material = source.clone() as THREE.MeshStandardMaterial;
+        if (material.color) material.color.set(source.name === 'M_Joints' ? TRIM_COLORS[look.trim] : ARMOR_COLORS[look.armor]);
+        owned.push(material); return material;
+      };
+      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(tint) : tint(mesh.material);
+    });
+    let ornament: THREE.Mesh | undefined;
+    const head = clone.getObjectByName('Head');
+    if (head && appearance && look.headpiece !== 'none') {
+      const geometry = look.headpiece === 'crest' ? new THREE.BoxGeometry(.08, .22, .25) : new THREE.CylinderGeometry(.14, .12, .1, 8, 1, true);
+      const material = new THREE.MeshStandardMaterial({ color: TRIM_COLORS[look.trim], metalness: .5, roughness: .45 });
+      ornament = new THREE.Mesh(geometry, material);
+      // Attach in model coordinates, cancelling any scale inherited from imported skeleton bones.
+      clone.updateWorldMatrix(true, true);
+      const scale = head.getWorldScale(new THREE.Vector3());
+      ornament.scale.set(1 / scale.x, 1 / scale.y, 1 / scale.z);
+      ornament.position.set(0, .2 / scale.y, 0);
+      head.add(ornament);
+    }
+    return () => {
+      originals.forEach((material, mesh) => { mesh.material = material; });
+      owned.forEach(material => material.dispose());
+      if (ornament) { ornament.removeFromParent(); ornament.geometry.dispose(); (ornament.material as THREE.Material).dispose(); }
+    };
+  }, [clone, override, appearance?.armor, appearance?.trim, appearance?.headpiece]);
   useEffect(() => {
     const clip = resolveClip(model.animations, pose.name);
     if (!clip) return;
@@ -105,7 +139,7 @@ export function HeroView({ hero, local, time, url, swordUrl, healAt }: { hero: H
   const sinceHurt = time - hero.hurtAt;
   const sinceAbility = time - hero.abilityAt;
   const sinceAttack = time - hero.attackAt;
-  const sinceHeal = time - healAt;
+  const sinceHeal = time - Math.max(healAt, hero.recoveryAt ?? -100);
   const pose: AvatarPose =
     sinceHurt >= 0 && sinceHurt < 0.45 ? { name: 'Hit_Chest', loop: false, nonce: hero.hurtAt }
     : sinceAbility >= 0 && sinceAbility < ABILITY_LENGTH[hero.class] ? { name: ABILITY_CLIP[hero.class], loop: false, nonce: hero.abilityAt }
@@ -114,16 +148,16 @@ export function HeroView({ hero, local, time, url, swordUrl, healAt }: { hero: H
     : { name: moving ? 'Jog_Fwd_Loop' : 'Idle_Loop', loop: true, nonce: 0 };
   useFrame((_, dt) => {
     if (!group.current) return;
-    group.current.position.lerp(target.set(hero.x, 0.02, hero.z), 1 - Math.exp(-Math.min(dt, 0.1) * FOLLOW_LAG));
+    group.current.position.lerp(target.set(hero.x, (hero.y ?? 0) + 0.02, hero.z), 1 - Math.exp(-Math.min(dt, 0.1) * FOLLOW_LAG));
     group.current.rotation.y = hero.yaw;
     const live = useRealm.getState().snapshot?.time ?? time;
     if (blade.current) blade.current.rotation.x = live - hero.attackAt < 0.35 ? -1.5 + Math.sin((live - hero.attackAt) * 10) * 1.5 : -0.3;
   });
   const glow = hero.equipped.weapon === 'warden-blade' ? '#a9e3ff' : hero.equipped.weapon === 'ashen-greatblade' ? '#ff9a5b' : undefined;
-  return <group ref={group} position={[hero.x, 0.02, hero.z]}>
+  return <group ref={group} position={[hero.x, (hero.y ?? 0) + 0.02, hero.z]}>
     {url
-      ? <Suspense fallback={<mesh position={[0, 0.9, 0]}><capsuleGeometry args={[0.28, 1, 5, 8]} /><meshStandardMaterial color={local ? '#dbbb68' : '#79bcbd'} /></mesh>}><Avatar url={url} pose={pose} /></Suspense>
-      : <mesh position={[0, 0.9, 0]}><capsuleGeometry args={[0.28, 1, 5, 8]} /><meshStandardMaterial color={local ? '#dbbb68' : '#79bcbd'} /></mesh>}
+      ? <Suspense fallback={<mesh position={[0, 0.9, 0]}><capsuleGeometry args={[0.28, 1, 5, 8]} /><meshStandardMaterial color={ARMOR_COLORS[normalizeAppearance(hero.appearance).armor]} /></mesh>}><Avatar url={url} pose={pose} appearance={hero.appearance} /></Suspense>
+      : <mesh position={[0, 0.9, 0]}><capsuleGeometry args={[0.28, 1, 5, 8]} /><meshStandardMaterial color={ARMOR_COLORS[normalizeAppearance(hero.appearance).armor]} /></mesh>}
     <group ref={blade} position={[0.38, 0.8, 0.15]}>
       <ClassWeapon hero={hero} swordUrl={swordUrl} />
       {glow && <pointLight color={glow} intensity={1.2} distance={2} />}
@@ -150,30 +184,31 @@ function npcMarker(npc: NpcDef, hero: Hero | undefined): { glyph: string; ready:
   return { glyph: '?', ready: done, hint: done ? 'E · Turn in' : 'E · Speak' };
 }
 
-export function NpcView({ npc, hero, url }: { npc: NpcDef; hero: Hero | undefined; url?: string }) {
+export function NpcView({ npc, hero, url, zone = 'ember-meadow' }: { npc: NpcDef; hero: Hero | undefined; url?: string; zone?: ZoneId }) {
   const marker = npcMarker(npc, hero);
-  return <group position={[npc.x, 0, npc.z]}>
+  const showLabel = hero && Math.hypot(npc.x - hero.x, npc.z - hero.z) < 28;
+  return <group position={[npc.x, groundHeight(zone, npc.x, npc.z), npc.z]}>
     {url
       ? <Suspense fallback={<mesh position={[0, 0.8, 0]}><capsuleGeometry args={[0.3, 1, 6, 10]} /><meshStandardMaterial color="#7d9870" roughness={0.8} /></mesh>}>
           <Avatar url={url} pose={npc.role === 'vendor' ? IDLE_POSE : TALKING_POSE} />
         </Suspense>
       : <><mesh position={[0, 0.8, 0]}><capsuleGeometry args={[0.3, 1, 6, 10]} /><meshStandardMaterial color="#7d9870" roughness={0.8} /></mesh>
         <mesh position={[0, 1.7, 0]}><sphereGeometry args={[0.22, 12, 8]} /><meshStandardMaterial color="#e3b983" /></mesh></>}
-    {marker && <Html position={[0, 2.85, 0]} center zIndexRange={[11, 0]} style={{ pointerEvents: 'none' }}>
+    {showLabel && marker && <Html position={[0, 2.85, 0]} center zIndexRange={[11, 0]} style={{ pointerEvents: 'none' }}>
       <div className={`titan-marker${marker.ready ? '' : ' titan-marker-dim'}`}>{marker.glyph}</div>
     </Html>}
-    <Html position={[0, 2.3, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+    {showLabel && <Html position={[0, 2.3, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
       <div className="titan-label">{npc.name}<small>{npc.title}</small>{marker && <small className="titan-label-hint">{marker.hint}</small>}</div>
-    </Html>
+    </Html>}
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}><ringGeometry args={[0.4, 0.45, 24]} /><meshBasicMaterial color="#cbe0b6" transparent opacity={0.45} /></mesh>
   </group>;
 }
 
-export function GatherableView({ node }: { node: GatherableDef }) {
+export function GatherableView({ node, zone = 'ember-meadow', showLabel = true }: { node: GatherableDef; zone?: ZoneId; showLabel?: boolean }) {
   const spin = useRef<THREE.Group>(null);
   useFrame((_, dt) => { if (spin.current) spin.current.rotation.y += dt * 0.8; });
   const petal = node.item === 'moonpetal';
-  return <group position={[node.x, petal ? 0.35 : 0.9, node.z]}>
+  return <group position={[node.x, groundHeight(zone, node.x, node.z) + (petal ? 0.35 : 0.9), node.z]}>
     <group ref={spin}>
       {petal
         ? <>
@@ -186,9 +221,9 @@ export function GatherableView({ node }: { node: GatherableDef }) {
         : <mesh rotation={[0, Math.PI / 4, 0.2]} castShadow><octahedronGeometry args={[0.5, 0]} /><meshStandardMaterial color="#ffe08b" emissive="#edae37" emissiveIntensity={1.2} metalness={0.3} roughness={0.25} /></mesh>}
     </group>
     <pointLight color={petal ? '#8ec3ff' : '#edc358'} intensity={petal ? 1.4 : 2} distance={petal ? 2.4 : 3} />
-    <Html position={[0, petal ? 0.9 : 1, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+    {showLabel && <Html position={[0, petal ? 0.9 : 1, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
       <div className="titan-label">{ITEMS[node.item].name}<small>E · Gather</small></div>
-    </Html>
+    </Html>}
   </group>;
 }
 
@@ -218,7 +253,7 @@ const ENEMY_TINT: Record<EnemyKind, { color: string; emissive: string }> = {
   boss: { color: '#3a3330', emissive: '#ff5a1e' },
 };
 
-export function EnemyView({ enemy, time, url }: { enemy: Enemy; time: number; url?: string }) {
+export function EnemyView({ enemy, time, url, showLabel = true }: { enemy: Enemy; time: number; url?: string; showLabel?: boolean }) {
   const group = useRef<THREE.Group>(null);
   const telegraph = useRef<THREE.Mesh>(null);
   const target = useMemo(() => new THREE.Vector3(enemy.x, 0, enemy.z), []);
@@ -227,7 +262,7 @@ export function EnemyView({ enemy, time, url }: { enemy: Enemy; time: number; ur
   const hit = time - enemy.hitAt < 0.2;
   useFrame((_, dt) => {
     if (!group.current) return;
-    group.current.position.lerp(target.set(enemy.x, 0, enemy.z), 1 - Math.exp(-Math.min(dt, 0.1) * 12));
+    group.current.position.lerp(target.set(enemy.x, enemy.y ?? 0, enemy.z), 1 - Math.exp(-Math.min(dt, 0.1) * 12));
     group.current.rotation.y = enemy.yaw;
     if (!telegraph.current) return;
     const live = useRealm.getState().snapshot?.time ?? time;
@@ -237,18 +272,18 @@ export function EnemyView({ enemy, time, url }: { enemy: Enemy; time: number; ur
     const grown = Math.max(0, Math.min(1, 1 - (enemy.burstAt - live) / burst.telegraph));
     telegraph.current.scale.setScalar(Math.max(0.05, burst.radius * grown));
   });
-  return <group ref={group} position={[enemy.x, 0, enemy.z]}>
+  return <group ref={group} position={[enemy.x, enemy.y ?? 0, enemy.z]}>
     {enemy.boss
       ? <BossBody enemy={enemy} url={url} hit={hit} time={time} />
       : enemy.kind === 'boar' ? <BoarBody tint={tint} hit={hit} /> : <WispBody tint={tint} hit={hit} />}
     {kind.burst && <mesh ref={telegraph} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]} visible={false}>
       <ringGeometry args={[0.82, 1, 44]} /><meshBasicMaterial color="#ff4a32" transparent opacity={0.55} side={THREE.DoubleSide} depthWrite={false} />
     </mesh>}
-    <Html position={[0, enemy.boss ? 4.7 : enemy.kind === 'boar' ? 1.5 : 1.9, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+    {showLabel && <Html position={[0, enemy.boss ? 4.7 : enemy.kind === 'boar' ? 1.5 : 1.9, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
       <div className={`titan-label${enemy.boss ? ' titan-label-boss' : ''}`}>{enemy.name}
         <div className="titan-enemy-health"><i style={{ width: `${Math.max(0, (enemy.health / enemy.maxHealth) * 100)}%` }} /></div>
       </div>
-    </Html>
+    </Html>}
   </group>;
 }
 
