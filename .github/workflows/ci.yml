@@ -51,6 +51,8 @@ jobs:
             sleep 1
           done
           npm run test:beginner
+          npm run test:recovery
+          npm run test:cube-rpg
           npm run test:lux
 
       - name: Preserve browser acceptance artifacts
@@ -61,6 +63,8 @@ jobs:
           path: |
             exports/beginner-acceptance/
             exports/lux-acceptance/
+            exports/recovery-acceptance/
+            exports/cube-rpg-acceptance/
           if-no-files-found: ignore
 
   rust:
@@ -99,3 +103,6 @@ jobs:
       - name: Run Clippy
         # One cfg-specific needless-return warning predates this workflow; all other warnings fail.
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets --all-features -- -D warnings -A clippy::needless-return
+
+      - name: Verify project save interruptions and recovery
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib project_snapshot

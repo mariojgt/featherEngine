@@ -927,6 +927,17 @@ button {
   color: var(--muted);
 }
 
+.status-bar__recovery--saving,
+.status-bar__recovery--pending { color: var(--warning); }
+.status-bar__recovery--saved { color: var(--success); }
+.status-bar__recovery--unavailable {
+  color: var(--danger);
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* App-wide toast stack (bottom-centre, above the status bar). */
 .toast-host {
   position: fixed;

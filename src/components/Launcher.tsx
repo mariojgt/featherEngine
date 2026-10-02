@@ -1,5 +1,5 @@
 import './Launcher.css';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -18,7 +18,7 @@ import {
 import { getPlatform, isDesktop } from '../platform';
 import { useProjectStore } from '../store/projectStore';
 import { useEditorStore } from '../store/editorStore';
-import { clearRecovery, readRecovery } from '../store/autosave';
+import { clearRecovery, readRecovery, subscribeRecoveryStatus, getRecoveryStatus } from '../store/autosave';
 import { useMarketplaceStore } from '../store/marketplaceStore';
 import { formatSize, matchesQuery, type StoreListing } from '../marketplace/catalog';
 import { CREATOR_QUICK_STARTS, type CreatorQuickStart } from '../creator/gameTemplates';
@@ -59,7 +59,13 @@ export function Launcher() {
   const busy = useProjectStore((state) => state.busy);
   const error = useProjectStore((state) => state.error);
   const restoreRecovery = useProjectStore((state) => state.restoreRecovery);
-  const [recovery, setRecovery] = useState(() => readRecovery());
+  const recoveryStatus = useSyncExternalStore(subscribeRecoveryStatus, getRecoveryStatus, getRecoveryStatus);
+  const [recovery, setRecovery] = useState<Awaited<ReturnType<typeof readRecovery>>>(null);
+  useEffect(() => {
+    let current = true;
+    void readRecovery().then((snapshot) => { if (current) setRecovery(snapshot); });
+    return () => { current = false; };
+  }, []);
 
   const loadCatalog = useMarketplaceStore((state) => state.load);
   const catalogStatus = useMarketplaceStore((state) => state.status);
@@ -284,6 +290,12 @@ export function Launcher() {
                 <span>{error}</span>
               </div>
             )}
+            {recoveryStatus.state === 'unavailable' && (
+              <div className="hub-error" role="alert">
+                <AlertTriangle size={16} aria-hidden />
+                <span>Recovery unavailable: {recoveryStatus.reason}</span>
+              </div>
+            )}
             {busy && (
               <div className="hub-busy" role="status">
                 Opening your workspace…
@@ -307,7 +319,7 @@ export function Launcher() {
                 </label>
               </div>
               <div className="hub-basics">
-                {[...offlineStarts].reverse().map((quickStart) => (
+                {[...offlineStarts].sort((a, b) => Number(b.id === 'cube-rpg') - Number(a.id === 'cube-rpg')).map((quickStart) => (
                   <button
                     type="button"
                     key={quickStart.id}
@@ -410,7 +422,7 @@ export function Launcher() {
                 <div className="hub-catalog-message hub-catalog-error" role="alert">
                   <div>
                     <strong>Starter worlds couldn't load.</strong>
-                    <p>Blank, Platformer, Parcel Panic, Lumen Lane and Tower Defense are ready to use offline.</p>
+                    <p>Blank, Platformer, Cube RPG, Parcel Panic, Lumen Lane and Tower Defense are ready to use offline.</p>
                     <details>
                       <summary>Error details</summary>
                       <p>{catalogError}</p>
@@ -431,7 +443,7 @@ export function Launcher() {
                       </button>
                     </>
                   ) : (
-                    'More starter worlds will appear here. Blank, Platformer, Parcel Panic, Lumen Lane and Tower Defense are ready above.'
+                    'More starter worlds will appear here. Blank, Platformer, Cube RPG, Parcel Panic, Lumen Lane and Tower Defense are ready above.'
                   )}
                 </div>
               )}

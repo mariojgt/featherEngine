@@ -987,6 +987,12 @@ export function NodeForgeGraphNode({ id, data, selected }: NodeProps<NodeForgeNo
       )}
 
       {/* On Land: Speed = impact speed (u/s). */}
+      {data.nodeKind === 'event.update' && (
+        <>
+          <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>Delta time</span>
+          <Handle id="value-out" className="node-port value-port value-number source" type="source" position={Position.Right} style={{ top: pinTop + 2 }} />
+        </>
+      )}
       {data.nodeKind === 'event.land' && (
         <>
           <span className="nfn-pin-label" style={{ top: pinTop - 4 }}>

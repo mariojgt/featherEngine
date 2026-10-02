@@ -47,4 +47,10 @@ describe('Creator quick starts', () => {
     expect(blank?.templateSlug).toBeUndefined();
     expect(new Set(CREATOR_QUICK_STARTS.map((entry) => entry.id)).size).toBe(CREATOR_QUICK_STARTS.length);
   });
+
+  it('offers Cube RPG as a separate, offline built-in starter', () => {
+    expect(findCreatorQuickStart('cube-rpg')).toMatchObject({
+      label: 'Cube RPG', templateSlug: 'template-cube-rpg', builtInTemplate: 'cube-rpg',
+    });
+  });
 });

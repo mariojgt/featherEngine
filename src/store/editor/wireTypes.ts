@@ -19,8 +19,8 @@ export const outputTypeOf: Partial<Record<GraphNodeKind, GraphValueType>> = {
   'animator.getParam': 'number',
   'query.vehicleSpeed': 'number',
   'event.receiveDamage': 'number',
-  'event.land': 'number',
   'event.update': 'number',
+  'event.land': 'number',
   'value.string': 'string',
   'animator.getState': 'string',
   'value.boolean': 'boolean',
@@ -156,6 +156,7 @@ const inputTypeOverrides: Partial<
   'animator.setBool': { value: 'boolean' },
   'action.setPhysics': { enabled: 'boolean' },
   'action.setVisible': { visible: 'boolean' },
+  'action.setMaterialColor': { color: 'string' },
   'ui.setVisible': { visible: 'boolean' },
   'action.fireEvent': { payload: 'any' },
   // This factor is scalar; transform Scale pins use a Vector3 with the same handle name.

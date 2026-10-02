@@ -3,6 +3,7 @@ mod steam_publishing;
 mod production_runtime;
 mod titan_realm;
 mod build_centre;
+mod project_snapshot;
 
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -53,6 +54,37 @@ fn ensure_project_scope(app: &AppHandle, project_dir: &str) -> Result<(), String
     return Err("The project directory is outside Feather's authorized filesystem scope.".into());
   }
   Ok(())
+}
+
+#[tauri::command]
+async fn save_project_snapshot(
+  app: AppHandle,
+  project_dir: String,
+  manifest_json: String,
+  scene_jsons: Vec<String>,
+  expected_revision: Option<String>,
+) -> Result<project_snapshot::SaveResult, String> {
+  ensure_project_scope(&app, &project_dir)?;
+  tauri::async_runtime::spawn_blocking(move || {
+    project_snapshot::save_project(
+      std::path::Path::new(&project_dir),
+      &manifest_json,
+      &scene_jsons,
+      expected_revision.as_deref(),
+    )
+  }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn read_project_snapshot(
+  app: AppHandle,
+  project_dir: String,
+  previous: bool,
+) -> Result<project_snapshot::ReadResult, String> {
+  ensure_project_scope(&app, &project_dir)?;
+  tauri::async_runtime::spawn_blocking(move || {
+    project_snapshot::read_project(std::path::Path::new(&project_dir), previous)
+  }).await.map_err(|error| error.to_string())?
 }
 
 fn validate_project_relative_path(relative_path: &str) -> Result<Vec<String>, String> {
@@ -839,6 +871,8 @@ pub fn run() {
       reveal_in_explorer,
       read_project_text,
       write_project_text_atomic,
+      save_project_snapshot,
+      read_project_snapshot,
       start_collaboration,
       stop_collaboration,
       collaboration_status,

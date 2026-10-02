@@ -26,6 +26,7 @@ type TemplateKey =
   | 'last-light'
   | 'blackthorn'
   | 'verdant'
+  | 'cube-rpg'
   | 'platformer'
   | 'parcel-panic'
   | 'moba'
@@ -50,6 +51,14 @@ const TEMPLATES: Record<TemplateKey, TemplateDef> = {
     description: 'Runtime mesh cutting: a chrome blade slices one solid turquoise block into colliding rigid bodies that tumble into water. A twelve-second machine cycle replenishes stock under a fade.',
     tags: ['template', 'world', 'cinematic', 'loop', 'glass', 'water', 'studio'],
     build: async () => (await import('../project/crystalSliceTemplate')).createCrystalSliceTemplate(),
+  },
+  'cube-rpg': {
+    slug: 'template-cube-rpg',
+    title: 'Cube RPG — The Skyward Trials',
+    version: '1.2.0',
+    description: 'A playable cube knight adventure: equip a sword and shield, chain a 3-hit combo into a spinning finisher, plunge into ground slams, block committed telegraphed attacks, use potions and conquer three floating arenas with a final boss. Animated strides, wind-ups, hurt faces, recoil, material flashes, impact stars and camera kicks give combat weight. Asset-free stylized scenery, editable VFX, a reusable character prefab, HUD and complete adventure menus.',
+    tags: ['template', 'world', 'rpg', 'combat', 'stylized', 'beginner', 'cube', 'vfx'],
+    build: async () => (await import('../project/cubeRpgTemplate')).createCubeRpgTemplate(),
   },
   verdant: {
     slug: 'template-verdant',

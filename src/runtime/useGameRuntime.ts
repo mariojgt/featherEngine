@@ -58,6 +58,8 @@ export function useGameRuntime(active: boolean, instrumentation?: RuntimeLoopIns
     const onKeyUp = (event: KeyboardEvent) => setRuntimeKey(event.code, false);
     const onMouseDown = (event: MouseEvent) => {
       if (useEditorStore.getState().playtimeCameraSession) return;
+      // HUD and editor buttons own their actions; a potion/block/menu click must not also fire a weapon.
+      if (event.target instanceof Element && event.target.closest('button,input,select,textarea,[role="button"],[contenteditable="true"]')) return;
       setRuntimeKey(`Mouse${event.button}`, true);
     };
     const onMouseUp = (event: MouseEvent) => setRuntimeKey(`Mouse${event.button}`, false);

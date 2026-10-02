@@ -18,7 +18,7 @@ export interface SceneStreamingSettings {
   radius: number;
 }
 
-/** A single scene within a project. Also the content of a `scenes/<id>.scene.json` file. */
+/** A single scene within a project. Also the content of a manifest-referenced scene JSON file. */
 export interface Scene {
   id: string;
   name: string;
@@ -426,7 +426,7 @@ export interface SceneRef {
 /**
  * The canonical, fully-loaded project bundle.
  * - Web export writes this as a single JSON file.
- * - Desktop writes it split into `project.json` (manifest) + `scenes/<id>.scene.json`.
+ * - Desktop publishes `project.json` after immutable `scenes/.feather/<hash>.scene.json` files.
  * Both read back into this shape.
  */
 export interface NodeForgeProject {

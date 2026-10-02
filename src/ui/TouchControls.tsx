@@ -181,7 +181,8 @@ const TOUCH_CSS = `
 .touch-controls {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  /* Authored screen UI (20) stays clickable above the camera-drag surface. */
+  z-index: 19;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;

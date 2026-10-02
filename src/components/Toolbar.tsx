@@ -53,6 +53,9 @@ function FileMenu() {
   const openProject = useProjectStore((state) => state.openProject);
   const save = useProjectStore((state) => state.save);
   const saveAs = useProjectStore((state) => state.saveAs);
+  const openPreviousSave = useProjectStore((state) => state.openPreviousSave);
+  const busy = useProjectStore((state) => state.busy);
+  const isDirty = useEditorStore((state) => state.isDirty);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const closeProject = useProjectStore((state) => state.closeProject);
   const projectName = useProjectStore((state) => state.projectName);
@@ -82,8 +85,9 @@ function FileMenu() {
           <hr />
           <button disabled={isPlaying} title={isPlaying ? 'Stop preview to create a scene' : 'Create and switch to an empty scene'} onClick={run(() => { const editor = useEditorStore.getState(); editor.setActiveScene(editor.createScene()); })}>New scene</button>
           <hr />
-          <button onClick={run(() => void save())}>Save project <kbd>⌘S</kbd></button>
-          <button onClick={run(() => void saveAs(`${projectName} Copy`))}>Save as…</button>
+          <button disabled={busy || isPlaying} onClick={run(() => void save())}>Save project <kbd>⌘S</kbd></button>
+          <button disabled={busy || isPlaying} onClick={run(() => void saveAs(`${projectName} Copy`))}>Save as…</button>
+          {runningInDesktopShell && <button disabled={busy || isPlaying || isDirty} title={isDirty ? 'Save your current edits first' : 'Open the last complete previous save for review'} onClick={run(() => void openPreviousSave())}>Open previous save…</button>}
           <hr />
           <button onClick={run(closeProject)}>Close project</button>
         </div>
@@ -609,7 +613,7 @@ export function Toolbar() {
           className="export-button"
           title={guestProjectLock ? 'Only the collaboration host can save project files' : 'Save project (⌘S)'}
           onClick={() => void save()}
-          disabled={busy || guestProjectLock}
+          disabled={busy || guestProjectLock || isPlaying}
           data-testid="toolbar-save-button"
         >
           <Save size={16} aria-hidden />

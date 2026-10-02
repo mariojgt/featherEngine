@@ -41,6 +41,8 @@
     "test:cache": "node --test scripts/tests/player-cache.test.mjs",
     "test:runner": "node scripts/smoke-runner.mjs",
     "test:beginner": "node scripts/e2e/creator.mjs && node scripts/e2e/beginner-journey.mjs",
+    "test:recovery": "node scripts/e2e/recovery.mjs",
+    "test:cube-rpg": "node scripts/e2e/cube-rpg.mjs && node scripts/e2e/cube-rpg-player.mjs",
     "test:e2e:local-ai": "node scripts/e2e/local-ai.mjs",
     "uikit:capture": "node scripts/uikit/capture.mjs",
     "uikit:pack": "node scripts/uikit/pack.mjs",

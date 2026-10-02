@@ -9,6 +9,21 @@ export interface TemplateLesson {
 
 /** Shared by the launcher, catalog builder, and learning documentation. */
 export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
+  'template-cube-rpg': {
+    version: 1, difficulty: 'Beginner', minutes: 15,
+    goal: 'Conquer three sky arenas with Cubie, then remix your own action RPG.',
+    controls: 'WASD move · Space jump · Shift sprint · click / J ×3 combo · jump + click ground slam · hold Q / right click block · 1 / 2 equip · E / 3 potion · P pause',
+    lessons: [
+      'Choose Cube RPG in the launcher, press Play, then Begin adventure. This starter is included offline.',
+      'Tap attack three times for slash, backhand and a spinning finisher; jump and attack to plunge into a ground slam.',
+      'Pink sparks mean a grumble is committed: light slashes will not stop it. Block, step away, or break it with the finisher or slam; potions restore 45 health.',
+      'Clear an arena and follow the golden arch. Each new arena raises your level and grants two potions.',
+      'Select Cubie · Playable Cube Knight in Characters to edit the reusable cube, eyes, helmet, sword or shield.',
+      'Edit Grumble · Chase, Telegraph & Loot and opponent instance variables to change health, damage, speed or arena.',
+      'Select named objects in Editable VFX to change colors, size, lifetime and particle count. Edit the Adventure HUD for your own menus.',
+      'Edit Cubie · Walk, Strike & Expressions or Grumble · Motion & Hit Reactions for poses and timing. Combat · Per-Character Damage Flash and Combat · Impact Star control contact effects; CubeImpact in Cubie combat controls the camera kick.',
+    ],
+  },
   'template-verdant': {
     version: 1, difficulty: 'Beginner', minutes: 15,
     goal: 'Watch a woodland film, then make your own landscape cinematic.',

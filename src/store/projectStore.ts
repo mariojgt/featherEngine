@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { getPlatform, isDesktop } from '../platform';
 import type { ExportPlatformsReport, ProductionBuildReport } from '../platform/types';
-import { blankProject } from '../project/serialize';
+import { blankProject, migrateLoaded } from '../project/serialize';
 import { buildGameBundle, embedAssets, mimeForAsset, stripUnusedAssets, type GameBundle } from '../project/exportGame';
 import { verifyGameBundle, type BundleReport } from '../project/verifyBundle';
 import {
@@ -26,6 +26,7 @@ import { clearHistory } from './history';
 import { clearRecovery, type RecoverySnapshot } from './autosave';
 import { canUseHostOnlyFeatures, collaborationAccess } from '../collaboration/access';
 import type { BuiltInTemplate } from '../creator/gameTemplates';
+import { authoredProjectChanged } from './editor/authoredState';
 
 /** Caller-supplied package metadata; the rest (id, createdAt, engineVersion) is filled in. */
 export type PackageMetaInput = Partial<Omit<PackageMeta, 'engineVersion' | 'createdAt'>>;
@@ -271,6 +272,7 @@ interface ProjectState {
   newProjectFromStarter: (name: string, template: BuiltInTemplate) => Promise<boolean>;
   openProject: () => Promise<void>;
   openRecent: (dir: string) => Promise<void>;
+  openPreviousSave: () => Promise<void>;
   /** Drop a recent project from the launcher list (does not delete files on disk). */
   removeRecent: (dir: string) => void;
   save: () => Promise<void>;
@@ -339,11 +341,25 @@ export const useProjectStore = create<ProjectState>()(
         }));
       };
 
+      // Internal creation is also used inside the already-busy template workflow. Its caller owns
+      // the busy flag so another save/open cannot interleave between creation and package import.
+      const createProjectInEditor = async (name: string) => {
+        const platform = await getPlatform();
+        const opened = await platform.createProject(name, blankProject(name));
+        if (!opened) return false;
+        useEditorStore.getState().loadProject(opened.project);
+        clearHistory();
+        clearRecovery();
+        set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
+        addRecent(opened.dir, opened.name);
+        return true;
+      };
+
       // Shared first half of both export flows: build the self-contained bundle, audit it, and
       // open the Build Report dialog. Nothing is written until the user confirms there.
       const prepareExport = async (mode: 'game' | 'production') => {
         const { projectName, hasProject } = get();
-        if (!hasProject) return;
+        if (get().busy || !hasProject) return;
         set({ busy: true, error: null });
         try {
           const editor = useEditorStore.getState();
@@ -498,17 +514,10 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         newProject: async (name) => {
-          if (blockProjectLifecycleDuringCollaboration()) return;
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return;
           set({ busy: true, error: null });
           try {
-            const platform = await getPlatform();
-            const opened = await platform.createProject(name, blankProject(name));
-            if (!opened) return;
-            useEditorStore.getState().loadProject(opened.project);
-            clearHistory(); // a fresh project starts with an empty undo history
-            clearRecovery(); // starting fresh discards any prior session's unsaved recovery
-            set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
-            addRecent(opened.dir, opened.name);
+            await createProjectInEditor(name);
           } catch (error) {
             set({ error: errorMessage(error) });
           } finally {
@@ -538,6 +547,9 @@ export const useProjectStore = create<ProjectState>()(
             } else if (template === 'crystal-slice') {
               const { createCrystalSliceTemplate } = await import('../project/crystalSliceTemplate');
               await createCrystalSliceTemplate();
+            } else if (template === 'cube-rpg') {
+              const { createCubeRpgTemplate } = await import('../project/cubeRpgTemplate');
+              await createCubeRpgTemplate();
             }
             return true;
           } catch (error) {
@@ -549,7 +561,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         openProject: async () => {
-          if (blockProjectLifecycleDuringCollaboration()) return;
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return;
           set({ busy: true, error: null });
           try {
             const platform = await getPlatform();
@@ -559,6 +571,10 @@ export const useProjectStore = create<ProjectState>()(
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // opening a project discards any prior session's unsaved recovery
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
+            if (opened.recoveredFrom) {
+              useEditorStore.setState({ isDirty: true });
+              set({ toast: { kind: 'error', message: 'The latest save was damaged. A previous complete save was recovered; review it before saving.' } });
+            }
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set({ error: errorMessage(error) });
@@ -568,7 +584,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         openRecent: async (dir) => {
-          if (blockProjectLifecycleDuringCollaboration()) return;
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return;
           set({ busy: true, error: null });
           try {
             const platform = await getPlatform();
@@ -578,6 +594,10 @@ export const useProjectStore = create<ProjectState>()(
             clearHistory(); // a fresh project starts with an empty undo history
             clearRecovery(); // opening a project discards any prior session's unsaved recovery
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
+            if (opened.recoveredFrom) {
+              useEditorStore.setState({ isDirty: true });
+              set({ toast: { kind: 'error', message: 'The latest save was damaged. A previous complete save was recovered; review it before saving.' } });
+            }
             addRecent(opened.dir, opened.name);
           } catch (error) {
             set((state) => ({
@@ -595,7 +615,36 @@ export const useProjectStore = create<ProjectState>()(
           }));
         },
 
+        openPreviousSave: async () => {
+          const { busy, projectDir, hasProject } = get();
+          if (busy || !hasProject || !projectDir || blockProjectLifecycleDuringCollaboration()) return;
+          const editor = useEditorStore.getState();
+          if (editor.isPlaying || editor.isDirty) {
+            set({ toast: { kind: 'error', message: 'Stop Play and save your current edits before opening a previous save.' } });
+            return;
+          }
+          set({ busy: true, error: null });
+          try {
+            const platform = await getPlatform();
+            if (!platform.openPreviousSave) throw new Error('Previous saves are available in the desktop editor.');
+            const opened = await platform.openPreviousSave(projectDir);
+            // A creator may edit while the disk read is running. Keep those edits intact.
+            if (useEditorStore.getState().isPlaying || authoredProjectChanged(editor, useEditorStore.getState())) {
+              throw new Error('Your project changed while loading the previous save. Save your edits and try again.');
+            }
+            useEditorStore.getState().loadProject(opened.project);
+            clearHistory();
+            set({ projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
+            useEditorStore.setState({ isDirty: true });
+            set({ toast: { kind: 'success', message: 'Previous save opened. Review it, then Save to keep it. Your files have not been replaced.' } });
+          } catch (error) {
+            const message = errorMessage(error);
+            set({ error: message, toast: { kind: 'error', message } });
+          } finally { set({ busy: false }); }
+        },
+
         save: async () => {
+          if (get().busy) return;
           const { projectDir, projectName, hasProject } = get();
           if (!hasProject) return;
           if (!canUseHostOnlyFeatures()) {
@@ -605,16 +654,27 @@ export const useProjectStore = create<ProjectState>()(
           if (!projectDir) return get().saveAs(projectName);
           set({ busy: true, error: null });
           try {
+            const source = useEditorStore.getState();
+            if (source.isPlaying) throw new Error('Stop Play before saving so preview changes cannot enter your project.');
+            const project = { ...source.exportProject(), name: projectName };
             const platform = await getPlatform();
-            const project = { ...useEditorStore.getState().exportProject(), name: projectName };
             if (!platform.isDesktop) {
-              project.assets = (await embedAssets(useEditorStore.getState().assets)).map(({ url: _url, ...asset }) => asset);
+              project.assets = (await embedAssets(source.assets)).map(({ url: _url, ...asset }) => asset);
               const missing = project.assets.filter((asset) => asset.unresolved);
               if (missing.length) throw new Error(`Re-import missing assets before saving: ${missing.map((asset) => asset.name).join(', ')}`);
+            } else {
+              // Procedural/browser-imported assets have no disk file. Persist their bytes too.
+              const embedded = await embedAssets(source.assets.filter((asset) => !asset.path));
+              const missing = embedded.filter((asset) => asset.unresolved);
+              if (missing.length) throw new Error(`Re-import missing assets before saving: ${missing.map((asset) => asset.name).join(', ')}`);
+              const byId = new Map(embedded.map((asset) => [asset.id, asset]));
+              project.assets = project.assets.map((asset) => byId.get(asset.id) ?? asset);
             }
             await platform.saveProject(projectDir, project);
-            useEditorStore.getState().markClean();
-            set({ toast: { kind: 'success', message: projectDir === 'web' ? 'Project downloaded' : 'Project saved' } });
+            const current = useEditorStore.getState();
+            const unchanged = !current.isPlaying && !authoredProjectChanged(source, current);
+            if (unchanged) current.markClean();
+            set({ toast: { kind: 'success', message: `${projectDir === 'web' ? 'Project downloaded' : 'Project saved'}${unchanged ? '' : '; newer edits still need saving'}` } });
           } catch (error) {
             const message = errorMessage(error);
             set({ error: message, toast: { kind: 'error', message: `Save failed: ${message}` } });
@@ -624,26 +684,42 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         saveAs: async (name) => {
+          if (get().busy) return;
           if (!canUseHostOnlyFeatures()) {
             set({ toast: { kind: 'error', message: 'Only the collaboration host can save the shared project.' } });
             return;
           }
           set({ busy: true, error: null });
           try {
+            const source = useEditorStore.getState();
+            if (source.isPlaying) throw new Error('Stop Play before saving so preview changes cannot enter your project.');
+            const project = { ...source.exportProject(), name };
             const platform = await getPlatform();
-            const project = { ...useEditorStore.getState().exportProject(), name };
-            if (!platform.isDesktop) {
-              project.assets = (await embedAssets(useEditorStore.getState().assets)).map(({ url: _url, ...asset }) => asset);
-              const missing = project.assets.filter((asset) => asset.unresolved);
-              if (missing.length) throw new Error(`Re-import missing assets before saving: ${missing.map((asset) => asset.name).join(', ')}`);
-            }
+            // Save as must bring asset bytes into the new project, including desktop assets whose
+            // relative paths belong to the old folder. It must never leave links to absent files.
+            project.assets = (await embedAssets(source.assets)).map(({ url: _url, path: _path, ...asset }) => asset);
+            const missing = project.assets.filter((asset) => asset.unresolved);
+            if (missing.length) throw new Error(`Re-import missing assets before saving: ${missing.map((asset) => asset.name).join(', ')}`);
             const opened = await platform.createProject(name, project);
             if (opened && !platform.isDesktop) await platform.saveProject(opened.dir, project);
             if (!opened) return;
             set({ hasProject: true, projectDir: opened.dir, projectName: opened.name, lastProductionOutput: null, lastProductionBuild: null });
             addRecent(opened.dir, opened.name);
-            useEditorStore.getState().markClean();
-            set({ toast: { kind: 'success', message: opened.dir === 'web' ? 'Project downloaded' : 'Project saved' } });
+            const current = useEditorStore.getState();
+            const unchanged = !current.isPlaying && !authoredProjectChanged(source, current);
+            if (platform.isDesktop) {
+              const savedAssets = new Map(project.assets.map((asset) => [asset.id, asset]));
+              const originals = new Map(source.assets.map((asset) => [asset.id, asset]));
+              useEditorStore.setState({ assets: current.assets.map((asset) => {
+                const saved = savedAssets.get(asset.id);
+                const { path: _path, ...portable } = asset;
+                // Preserve asset edits/imports made during saving; their live URLs can be embedded
+                // on the next save, and recovery also copies them into its durable snapshot.
+                return saved && originals.get(asset.id) === asset ? { ...saved, url: saved.data } : portable;
+              }) });
+            }
+            if (unchanged) current.markClean();
+            set({ toast: { kind: 'success', message: `${opened.dir === 'web' ? 'Project downloaded' : 'Project saved'}${unchanged ? '' : '; newer edits still need saving'}` } });
           } catch (error) {
             const message = errorMessage(error);
             set({ error: message, toast: { kind: 'error', message: `Save failed: ${message}` } });
@@ -660,6 +736,7 @@ export const useProjectStore = create<ProjectState>()(
         cancelPendingExport: () => set({ pendingExport: null }),
 
         confirmPendingExport: async (stripUnused, profile) => {
+          if (get().busy) return;
           const pending = get().pendingExport;
           if (!pending) return;
           const mode = pending.mode;
@@ -709,7 +786,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         exportPrefabPackage: async (prefabId, meta) => {
-          if (!get().hasProject) return;
+          if (get().busy || !get().hasProject) return;
           set({ busy: true, error: null });
           try {
             const editor = useEditorStore.getState();
@@ -744,7 +821,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         exportFolderPackage: async (folderId, meta) => {
-          if (!get().hasProject) return;
+          if (get().busy || !get().hasProject) return;
           set({ busy: true, error: null });
           try {
             const editor = useEditorStore.getState();
@@ -782,7 +859,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         exportProjectPackage: async (meta) => {
-          if (!get().hasProject) return;
+          if (get().busy || !get().hasProject) return;
           set({ busy: true, error: null });
           try {
             const editor = useEditorStore.getState();
@@ -826,9 +903,7 @@ export const useProjectStore = create<ProjectState>()(
             }
             // Only create the project once we know the package is usable — otherwise a bad download
             // would leave the user staring at an empty project they didn't ask for.
-            const previousScenes = useEditorStore.getState().scenes;
-            await get().newProject(name);
-            if (get().error || !get().hasProject || useEditorStore.getState().scenes === previousScenes) return false;
+            if (!(await createProjectInEditor(name))) return false;
 
             const platform = await getPlatform();
             const summary = await applyPackage(
@@ -855,7 +930,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         importPackageFromFile: async () => {
-          if (!get().hasProject) return;
+          if (get().busy || !get().hasProject) return;
           if (blockGuestPackageMutation()) return;
           set({ busy: true, error: null });
           try {
@@ -878,7 +953,7 @@ export const useProjectStore = create<ProjectState>()(
         },
 
         importPackageFromUrl: async (url) => {
-          if (!get().hasProject) return false;
+          if (get().busy || !get().hasProject) return false;
           if (blockGuestPackageMutation()) return false;
           set({ busy: true, error: null });
           try {
@@ -898,24 +973,27 @@ export const useProjectStore = create<ProjectState>()(
 
         // Continue with the built-in starter scene without a saved project (Save acts as Save As).
         useDemo: () => {
-          if (blockProjectLifecycleDuringCollaboration()) return;
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return;
           clearRecovery();
           set({ hasProject: true, projectDir: isDesktop ? null : 'web', projectName: 'Demo (unsaved)', lastProductionOutput: null, lastProductionBuild: null });
         },
 
         restoreRecovery: (snapshot) => {
-          if (blockProjectLifecycleDuringCollaboration()) return;
-          useEditorStore.getState().loadProject(snapshot.project);
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return;
+          let project;
+          try {
+            project = migrateLoaded(snapshot.project);
+            project.assets = project.assets.map((asset) => ({ ...asset, url: asset.data ?? snapshot.project.assets.find((source) => source.id === asset.id)?.url }));
+          } catch (error) { set({ error: errorMessage(error) }); return; }
+          useEditorStore.getState().loadProject(project);
           clearHistory();
-          // The restored state is exactly the unsaved work, so flag it dirty (and clear the snapshot
-          // now that it's live) — the user still needs to Save it to disk/download.
+          // Restoring is not a save. Keep the durable recovery until an explicit save or discard.
           useEditorStore.setState({ isDirty: true });
-          clearRecovery();
           set({ hasProject: true, projectDir: snapshot.dir, projectName: snapshot.name, lastProductionOutput: null, lastProductionBuild: null });
         },
 
         closeProject: () => {
-          if (blockProjectLifecycleDuringCollaboration()) return;
+          if (get().busy || blockProjectLifecycleDuringCollaboration()) return;
           clearRecovery();
           set({ hasProject: false, projectDir: null, projectName: 'Untitled Project', lastProductionOutput: null, lastProductionBuild: null });
         },

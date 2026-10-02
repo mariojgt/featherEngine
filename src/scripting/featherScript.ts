@@ -748,6 +748,9 @@ class FeatherScriptPrinter {
       case 'event.receiveDamage':
         result = 'amount';
         break;
+      case 'event.update':
+        result = 'dt';
+        break;
       case 'event.land':
         result = 'speed';
         break;

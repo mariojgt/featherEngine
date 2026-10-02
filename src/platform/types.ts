@@ -76,6 +76,8 @@ export interface OpenedProject {
   name: string;
   /** Fully loaded project with asset `url`s resolved for the current platform. */
   project: NodeForgeProject;
+  /** The current save was damaged, or the creator deliberately opened an earlier saved version. */
+  recoveredFrom?: string;
 }
 
 export interface ProjectTextWriteOptions {
@@ -147,6 +149,8 @@ export interface Platform {
   openProject(): Promise<OpenedProject | null>;
   /** Open a project from a known path/handle (used for "recent projects"). */
   openProjectAt(dir: string): Promise<OpenedProject | null>;
+  /** Desktop only: open the latest complete previous save without replacing files on disk. */
+  openPreviousSave?(dir: string): Promise<OpenedProject>;
   /** Persist the project to its directory (desktop) or download it (web). */
   saveProject(dir: string, project: NodeForgeProject): Promise<void>;
   /** Copy an imported asset into the project and return its relative path + runtime url. */

@@ -26,6 +26,7 @@ function starter(options: { cancel?: boolean; collaboration?: boolean; build?: (
     './editorStore': { useEditorStore: { getState: () => editor } },
     './history': { clearHistory: vi.fn() },
     './autosave': { clearRecovery: vi.fn() },
+    './editor/authoredState': { authoredProjectChanged: () => false },
     '../collaboration/access': { collaborationAccess: () => ({ active: options.collaboration ?? false }) },
     '../project/parcelPanicTemplate': { createParcelPanicTemplate: build },
     '../project/mobaTemplate': { createMobaTemplate: moba },

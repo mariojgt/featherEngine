@@ -26,6 +26,64 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 import { tauriPlatform } from '../tauri';
+import { blankProject, splitProject } from '../../project/serialize';
+
+describe('desktop snapshot integration', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const snapshot = (name: string, revision: string, recoveredFrom: string | null = null) => {
+    const project = blankProject(name);
+    const { manifest } = splitProject(project);
+    return { manifest, scenes: project.scenes, revision, recoveredFrom };
+  };
+
+  it('saves every scene through one native command guarded by the opened revision', async () => {
+    const opened = snapshot('Atomic', 'opened-revision');
+    mocks.invoke.mockResolvedValueOnce(opened);
+    await tauriPlatform.openProjectAt('/projects/atomic');
+    mocks.invoke.mockResolvedValueOnce({ revision: 'saved-revision', warnings: [] });
+    await tauriPlatform.saveProject('/projects/atomic', blankProject('Atomic'));
+    expect(mocks.invoke).toHaveBeenLastCalledWith('save_project_snapshot', {
+      projectDir: '/projects/atomic', manifestJson: expect.any(String),
+      sceneJsons: [expect.any(String)], expectedRevision: 'opened-revision',
+    });
+    expect(mocks.writeTextFile).not.toHaveBeenCalled();
+  });
+
+  it('retains the disk checkpoint after failed saves so retries remain protected', async () => {
+    mocks.invoke.mockResolvedValueOnce(snapshot('Retry', 'original-revision'));
+    await tauriPlatform.openProjectAt('/projects/retry');
+    mocks.invoke.mockRejectedValueOnce(new Error('Disk full'));
+    await expect(tauriPlatform.saveProject('/projects/retry', blankProject('Retry'))).rejects.toThrow('Disk full');
+    mocks.invoke.mockResolvedValueOnce({ revision: 'next-revision', warnings: [] });
+    await tauriPlatform.saveProject('/projects/retry', blankProject('Retry'));
+    expect(mocks.invoke.mock.calls.at(-1)?.[1].expectedRevision).toBe('original-revision');
+  });
+
+  it('exposes recovered saves and asks native code for earlier snapshots without writing', async () => {
+    mocks.invoke.mockResolvedValueOnce(snapshot('Recovered', 'damaged-current', '.feather/backups/backup.json'));
+    const opened = await tauriPlatform.openPreviousSave?.('/projects/recovered');
+    expect(opened?.recoveredFrom).toBe('.feather/backups/backup.json');
+    expect(mocks.invoke).toHaveBeenCalledWith('read_project_snapshot', { projectDir: '/projects/recovered', previous: true });
+    expect(mocks.writeTextFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects future formats before recording a save checkpoint', async () => {
+    const future = snapshot('Future', 'future-revision'); future.manifest.version = '99.0.0';
+    mocks.invoke.mockResolvedValueOnce(future);
+    await expect(tauriPlatform.openProjectAt('/projects/future')).rejects.toThrow('Update Feather');
+  });
+
+  it('does not replace the save checkpoint when an earlier-save read finds an external change', async () => {
+    mocks.invoke.mockResolvedValueOnce(snapshot('Original', 'original-checkpoint'));
+    await tauriPlatform.openProjectAt('/projects/external-change');
+    mocks.invoke.mockResolvedValueOnce(snapshot('Earlier', 'external-checkpoint', '.feather/backups/backup.json'));
+    await expect(tauriPlatform.openPreviousSave?.('/projects/external-change')).rejects.toThrow('changed on disk');
+    mocks.invoke.mockResolvedValueOnce({ revision: 'saved', warnings: [] });
+    await tauriPlatform.saveProject('/projects/external-change', blankProject('Original'));
+    expect(mocks.invoke.mock.calls.at(-1)?.[1].expectedRevision).toBe('original-checkpoint');
+  });
+});
 
 describe('desktop project text files', () => {
   beforeEach(() => {

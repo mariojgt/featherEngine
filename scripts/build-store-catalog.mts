@@ -1009,6 +1009,7 @@ const TEMPLATE_THUMBNAILS = {
   'template-driving': ['#FF9F3D', '#5A2E08', '\u{1F697}'],
   'template-sim-racing': ['#E84B3C', '#4A120C', '\u{1F3C1}'],
   'template-verdant': ['#70954F', '#142A20', '\u{1F332}'],
+  'template-cube-rpg': ['#FBA06B', '#427E86', '\u{1F6E1}'],
   'template-platformer': ['#FF7196', '#236784', '\u{2600}\u{FE0F}'],
   'template-moba': ['#69D5B2', '#243B52', '⚔️'],
   'template-parcel-panic': ['#FFD166', '#269DAB', '\u{1F4E6}'],
@@ -1132,10 +1133,10 @@ async function main() {
       const preview = await readFile(join(OUT_DIR, 'previews', 'sproutwatch.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
-    if (['template-last-light', 'template-blackthorn', 'template-verdant', 'template-parcel-panic', 'template-moba'].includes(slug)) {
+    if (['template-last-light', 'template-blackthorn', 'template-verdant', 'template-parcel-panic', 'template-moba', 'template-cube-rpg'].includes(slug)) {
       // A real engine capture, produced by render-cinematic.mjs (or e2e/resonance.mjs). Inline like the
       // other covers so the catalog remains portable/offline, even when served from another host.
-      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-moba' ? 'moba.png' : slug === 'template-parcel-panic' ? 'parcel-panic.png' : slug === 'template-verdant' ? 'verdant.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : 'last-light.png')).catch(() => null);
+      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-cube-rpg' ? 'cube-rpg.png' : slug === 'template-moba' ? 'moba.png' : slug === 'template-parcel-panic' ? 'parcel-panic.png' : slug === 'template-verdant' ? 'verdant.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : 'last-light.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
     entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }));

@@ -11,6 +11,7 @@ import { DEFAULT_RENDER_PRESET, renderPresetEnvironmentPatch, renderPresetRender
 import { defaultTreeLibrary } from '../tree/treeSpec';
 import { defaultModelLibrary } from '../model/modelSpec';
 import { createDefaultExportSettings, parseExportSettings } from './exportProfiles';
+import { assertProjectContainers, assertSupportedProjectVersion } from './projectValidation';
 
 export const SCENES_DIR = 'scenes';
 export const ASSETS_DIR = 'assets';
@@ -22,6 +23,8 @@ export function splitProject(project: NodeForgeProject): {
   manifest: ProjectManifest;
   sceneFiles: { path: string; scene: Scene }[];
 } {
+  assertSupportedProjectVersion(project);
+  assertProjectContainers(project as unknown as Record<string, unknown>);
   // The prefab-editing scene is transient — never persist it. If it happens to be active (the user
   // saved mid-edit), fall back the active id to the first real scene so reloads stay valid.
   const realScenes = project.scenes.filter((scene) => scene.id !== PREFAB_EDIT_SCENE_ID);
@@ -68,6 +71,8 @@ export function splitProject(project: NodeForgeProject): {
 
 /** Reassemble a full project from a manifest + the loaded scene files. */
 export function joinProject(manifest: ProjectManifest, scenes: Scene[]): NodeForgeProject {
+  assertSupportedProjectVersion(manifest);
+  assertProjectContainers({ ...manifest, scenes });
   return {
     version: manifest.version,
     name: manifest.name,
@@ -102,7 +107,9 @@ export function joinProject(manifest: ProjectManifest, scenes: Scene[]): NodeFor
 
 /** Normalize/migrate any loaded JSON (new single-file export or legacy v0.1.0) to the canonical shape. */
 export function migrateLoaded(raw: unknown): NodeForgeProject {
+  assertSupportedProjectVersion(raw);
   const data = raw as Record<string, unknown>;
+  assertProjectContainers(data);
 
   // Current multi-scene format (single-file web export).
   if (data && Array.isArray(data.scenes)) {

@@ -6,11 +6,12 @@ export const CREATOR_QUICK_START_IDS = [
   'moba',
   'tower-defense',
   'crystal-slice',
+  'cube-rpg',
   'blank',
 ] as const;
 
 export type CreatorQuickStartId = (typeof CREATOR_QUICK_START_IDS)[number];
-export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense' | 'crystal-slice';
+export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense' | 'crystal-slice' | 'cube-rpg';
 
 export interface CreatorQuickStart {
   id: CreatorQuickStartId;
@@ -81,6 +82,14 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
     description: 'A chrome blade cuts an intact crystal block into colliding pieces that tumble into a reflective pool.',
     icon: '💎',
     builtInTemplate: 'crystal-slice',
+  },
+  {
+    id: 'cube-rpg',
+    label: 'Cube RPG',
+    description: 'An expressive cube knight with a 3-hit sword combo, ground-slam air attack, shield, potions, three floating arenas and a final boss. Every effect and object is editable.',
+    icon: '🛡️',
+    templateSlug: 'template-cube-rpg',
+    builtInTemplate: 'cube-rpg',
   },
   {
     id: 'blank',
