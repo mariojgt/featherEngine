@@ -7,6 +7,7 @@ import type {
 } from '../../types';
 import { makeSpawnedObject } from './objectFactory';
 import { defaultRenderer } from './defaults';
+import { waterAnimationTime } from '../../runtime/waterAnimation';
 
 // Monotonic id for water surface-impact ripple events (transient FX; the WaterSurface shader dedupes by it).
 let waterImpactSeq = 0;
@@ -31,11 +32,12 @@ export const SURFACE_DUST: Record<string, string> = {
  * this in sync with `waterHeight` in src/three/WaterSurface.tsx.
  */
 export function waterSurfaceHeight(
-  water: { waveAmplitude: number; waveFrequency: number; waveSpeed: number; flowStrength?: number; flowAngle?: number },
+  water: { waveAmplitude: number; waveFrequency: number; waveSpeed: number; flowStrength?: number; flowAngle?: number; loopDuration?: number },
   px: number,
   pz: number,
   t: number,
 ): number {
+  t = waterAnimationTime(t, water.loopDuration);
   const a = water.waveAmplitude;
   const f = water.waveFrequency;
   const s = water.waveSpeed;

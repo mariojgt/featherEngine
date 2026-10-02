@@ -22,6 +22,7 @@ type TemplateKey =
   | 'first-person'
   | 'driving'
   | 'sim-racing'
+  | 'crystal-slice'
   | 'last-light'
   | 'blackthorn'
   | 'verdant'
@@ -43,6 +44,13 @@ interface TemplateDef {
 }
 
 const TEMPLATES: Record<TemplateKey, TemplateDef> = {
+  'crystal-slice': {
+    slug: 'template-crystal-slice',
+    title: 'Crystal Slice',
+    description: 'Runtime mesh cutting: a chrome blade slices one solid turquoise block into colliding rigid bodies that tumble into water. A twelve-second machine cycle replenishes stock under a fade.',
+    tags: ['template', 'world', 'cinematic', 'loop', 'glass', 'water', 'studio'],
+    build: async () => (await import('../project/crystalSliceTemplate')).createCrystalSliceTemplate(),
+  },
   verdant: {
     slug: 'template-verdant',
     title: 'Verdant — A Woodland Study',

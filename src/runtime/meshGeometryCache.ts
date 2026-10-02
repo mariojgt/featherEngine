@@ -15,6 +15,8 @@ export interface ModelGeometry {
   vertices: Float32Array;
   /** Triangle indices into `vertices` (every 3 = one triangle). */
   indices: Uint32Array;
+  /** Optional authored/interpolated normals, including sharp normals on generated cut faces. */
+  normals?: Float32Array;
 }
 
 const cache = new Map<string, ModelGeometry>();
@@ -39,9 +41,9 @@ export function getModelGeometry(key: string | undefined): ModelGeometry | undef
  * ([physicsWorld.ts], via the shard's `modelAssetId`) read the exact same vertices. Bumps the
  * version so a collider built before this ran gets rebuilt.
  */
-export function registerRawGeometry(key: string, vertices: Float32Array, indices: Uint32Array): void {
+export function registerRawGeometry(key: string, vertices: Float32Array, indices: Uint32Array, normals?: Float32Array): void {
   if (!key) return;
-  cache.set(key, { vertices, indices });
+  cache.set(key, { vertices, indices, normals });
   rawKeys.add(key);
   version++;
 }

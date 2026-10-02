@@ -36,6 +36,7 @@ import { DecalKind, addDecal } from '../../runtime/decalBus';
 import { markExec, takeExecHit } from '../../runtime/execTrace';
 import { pushExplosion } from '../../runtime/explosionBus';
 import { clearFractureDebris, updateFractureDebris } from '../../runtime/fractureDebris';
+import { clearMeshCutting, updateMeshCutting } from '../../runtime/meshCutting';
 import { gamepadInput } from '../../runtime/gamepadInput';
 import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../../runtime/mouseLook';
 import { findNavPath } from '../../runtime/navGrid';
@@ -5990,7 +5991,22 @@ export const applyRuntimeTick = (
           const prevTime = nextRuntimeCinematic.time;
           const sequenceList = scene?.cinematics ?? [];
           const timeScale = cinematicTimeScaleAt(sequence, prevTime, sequenceList);
-          const currentTime = Math.min(sequence.duration, prevTime + delta * timeScale);
+          const scaledDelta = delta * timeScale;
+          const duration = Math.max(0.0001, Number.isFinite(sequence.duration) ? sequence.duration : 1);
+          const currentTime = advanceTimelineTime(prevTime, scaledDelta, duration, sequence.loop === true, false).time;
+          // Visit both sides of a wrap so end cues are not lost and start cues fire once again.
+          // Spawned props belong to one cycle; discard them before the next cycle's start cues.
+          const intervals: { start: number; end: number; wraps: boolean }[] = [];
+          let remaining = scaledDelta;
+          let intervalStart = prevTime;
+          if (sequence.loop) {
+            while (intervalStart + remaining >= duration) {
+              intervals.push({ start: intervalStart, end: duration, wraps: true });
+              remaining -= duration - intervalStart;
+              intervalStart = 0;
+            }
+          }
+          intervals.push({ start: intervalStart, end: currentTime, wraps: false });
           const fired = new Set(nextRuntimeCinematic.firedActionIds);
           const spawnedByCinematic = new Set(nextRuntimeCinematic.spawnedObjectIds);
 
@@ -6011,68 +6027,79 @@ export const applyRuntimeTick = (
             }));
           }
 
-          for (const action of cinematicActionsAt(sequence, sequenceList, currentTime)) {
-            const length = Math.max(action.duration ?? 0, 0.001);
-            const local = clamp01((currentTime - action.time) / length);
-            const active = currentTime >= action.time && currentTime <= action.time + length;
-            const shouldFire = !fired.has(action.id) && action.time >= prevTime && action.time <= currentTime;
+          for (const interval of intervals) {
+            for (const action of cinematicActionsAt(sequence, sequenceList, interval.end)) {
+              const length = Math.max(action.duration ?? 0, 0.001);
+              const local = clamp01((currentTime - action.time) / length);
+              const active = currentTime >= action.time && currentTime <= action.time + length;
+              const shouldFire = !fired.has(action.id) && action.time >= interval.start && action.time <= interval.end;
 
-            if (action.type === 'transform' && active && action.objectId) {
-              allObjects = allObjects.map((object) => {
-                if (object.id !== action.objectId) return object;
-                return {
-                  ...object,
-                  transform: {
-                    position: action.fromPosition && action.toPosition ? mixVec3(action.fromPosition, action.toPosition, local) : action.toPosition ?? action.position ?? object.transform.position,
-                    rotation: action.fromRotation && action.toRotation ? mixVec3(action.fromRotation, action.toRotation, local) : action.toRotation ?? action.rotation ?? object.transform.rotation,
-                    scale: action.fromScale && action.toScale ? mixVec3(action.fromScale, action.toScale, local) : action.toScale ?? action.scale ?? object.transform.scale,
-                  },
-                };
-              });
+              if (!interval.wraps && action.type === 'transform' && active && action.objectId) {
+                allObjects = allObjects.map((object) => {
+                  if (object.id !== action.objectId) return object;
+                  return {
+                    ...object,
+                    transform: {
+                      position: action.fromPosition && action.toPosition ? mixVec3(action.fromPosition, action.toPosition, local) : action.toPosition ?? action.position ?? object.transform.position,
+                      rotation: action.fromRotation && action.toRotation ? mixVec3(action.fromRotation, action.toRotation, local) : action.toRotation ?? action.rotation ?? object.transform.rotation,
+                      scale: action.fromScale && action.toScale ? mixVec3(action.fromScale, action.toScale, local) : action.toScale ?? action.scale ?? object.transform.scale,
+                    },
+                  };
+                });
+              }
+
+              if (!shouldFire) continue;
+              fired.add(action.id);
+              if (action.type === 'visibility' && action.objectId) {
+                if (action.visible === false) nextHidden.add(action.objectId);
+                else nextHidden.delete(action.objectId);
+              } else if (action.type === 'spawn') {
+                if (action.prefabId) {
+                  const prefab = prefabById.get(action.prefabId);
+                  if (prefab) {
+                    const { objects: clones, rootId } = instantiatePrefabTree(prefab);
+                    const root = clones.find((object) => object.id === rootId);
+                    if (root && action.position) root.transform.position = action.position;
+                    allObjects = [...allObjects, ...clones];
+                    for (const clone of clones) spawnedByCinematic.add(clone.id);
+                  }
+                } else {
+                  const kind = action.spawnKind ?? 'cube';
+                  const object: SceneObject = {
+                    id: makeId('obj'),
+                    name: action.name ?? `Cinematic ${kind}`,
+                    kind,
+                    transform: {
+                      position: action.position ?? [0, 1, 0],
+                      rotation: action.rotation ?? [0, 0, 0],
+                      scale: action.scale ?? [1, 1, 1],
+                    },
+                    ...objectDefaults[kind],
+                    variables: { cinematicOnly: true },
+                  };
+                  allObjects.push(object);
+                  spawnedByCinematic.add(object.id);
+                }
+              } else if (action.type === 'animation' && action.objectId && action.animationId) {
+                animMontages[action.objectId] = { animationId: action.animationId, speed: action.animationSpeed ?? 1 };
+              } else if (action.type === 'sound' && action.soundId) {
+                pushSound(action.soundId); // cinematic beats are 2D (cutscene-wide, not world-positioned)
+              } else if (action.type === 'event' && action.eventName) {
+                cinematicEvents.push(action.eventName);
+              }
             }
 
-            if (!shouldFire) continue;
-            fired.add(action.id);
-            if (action.type === 'visibility' && action.objectId) {
-              if (action.visible === false) nextHidden.add(action.objectId);
-              else nextHidden.delete(action.objectId);
-            } else if (action.type === 'spawn') {
-              if (action.prefabId) {
-                const prefab = prefabById.get(action.prefabId);
-                if (prefab) {
-                  const { objects: clones, rootId } = instantiatePrefabTree(prefab);
-                  const root = clones.find((object) => object.id === rootId);
-                  if (root && action.position) root.transform.position = action.position;
-                  allObjects = [...allObjects, ...clones];
-                  for (const clone of clones) spawnedByCinematic.add(clone.id);
-                }
-              } else {
-                const kind = action.spawnKind ?? 'cube';
-                const object: SceneObject = {
-                  id: makeId('obj'),
-                  name: action.name ?? `Cinematic ${kind}`,
-                  kind,
-                  transform: {
-                    position: action.position ?? [0, 1, 0],
-                    rotation: action.rotation ?? [0, 0, 0],
-                    scale: action.scale ?? [1, 1, 1],
-                  },
-                  ...objectDefaults[kind],
-                  variables: { cinematicOnly: true },
-                };
-                allObjects.push(object);
-                spawnedByCinematic.add(object.id);
+            if (interval.wraps) {
+              allObjects = allObjects.filter((object) => !spawnedByCinematic.has(object.id));
+              spawnedByCinematic.clear();
+              fired.clear();
+              // Visibility tracks are cycle-local, just like their fired action ids.
+              for (const action of cinematicActionsAt(sequence, sequenceList, sequence.duration)) {
+                if (action.type === 'visibility' && action.objectId) nextHidden.delete(action.objectId);
               }
-            } else if (action.type === 'animation' && action.objectId && action.animationId) {
-              animMontages[action.objectId] = { animationId: action.animationId, speed: action.animationSpeed ?? 1 };
-            } else if (action.type === 'sound' && action.soundId) {
-              pushSound(action.soundId); // cinematic beats are 2D (cutscene-wide, not world-positioned)
-            } else if (action.type === 'event' && action.eventName) {
-              cinematicEvents.push(action.eventName);
             }
           }
-
-          if (currentTime >= sequence.duration) {
+          if (!sequence.loop && currentTime >= sequence.duration) {
             allObjects = allObjects.filter((object) => !spawnedByCinematic.has(object.id));
             nextRuntimeCinematic = undefined;
             nextRuntimeCinematicCamera = undefined;
@@ -6084,6 +6111,7 @@ export const applyRuntimeTick = (
           }
         }
       }
+      allObjects = updateMeshCutting(allObjects, runtimeTime, delta, nextVelocities, nextAngularVelocities);
       allObjects = updateFractureDebris(allObjects, delta);
       const remainingObjectIds = new Set(allObjects.map((object) => object.id));
       const attachedOwnerIds = new Set(allObjects.map((object) => object.attachment?.targetObjectId).filter(Boolean) as string[]);
@@ -6130,6 +6158,15 @@ export const applyRuntimeTick = (
       // them imperatively in useFrame, so moving objects don't reconcile their React subtree each
       // frame (see transformBuffer.ts). The store copy above still drives Inspector/gizmo/save.
       publishTransforms(allObjects);
+      // Mesh cutting can change a surviving body's origin and scale after the physics step.
+      // Its old interpolated pose belongs to the previous solid, not the new remainder.
+      if (physicsRenderTransforms) {
+        for (const object of allObjects) {
+          if (object.renderer?.fragmentKey !== activeObjectById.get(object.id)?.renderer?.fragmentKey) {
+            physicsRenderTransforms.delete(object.id);
+          }
+        }
+      }
       // Then swap in the fixed-step physics bodies' SMOOTHED render poses (cars, props, characters) so
       // they don't stutter against the interpolated follow camera. Store/Inspector keep the authoritative
       // transform written above; only the high-frequency render path reads these.
@@ -6360,6 +6397,7 @@ export const applyRuntimeTick = (
           startPhysics();
           clearTransformBuffer();
           clearFractureDebris();
+          clearMeshCutting();
           resetReplayRecorder(freshObjects); // rebuild the replay slot table for the new scene's objects
           clearPerception();
           resetStartedScriptObjects();

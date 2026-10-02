@@ -65,6 +65,7 @@ import { isCinematicCaptureEnabled } from '../runtime/cinematicCapture';
 import { WaterEnvCapture } from '../three/WaterEnvCapture';
 import { UnderwaterOverlay } from '../three/UnderwaterOverlay';
 import { FragmentMesh } from '../three/FragmentMesh';
+import { getActivePhysics } from '../runtime/physicsWorld';
 import { readTransform } from '../runtime/transformBuffer';
 import { structuralObjectsSignature } from '../store/stableSelectors';
 import type { SceneObject } from '../types';
@@ -199,7 +200,19 @@ function GameMesh({ object, focused = false }: { object: SceneObject; focused?: 
 
   // A spawned fracture shard renders its raw generated geometry (from the geometry cache).
   if (renderer.fragmentKey) {
-    return <FragmentMesh geometryKey={renderer.fragmentKey} resolved={resolved} />;
+    return <FragmentMesh geometryKey={renderer.fragmentKey} resolved={resolved}
+      onPointerDown={object.variables?.__cutStock ? event => {
+        const state = useEditorStore.getState();
+        if (!state.isPlaying || state.isPlayPaused) return;
+        // Runtime transforms deliberately bypass React reconciliation. Read release state at the
+        // interaction boundary instead of capturing the piece's original, clamped state.
+        const live = selectActiveObjects(state).find(o => o.id === object.id);
+        if (!live?.variables?.__cutReleased) return;
+        event.stopPropagation();
+        const mass = live.physics?.mass ?? 1;
+        getActivePhysics()?.applyImpulse(object.id,
+          [event.ray.direction.x * mass * 2.4, mass * 2.8, event.ray.direction.z * mass * 2.4]);
+      } : undefined} />;
   }
 
   // A skinned model with an enabled animator plays its clips (state machine or single clip).

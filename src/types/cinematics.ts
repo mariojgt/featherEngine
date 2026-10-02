@@ -230,6 +230,8 @@ export interface CinematicSequence {
   /** Human take number; duplicate-take creation increments it. */
   takeNumber?: number;
   autoplay?: boolean;
+  /** Repeat without releasing the cinematic camera. Matching endpoint keys make a seamless loop. */
+  loop?: boolean;
   skippable?: boolean;
   markers?: CinematicMarker[];
   /** The film look (letterbox / grade / grain / vignette) layered over the frame while this plays. */

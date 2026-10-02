@@ -1,6 +1,7 @@
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { waterAnimationTime } from '../runtime/waterAnimation';
 import { defaultWaterVolume } from '../store/editor/defaults';
 import { useEditorStore } from '../store/editorStore';
 import { sunDirectionFromEnvironment, withSceneEnvironmentDefaults } from './environmentSettings';
@@ -17,7 +18,7 @@ const RIPPLE_SPEED = 3.2; // world units/sec a ring expands
 const RIPPLE_LIFE = 2.4; // seconds before a ripple fully fades
 
 const vertexShader = /* glsl */ `
-uniform float uTime, uAmp, uFreq, uSpeed, uRippleAmp, uFlowStrength;
+uniform float uTime, uWaveTime, uAmp, uFreq, uSpeed, uRippleAmp, uFlowStrength;
 uniform vec2 uFlowDir; // unit current direction on XZ
 uniform vec3 uRipples[${MAX_RIPPLES}]; // (worldX, worldZ, startTime); startTime < 0 = inactive
 uniform mat4 uReflectionMatrix; // bias * mirrorProjection * mirrorView, for projective reflection sampling
@@ -32,12 +33,12 @@ varying float vViewZ; // linear positive view-space depth of this water fragment
 // ripple rings — all sampled in world XZ. Keep in sync with waterSurfaceHeight() in editorStore.ts.
 float waterHeight(vec2 p) {
   float h = 0.0;
-  h += sin(dot(vec2(1.0, 0.0), p) * uFreq + uTime * uSpeed) * uAmp * 0.5;
-  h += sin(dot(vec2(0.7071, 0.7071), p) * uFreq * 1.7 - uTime * uSpeed * 1.3) * uAmp * 0.28;
-  h += sin(dot(vec2(-0.6, 0.8), p) * uFreq * 2.6 + uTime * uSpeed * 1.7) * uAmp * 0.16;
-  h += sin(dot(vec2(0.2, -0.98), p) * uFreq * 3.7 - uTime * uSpeed * 2.1) * uAmp * 0.09;
+  h += sin(dot(vec2(1.0, 0.0), p) * uFreq + uWaveTime * uSpeed) * uAmp * 0.5;
+  h += sin(dot(vec2(0.7071, 0.7071), p) * uFreq * 1.7 - uWaveTime * uSpeed * 1.3) * uAmp * 0.28;
+  h += sin(dot(vec2(-0.6, 0.8), p) * uFreq * 2.6 + uWaveTime * uSpeed * 1.7) * uAmp * 0.16;
+  h += sin(dot(vec2(0.2, -0.98), p) * uFreq * 3.7 - uWaveTime * uSpeed * 2.1) * uAmp * 0.09;
   if (uFlowStrength > 0.0) {
-    h += sin(dot(uFlowDir, p) * uFreq * 1.2 - uTime * uSpeed * (1.0 + uFlowStrength)) * uAmp * 0.2;
+    h += sin(dot(uFlowDir, p) * uFreq * 1.2 - uWaveTime * uSpeed * (1.0 + uFlowStrength)) * uAmp * 0.2;
   }
   for (int i = 0; i < ${MAX_RIPPLES}; i++) {
     if (uRipples[i].z < 0.0) continue;
@@ -60,8 +61,8 @@ void main() {
   vHeight = h;
   world.y += h;
   // Slight horizontal chop so crests lean, not just bob.
-  world.x += sin(p.x * uFreq + uTime * uSpeed) * uAmp * 0.05;
-  world.z += cos(p.y * uFreq - uTime * uSpeed) * uAmp * 0.05;
+  world.x += sin(p.x * uFreq + uWaveTime * uSpeed) * uAmp * 0.05;
+  world.z += cos(p.y * uFreq - uWaveTime * uSpeed) * uAmp * 0.05;
 
   // Analytic normal from the height field (forward differences in world units).
   float e = 0.35;
@@ -78,7 +79,7 @@ void main() {
 
 const fragmentShader = /* glsl */ `
 uniform vec3 uShallow, uDeep, uFoamColor, uSunDir, uSunColor, uSkyTop, uSkyHorizon, uCamPos;
-uniform float uOpacity, uReflect, uFoam, uSparkle, uEmissive, uCaustics, uAmp, uTime, uFlowStrength;
+uniform float uOpacity, uReflect, uFoam, uSparkle, uEmissive, uCaustics, uAmp, uTime, uWaveTime, uFlowStrength;
 uniform vec2 uFlowDir;
 // Scene-capture inputs (High/Epic). uUseReflection/uUseRefraction gate them; without captures the
 // surface falls back to fresnel-sky reflection + UV-edge foam so it still looks right on Low/Medium.
@@ -183,9 +184,9 @@ void main() {
   col += uSunColor * spec * (0.35 + uSparkle * 0.4);
 
   // Caustic shimmer crawling across the surface (drifts along the current when flowing).
-  vec2 cp = vWorldPos.xz - uFlowDir * uFlowStrength * uTime * 0.6;
-  float c1 = sin(cp.x * 1.5 + uTime * 0.8) + sin(cp.y * 1.7 - uTime * 0.6);
-  float c2 = sin((cp.x + cp.y) * 1.1 + uTime * 1.1);
+  vec2 cp = vWorldPos.xz - uFlowDir * uFlowStrength * uWaveTime * 0.6;
+  float c1 = sin(cp.x * 1.5 + uWaveTime * 0.8) + sin(cp.y * 1.7 - uWaveTime * 0.6);
+  float c2 = sin((cp.x + cp.y) * 1.1 + uWaveTime * 1.1);
   float caust = pow(max(0.0, (c1 + c2) * 0.25 + 0.5), 2.0);
   col += baseColor * caust * uCaustics * 0.6;
 
@@ -241,6 +242,7 @@ export function WaterSurface({ object }: { object: SceneObject }) {
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
+      uWaveTime: { value: 0 },
       uAmp: { value: 0.22 },
       uFreq: { value: 0.55 },
       uSpeed: { value: 1.4 },
@@ -312,6 +314,7 @@ export function WaterSurface({ object }: { object: SceneObject }) {
 
     const u = uniforms;
     u.uTime.value = t;
+    u.uWaveTime.value = waterAnimationTime(t, water.loopDuration);
     u.uAmp.value = water.waveAmplitude;
     u.uFreq.value = water.waveFrequency;
     u.uSpeed.value = water.waveSpeed;

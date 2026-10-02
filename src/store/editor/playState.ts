@@ -17,6 +17,7 @@ import { clearReplayRecorder, resetReplayRecorder } from '../../runtime/replayRe
 import { clearPerception } from '../../runtime/aiPerception';
 import { clearVehicleDents } from '../../runtime/vehicleDamageBus';
 import { clearFractureDebris } from '../../runtime/fractureDebris';
+import { clearMeshCutting } from '../../runtime/meshCutting';
 import { clearExplosions } from '../../runtime/explosionBus';
 import { clearDecals } from '../../runtime/decalBus';
 import { clearFoliageInteractors } from '../../three/foliageInteractors';
@@ -39,6 +40,7 @@ export const applySetPlaying = (
       clearImpactAudioCooldown();
       clearNodeErrors();
       if (isPlaying) {
+        clearMeshCutting();
         const authoredObjects = selectActiveObjects(state);
         const objects = withProjectUILogic(authoredObjects, state.uiDocuments, state.blueprints);
         const autoplay = state.scenes.find((scene) => scene.id === state.activeSceneId)?.cinematics?.find((cinematic) => cinematic.autoplay);
@@ -196,6 +198,7 @@ export const applySetPlaying = (
       stopPhysics();
       clearExplosions();
       clearFractureDebris();
+      clearMeshCutting();
       clearDecals();
       clearTransformBuffer();
       clearReplayRecorder(); // drop the replay ring + any active clip

@@ -3233,6 +3233,7 @@ function WaterSection({
       <RangeField label="Surface bounce" value={water.surfaceBounce} min={0} max={2} onChange={(surfaceBounce) => onChange({ surfaceBounce })} />
       <RangeField label="Wave height" value={water.waveAmplitude} min={0} max={2} onChange={(waveAmplitude) => onChange({ waveAmplitude })} />
       <RangeField label="Wave speed" value={water.waveSpeed} min={0} max={6} onChange={(waveSpeed) => onChange({ waveSpeed })} />
+      <RangeField label="Loop seconds (0 = off)" value={water.loopDuration ?? 0} min={0} max={60} onChange={(loopDuration) => onChange({ loopDuration })} />
       <RangeField label="Wave frequency" value={water.waveFrequency} min={0.05} max={2} onChange={(waveFrequency) => onChange({ waveFrequency })} />
       <RangeField label="Current strength" value={water.flowStrength ?? 0} min={0} max={4} onChange={(flowStrength) => onChange({ flowStrength })} />
       <RangeField label="Current angle" value={water.flowAngle ?? 0} min={0} max={360} step={1} onChange={(flowAngle) => onChange({ flowAngle })} />

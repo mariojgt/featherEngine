@@ -2263,6 +2263,10 @@ export function CinematicPanel() {
                   <input type="checkbox" checked={Boolean(active.autoplay)} onChange={(event) => updateCinematic(active.id, { autoplay: event.target.checked })} />
                 </label>
                 <label className="field-row">
+                  <span>Loop</span>
+                  <input type="checkbox" checked={Boolean(active.loop)} onChange={(event) => updateCinematic(active.id, { loop: event.target.checked })} />
+                </label>
+                <label className="field-row">
                   <span>Snap</span>
                   <button className={`mini-toggle${snapTimeline ? ' active' : ''}`} type="button" title="Snap scrubbing and drag retiming to sequence frames" onClick={() => setSnapTimeline(!snapTimeline)}>
                     <Magnet size={14} aria-hidden />

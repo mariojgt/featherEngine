@@ -535,6 +535,9 @@ export const useProjectStore = create<ProjectState>()(
             } else if (template === 'tower-defense') {
               const { createTowerDefenseTemplate } = await import('../project/towerDefenseTemplate');
               await createTowerDefenseTemplate(Math.floor(Math.random() * 1_000_000));
+            } else if (template === 'crystal-slice') {
+              const { createCrystalSliceTemplate } = await import('../project/crystalSliceTemplate');
+              await createCrystalSliceTemplate();
             }
             return true;
           } catch (error) {

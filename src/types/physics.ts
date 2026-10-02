@@ -243,6 +243,8 @@ export interface WaterVolumeComponent {
   waveFrequency: number;
   /** Wave scroll speed. */
   waveSpeed: number;
+  /** Optional seamless visual/swell cycle in seconds. Impacts still age on the simulation clock. */
+  loopDuration?: number;
 
   // --- Visuals (rendered by the WaterSurface shader; all optional so legacy water keeps working) ---
   /** Look preset; applying one (other than 'custom') overwrites the visual fields below. */

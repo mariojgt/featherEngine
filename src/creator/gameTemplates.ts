@@ -5,11 +5,12 @@ export const CREATOR_QUICK_START_IDS = [
   'parcel-panic',
   'moba',
   'tower-defense',
+  'crystal-slice',
   'blank',
 ] as const;
 
 export type CreatorQuickStartId = (typeof CREATOR_QUICK_START_IDS)[number];
-export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense';
+export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense' | 'crystal-slice';
 
 export interface CreatorQuickStart {
   id: CreatorQuickStartId;
@@ -73,6 +74,13 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
     templateSlug: 'template-tower-defense',
     builtInTemplate: 'tower-defense',
     projectTitle: 'Sproutwatch',
+  },
+  {
+    id: 'crystal-slice',
+    label: 'Crystal Slice',
+    description: 'A chrome blade cuts an intact crystal block into colliding pieces that tumble into a reflective pool.',
+    icon: '💎',
+    builtInTemplate: 'crystal-slice',
   },
   {
     id: 'blank',

@@ -24,6 +24,9 @@ export interface SceneObject {
   transform: TransformComponent;
   renderer?: MeshRendererComponent;
   physics?: PhysicsComponent;
+  /** Convex mesh cutting. A blade's local X axis is the cut normal, local -Y its cutting edge.
+   * Stock stays clamped until the edge traverses its full height; detached parts become rigid bodies. */
+  cutting?: { enabled: boolean; role: 'stock' | 'blade'; kerf?: number; repeatSeconds?: number };
   /** Physics constraint linking this body to another (hinge/slider/spring/rope/fixed/ball). See {@link JointComponent}. */
   joint?: JointComponent;
   /** Real-time cloth sheet (Verlet sim, separate from Rapier). See {@link ClothComponent}. */
