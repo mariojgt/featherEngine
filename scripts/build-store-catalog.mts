@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 // Run through vite-node so the container format has ONE implementation. A hand-rolled copy of the
 // zip layout here would drift from the engine's reader the first time either changed.
 import { readPackageFile, writePackageArchive } from '../src/project/packageArchive';
-// UI captured from the shipped builds of rpgMania and MomentumCup by scripts/uikit/capture.mjs.
+// RPG UI captured from the shipped build of rpgMania by scripts/uikit/capture.mjs.
 // Kept as data so this catalog stays byte-stable — re-running the capture is a deliberate act, not
 // a side effect of building the store.
 import uiKits from '../src/store-assets/uiKits.json';
@@ -40,70 +40,6 @@ const ISO = new Date(EPOCH).toISOString();
 // ------------------------------------------------------------------------------------------------
 // Authoring helpers — the minimum valid shape of each entity (see src/types/).
 // ------------------------------------------------------------------------------------------------
-
-const transform = (position = [0, 0, 0], rotation = [0, 0, 0], scale = [1, 1, 1]) => ({
-  position,
-  rotation,
-  scale,
-});
-
-const renderer = (mesh, { color = '#5B8CFF', materialId, metalness = 0.1, roughness = 0.65 } = {}) => ({
-  enabled: true,
-  mesh,
-  color,
-  metalness,
-  roughness,
-  ...(materialId ? { materialId } : {}),
-});
-
-/** A scene object inside a prefab. Ids are prefab-local; every install re-ids them. */
-const object = (id, name, kind, opts = {}) => ({
-  id,
-  name,
-  kind,
-  transform: transform(opts.position, opts.rotation, opts.scale),
-  ...(kind === 'empty' ? {} : { renderer: renderer(kind, opts) }),
-  ...(opts.parentId ? { parentId: opts.parentId } : {}),
-  ...(opts.physics ? { physics: physics(opts.physics) } : {}),
-});
-
-const physics = ({ bodyType = 'dynamic', collider = 'box', mass = 1 } = {}) => ({
-  enabled: true,
-  bodyType,
-  collider,
-  materialPreset: 'default',
-  isTrigger: false,
-  collisionLayer: 0,
-  collisionMask: 0xffff,
-  mass,
-  gravityScale: 1,
-  friction: 0.6,
-  restitution: 0.05,
-  linearDamping: 0,
-  angularDamping: 0.05,
-  windInfluence: 0,
-});
-
-const material = (id, name, props) => ({
-  id,
-  name,
-  description: 'Reusable material asset.',
-  color: '#5B8CFF',
-  metalness: 0.1,
-  roughness: 0.65,
-  emissiveColor: '#000000',
-  emissiveIntensity: 0,
-  createdAt: EPOCH,
-  ...props,
-});
-
-const prefab = (id, name, objects) => ({
-  id,
-  name,
-  objects,
-  rootId: objects[0].id,
-  createdAt: EPOCH,
-});
 
 /** A flat-gradient SVG card used as the store thumbnail — keeps the catalog binary-free. */
 const thumbnail = (from, to, glyph) => {
@@ -144,30 +80,8 @@ const buildPackage = (meta, content, assets = [], kind = 'asset') => ({
 });
 
 // ------------------------------------------------------------------------------------------------
-// The seed catalogue. Primitives only — every pack is a few KB and works fully offline.
+// The bundled UI kits.
 // ------------------------------------------------------------------------------------------------
-
-const woodMat = material('mat-store-wood', 'Crate Wood', { color: '#A9743B', roughness: 0.85, metalness: 0 });
-const metalMat = material('mat-store-metal', 'Banded Metal', { color: '#8C8F96', roughness: 0.35, metalness: 0.9 });
-const stoneMat = material('mat-store-stone', 'Quarry Stone', { color: '#8A8A85', roughness: 0.95, metalness: 0 });
-
-const neonPink = material('mat-store-neon-pink', 'Neon Pink', {
-  color: '#FF3D8B',
-  emissiveColor: '#FF3D8B',
-  emissiveIntensity: 3.4,
-  roughness: 0.3,
-});
-const neonCyan = material('mat-store-neon-cyan', 'Neon Cyan', {
-  color: '#3DE8FF',
-  emissiveColor: '#3DE8FF',
-  emissiveIntensity: 3.4,
-  roughness: 0.3,
-});
-const darkMetal = material('mat-store-dark-metal', 'Gantry Steel', {
-  color: '#23262E',
-  roughness: 0.45,
-  metalness: 0.8,
-});
 
 /**
  * A captured UI kit as a UIDocument. `renderMode: 'dom'` plus the per-document `css` is exactly how
@@ -786,174 +700,6 @@ const PACKS = [
       thumbnail: thumbnail('#6C3BFF', '#FF9B3D', '\u{1F5E1}'),
     },
     content: { uiDocuments: decomposeUIKit('uidoc-store-rpg-hud', uiKitDoc('uidoc-store-rpg-hud', uiKits['rpg-hud'])) },
-  },
-  {
-    slug: 'ui-kit-arcade-hud',
-    meta: {
-      id: 'pkg-feather-ui-arcade-hud',
-      name: 'Arcade Racer HUD',
-      description:
-        'Arcade racing overlay from a shipped game — lap and timing readouts, boost and speed panels, menu chrome. Screen UI, hidden until you show it.',
-      author: 'TheDevRealm',
-      version: '1.0.0',
-      tags: ['ui', 'hud', 'racing'],
-      thumbnail: thumbnail('#00E5FF', '#FFE23D', '\u{1F3C1}'),
-    },
-    content: { uiDocuments: decomposeUIKit('uidoc-store-arcade-hud', uiKitDoc('uidoc-store-arcade-hud', uiKits['arcade-hud'])) },
-  },
-
-  {
-    slug: 'starter-props',
-    meta: {
-      id: 'pkg-feather-starter-props',
-      name: 'Starter Props',
-      description:
-        'Crates, a barrel and a stone block to dress a level with. Physics is switched on, so they tumble the moment you press Play.',
-      author: 'Feather',
-      version: '1.0.0',
-      tags: ['props', 'environment', 'physics'],
-      thumbnail: thumbnail('#B4762F', '#6E4318', '\u{1F4E6}'),
-    },
-    content: {
-      materials: [woodMat, metalMat, stoneMat],
-      prefabs: [
-        prefab('prefab-store-crate', 'Wooden Crate', [
-          object('obj-crate', 'Wooden Crate', 'cube', {
-            materialId: woodMat.id,
-            color: woodMat.color,
-            physics: { collider: 'box', mass: 12 },
-          }),
-        ]),
-        prefab('prefab-store-barrel', 'Metal Barrel', [
-          object('obj-barrel', 'Metal Barrel', 'capsule', {
-            materialId: metalMat.id,
-            color: metalMat.color,
-            scale: [0.8, 0.7, 0.8],
-            physics: { collider: 'capsule', mass: 22 },
-          }),
-        ]),
-        prefab('prefab-store-crate-stack', 'Crate Stack', [
-          object('obj-stack-root', 'Crate Stack', 'empty'),
-          object('obj-stack-a', 'Crate A', 'cube', {
-            parentId: 'obj-stack-root',
-            materialId: woodMat.id,
-            color: woodMat.color,
-            physics: { collider: 'box', mass: 12 },
-          }),
-          object('obj-stack-b', 'Crate B', 'cube', {
-            parentId: 'obj-stack-root',
-            position: [0.12, 1.02, -0.08],
-            rotation: [0, 0.35, 0],
-            materialId: woodMat.id,
-            color: woodMat.color,
-            physics: { collider: 'box', mass: 12 },
-          }),
-          object('obj-stack-c', 'Capstone', 'cube', {
-            parentId: 'obj-stack-root',
-            position: [-0.05, 2.04, 0.05],
-            rotation: [0, -0.2, 0],
-            scale: [0.85, 0.85, 0.85],
-            materialId: stoneMat.id,
-            color: stoneMat.color,
-            physics: { collider: 'box', mass: 30 },
-          }),
-        ]),
-      ],
-    },
-  },
-  {
-    slug: 'neon-signage',
-    meta: {
-      id: 'pkg-feather-neon-signage',
-      name: 'Neon Signage Kit',
-      description:
-        'Emissive pillars and a hanging sign for night-time city scenes. Drops straight into a scene with bloom enabled.',
-      author: 'Feather',
-      version: '1.0.0',
-      tags: ['props', 'lighting', 'cyberpunk'],
-      thumbnail: thumbnail('#FF3D8B', '#3DE8FF', '\u{1F3AE}'),
-    },
-    content: {
-      materials: [neonPink, neonCyan, darkMetal],
-      prefabs: [
-        prefab('prefab-store-neon-pillar', 'Neon Pillar', [
-          object('obj-pillar-root', 'Neon Pillar', 'empty'),
-          object('obj-pillar-post', 'Post', 'cube', {
-            parentId: 'obj-pillar-root',
-            position: [0, 1.6, 0],
-            scale: [0.18, 3.2, 0.18],
-            materialId: darkMetal.id,
-            color: darkMetal.color,
-          }),
-          object('obj-pillar-tube', 'Neon Tube', 'cube', {
-            parentId: 'obj-pillar-root',
-            position: [0, 1.8, 0.12],
-            scale: [0.06, 2.4, 0.06],
-            materialId: neonPink.id,
-            color: neonPink.color,
-          }),
-        ]),
-        prefab('prefab-store-neon-sign', 'Hanging Sign', [
-          object('obj-sign-root', 'Hanging Sign', 'empty'),
-          object('obj-sign-bracket', 'Bracket', 'cube', {
-            parentId: 'obj-sign-root',
-            position: [0, 2.6, 0],
-            scale: [1.4, 0.08, 0.08],
-            materialId: darkMetal.id,
-            color: darkMetal.color,
-          }),
-          object('obj-sign-panel', 'Panel', 'plane', {
-            parentId: 'obj-sign-root',
-            position: [0.5, 1.9, 0],
-            rotation: [0, 0, 0],
-            scale: [1.6, 1, 1],
-            materialId: neonCyan.id,
-            color: neonCyan.color,
-          }),
-        ]),
-      ],
-    },
-  },
-  {
-    slug: 'physics-playground',
-    meta: {
-      id: 'pkg-feather-physics-playground',
-      name: 'Physics Playground',
-      description:
-        'A ramp, a launch platform and a heavy ball — a ready-made rig for testing collisions, mass and restitution.',
-      author: 'Feather',
-      version: '1.0.0',
-      tags: ['physics', 'prototyping', 'kit'],
-      thumbnail: thumbnail('#3D7BFF', '#153A8A', '\u{26BD}'),
-    },
-    content: {
-      materials: [stoneMat],
-      prefabs: [
-        prefab('prefab-store-ramp', 'Test Ramp', [
-          object('obj-ramp', 'Test Ramp', 'cube', {
-            rotation: [0, 0, -0.32],
-            scale: [6, 0.25, 2.4],
-            materialId: stoneMat.id,
-            color: stoneMat.color,
-            physics: { bodyType: 'fixed', collider: 'box' },
-          }),
-        ]),
-        prefab('prefab-store-platform', 'Launch Platform', [
-          object('obj-platform', 'Launch Platform', 'cube', {
-            scale: [3, 0.4, 3],
-            materialId: stoneMat.id,
-            color: stoneMat.color,
-            physics: { bodyType: 'fixed', collider: 'box' },
-          }),
-        ]),
-        prefab('prefab-store-ball', 'Heavy Ball', [
-          object('obj-ball', 'Heavy Ball', 'sphere', {
-            color: '#D8452F',
-            physics: { collider: 'sphere', mass: 40 },
-          }),
-        ]),
-      ],
-    },
   },
 ];
 

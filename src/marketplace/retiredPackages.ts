@@ -10,6 +10,10 @@ export const RETIRED_STORE_SLUGS = [
   'pixel-art-trees',
   'sandbox-world',
   'blade-prop',
+  'ui-kit-arcade-hud',
+  'starter-props',
+  'neon-signage',
+  'physics-playground',
 ] as const;
 
 const retiredStoreSlugs = new Set<string>(RETIRED_STORE_SLUGS);
