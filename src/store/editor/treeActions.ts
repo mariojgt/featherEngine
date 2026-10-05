@@ -20,6 +20,7 @@ import { cloneMesh, extrudeMeshFaces, subdivideMeshFaces, type MeshBooleanOp } f
 import { booleanMeshParts, dedupeGeometryToMesh } from '../../model/modelMeshCsg';
 import { getPartRenderGeometry } from '../../model/modelGeometry';
 import { defaultTransform } from './defaults';
+import { meshForPart } from './modelMeshActions';
 import { makeId, stripUndefined } from './ids';
 import { mapActiveSceneObjects, selectActiveObjects } from './storeHelpers';
 
@@ -450,7 +451,9 @@ export const applyConvertModelPartToMesh = (set: SetState, get: GetState, specId
   const found = findSpecAndPart(get, specId, partId);
   if (!found || found.index < 0) return false;
   const target = found.target;
-  const baked = dedupeGeometryToMesh(getPartRenderGeometry(target));
+  if (target.shape === 'mesh') return true;
+  // Clean quads from the generators (not a welded triangle soup), so loop cuts and subdivision work.
+  const baked = meshForPart(target);
   return withUpdatedParts(get, specId, partId, (parts) => {
     const part = parts[found.index];
     parts[found.index] = {
@@ -459,6 +462,7 @@ export const applyConvertModelPartToMesh = (set: SetState, get: GetState, specId
       mesh: baked,
     };
     delete parts[found.index].corners;
+    delete parts[found.index].faceColors;
     return parts;
   });
 };

@@ -8,7 +8,7 @@ import {
   Box, Boxes, CircleDot, Cone, Copy, Cylinder, Donut, Eye, Focus, Globe, Grid3X3, Hammer, Hexagon, Minus, Move3d,
   PackagePlus, Paintbrush, Pill, Plus, Pyramid, RotateCcw, Square, Tent, Trash2,
 } from 'lucide-react';
-import type { ModelPart, ModelPartCollider, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
+import type { ModelMeshGenerator, ModelMeshOp, ModelMeshOpResult, ModelModifier, ModelPart, ModelPartCollider, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
 import {
   BOX_CORNER_LABELS,
   BOX_EDGE_CORNERS,
@@ -20,11 +20,26 @@ import {
   boxComponentCount,
   type BoxComponentMode,
 } from '../model/modelSpec';
-import { buildModelGroup, faceGroupForFaceIndex, getPartRenderEdges, getPartRenderGeometry } from '../model/modelGeometry';
-import { meshEdgePairs, meshFaceCount, meshFaceVertices, DEFAULT_MESH } from '../model/modelMesh';
+import { buildModelGroup, faceGroupForFaceIndex, getPartRenderEdges, getPartRenderGeometry, polyFaceForTriangle } from '../model/modelGeometry';
+import { meshEdgePairs, meshFaceCount, DEFAULT_MESH } from '../model/modelMesh';
+import { ensurePolyMesh, meshFaces, polygonCenter, polygonNormal } from '../model/polyMesh';
+import { growSelection, selectLinked, shrinkSelection, verticesToFaces } from '../model/meshOps';
+import {
+  EMPTY_MESH_SELECTION,
+  MeshEditOverlay,
+  convertSelection,
+  selectAllComponents as selectAllMeshComponents,
+  selectionFromResult,
+  selectionVertices,
+  type MeshModalKind,
+  type MeshModalRequest,
+  type MeshSelection,
+  type MeshToolSettings,
+} from './modelForgeMeshEdit';
 import { ModelPartMesh } from '../three/ModelMesh';
 import { RangeField } from '../components/InspectorPanel';
 import { useEditorStore } from '../store/editorStore';
+import { redo as redoHistory, undo as undoHistory } from '../store/history';
 import { defineFeatherPlugin, type FeatherPluginAPI } from './types';
 
 /**
@@ -254,164 +269,6 @@ function ComponentHandles({
   );
 }
 
-/**
- * Edit mode for MESH parts — a parallel of ComponentHandles that walks the part's actual triangle
- * data instead of the eight-corner box cage. Vertex mode moves real vertices; edge/face modes pick
- * them for grouped transforms but Vertices are the only thing committed (undo-friendly, no new
- * topology from the gizmo). The part matrix maps unit-space vertices to/from the preview.
- */
-function MeshEditHandles({
-  part,
-  mode,
-  gizmoMode,
-  snap,
-  roundTo,
-  selectedComponents,
-  onSelectComponent,
-  onCommitVertices,
-  gizmoActive,
-  onGizmoStart,
-  onGizmoEnd,
-}: {
-  part: ModelPart;
-  mode: BoxComponentMode;
-  gizmoMode: ForgeGizmoMode;
-  snap: boolean;
-  roundTo: (value: number, decimals?: number) => number;
-  selectedComponents: number[];
-  onSelectComponent: (index: number, additive: boolean) => void;
-  onCommitVertices: (updates: Array<[number, Vector3Tuple]>) => void;
-  gizmoActive: { current: boolean };
-  onGizmoStart: (commit: () => void) => void;
-  onGizmoEnd: () => void;
-}) {
-  const controlsRef = useRef<TransformControlsImpl | null>(null);
-  const mesh = part.mesh ?? DEFAULT_MESH;
-  const { inverse, worldVertices, handles } = useMemo(() => {
-    const matrix = new THREE.Matrix4().compose(
-      new THREE.Vector3(...part.position),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(...part.rotation)),
-      new THREE.Vector3(...part.scale),
-    );
-    const world = mesh.vertices.map((vertex) => new THREE.Vector3(...vertex).applyMatrix4(matrix));
-    let indices: number[] = [];
-    if (mode === 'vertex') {
-      indices = mesh.vertices.map((_, index) => index);
-    } else if (mode === 'edge') {
-      indices = meshEdgePairs(mesh).map((_, index) => index);
-    } else {
-      indices = Array.from({ length: Math.floor(mesh.indices.length / 3) }, (_, index) => index);
-    }
-    return { inverse: matrix.clone().invert(), worldVertices: world, handles: indices };
-  }, [part, mesh, mode]);
-
-  const handleCenter = (index: number): THREE.Vector3 => {
-    if (mode === 'vertex') return worldVertices[index];
-    if (mode === 'edge') {
-      const [a, b] = meshEdgePairs(mesh)[index];
-      return worldVertices[a].clone().add(worldVertices[b]).multiplyScalar(0.5);
-    }
-    const [a, b, c] = meshFaceVertices(mesh, index);
-    return worldVertices[a].clone().add(worldVertices[b]).add(worldVertices[c]).multiplyScalar(1 / 3);
-  };
-
-  const commit = () => {
-    const target = (controlsRef.current as unknown as { object?: THREE.Object3D } | null)?.object;
-    if (!target || !selectedComponents.length) return;
-    const componentMatrix = new THREE.Matrix4().compose(target.position, target.quaternion, target.scale);
-    const updates: Array<[number, Vector3Tuple]> = [];
-    const verts = mode === 'vertex'
-      ? selectedComponents
-      : mode === 'edge'
-        ? selectedComponents.flatMap((index) => meshEdgePairs(mesh)[index] ?? [])
-        : selectedComponents.flatMap((index) => meshFaceVertices(mesh, index));
-    const uniqueVerts = [...new Set(verts)];
-    uniqueVerts.forEach((index) => {
-      // Translate the world-space vertex by the gizmo's displacement, then map back to unit space.
-      const translation = new THREE.Vector3(componentMatrix.elements[12], componentMatrix.elements[13], componentMatrix.elements[14]);
-      const unit = worldVertices[index].clone().add(translation).applyMatrix4(inverse);
-      const rounded: Vector3Tuple = [roundTo(unit.x, 4), roundTo(unit.y, 4), roundTo(unit.z, 4)];
-      updates.push([index, rounded]);
-    });
-    if (updates.length) onCommitVertices(updates);
-  };
-
-  return (
-    <>
-      <lineSegments raycast={ignoreOutlineRaycast}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            args={[new Float32Array(meshEdgePairs(mesh).flatMap(([a, b]) => [worldVertices[a].x, worldVertices[a].y, worldVertices[a].z, worldVertices[b].x, worldVertices[b].y, worldVertices[b].z])), 3]}
-          />
-        </bufferGeometry>
-        <lineBasicMaterial color={OUTLINE_ACCENT} transparent opacity={0.5} toneMapped={false} />
-      </lineSegments>
-      {handles.map((index) => {
-        const center = handleCenter(index);
-        const selected = selectedComponents.includes(index);
-        const label = mode === 'vertex'
-          ? `Vertex ${index}`
-          : mode === 'edge'
-            ? `Edge ${index + 1}`
-            : `Face ${index + 1}`;
-        return (
-          <mesh
-            key={`${mode}-${index}`}
-            position={[center.x, center.y, center.z]}
-            scale={selected ? 1.28 : 1}
-            name={label}
-            onPointerDown={(event) => {
-              if (event.nativeEvent.button !== 0) return;
-              event.stopPropagation();
-              onSelectComponent(index, event.nativeEvent.shiftKey);
-            }}
-            onPointerOver={(event) => {
-              event.stopPropagation();
-              document.body.style.cursor = 'pointer';
-            }}
-            onPointerOut={() => {
-              document.body.style.cursor = '';
-            }}
-          >
-            {mode === 'vertex' ? (
-              <sphereGeometry args={[0.05, 14, 12]} />
-            ) : mode === 'edge' ? (
-              <boxGeometry args={[0.1, 0.1, 0.1]} />
-            ) : (
-              <octahedronGeometry args={[0.07, 0]} />
-            )}
-            <meshBasicMaterial color={selected ? OUTLINE_ACCENT : '#ffffff'} transparent opacity={selected ? 1 : 0.88} toneMapped={false} />
-          </mesh>
-        );
-      })}
-      {selectedComponents.length > 0 && (
-        <TransformControls
-          key={`mesh-${mode}-${selectedComponents.join('-')}`}
-          ref={controlsRef}
-          mode={gizmoMode}
-          size={0.72}
-          translationSnap={snap ? 0.05 : null}
-          rotationSnap={snap ? Math.PI / 12 : null}
-          scaleSnap={snap ? 0.1 : null}
-          position={[0, 0, 0]}
-          onMouseDown={() => {
-            onGizmoStart(commit);
-          }}
-          onMouseUp={() => {
-            onGizmoEnd();
-          }}
-        >
-          <mesh>
-            <sphereGeometry args={[0.04, 12, 10]} />
-            <meshBasicMaterial color={OUTLINE_ACCENT} transparent opacity={0.3} toneMapped={false} />
-          </mesh>
-        </TransformControls>
-      )}
-    </>
-  );
-}
-
 /** Reset the studio camera to a comfortable framing of the current prop. */
 function FitCamera({
   framing,
@@ -462,7 +319,42 @@ interface ForgePreviewProps {
   onPaintFace: (partId: string, faceGroup: number) => void;
   onCommitPart: (partId: string, patch: Pick<ModelPart, 'position' | 'rotation' | 'scale'>) => void;
   onCommitCorners: (partId: string, corners: Record<number, Vector3Tuple> | null) => void;
-  onCommitMeshVertices: (partId: string, updates: Array<[number, Vector3Tuple]>) => void;
+  meshSelection: MeshSelection;
+  meshSettings: MeshToolSettings;
+  meshModalRequest: MeshModalRequest | null;
+  hiddenPartIds: readonly string[];
+  onMeshSelectionChange: (selection: MeshSelection) => void;
+  onCommitMeshPositions: (partId: string, positions: Array<[number, Vector3Tuple]>) => void;
+  onCommitMeshOp: (partId: string, op: ModelMeshOp) => ModelMeshOpResult;
+  onMeshModalChange: (label: string | null) => void;
+  onProportionalRadiusChange: (radius: number) => void;
+}
+
+/** The cage polygon a paint click landed on. Without modifiers the render triangles map straight back;
+ *  with a modifier stack (mirror/subdivision) the closest cage face to the hit point wins. */
+function paintedCageFace(part: ModelPart, style: ModelStyle | undefined, event: ThreeEvent<PointerEvent>): number {
+  const mesh = ensurePolyMesh(part.mesh ?? DEFAULT_MESH);
+  const faces = meshFaces(mesh);
+  const active = part.modifiers?.some((modifier) => modifier.enabled !== false);
+  if (!active && event.faceIndex != null) {
+    const face = polyFaceForTriangle(getPartRenderGeometry(part, style), event.faceIndex);
+    if (face >= 0) return face;
+  }
+  const local = event.object.worldToLocal(event.point.clone());
+  let best = -1;
+  let bestDistance = Infinity;
+  faces.forEach((loop, index) => {
+    const center = polygonCenter(mesh.vertices, loop);
+    const normal = polygonNormal(mesh.vertices, loop);
+    const offset = [local.x - center[0], local.y - center[1], local.z - center[2]];
+    const planeDistance = Math.abs(offset[0] * normal[0] + offset[1] * normal[1] + offset[2] * normal[2]);
+    const distance = Math.hypot(offset[0], offset[1], offset[2]) + planeDistance * 2;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  });
+  return best;
 }
 
 function ForgePreview({
@@ -483,8 +375,19 @@ function ForgePreview({
   onPaintFace,
   onCommitPart,
   onCommitCorners,
-  onCommitMeshVertices,
+  meshSelection,
+  meshSettings,
+  meshModalRequest,
+  hiddenPartIds,
+  onMeshSelectionChange,
+  onCommitMeshPositions,
+  onCommitMeshOp,
+  onMeshModalChange,
+  onProportionalRadiusChange,
 }: ForgePreviewProps) {
+  const [meshPreviewing, setMeshPreviewing] = useState(false);
+  const selectedPartForEdit = spec.parts.find((part) => part.id === selectedPartId);
+  const editingMeshPart = mode === 'mesh' && selectedPartForEdit?.shape === 'mesh' ? selectedPartForEdit : null;
   const controlsRef = useRef<TransformControlsImpl | null>(null);
   const activeGizmoCommit = useRef<(() => void) | null>(null);
   // True from gizmo grab until just AFTER release: the gizmo raycasts through its own DOM
@@ -520,6 +423,11 @@ function ForgePreview({
     if (event.nativeEvent.button !== 0) return;
     event.stopPropagation();
     if (mode === 'paint') {
+      if (part.shape === 'mesh') {
+        const face = paintedCageFace(part, spec.style, event);
+        if (face >= 0) onPaintFace(part.id, face);
+        return;
+      }
       const faceIndex = event.faceIndex;
       if (faceIndex != null) onPaintFace(part.id, faceGroupForFaceIndex(getPartRenderGeometry(part, spec.style), faceIndex));
       return;
@@ -623,8 +531,11 @@ function ForgePreview({
         />
       )}
       <ContactShadows position={[0, 0.006, 0]} opacity={0.48} scale={14} blur={2.4} far={8} resolution={512} />
-      {spec.parts.map((part) =>
-        mode === 'build' && part.id === selectedPartId ? (
+      {spec.parts.filter((part) => !hiddenPartIds.includes(part.id)).map((part) =>
+        editingMeshPart && part.id === editingMeshPart.id ? (
+          // Edit mode owns this part's clicks (the overlay's pick surface); hide it while a modal previews.
+          meshPreviewing ? null : <ModelPartMesh key={part.id} part={part} palette={spec.palette} style={spec.style} />
+        ) : mode === 'build' && part.id === selectedPartId ? (
           <TransformControls
             key={part.id}
             ref={controlsRef}
@@ -690,15 +601,21 @@ function ForgePreview({
           );
         }
         return (
-          <MeshEditHandles
+          <MeshEditOverlay
             part={selected}
+            palette={spec.palette}
+            style={spec.style}
             mode={componentMode}
+            selection={meshSelection}
+            settings={meshSettings}
             gizmoMode={gizmoMode}
-            snap={snap}
-            roundTo={round}
-            selectedComponents={selectedComponents}
-            onSelectComponent={onSelectComponent}
-            onCommitVertices={(updates) => onCommitMeshVertices(selected.id, updates)}
+            modalRequest={meshModalRequest}
+            onSelectionChange={onMeshSelectionChange}
+            onCommitPositions={(positions) => onCommitMeshPositions(selected.id, positions)}
+            onCommitOp={(op) => onCommitMeshOp(selected.id, op)}
+            onModalChange={onMeshModalChange}
+            onPreviewChange={setMeshPreviewing}
+            onProportionalRadiusChange={onProportionalRadiusChange}
             gizmoActive={gizmoActive}
             onGizmoStart={beginGizmo}
             onGizmoEnd={finishGizmo}
@@ -771,6 +688,21 @@ function PaletteStrip({ palette, activeSlot, onPick }: { palette: readonly strin
   );
 }
 
+/** One-click clean-topology meshes for the Add menu: quad primitives, lathe profiles and tube sweeps. */
+const MESH_PRESETS: ReadonlyArray<{ id: string; label: string; generator: ModelMeshGenerator; scale?: Vector3Tuple }> = [
+  { id: 'quad-cube', label: 'Cube (2×2 quads)', generator: { kind: 'cube', segments: 2 } },
+  { id: 'grid', label: 'Grid plane', generator: { kind: 'plane', segmentsX: 4, segmentsZ: 4 }, scale: [2, 1, 2] },
+  { id: 'cylinder', label: 'Cylinder (12)', generator: { kind: 'cylinder', sides: 12 } },
+  { id: 'sphere', label: 'UV sphere', generator: { kind: 'sphere', segments: 16, rings: 8 } },
+  { id: 'torus', label: 'Torus', generator: { kind: 'torus', majorSegments: 24, minorSegments: 10, minorRatio: 0.3 } },
+  { id: 'vase', label: 'Vase (lathe)', generator: { kind: 'lathe', segments: 20, profile: [[0, -0.5], [0.22, -0.48], [0.38, -0.3], [0.42, -0.05], [0.24, 0.25], [0.16, 0.4], [0.22, 0.5]] } },
+  { id: 'bottle', label: 'Bottle (lathe)', generator: { kind: 'lathe', segments: 18, profile: [[0, -0.5], [0.3, -0.5], [0.32, 0.05], [0.12, 0.28], [0.1, 0.5], [0, 0.5]] } },
+  { id: 'column', label: 'Column (lathe)', generator: { kind: 'lathe', segments: 16, profile: [[0, -0.5], [0.45, -0.5], [0.45, -0.42], [0.32, -0.36], [0.28, 0.36], [0.4, 0.42], [0.4, 0.5], [0, 0.5]] }, scale: [0.8, 2.4, 0.8] },
+  { id: 'bowl', label: 'Bowl (lathe)', generator: { kind: 'lathe', segments: 24, profile: [[0, -0.2], [0.25, -0.2], [0.45, 0], [0.5, 0.2], [0.44, 0.2], [0.38, 0.02], [0.2, -0.12], [0, -0.12]] } },
+  { id: 'handle', label: 'Handle (tube)', generator: { kind: 'tube', radius: 0.06, sides: 10, path: [[-0.4, 0, 0], [-0.4, 0.3, 0], [-0.25, 0.45, 0], [0.25, 0.45, 0], [0.4, 0.3, 0], [0.4, 0, 0]] } },
+  { id: 'elbow', label: 'Pipe elbow (tube)', generator: { kind: 'tube', radius: 0.12, sides: 12, path: [[0, -0.5, 0], [0, 0, 0], [0.08, 0.22, 0], [0.28, 0.38, 0], [0.5, 0.4, 0]] } },
+];
+
 function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
   const studioRef = useRef<HTMLElement | null>(null);
   // The plugin sees the library through detached api snapshots; models:changed says when to
@@ -797,6 +729,21 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
   const [baking, setBaking] = useState(false);
   const [fitNonce, setFitNonce] = useState(0);
   const [status, setStatus] = useState('Start in Object mode, then use Edit for the box control cage or Paint for faces.');
+  const [meshSelection, setMeshSelection] = useState<MeshSelection>(EMPTY_MESH_SELECTION);
+  const [meshTools, setMeshTools] = useState<Omit<MeshToolSettings, 'snap'>>({
+    proportional: false,
+    proportionalRadius: 0.5,
+    falloff: 'smooth',
+    symmetry: [],
+    xray: false,
+  });
+  const meshSettings = useMemo<MeshToolSettings>(() => ({ ...meshTools, snap }), [meshTools, snap]);
+  const [meshModalRequest, setMeshModalRequest] = useState<MeshModalRequest | null>(null);
+  const [meshModalLabel, setMeshModalLabel] = useState<string | null>(null);
+  const [hiddenPartIds, setHiddenPartIds] = useState<string[]>([]);
+  const materials = useEditorStore((state) => state.materials);
+  const glbInputRef = useRef<HTMLInputElement | null>(null);
+  const [bakeOptions, setBakeOptions] = useState({ ao: true, normal: false, size: 512 });
 
   const spec = library.find((entry) => entry.id === selectedSpecId) ?? library[0];
   const placedCount = useMemo(
@@ -850,6 +797,22 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
   useEffect(() => {
     setSelectedComponents([]);
   }, [selectedPartId, mode, componentMode]);
+
+  // Mesh selections survive component-mode switches (Blender converts them); a new part or mode clears.
+  useEffect(() => {
+    setMeshSelection(EMPTY_MESH_SELECTION);
+  }, [selectedPartId, mode, selectedSpecId]);
+  const previousComponentMode = useRef(componentMode);
+  useEffect(() => {
+    const from = previousComponentMode.current;
+    previousComponentMode.current = componentMode;
+    if (from === componentMode) return;
+    const part = spec?.parts.find((entry) => entry.id === selectedPartId);
+    if (part?.shape !== 'mesh' || !part.mesh) return;
+    const mesh = ensurePolyMesh(part.mesh);
+    setMeshSelection((current) => convertSelection(mesh, from, componentMode, current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [componentMode]);
 
   if (!spec) {
     return (
@@ -924,12 +887,19 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
         : status;
     });
 
-  const paintFace = (partId: string, faceGroup: number) =>
+  const paintFace = (partId: string, faceGroup: number) => {
+    if (spec.parts.find((part) => part.id === partId)?.shape === 'mesh') {
+      // Mesh parts paint per POLYGON (faceGroup is the cage face index here).
+      setSelectedPartId(partId);
+      runMeshOp('Paint face', { type: 'paintFaces', faces: [faceGroup], slot: clampedActiveSlot }, partId);
+      return;
+    }
     attempt('Paint face', () => {
       api.models.paintPart(spec.id, partId, clampedActiveSlot, faceGroup);
       setSelectedPartId(partId);
       return `Painted ${MODEL_FACE_GROUPS[spec.parts.find((part) => part.id === partId)?.shape ?? 'box'][faceGroup] ?? 'face'} with slot ${clampedActiveSlot}.`;
     });
+  };
 
   const editPaletteColor = (slot: number, color: string) =>
     attempt('Edit palette', () => {
@@ -1006,6 +976,162 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
     });
   };
 
+  const meshPart = mode === 'mesh' && selectedPart?.shape === 'mesh' && selectedPart.mesh ? selectedPart : null;
+  const meshCage = meshPart ? ensurePolyMesh(meshPart.mesh!) : null;
+  const meshSelectedVerts = meshCage ? selectionVertices(meshCage, componentMode, meshSelection) : [];
+  const meshSelectionCount = componentMode === 'vertex'
+    ? meshSelection.vertices.length
+    : componentMode === 'edge' ? meshSelection.edges.length : meshSelection.faces.length;
+
+  /** One mesh op through the plugin API (one undo step); the selection follows Blender's rules. */
+  const runMeshOp = (label: string, op: ModelMeshOp, partId = selectedPart?.id): ModelMeshOpResult => {
+    let outcome: ModelMeshOpResult = { ok: false };
+    if (!partId) return outcome;
+    attempt(label, () => {
+      outcome = api.models.meshOp(spec.id, partId, op);
+      const updated = api.models.library().find((entry) => entry.id === spec.id)?.parts.find((part) => part.id === partId);
+      if (updated?.mesh) {
+        const mesh = ensurePolyMesh(updated.mesh as ModelPart['mesh'] & object);
+        setMeshSelection(outcome.ok ? selectionFromResult(mesh, componentMode, outcome) : meshSelection);
+      }
+      if (!outcome.ok) return outcome.message ?? `${label} needs a valid selection.`;
+      const after = updated?.mesh ? `${updated.mesh.vertices.length} verts · ${meshFaceCount(updated.mesh as ModelPart['mesh'] & object)} faces` : '';
+      return `${label} done${after ? ` — ${after}` : ''}.${outcome.message ? ` ${outcome.message}` : ''}`;
+    });
+    return outcome;
+  };
+
+  const meshSelectedEdges = (): Array<[number, number]> => {
+    if (!meshCage) return [];
+    if (componentMode === 'edge') return meshSelection.edges;
+    const verts = new Set(meshSelectedVerts);
+    return convertSelection(meshCage, 'vertex', 'edge', { ...EMPTY_MESH_SELECTION, vertices: [...verts] }).edges;
+  };
+  const meshSelectedFaces = (): number[] => {
+    if (!meshCage) return [];
+    if (componentMode === 'face') return meshSelection.faces;
+    return convertSelection(meshCage, 'vertex', 'face', { ...EMPTY_MESH_SELECTION, vertices: meshSelectedVerts }).faces;
+  };
+
+  const meshAction = (action: string) => {
+    if (!meshPart || !meshCage) return;
+    switch (action) {
+      case 'extrude': runMeshOp('Extrude', { type: 'extrude', faces: meshSelectedFaces(), distance: 0.2 / Math.max(0.01, meshPart.scale[1]) }); break;
+      case 'inset': runMeshOp('Inset', { type: 'inset', faces: meshSelectedFaces(), thickness: 0.06 }); break;
+      case 'bevel': runMeshOp('Bevel', { type: 'bevel', edges: meshSelectedEdges(), width: 0.04, segments: 2 }); break;
+      case 'loopcut': {
+        const edge = meshSelectedEdges()[0];
+        if (!edge) {
+          setStatus('Loop Cut: hover the mesh and press Ctrl+R, or select one edge first.');
+          return;
+        }
+        runMeshOp('Loop cut', { type: 'loopCut', edge, cuts: 1 });
+        break;
+      }
+      case 'subdivide': runMeshOp('Subdivide', { type: 'subdivide', faces: meshSelectedFaces(), cuts: 1 }); break;
+      case 'merge': runMeshOp('Merge', { type: 'merge', vertices: meshSelectedVerts, mode: 'center' }); break;
+      case 'fill': runMeshOp('Fill', { type: 'fill', vertices: meshSelectedVerts }); break;
+      case 'delete':
+        if (componentMode === 'face') runMeshOp('Delete faces', { type: 'delete', faces: meshSelection.faces });
+        else if (componentMode === 'edge') runMeshOp('Dissolve edges', { type: 'dissolveEdges', edges: meshSelection.edges });
+        else runMeshOp('Delete vertices', { type: 'delete', vertices: meshSelection.vertices });
+        break;
+      case 'dissolve': runMeshOp('Dissolve edges', { type: 'dissolveEdges', edges: meshSelectedEdges() }); break;
+      case 'flip': runMeshOp('Flip normals', { type: 'flip', faces: meshSelectedFaces() }); break;
+      case 'recalc': runMeshOp('Recalculate normals', { type: 'recalculateNormals' }); break;
+      case 'sharp': runMeshOp('Mark sharp', { type: 'markSharp', edges: meshSelectedEdges(), sharp: true }); break;
+      case 'unsharp': runMeshOp('Clear sharp', { type: 'markSharp', edges: meshSelectedEdges(), sharp: false }); break;
+      case 'weld': runMeshOp('Merge by distance', { type: 'weld', distance: 0.001 }); break;
+      case 'all': setMeshSelection(selectAllMeshComponents(meshCage, componentMode)); break;
+      case 'none': setMeshSelection(EMPTY_MESH_SELECTION); break;
+      case 'invert': {
+        const all = selectAllMeshComponents(meshCage, componentMode);
+        const key = (edge: [number, number]) => `${edge[0]}:${edge[1]}`;
+        const edgeKeys = new Set(meshSelection.edges.map(key));
+        setMeshSelection({
+          vertices: all.vertices.filter((index) => !meshSelection.vertices.includes(index)),
+          edges: all.edges.filter((edge) => !edgeKeys.has(key(edge))),
+          faces: all.faces.filter((index) => !meshSelection.faces.includes(index)),
+        });
+        break;
+      }
+      case 'linked': {
+        const faces = selectLinked(meshCage, meshSelectedFaces().length ? meshSelectedFaces() : verticesToFaces(meshCage, meshSelectedVerts, false));
+        setMeshSelection(convertSelection(meshCage, 'face', componentMode, { ...EMPTY_MESH_SELECTION, faces }));
+        break;
+      }
+      case 'grow':
+      case 'shrink': {
+        const verts = action === 'grow' ? growSelection(meshCage, meshSelectedVerts) : shrinkSelection(meshCage, meshSelectedVerts);
+        setMeshSelection(convertSelection(meshCage, 'vertex', componentMode, { ...EMPTY_MESH_SELECTION, vertices: verts }));
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  const startMeshModal = (kind: MeshModalKind) => {
+    if (!meshPart) return;
+    if (kind !== 'loopcut' && kind !== 'box' && kind !== 'knife' && !meshSelectedVerts.length) {
+      setStatus('Select some geometry first (A selects everything).');
+      return;
+    }
+    if ((kind === 'extrude' || kind === 'inset') && componentMode !== 'face') {
+      setStatus(`${kind === 'extrude' ? 'Extrude' : 'Inset'} works on faces — press 3 for face select.`);
+      return;
+    }
+    setMeshModalRequest({ kind, nonce: Date.now() });
+  };
+
+  const patchPart = (label: string, patch: Partial<Omit<ModelPart, 'id'>>, message?: string) =>
+    attempt(label, () => {
+      api.models.updatePart(spec.id, selectedPart!.id, patch);
+      return message ?? status;
+    });
+
+  const addMeshPart = (generator: ModelMeshGenerator, name: string, scale: Vector3Tuple = [1, 1, 1]) =>
+    attempt('Add mesh', () => {
+      const position: Vector3Tuple = [0, scale[1] / 2, 0];
+      const partId = api.models.addMeshPart(spec.id, generator, { name, colorSlot: clampedActiveSlot, position, scale });
+      setSelectedPartId(partId);
+      setAddMenuOpen(false);
+      return `Added ${name} — a clean quad mesh. Tab into Edit mode to shape it.`;
+    });
+
+  const bakeTextures = async () => {
+    if (!selectedPart) return;
+    setBaking(true);
+    setStatus('Baking textures… (a 512px bake takes a second or two)');
+    // Let the status paint before the CPU-bound bake starts.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    try {
+      const result = await api.models.bakePartTextures(spec.id, selectedPart.id, bakeOptions);
+      setStatus(result.message);
+      api.ui.notify(result.message, result.ok ? undefined : 'error');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Bake failed: ${message}`);
+      api.ui.notify(`Bake failed: ${message}`, 'error');
+    } finally {
+      setBaking(false);
+    }
+  };
+
+  const importGlb = async (file: File) => {
+    try {
+      const { specId, warnings } = await api.models.importGlb(file);
+      selectSpec(specId);
+      const message = `Imported ${file.name} as an editable model${warnings.length ? ` (${warnings.length} warning${warnings.length === 1 ? '' : 's'}: ${warnings[0]})` : ''}.`;
+      setStatus(message);
+      api.ui.notify(message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Import failed: ${message}`);
+      api.ui.notify(`Import failed: ${message}`, 'error');
+    }
+  };
+
   const booleanWithOpposite = (operation: 'union' | 'difference' | 'intersect') => {
     if (!selectedPart || spec.parts.length < 2) return;
     const other = spec.parts.find((part) => part.id !== selectedPart.id);
@@ -1018,10 +1144,56 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
     });
   };
 
+  /** Blender's edit-mesh keymap, active while editing a mesh part. Returns true when it consumed the key. */
+  const handleMeshKey = (event: ReactKeyboardEvent<HTMLElement>): boolean => {
+    if (!meshPart || meshModalLabel) return false;
+    const key = event.key.toLowerCase();
+    const ctrl = event.ctrlKey || event.metaKey;
+    if (ctrl && key === 'b') startMeshModal('bevel');
+    else if (ctrl && key === 'r') startMeshModal('loopcut');
+    else if (ctrl && key === 'i') meshAction('invert');
+    else if (ctrl && key === 'l') meshAction('linked');
+    else if (ctrl && (key === '=' || key === '+')) meshAction('grow');
+    else if (ctrl && key === '-') meshAction('shrink');
+    else if (ctrl) return false;
+    else if (event.altKey && key === 'a') meshAction('none');
+    else if (event.altKey && key === 'z') setMeshTools((tools) => ({ ...tools, xray: !tools.xray }));
+    else if (event.altKey) return false;
+    else if (event.shiftKey && key === 'n') meshAction('recalc');
+    else if (key === 'b') startMeshModal('box');
+    else if (key === 'k') startMeshModal('knife');
+    else if (key === 'g') startMeshModal('grab');
+    else if (key === 'r') startMeshModal('rotate');
+    else if (key === 's') startMeshModal('scale');
+    else if (key === 'e') startMeshModal('extrude');
+    else if (key === 'i') startMeshModal('inset');
+    else if (key === 'x' || key === 'delete' || key === 'backspace') meshAction('delete');
+    else if (key === 'm') meshAction('merge');
+    else if (key === 'f' && meshSelectedVerts.length) meshAction('fill');
+    else if (key === 'o') setMeshTools((tools) => ({ ...tools, proportional: !tools.proportional }));
+    else if (key === 'a') meshAction('all');
+    else return false;
+    return true;
+  };
+
   const handleStudioKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target as HTMLElement | null;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (handleMeshKey(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    // Undo/redo work while the studio has focus (the viewport's own shortcut only fires there).
+    if ((event.metaKey || event.ctrlKey) && !meshModalLabel && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
+      if (event.key.toLowerCase() === 'y' || event.shiftKey) redoHistory();
+      else undoHistory();
+      setMeshSelection(EMPTY_MESH_SELECTION);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     const key = event.key.toLowerCase();
     let handled = true;
     if (key === 'w' && mode !== 'paint') setGizmoMode('translate');
@@ -1087,6 +1259,21 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
           >
             <Trash2 size={13} aria-hidden /> Delete
           </button>
+          <button className="full-button" onClick={() => glbInputRef.current?.click()} title="Turn a .glb into an editable Model Forge asset (one mesh part per mesh)">
+            <PackagePlus size={13} aria-hidden /> Import GLB
+          </button>
+          <input
+            ref={glbInputRef}
+            type="file"
+            accept=".glb,.gltf,model/gltf-binary"
+            hidden
+            data-testid="model-forge-import-glb"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void importGlb(file);
+            }}
+          />
           <button className="full-button primary" onClick={placeInScene}>Place in Scene</button>
           <button className="full-button" onClick={bakeToAsset} disabled={baking}>
             <PackagePlus size={13} aria-hidden /> {baking ? 'Baking…' : 'Bake to GLB Asset'}
@@ -1195,6 +1382,13 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                     </button>
                   );
                 })}
+                <strong>Add mesh (editable quads)</strong>
+                {MESH_PRESETS.map((preset) => (
+                  <button key={preset.id} type="button" role="menuitem" data-testid={`model-forge-mesh-${preset.id}`} onClick={() => addMeshPart(preset.generator, preset.label.replace(/ \(.*\)$/, ''), preset.scale)}>
+                    <Boxes size={14} aria-hidden />
+                    <span>{preset.label}</span>
+                  </button>
+                ))}
               </div>
             )}
             {mode === 'mesh' && selectedPart?.shape === 'box' && (
@@ -1217,6 +1411,7 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 <span>{selectedComponents.length || 0} selected</span>
               </div>
             )}
+            {meshModalLabel && <div className="model-forge-modal-hud" role="status">{meshModalLabel}</div>}
             <ForgePreview
               key={spec.id}
               spec={spec}
@@ -1245,10 +1440,18 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 api.models.setPartCorners(spec.id, partId, corners);
                 return corners ? 'Control cage committed — linked scene copies updated.' : 'Control cage reset.';
               })}
-              onCommitMeshVertices={(partId, updates) => attempt('Move mesh vertices', () => {
-                api.models.setPartMeshVertices(spec.id, partId, updates);
-                return `Moved ${updates.length} vertex${updates.length === 1 ? '' : 'es'} — the part now carves its own hull.`;
+              meshSelection={meshSelection}
+              meshSettings={meshSettings}
+              meshModalRequest={meshModalRequest}
+              hiddenPartIds={hiddenPartIds}
+              onMeshSelectionChange={setMeshSelection}
+              onCommitMeshPositions={(partId, positions) => attempt('Transform', () => {
+                api.models.meshOp(spec.id, partId, { type: 'setVertices', positions });
+                return `Moved ${positions.length} vertex${positions.length === 1 ? '' : 'es'}.`;
               })}
+              onCommitMeshOp={(partId, op) => runMeshOp(op.type === 'loopCut' ? 'Loop cut' : op.type.charAt(0).toUpperCase() + op.type.slice(1), op, partId)}
+              onMeshModalChange={setMeshModalLabel}
+              onProportionalRadiusChange={(radius) => setMeshTools((tools) => ({ ...tools, proportionalRadius: radius }))}
             />
           </div>
           <div className="tree-preview-meta">
@@ -1256,28 +1459,66 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
             <span>{placedCount} placed</span>
           </div>
           <div className="model-part-chips" role="listbox" aria-label="Parts">
-            {spec.parts.map((part) => (
+            {[...spec.parts].sort((x, y) => (x.group ?? '').localeCompare(y.group ?? '')).map((part, index, sorted) => {
+              const hidden = hiddenPartIds.includes(part.id);
+              const showGroup = part.group && part.group !== sorted[index - 1]?.group;
+              return (
+                <span key={part.id} className="model-part-chip-wrap">
+                  {showGroup && (
+                    <button
+                      type="button"
+                      className="model-part-group"
+                      title={`Select the "${part.group}" group's first part; hide/show the group`}
+                      onClick={() => {
+                        const members = spec.parts.filter((entry) => entry.group === part.group).map((entry) => entry.id);
+                        const allHidden = members.every((id) => hiddenPartIds.includes(id));
+                        setHiddenPartIds((current) => (allHidden ? current.filter((id) => !members.includes(id)) : [...new Set([...current, ...members])]));
+                      }}
+                    >
+                      {part.group}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={part.id === selectedPartId}
+                    className={`${part.id === selectedPartId ? 'active' : ''}${hidden ? ' is-hidden' : ''}`}
+                    onClick={() => {
+                      setSelectedPartId(part.id);
+                      setSelectedComponents([]);
+                      if (mode === 'mesh' && part.shape !== 'box' && part.shape !== 'mesh') {
+                        setStatus('Edit mode shapes boxes (control cage) or mesh parts (real polygons). Convert this part to a mesh to edit it.');
+                      }
+                    }}
+                  >
+                    <span
+                      className="model-part-chip-swatch"
+                      style={{ background: spec.palette[part.colorSlot] ?? '#888' }}
+                    />
+                    {part.name || part.shape}
+                  </button>
+                  <button
+                    type="button"
+                    className="model-part-eye"
+                    aria-label={hidden ? `Show ${part.name}` : `Hide ${part.name}`}
+                    title={hidden ? 'Show in the Forge preview' : 'Hide in the Forge preview (editor only)'}
+                    onClick={() => setHiddenPartIds((current) => (hidden ? current.filter((id) => id !== part.id) : [...current, part.id]))}
+                  >
+                    <Eye size={11} aria-hidden style={{ opacity: hidden ? 0.35 : 1 }} />
+                  </button>
+                </span>
+              );
+            })}
+            {selectedPart && (
               <button
-                key={part.id}
                 type="button"
-                role="option"
-                aria-selected={part.id === selectedPartId}
-                className={part.id === selectedPartId ? 'active' : undefined}
-                  onClick={() => {
-                    setSelectedPartId(part.id);
-                    setSelectedComponents([]);
-                    if (mode === 'mesh' && part.shape !== 'box' && part.shape !== 'mesh') {
-                      setStatus('Edit mode shapes boxes (control cage) or mesh parts (real vertices). Pick one, or change this part\'s shape.');
-                    }
-                  }}
+                className="model-part-isolate"
+                title="Isolate: hide every other part (click again to show all)"
+                onClick={() => setHiddenPartIds((current) => (current.length ? [] : spec.parts.filter((part) => part.id !== selectedPart.id).map((part) => part.id)))}
               >
-                <span
-                  className="model-part-chip-swatch"
-                  style={{ background: spec.palette[part.colorSlot] ?? '#888' }}
-                />
-                {part.name || part.shape}
+                {hiddenPartIds.length ? 'Show all' : 'Isolate'}
               </button>
-            ))}
+            )}
           </div>
           <div className="model-toolbar">
             <div className="model-toolbar-seg" role="tablist" aria-label="Mode">
@@ -1291,7 +1532,88 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 <Paintbrush size={12} aria-hidden /> Paint
               </button>
             </div>
-            {mode === 'mesh' && (selectedPart?.shape === 'box' || selectedPart?.shape === 'mesh') && (
+            {meshPart && (
+              <div className="model-toolbar-seg" role="toolbar" aria-label="Mesh selection">
+                {(['vertex', 'edge', 'face'] as BoxComponentMode[]).map((kind, index) => (
+                  <button key={kind} aria-pressed={componentMode === kind} className={componentMode === kind ? 'active' : ''} onClick={() => setComponentMode(kind)} title={`${kind} select (${index + 1})`}>
+                    {kind.charAt(0).toUpperCase() + kind.slice(1)}
+                  </button>
+                ))}
+                <button onClick={() => meshAction('all')} title="Select all (A)">All</button>
+                <button disabled={!meshSelectionCount} onClick={() => meshAction('none')} title="Select none (Alt+A)">None</button>
+                <button onClick={() => meshAction('invert')} title="Invert selection (Ctrl+I)">Invert</button>
+                <button disabled={!meshSelectionCount} onClick={() => meshAction('linked')} title="Select linked (Ctrl+L)">Linked</button>
+                <button disabled={!meshSelectionCount} onClick={() => meshAction('grow')} title="Grow selection (Ctrl +)">Grow</button>
+                <button disabled={!meshSelectionCount} onClick={() => meshAction('shrink')} title="Shrink selection (Ctrl -)">Shrink</button>
+                <span className="model-toolbar-count">{meshSelectionCount} selected</span>
+              </div>
+            )}
+            {meshPart && (
+              <div className="model-toolbar-seg" role="toolbar" aria-label="Mesh edit actions" data-testid="model-forge-mesh-tools">
+                <button disabled={!meshSelectedFaces().length} onClick={() => meshAction('extrude')} title="Extrude faces (E drags it)">Extrude</button>
+                <button disabled={!meshSelectedFaces().length} onClick={() => meshAction('inset')} title="Inset faces (I drags it)">Inset</button>
+                <button disabled={!meshSelectedEdges().length} onClick={() => meshAction('bevel')} title="Bevel edges (Ctrl+B drags it, wheel = segments)">Bevel</button>
+                <button onClick={() => (meshSelectedEdges().length ? meshAction('loopcut') : startMeshModal('loopcut'))} title="Loop cut (Ctrl+R: hover an edge, wheel = cuts, click)">Loop Cut</button>
+                <button disabled={!meshSelectedFaces().length} onClick={() => meshAction('subdivide')} title="Subdivide faces">Subdivide</button>
+                <button disabled={meshSelectedVerts.length < 2} onClick={() => meshAction('merge')} title="Merge at center (M)">Merge</button>
+                <button disabled={!meshSelectedVerts.length} onClick={() => meshAction('fill')} title="Fill hole (F)">Fill</button>
+                <button disabled={!meshSelectionCount} onClick={() => meshAction('delete')} title="Delete (X) — edges dissolve">Delete</button>
+                <button disabled={!meshSelectedEdges().length} onClick={() => meshAction('dissolve')} title="Dissolve edges">Dissolve</button>
+                <button disabled={!meshSelectedFaces().length} onClick={() => meshAction('flip')} title="Flip normals">Flip</button>
+                <button onClick={() => meshAction('recalc')} title="Recalculate normals outside (Shift+N)">Normals</button>
+                <button disabled={!meshSelectedEdges().length} onClick={() => meshAction('sharp')} title="Mark sharp: stays crisp under subdivision and auto-smooth">Sharp</button>
+                <button disabled={!meshSelectedEdges().length} onClick={() => meshAction('unsharp')} title="Clear sharp">Smooth</button>
+                <button onClick={() => meshAction('weld')} title="Merge vertices by distance">Weld</button>
+              </div>
+            )}
+            {meshPart && (
+              <div className="model-toolbar-seg" role="toolbar" aria-label="Modeling aids">
+                {(['x', 'y', 'z'] as const).map((axis) => (
+                  <button
+                    key={axis}
+                    aria-pressed={meshTools.symmetry.includes(axis)}
+                    className={meshTools.symmetry.includes(axis) ? 'active' : ''}
+                    title={`${axis.toUpperCase()}-mirror editing: moves also move the mirrored vertex`}
+                    onClick={() => setMeshTools((tools) => ({
+                      ...tools,
+                      symmetry: tools.symmetry.includes(axis) ? tools.symmetry.filter((entry) => entry !== axis) : [...tools.symmetry, axis],
+                    }))}
+                  >
+                    Mirror {axis.toUpperCase()}
+                  </button>
+                ))}
+                <button
+                  aria-pressed={meshTools.xray}
+                  className={meshTools.xray ? 'active' : ''}
+                  title="X-Ray (Alt+Z): see and select through the mesh"
+                  onClick={() => setMeshTools((tools) => ({ ...tools, xray: !tools.xray }))}
+                >
+                  X-Ray
+                </button>
+                <button title="Box select (B): drag a rectangle; Shift adds, Ctrl subtracts" onClick={() => startMeshModal('box')}>Box</button>
+                <button title="Knife (K): drag a line across faces to cut them" onClick={() => startMeshModal('knife')}>Knife</button>
+                <button
+                  aria-pressed={meshTools.proportional}
+                  className={meshTools.proportional ? 'active' : ''}
+                  title="Proportional editing (O) — mouse wheel during G/R/S changes the radius"
+                  onClick={() => setMeshTools((tools) => ({ ...tools, proportional: !tools.proportional }))}
+                >
+                  Proportional
+                </button>
+                {meshTools.proportional && (
+                  <select
+                    aria-label="Proportional falloff"
+                    value={meshTools.falloff}
+                    onChange={(event) => setMeshTools((tools) => ({ ...tools, falloff: event.target.value as MeshToolSettings['falloff'] }))}
+                  >
+                    {(['smooth', 'sphere', 'root', 'linear', 'sharp', 'constant'] as const).map((falloff) => (
+                      <option key={falloff} value={falloff}>{falloff}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+            {mode === 'mesh' && selectedPart?.shape === 'box' && (
               <div className="model-toolbar-seg" role="toolbar" aria-label="Mesh selection">
                 <button aria-pressed={componentMode === 'vertex'} className={componentMode === 'vertex' ? 'active' : ''} onClick={() => setComponentMode('vertex')} title="Vertex select (1)">Vertex</button>
                 <button aria-pressed={componentMode === 'edge'} className={componentMode === 'edge' ? 'active' : ''} onClick={() => setComponentMode('edge')} title="Edge select (2)">Edge</button>
@@ -1299,12 +1621,6 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 <button onClick={selectAllComponents} title="Select all components (A)">All</button>
                 <button disabled={!selectedComponents.length} onClick={() => setSelectedComponents([])}>Clear</button>
                 <button disabled={!selectedComponents.length} onClick={resetSelectedComponents} title="Restore the selected control points">Reset</button>
-              </div>
-            )}
-            {mode === 'mesh' && selectedPart?.shape === 'mesh' && (
-              <div className="model-toolbar-seg" role="toolbar" aria-label="Mesh edit actions">
-                <button disabled={!selectedComponents.length} onClick={() => applySelectedFaceAction('extrude')} title="Extrude the selected faces along their normals">Extrude</button>
-                <button disabled={!selectedComponents.length} onClick={() => applySelectedFaceAction('subdivide')} title="Midpoint-subdivide the selected faces">Subdivide</button>
               </div>
             )}
             {mode !== 'paint' && (
@@ -1325,7 +1641,7 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                 ? selectedPart?.shape === 'box'
                   ? `Select ${componentPlural}, Shift-click for more, then transform with W/E/R. The fixed eight-point cage keeps the model lightweight.`
                   : selectedPart?.shape === 'mesh'
-                    ? `Select ${componentPlural} (real mesh data), W/E/R to move vertices. Extrude/Subdivide act on the selected faces.`
+                    ? `Click ${componentPlural} (Shift adds, Alt picks a loop). G/R/S transform (X/Y/Z lock, type a value), E extrude, I inset, Ctrl+B bevel, Ctrl+R loop cut, X delete, M merge, F fill, O proportional.`
                     : 'Edit mode shapes box parts (control cage) or mesh parts (real vertices). Select one, or change this part\'s shape in the inspector.'
                 : 'Select a part and transform it with W/E/R. Add primitives from the + rail or inspector. F fits the view.'}
           </p>
@@ -1335,6 +1651,20 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
             <span><kbd>Shift</kbd> Multi-select</span>
             <span><kbd>A</kbd> Select all</span>
             <span><kbd>F</kbd> Frame</span>
+            {meshPart && (
+              <>
+                <span><kbd>G</kbd><kbd>R</kbd><kbd>S</kbd> Move/Rotate/Scale</span>
+                <span><kbd>E</kbd> Extrude</span>
+                <span><kbd>I</kbd> Inset</span>
+                <span><kbd>Ctrl</kbd><kbd>B</kbd> Bevel</span>
+                <span><kbd>Ctrl</kbd><kbd>R</kbd> Loop cut</span>
+                <span><kbd>Alt</kbd>-click Loop select</span>
+                <span><kbd>O</kbd> Proportional</span>
+                <span><kbd>B</kbd> Box select</span>
+                <span><kbd>K</kbd> Knife</span>
+                <span><kbd>Alt</kbd><kbd>Z</kbd> X-Ray</span>
+              </>
+            )}
           </div>
           <p className="field-hint model-forge-status">{status}</p>
         </div>
@@ -1530,7 +1860,8 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                     <div className="model-cage-summary">
                       <h4 className="inspector-subhead">Mesh geometry</h4>
                       <p className="field-hint">
-                        {selectedPart.mesh.vertices.length} vertices · {meshEdgePairs(selectedPart.mesh).length} edges · {meshFaceCount(selectedPart.mesh)} faces. Real surface — W/E/R the vertices or Extrude/Subdivide faces.
+                        {selectedPart.mesh.vertices.length} vertices · {meshEdgePairs(selectedPart.mesh).length} edges · {meshFaceCount(selectedPart.mesh)} faces
+                        {selectedPart.mesh.sharpEdges?.length ? ` · ${selectedPart.mesh.sharpEdges.length} sharp` : ''}. Tab into Edit mode: G/R/S move, E extrude, I inset, Ctrl+B bevel, Ctrl+R loop cut, Alt-click loops.
                       </p>
                       <div className="model-toolbar-seg" role="toolbar" aria-label="Open mesh editing">
                         {(['vertex', 'edge', 'face'] as BoxComponentMode[]).map((kind) => (
@@ -1546,8 +1877,170 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
                           </button>
                         ))}
                       </div>
+
+                      <h4 className="inspector-subhead">Modifiers</h4>
+                      {(selectedPart.modifiers ?? []).map((modifier, index, list) => {
+                        const update = (next: ModelModifier | null) => {
+                          const stack = [...list];
+                          if (next) stack[index] = next;
+                          else stack.splice(index, 1);
+                          patchPart('Edit modifier', { modifiers: stack });
+                        };
+                        const move = (delta: number) => {
+                          const stack = [...list];
+                          const [entry] = stack.splice(index, 1);
+                          stack.splice(Math.min(stack.length, Math.max(0, index + delta)), 0, entry);
+                          patchPart('Reorder modifiers', { modifiers: stack });
+                        };
+                        return (
+                          <div key={index} className="model-modifier-card" data-testid={`model-modifier-${modifier.type}`}>
+                            <div className="model-modifier-head">
+                              <label>
+                                <input type="checkbox" checked={modifier.enabled !== false} onChange={(event) => update({ ...modifier, enabled: event.target.checked })} />
+                                {modifier.type === 'mirror' ? 'Mirror' : modifier.type === 'array' ? 'Array' : 'Subdivision Surface'}
+                              </label>
+                              <button type="button" title="Move up" disabled={index === 0} onClick={() => move(-1)}>↑</button>
+                              <button type="button" title="Move down" disabled={index === list.length - 1} onClick={() => move(1)}>↓</button>
+                              <button type="button" title="Remove modifier" onClick={() => update(null)}><Trash2 size={11} aria-hidden /></button>
+                            </div>
+                            {modifier.type === 'mirror' && (
+                              <div className="model-toolbar-seg" role="group" aria-label="Mirror axes">
+                                {(['x', 'y', 'z'] as const).map((axis) => (
+                                  <button
+                                    key={axis}
+                                    className={modifier.axes.includes(axis) ? 'active' : ''}
+                                    onClick={() => {
+                                      const axes = modifier.axes.includes(axis) ? modifier.axes.filter((entry) => entry !== axis) : [...modifier.axes, axis];
+                                      if (axes.length) update({ ...modifier, axes });
+                                    }}
+                                  >
+                                    {axis.toUpperCase()}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {modifier.type === 'subdivision' && (
+                              <RangeField label="Levels" value={modifier.levels} min={1} max={4} step={1} onChange={(value) => update({ ...modifier, levels: Math.round(value) })} />
+                            )}
+                            {modifier.type === 'array' && (
+                              <>
+                                <RangeField label="Count" value={modifier.count} min={1} max={32} step={1} onChange={(value) => update({ ...modifier, count: Math.round(value) })} />
+                                <div className="model-toolbar-seg" role="group" aria-label="Array mode">
+                                  {(['linear', 'radial'] as const).map((arrayMode) => (
+                                    <button key={arrayMode} className={modifier.mode === arrayMode ? 'active' : ''} onClick={() => update({ ...modifier, mode: arrayMode })}>
+                                      {arrayMode === 'linear' ? 'Linear' : 'Radial'}
+                                    </button>
+                                  ))}
+                                </div>
+                                {modifier.mode === 'linear' ? (
+                                  <VecField label="Offset" value={modifier.offset ?? [1, 0, 0]} step={0.1} onChange={(offset) => update({ ...modifier, offset })} />
+                                ) : (
+                                  <>
+                                    <div className="model-toolbar-seg" role="group" aria-label="Array axis">
+                                      {(['x', 'y', 'z'] as const).map((axis) => (
+                                        <button key={axis} className={(modifier.axis ?? 'y') === axis ? 'active' : ''} onClick={() => update({ ...modifier, axis })}>
+                                          {axis.toUpperCase()}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <RangeField label="Angle°" value={modifier.angle ?? 360} min={10} max={360} step={5} onChange={(value) => update({ ...modifier, angle: value })} />
+                                  </>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <div className="model-toolbar-seg" role="toolbar" aria-label="Add modifier">
+                        <button onClick={() => patchPart('Add modifier', { modifiers: [...(selectedPart.modifiers ?? []), { type: 'mirror', axes: ['x'] }] }, 'Mirror modifier: model one half, the other follows live.')}>+ Mirror</button>
+                        <button onClick={() => patchPart('Add modifier', { modifiers: [...(selectedPart.modifiers ?? []), { type: 'array', count: 3, mode: 'linear', offset: [1.2, 0, 0] }] }, 'Array modifier added.')}>+ Array</button>
+                        <button onClick={() => patchPart('Add modifier', { modifiers: [...(selectedPart.modifiers ?? []), { type: 'subdivision', levels: 2 }] }, 'Subdivision surface: mark hard edges Sharp to keep them crisp.')}>+ Subdivision</button>
+                      </div>
+                      {!!selectedPart.modifiers?.length && (
+                        <button className="full-button" onClick={() => runMeshOp('Apply modifiers', { type: 'applyModifiers' })} title="Bake the modifier stack into the editable cage">
+                          Apply Modifiers
+                        </button>
+                      )}
+
+                      <h4 className="inspector-subhead">Surface</h4>
+                      <RangeField
+                        label="Smooth angle°"
+                        value={selectedPart.smoothAngle ?? (styleOf(spec).finish === 'smooth' ? 40 : 0)}
+                        min={0}
+                        max={180}
+                        step={5}
+                        onChange={(value) => patchPart('Auto smooth', { smoothAngle: value })}
+                      />
+                      <label className="node-field">
+                        <span>Material</span>
+                        <select
+                          value={selectedPart.materialId ?? ''}
+                          onChange={(event) => patchPart('Set material', { materialId: event.target.value || undefined }, event.target.value ? 'Project material applied — textures tile through the part UVs.' : 'Back to the palette color.')}
+                        >
+                          <option value="">Palette color</option>
+                          {materials.map((material) => (
+                            <option key={material.id} value={material.id}>{material.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="model-toolbar-seg" role="toolbar" aria-label="UV unwrap">
+                        {(['box', 'smart', 'cylinder', 'sphere'] as const).map((method) => (
+                          <button key={method} onClick={() => runMeshOp(`UV unwrap (${method})`, { type: 'unwrap', method })} title={method === 'smart' ? 'Smart UV project: non-overlapping charts packed in 0-1 (for painted/baked textures)' : `${method} projection, world-scaled tiling`}>
+                            UV {method.charAt(0).toUpperCase() + method.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="field-hint">{selectedPart.mesh.faceUVs ? 'Has its own UV layout.' : 'No UVs yet — textures use automatic box projection.'}</p>
+
+                      <h4 className="inspector-subhead">Bake textures</h4>
+                      <p className="field-hint">Bakes paint × ambient occlusion (and optionally a normal map from the subdivision detail) into a textured material — game-ready for GLB export.</p>
+                      <div className="model-bake-row">
+                        <label><input type="checkbox" checked={bakeOptions.ao} onChange={(event) => setBakeOptions((current) => ({ ...current, ao: event.target.checked }))} /> AO</label>
+                        <label><input type="checkbox" checked={bakeOptions.normal} onChange={(event) => setBakeOptions((current) => ({ ...current, normal: event.target.checked }))} /> Normal map</label>
+                        <select aria-label="Bake size" value={bakeOptions.size} onChange={(event) => setBakeOptions((current) => ({ ...current, size: Number(event.target.value) }))}>
+                          {[256, 512, 1024, 2048].map((size) => <option key={size} value={size}>{size}px</option>)}
+                        </select>
+                      </div>
+                      <button className="full-button" data-testid="model-forge-bake-textures" disabled={baking} onClick={() => void bakeTextures()}>
+                        <Paintbrush size={13} aria-hidden /> {baking ? 'Baking…' : 'Bake Textures'}
+                      </button>
+
+                      <h4 className="inspector-subhead">Bisect (cut in half)</h4>
+                      <div className="model-toolbar-seg" role="toolbar" aria-label="Bisect">
+                        {(['x', 'y', 'z'] as const).map((axis) => (
+                          <button
+                            key={axis}
+                            title={`Cut at ${axis.toUpperCase()}=0, delete the negative side and cap the cut`}
+                            onClick={() => runMeshOp(`Bisect ${axis.toUpperCase()}`, {
+                              type: 'bisect',
+                              plane: { point: [0, 0, 0], normal: [axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0] },
+                              clear: 'inner',
+                              fill: true,
+                            })}
+                          >
+                            Keep +{axis.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
+
+                      <h4 className="inspector-subhead">Mirror (apply)</h4>
+                      <div className="model-toolbar-seg" role="toolbar" aria-label="Apply mirror">
+                        {(['x', 'y', 'z'] as const).map((axis) => (
+                          <button key={axis} onClick={() => runMeshOp(`Mirror ${axis.toUpperCase()}`, { type: 'mirror', axis })} title={`Duplicate across the ${axis.toUpperCase()}=0 plane and weld the seam`}>
+                            {axis.toUpperCase()}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
+                  <label className="node-field">
+                    <span>Group</span>
+                    <input
+                      value={selectedPart.group ?? ''}
+                      placeholder="e.g. Wheels"
+                      onChange={(event) => patchPart('Group part', { group: event.target.value || undefined })}
+                    />
+                  </label>
                   {selectedPart.shape !== 'mesh' && (
                     <button
                       className="full-button"
@@ -1638,9 +2131,9 @@ function ModelForgePanel({ api }: { api: FeatherPluginAPI }) {
 export const modelForgePlugin = defineFeatherPlugin({
   id: PLUGIN_ID,
   name: 'Model Forge',
-  version: '1.1.0',
+  version: '1.2.0',
   description:
-    'A Blender-inspired in-engine modeler with Object, Edit, and Paint workflows, vertex/edge/face box-cage shaping, starter props, live-linked copies, and GLB baking.',
+    'A Blender-style in-engine modeler: polygon Edit mode (extrude, inset, bevel, loop cut, G/R/S with axis locks, proportional editing, X-mirror), non-destructive mirror/array/subdivision modifiers, lathe and tube generators, UV unwrapping, project materials, GLB import and baking.',
   apiVersion: '0.2.0',
   activate(api) {
     api.panels.register({

@@ -1,5 +1,7 @@
 import { makeId } from '../store/editor/ids';
 import { DEFAULT_MESH, cloneMesh, normalizeMesh } from './modelMesh';
+import { normalizeModifiers } from './meshModifiers';
+import { isTrustedPolyMesh } from './polyMesh';
 import type { ModelPart, ModelPartMesh, ModelPartShape, ModelSpec, ModelStyle, Vector3Tuple } from '../types';
 
 /**
@@ -159,7 +161,17 @@ export function normalizeModelSpec(spec: ModelSpec): ModelSpec {
       ? part.collider
       : undefined;
     // Mesh payloads only mean something on mesh parts; reshaping away sheds them (like corners).
-    const mesh = shape === 'mesh' ? normalizeMesh(part?.mesh) ?? cloneMesh(DEFAULT_MESH) : undefined;
+    const rawMesh = shape === 'mesh'
+      ? (isTrustedPolyMesh(part?.mesh) ? part.mesh : normalizeMesh(part?.mesh) ?? cloneMesh(DEFAULT_MESH))
+      : undefined;
+    // Face paint can point past a palette that has since shrunk; those faces fall back to the part color.
+    const mesh = rawMesh?.faceSlots?.some((slot) => slot >= palette.length)
+      ? { ...rawMesh, faceSlots: rawMesh.faceSlots.map((slot) => (slot < palette.length ? slot : -1)) }
+      : rawMesh;
+    const modifiers = shape === 'mesh' ? normalizeModifiers(part?.modifiers) : undefined;
+    const smoothAngle = Number.isFinite(part?.smoothAngle) ? Math.min(180, Math.max(0, part.smoothAngle as number)) : undefined;
+    const materialId = typeof part?.materialId === 'string' && part.materialId ? part.materialId : undefined;
+    const group = typeof part?.group === 'string' && part.group.trim() ? part.group.trim().slice(0, 48) : undefined;
     return {
       id: part?.id || makeId('part'),
       name: part?.name?.trim() || `Part ${index + 1}`,
@@ -172,6 +184,10 @@ export function normalizeModelSpec(spec: ModelSpec): ModelSpec {
       ...(faceColors && Object.keys(faceColors).length ? { faceColors } : {}),
       ...(corners && Object.keys(corners).length ? { corners } : {}),
       ...(mesh ? { mesh } : {}),
+      ...(modifiers?.length ? { modifiers } : {}),
+      ...(smoothAngle !== undefined ? { smoothAngle } : {}),
+      ...(materialId ? { materialId } : {}),
+      ...(group ? { group } : {}),
     };
   });
   return { id: spec.id, name: spec.name?.trim() || 'Model', palette, parts, style: normalizeModelStyle(spec.style) };

@@ -14805,6 +14805,123 @@ body.is-scrubbing * {
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
     0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
 }
+/* Model Forge polygon editing: modal HUD, part groups/visibility, modifier stack. */
+.model-forge-modal-hud {
+  position: absolute;
+  z-index: 5;
+  top: 46px;
+  left: 50%;
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(8, 10, 15, 0.82);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 8px 22px rgba(0, 0, 0, 0.3);
+  color: #e8eefc;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+.model-forge-box-select {
+  position: fixed;
+  z-index: 50;
+  border: 1px dashed color-mix(in srgb, var(--accent) 85%, white);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+}
+.model-forge-knife-line {
+  position: fixed;
+  z-index: 50;
+  height: 2px;
+  margin-top: -1px;
+  background: #ffd23f;
+  box-shadow: 0 0 6px rgba(255, 210, 63, 0.7);
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+.model-bake-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: var(--text-2xs);
+}
+.model-bake-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.model-part-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.model-part-chips button.is-hidden {
+  opacity: 0.45;
+}
+.model-part-chips .model-part-eye {
+  padding: 4px 6px;
+  background: transparent;
+  box-shadow: none;
+}
+.model-part-chips .model-part-group,
+.model-part-chips .model-part-isolate {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  color: var(--text-muted, #9aa4b5);
+  font-size: var(--text-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.model-toolbar-count {
+  align-self: center;
+  padding: 0 6px;
+  color: var(--text-muted, #9aa4b5);
+  font-size: var(--text-3xs);
+  font-variant-numeric: tabular-nums;
+}
+.model-modifier-card {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.model-modifier-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+}
+.model-modifier-head label {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+}
+.model-modifier-head button {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.model-modifier-head button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.model-modifier-head button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
 .model-part-chip-swatch {
   width: 10px;
   height: 10px;
@@ -15152,10 +15269,15 @@ body.is-scrubbing * {
 .model-forge-add-popover {
   position: absolute;
   z-index: 5;
-  top: 170px;
+  top: 12px;
   left: 50px;
   display: grid;
-  width: 154px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  width: 300px;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: 3px;
   padding: 7px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -15165,6 +15287,7 @@ body.is-scrubbing * {
   backdrop-filter: blur(14px);
 }
 .model-forge-add-popover strong {
+  grid-column: 1 / -1;
   padding: 3px 5px 6px;
   color: var(--text-dim, #8b93a1);
   font-size: var(--text-3xs);
