@@ -9,7 +9,7 @@
  * buttons opt back in (`pointerEvents: auto`, set in `UIElementView`). Button clicks fire a
  * custom runtime event, reusing the existing `event.custom` node path.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import type { UIDocument } from '../types';
 import { buildUIContext } from './runtimeContext';
@@ -47,6 +47,27 @@ export function ScreenUILayer() {
   const [overlay, setOverlay] = useState<HTMLDivElement | null>(null);
   const navActive = isPlaying && docs.some((doc) => hasInteractive(doc, uiDocuments));
   useUIFocusNavigation(overlay, navActive);
+
+  // A full-screen interactive veil is a menu: release FPS mouse capture so its buttons can be used.
+  // HUD controls on a transparent surface continue to work without changing mouse capture.
+  useEffect(() => {
+    if (!overlay || !isPlaying || !document.pointerLockElement) return;
+    const bounds = overlay.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    for (const button of overlay.querySelectorAll('button, input, select')) {
+      if (!button.getClientRects().length) continue;
+      for (let parent = button.parentElement; parent && parent !== overlay; parent = parent.parentElement) {
+        if (!parent.hasAttribute('data-uiel-id')) continue;
+        const rect = parent.getBoundingClientRect(), style = getComputedStyle(parent);
+        const rgba = style.backgroundColor.match(/^rgba?\(([^)]+)\)$/);
+        const channels = rgba?.[1].split(',').map(value => Number(value.trim()));
+        const alpha = channels ? channels.length === 4 ? channels[3] : 1 : 0;
+        if (rect.width >= bounds.width * 0.9 && rect.height >= bounds.height * 0.9 && alpha >= 0.5 && Number(style.opacity) > 0.5) {
+          document.exitPointerLock(); return;
+        }
+      }
+    }
+  }, [overlay, isPlaying, runtimeVariableValues, visible, visibleOverrides]);
 
   if (!isPlaying || docs.length === 0) return null;
   const resolveAssetUrl = (assetId: string) => assets.find((asset) => asset.id === assetId)?.url;

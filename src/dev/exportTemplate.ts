@@ -18,6 +18,7 @@ import type { AssetItem } from '../types';
  */
 
 type TemplateKey =
+  | 'cinderfall'
   | 'third-person'
   | 'first-person'
   | 'driving'
@@ -44,6 +45,14 @@ interface TemplateDef {
 }
 
 const TEMPLATES: Record<TemplateKey, TemplateDef> = {
+  cinderfall: {
+    slug: 'template-cinderfall',
+    title: 'Cinderfall — Extraction FPS',
+    version: '1.0.0',
+    description: 'An original single-player sci-fi cave expedition: recover sixteen aetherite units, fight eight articulated cave creatures, and return to the amber extraction rig. Includes an editable VX-24 rifle, timed magazine reloads, a headlamp, responsive briefing/HUD/pause/results, replay, original synthesized audio, reusable Model Forge assets and editable FeatherScript gameplay. Requires a Feather build with Model Forge camera view-model support.',
+    tags: ['template', 'world', 'fps', 'mining', 'extraction', 'sci-fi', 'caves', 'editable'],
+    build: async () => (await import('../project/cinderfallTemplate')).createCinderfallTemplate(),
+  },
   'crystal-slice': {
     slug: 'template-crystal-slice',
     title: 'Crystal Slice',

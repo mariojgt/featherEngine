@@ -92,15 +92,20 @@ Start with a blank project or launch an editable template:
 
 | Template | Focus |
 | --- | --- |
-| **Third-person** | Character movement, a follow camera, combat, and an explorable tutorial world. |
+| **Platformer** | Cloudstep Garden: an animated hero, moving clouds, collectibles, checkpoints and a goal. Included offline. |
 | **[Lumen Lane](docs/LUMEN_LANE.md)** | A three-lane solo MOBA with five champions, click commands, a following camera, minimap, gold, an item shop, jungle camps, towers and cores. Included offline. |
 | **[Parcel Panic](docs/PARCEL_PANIC.md)** | An animated robot courier, seeded villages, playful physics, and five-delivery rounds. Included in launcher quick starts. |
 | **First-person shooter** | A neon FPS sandbox with multiple weapons, grenades, targets, and HUD logic. |
 | **Driving** | An arcade-style neon cruise with vehicle controls, chase cameras, and a garage. |
-| **Sim racing** | Tuned vehicle physics, laps, rivals, traffic, and race presentation. |
+| **Crystal Slice** | A chrome blade cuts a crystal block into colliding pieces. Included offline. |
+| **Spline Studio** | An editable product stage with candy materials and kinetic motion. |
 | **Verdant — A Woodland Study** | An editable woodland film with six camera shots, living foliage and atmospheric lighting. |
 | **Physics Lab** | Axis locks, stay events, angular velocity, and runtime gravity controls. |
 | **Timeline Mechanics** | Curve-driven Vault Door, elevator, drawbridge, gate, crusher, and chest examples. |
+
+The launcher keeps Third Person Starter, Sim Racing and Sproutwatch out of its quick cards,
+expanded world list and search. Their builders, explicit creation APIs and package archives remain
+available for optional samples and existing projects. Blank and the templates above remain launcher choices.
 
 Templates are editable projects, not videos or hard-coded demos. Open their scenes, inspect their
 Blueprints, replace assets, and reuse the systems in your own game.
@@ -151,7 +156,7 @@ server.
 
 ### Your first five minutes
 
-1. Choose **Parcel Panic** for a small delivery game, or **Third-person** or **First-person shooter** in the launcher. Follow the [Parcel Panic beginner guide](docs/PARCEL_PANIC.md) to play and remix it.
+1. Choose **Parcel Panic** for a small delivery game, **Platformer** for Cloudstep Garden, or **First Person** in the launcher. Follow the [Parcel Panic beginner guide](docs/PARCEL_PANIC.md) to play and remix it.
 2. Select an object in the **Hierarchy** and edit its components in the **Inspector**.
 3. Open **Scripting**, add an event and an action, then connect their execution pins.
 4. Press **Play** to test the result in the same viewport.
@@ -387,3 +392,21 @@ Feather Engine is released under the [MIT License](LICENSE).
 measures a representative scene and previews reversible quality changes.
 [Build Centre](docs/BUILD_CENTRE.md) brings local builds, GitHub desktop build jobs,
 launch-test reports and artifact collection into the editor.
+
+## Hosted Asset Store
+
+The Asset Store downloads catalog entries, previews, and `.nfpack` packages from Supabase Storage.
+The website’s `/store/` collection offers curated free packages. Downloads no longer ship
+inside the editor repository or its builds. **Open template file** in the launcher creates a
+project from a downloaded package; UI kits use Asset Browser → Import package…; plugins install
+through the editor’s Asset Store. See [Hosted asset store](docs/ASSET_STORE.md) for authoring,
+publishing, verified test fixtures, and future paid-download requirements.
+
+Cinderfall is an original single-player mining/extraction FPS: an authored basalt cave, a
+24-round survey rifle, mineable crystals, articulated cave creatures, a 75-second extraction
+return, anchored menus/HUD, original synthesized audio and replay. Its art and gameplay stay
+editable in Model Forge and Blueprints. See [Cinderfall](docs/CINDERFALL.md).
+
+For future store releases, [the publishing guide](docs/ASSET_STORE.md) covers staging exported
+assets with `store:add`, capturing real preview images with `store:capture`, validating,
+publishing to Supabase and syncing/deploying the website.

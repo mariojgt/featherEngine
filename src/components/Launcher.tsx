@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Gamepad2,
   Plus,
+  PackageOpen,
   Search,
   ChevronDown,
   Clock3,
@@ -21,7 +22,7 @@ import { useEditorStore } from '../store/editorStore';
 import { clearRecovery, readRecovery } from '../store/autosave';
 import { useMarketplaceStore } from '../store/marketplaceStore';
 import { formatSize, matchesQuery, type StoreListing } from '../marketplace/catalog';
-import { CREATOR_QUICK_STARTS, type CreatorQuickStart } from '../creator/gameTemplates';
+import { CREATOR_QUICK_STARTS, isLauncherStarterVisible, type CreatorQuickStart } from '../creator/gameTemplates';
 
 /** The starter world shown first. Everything else keeps the catalog's order. */
 const FEATURED_SLUG = 'template-verdant';
@@ -51,6 +52,7 @@ export function Launcher() {
   const [showAll, setShowAll] = useState(false);
   const newProject = useProjectStore((state) => state.newProject);
   const openProject = useProjectStore((state) => state.openProject);
+  const openTemplateFile = useProjectStore((state) => state.newProjectFromPackageFile);
   const openRecent = useProjectStore((state) => state.openRecent);
   const removeRecent = useProjectStore((state) => state.removeRecent);
   const useDemo = useProjectStore((state) => state.useDemo);
@@ -70,7 +72,9 @@ export function Launcher() {
   }, [loadCatalog]);
 
   const templates = useMemo(() => {
-    const worlds = packages.filter((entry) => entry.kind === 'project');
+    const worlds = packages.filter(
+      (entry) => entry.kind === 'project' && isLauncherStarterVisible(entry.slug),
+    );
     return worlds.sort((a, b) => Number(b.slug === FEATURED_SLUG) - Number(a.slug === FEATURED_SLUG));
   }, [packages]);
 
@@ -175,6 +179,10 @@ export function Launcher() {
               <button className="hub-open" type="button" disabled={busy} onClick={() => void openProject()}>
                 <FolderOpen size={16} aria-hidden />
                 Open project{isDesktop ? '…' : ' file'}
+              </button>
+              <button className="hub-open" type="button" data-open-template-file disabled={busy} onClick={() => void openTemplateFile(projectName())}>
+                <PackageOpen size={16} aria-hidden />
+                Open template file
               </button>
             </div>
             <section className="hub-recent" aria-labelledby="recent-projects-title">
@@ -410,7 +418,7 @@ export function Launcher() {
                 <div className="hub-catalog-message hub-catalog-error" role="alert">
                   <div>
                     <strong>Starter worlds couldn't load.</strong>
-                    <p>Blank, Platformer, Parcel Panic, Lumen Lane and Tower Defense are ready to use offline.</p>
+                    <p>Blank, Platformer, Parcel Panic, Lumen Lane and Crystal Slice are ready to use offline.</p>
                     <details>
                       <summary>Error details</summary>
                       <p>{catalogError}</p>
@@ -431,7 +439,7 @@ export function Launcher() {
                       </button>
                     </>
                   ) : (
-                    'More starter worlds will appear here. Blank, Platformer, Parcel Panic, Lumen Lane and Tower Defense are ready above.'
+                    'More starter worlds will appear here. Blank, Platformer, Parcel Panic, Lumen Lane and Crystal Slice are ready above.'
                   )}
                 </div>
               )}
@@ -490,7 +498,7 @@ export function Launcher() {
                   <span aria-live="polite">
                     {query.trim()
                       ? `${filteredWorlds.length} matching world${filteredWorlds.length === 1 ? '' : 's'}`
-                      : `${visibleWorlds.length} of ${library.length} worlds · plus Blank, Platformer, Parcel Panic, Lumen Lane & Tower Defense above`}
+                      : `${visibleWorlds.length} of ${library.length} worlds · plus Blank, Platformer, Parcel Panic, Lumen Lane & Crystal Slice above`}
                   </span>
                 </div>
               )}

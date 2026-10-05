@@ -9,6 +9,12 @@ export interface TemplateLesson {
 
 /** Shared by the launcher, catalog builder, and learning documentation. */
 export const TEMPLATE_LESSONS: Readonly<Record<string, TemplateLesson>> = {
+  'template-cinderfall': {
+    version: 1, difficulty: 'Intermediate', minutes: 20,
+    goal: 'Mine sixteen aetherite units, survive the cave and extract before the rig departs.',
+    controls: 'WASD move · Shift sprint · LMB fire · R reload · Hold E mine/extract · F headlamp · P pause',
+    lessons: ['Explore the five veins; four fill the quota.', 'Reload between fights and follow the amber survey lights back to the rig.', 'Edit the original rifle and cave assets in Model Forge.', 'Open the six gameplay Blueprints in Logic and inspect their FeatherScript.', 'Test replay and a web export; use a build with Model Forge camera view-model support.'],
+  },
   'template-verdant': {
     version: 1, difficulty: 'Beginner', minutes: 15,
     goal: 'Watch a woodland film, then make your own landscape cinematic.',

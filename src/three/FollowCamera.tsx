@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { defaultCharacter, resolveCharacter, selectActiveObjects, useEditorStore } from '../store/editorStore';
 import { useStableActiveObjects } from '../store/stableSelectors';
 import { cameraPitch as lookPitch, cameraYaw as lookYaw, mouseLook, resetMouseLook } from '../runtime/mouseLook';
+import { ModelMesh } from './ModelMesh';
 import { readTransform } from '../runtime/transformBuffer';
 import { SkinnedModel, useResolvedAnimator } from './SkinnedModel';
 import type { CharacterControllerComponent, SceneObject } from '../types';
@@ -159,6 +160,8 @@ export function computeRestingCameraPose(target: SceneObject): CameraPose {
 
 function CameraViewModel({ object }: { object: SceneObject }) {
   const resolvedAnimator = useResolvedAnimator(object);
+  // Authored Model Forge weapons remain editable and use the same renderer in editor and player.
+  if (object.model?.enabled) return <ModelMesh object={object} />;
   if (!object.animator?.enabled || !resolvedAnimator.meshUrl) return null;
 
   return (

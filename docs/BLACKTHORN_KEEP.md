@@ -8,7 +8,7 @@ Open **Asset Store**, search **Blackthorn Keep**, choose **Use template**, then 
 
 Press **Play** to run the film and **R** to replay. Stop restores the authored environment and props. Film Mode contains the camera shots and named beat markers. Camera scrubbing previews the framing; start playback at the beginning to see event-driven weather and destruction.
 
-The standalone archive is `public/store/packages/projects/template-blackthorn.nfpack`. The AI tool `create_blackthorn_template` can also construct the film in the active scene; use a blank project for this route.
+The standalone archive is `.feather-cache/store/packages/projects/template-blackthorn.nfpack`. The AI tool `create_blackthorn_template` can also construct the film in the active scene; use a blank project for this route.
 
 ## What is editable
 

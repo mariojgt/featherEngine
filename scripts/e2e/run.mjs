@@ -833,7 +833,7 @@ spec('an installed UI kit renders styled in the design canvas', async () => {
   // The reported bug: a kit installed from the Asset Store previewed as "all black, no colours".
   // Its look lives entirely in doc.css (every element ships an empty style object), and the design
   // canvas never injected that stylesheet — so it drew a few hundred transparent divs.
-  const app = await openInstalledKit('pkg-feather-ui-arcade-hud');
+  const app = await openInstalledKit('pkg-feather-ui-rpg-hud');
   try {
     await app.waitFor(`document.querySelector('style[data-ui-css]')`, { label: 'document stylesheet injected' });
 
@@ -864,11 +864,29 @@ spec('an installed UI kit renders styled in the design canvas', async () => {
 });
 
 spec('an installed UI kit cannot restyle the editor around it', async () => {
-  // The other half of the bug: the kit's own `html, body { background: #101819 }` and its `:root`
-  // custom properties used to be injected raw, repainting the whole editor and hijacking the
-  // editor's design tokens (--accent, --text, --panel).
-  const app = await openInstalledKit('pkg-feather-ui-arcade-hud');
+  // Page-level CSS must style only the document frame. Supply an explicit conflicting theme
+  // so this regression stays covered independently of the retained kit's visual design.
+  const app = await openInstalledKit('pkg-feather-ui-rpg-hud');
   try {
+    const editorTheme = await app.evaluate(`(() => {
+      const root = getComputedStyle(document.documentElement);
+      return {
+        bodyBackground: getComputedStyle(document.body).backgroundColor,
+        accent: root.getPropertyValue('--accent').trim(),
+        text: root.getPropertyValue('--text').trim(),
+      };
+    })()`);
+    await app.evaluate(`(() => {
+      const store = window.__featherStore;
+      const doc = store.uiDocuments.find((item) => item.id === store.activeUIDocumentId);
+      store.updateUIDocument(doc.id, {
+        css: doc.css + ':root { --accent: #6ff7ff; --text: #f5fff9; } html, body { background: #101819; }',
+      });
+    })()`);
+    await app.waitFor(
+      `getComputedStyle(document.querySelector('.ui-edit-layer')).getPropertyValue('--accent').trim() === '#6ff7ff'`,
+      { label: 'document theme applied' },
+    );
     const leaked = await app.evaluate(`(() => {
       const body = getComputedStyle(document.body);
       const root = getComputedStyle(document.documentElement);
@@ -883,9 +901,9 @@ spec('an installed UI kit cannot restyle the editor around it', async () => {
       };
     })()`);
 
-    assert.notEqual(leaked.bodyBackground, 'rgb(16, 24, 25)', 'the kit repainted the editor body');
-    assert.notEqual(leaked.accent, '#6ff7ff', 'the kit overrode the editor --accent token');
-    assert.notEqual(leaked.text, '#f5fff9', 'the kit overrode the editor --text token');
+    assert.equal(leaked.bodyBackground, editorTheme.bodyBackground, 'the kit repainted the editor body');
+    assert.equal(leaked.accent, editorTheme.accent, 'the kit overrode the editor --accent token');
+    assert.equal(leaked.text, editorTheme.text, 'the kit overrode the editor --text token');
     // The rules did not vanish — they moved onto the widget frame, which is the point.
     assert.equal(leaked.frameAccent, '#6ff7ff', 'the kit tokens should apply inside the document');
     assert.equal(leaked.frameBackground, 'rgb(16, 24, 25)', 'page-level background should style the widget frame');
@@ -1057,7 +1075,7 @@ spec('each instance of a shared button fires its own event', async () => {
 
 spec('per-element CSS applies in the design canvas and in Play', async () => {
   // Reuse the kit demo purely because it leaves the UI panel docked and open.
-  const app = await openInstalledKit('pkg-feather-ui-arcade-hud');
+  const app = await openInstalledKit('pkg-feather-ui-rpg-hud');
   try {
     // Build a screen HUD with one element styled purely through element CSS.
     const ids = await app.evaluate(`(() => {

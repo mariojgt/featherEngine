@@ -12,9 +12,8 @@ import { packageKindLabel } from '../project/package';
 /**
  * The Asset Store — browse published `.nfpack` packages and install them into the open project.
  *
- * The catalog is data, not code: it is fetched from `VITE_STORE_URL` (defaulting to the bundled
- * `public/store/` index), so the same panel works against a static folder today and a hosted
- * backend later without changes here.
+ * The catalog is fetched from Supabase Storage by default. VITE_STORE_URL can select another
+ * host. Package and preview bytes are downloaded when needed and are not bundled with the editor.
  *
  * Installing runs the ordinary package-import path, so anything the store can add is something the
  * user could equally have imported from a file by hand.

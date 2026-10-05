@@ -68,7 +68,7 @@ try {
     project.name=window.__featherProject?.projectName ?? ${JSON.stringify(info.name)};
     return (await import('/src/project/exportGame.ts')).buildGameBundle(project);
   })()`);
-  if (!bundlePath) copyFileSync(resolve(`public/store/packages/projects/template-${template}.nfpack`), resolve(out, `${template}.nfpack`));
+  if (!bundlePath) copyFileSync(resolve(`.feather-cache/store/packages/projects/template-${template}.nfpack`), resolve(out, `${template}.nfpack`));
   else {
     const archive = await app.evaluate(`(async () => {
       const s=window.__featherStore;
@@ -188,7 +188,7 @@ try {
     const image = await app.page.call('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true, clip: { x: 0, y: 0, width, height, scale: 1 } });
     const bytes = Buffer.from(image.data, 'base64');
     if (preview && template === 'verdant' && i === 0) {
-      const previews = resolve('public/store/previews');
+      const previews = resolve('.feather-cache/store/previews');
       mkdirSync(previews, { recursive: true });
       writeFileSync(resolve(previews, 'verdant.png'), bytes);
     }

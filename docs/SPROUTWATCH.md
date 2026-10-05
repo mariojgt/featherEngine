@@ -47,5 +47,5 @@ npm run build
 node scripts/e2e/tower-defense.mjs
 ```
 
-To refresh the bundled store package after changing the template, open `/?exportTemplate=tower-defense`
-on the dev server, wait for the export to finish, then run `npm run build:store`.
+To refresh the hosted store package after changing the template, open `/?exportTemplate=tower-defense`
+on the dev server, wait for the export to finish, then run `npm run build:store`. Review and publish with `npm run store:publish`; see [Hosted asset store](ASSET_STORE.md).

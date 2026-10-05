@@ -50,7 +50,7 @@ Click **Save**. In the browser, keep the downloaded `.nforge` file and reopen it
 
 For a playable game, choose **Export → Production**, select the launch scene and web target, and resolve any blocking checks. Desktop builds locally; browser export provides a bundle and a command to finish on your machine. See [Production Export](PRODUCTION_EXPORT.md). Serve the complete exported web folder over HTTP or upload it to a static host.
 
-For an editable starter, export a project package. The checked-in Asset Store package is `public/store/packages/projects/template-parcel-panic.nfpack`.
+For an editable starter, export a project package. The staged Asset Store package is `.feather-cache/store/packages/projects/template-parcel-panic.nfpack`.
 
 ## Contributors
 
@@ -58,8 +58,8 @@ For an editable starter, export a project package. The checked-in Asset Store pa
 
 After changing the builder, regenerate the packaged scene:
 
-1. Run `npm run dev` and open its URL with `?exportTemplate=parcel-panic`. This development route writes `public/store/packages/projects/template-parcel-panic.nfpack`. Wait for `document.body.dataset.templateExport`; `templateExportError` reports failure.
-2. Run `npm run build:store` to update the catalog and thumbnail.
+1. Run `npm run dev` and open its URL with `?exportTemplate=parcel-panic`. This development route writes `.feather-cache/store/packages/projects/template-parcel-panic.nfpack`. Wait for `document.body.dataset.templateExport`; `templateExportError` reports failure.
+2. Run `npm run build:store` to stage the catalog and thumbnail. After validation, publish with `npm run store:publish`; see [Hosted asset store](ASSET_STORE.md).
 3. Run `npm test`, `npm run build`, and the Parcel Panic browser check: `E2E_BASE_URL=http://127.0.0.1:17420 node scripts/e2e/parcel-panic.mjs` (use your dev-server port).
 4. The browser check samples the rendered courier joints during idle, walking without a parcel, and stopping, then exercises opening/skip, pickup and throw, five deliveries, pause, timed mode, same-seed retry, a new village, and package installation into a fresh project. Also review its screenshots and check stopped carrying in the exported game.
 

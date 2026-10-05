@@ -9,21 +9,27 @@ import { MODEL_FORGE_PLUGIN_ID, usePluginStore } from '../pluginStore';
 import { useProjectStore } from '../projectStore';
 
 /**
- * The store plugin path end-to-end against the REAL shipped catalog: the Arbor Forge listing's
+ * The store plugin path end-to-end against the REAL hosted catalog and verified archive fixtures: the Arbor Forge listing's
  * `.nfpack` manifest names a compiled-in module, installing activates it, removing deactivates it,
  * and boot-time restore brings the persisted set back.
  */
 
-const PUBLIC_STORE = join(process.cwd(), 'public', 'store');
+const STORE_FIXTURES = join(process.cwd(), '.feather-cache', 'store-fixtures');
 
 function serveBundledStore() {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL) => {
-      const path = new URL(String(input), document.baseURI).pathname;
-      const relative = path.slice(path.indexOf('/store/') + '/store/'.length);
+      const url = new URL(String(input), document.baseURI);
       try {
-        const body = await readFile(join(PUBLIC_STORE, relative));
+        const seed = await readFile(join(process.cwd(), 'public/store/catalog.json'));
+        const catalog = JSON.parse(seed.toString('utf8'));
+        const listing = catalog.packages.find((entry: { downloadUrl: string }) => entry.downloadUrl === url.href);
+        const folders = { asset: 'assets', project: 'projects', plugin: 'plugins' };
+        if (!url.pathname.endsWith('/catalog.json') && !listing) throw new Error('Unknown store archive');
+        const body = url.pathname.endsWith('/catalog.json') ? seed : await readFile(join(
+          STORE_FIXTURES, 'packages', folders[listing.kind as keyof typeof folders], `${listing.slug}.nfpack`,
+        ));
         return {
           ok: true,
           status: 200,

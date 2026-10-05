@@ -292,6 +292,8 @@ interface ProjectState {
    * project rather than merging into whatever the user has open.
    */
   newProjectFromPackageUrl: (url: string, name: string) => Promise<boolean>;
+  /** Pick a downloaded project template and create its own new project. Cancellation changes nothing. */
+  newProjectFromPackageFile: (name: string) => Promise<boolean>;
   /**
    * Download a `.nfpack` from a URL and additively import it — the asset store's install path.
    * Same trust model as importPackageFromFile: the caller is responsible for vouching for the URL.
@@ -337,6 +339,47 @@ export const useProjectStore = create<ProjectState>()(
         set((state) => ({
           recentProjects: [{ dir, name }, ...state.recentProjects.filter((item) => item.dir !== dir)].slice(0, 8),
         }));
+      };
+
+      const startProjectFromPackage = async (read: () => Promise<Uint8Array | null>, name: string): Promise<boolean> => {
+        if (get().busy || blockProjectLifecycleDuringCollaboration()) return false;
+        set({ busy: true, error: null });
+        try {
+          const raw = await read();
+          if (!raw) return false;
+          const archive = readPackageFile(raw);
+          await verifyPackageIntegrity(archive);
+          if (archive.pkg.kind !== 'project' || !archive.pkg.content.scenes?.length) {
+            throw new Error('That package is a module, not a project template. Install it into an open project instead.');
+          }
+          // Only create the project once we know the package is usable — otherwise a bad download
+          // would leave the user staring at an empty project they didn't ask for.
+          const previousScenes = useEditorStore.getState().scenes;
+          await get().newProject(name);
+          if (get().error || !get().hasProject || useEditorStore.getState().scenes === previousScenes) return false;
+
+          const platform = await getPlatform();
+          const summary = await applyPackage(
+            archive,
+            get().projectDir,
+            platform,
+            useEditorStore.getState().mergeProjectPackage,
+          );
+          const scenes = useEditorStore.getState().scenes.length;
+          set({
+            toast: {
+              kind: 'success',
+              message: `Created "${name}" from "${summary.name}" (${scenes} scene(s)).`,
+            },
+          });
+          return true;
+        } catch (error) {
+          const message = errorMessage(error);
+          set({ error: message, toast: { kind: 'error', message: `Could not use that template: ${message}` } });
+          return false;
+        } finally {
+          set({ busy: false });
+        }
       };
 
       // Shared first half of both export flows: build the self-contained bundle, audit it, and
@@ -523,7 +566,10 @@ export const useProjectStore = create<ProjectState>()(
           if (get().error || !get().hasProject || useEditorStore.getState().scenes === previousScenes) return false;
           set({ busy: true });
           try {
-            if (template === 'platformer') {
+            if (template === 'cinderfall') {
+              const { createCinderfallTemplate } = await import('../project/cinderfallTemplate');
+              await createCinderfallTemplate();
+            } else if (template === 'platformer') {
               const { createPlatformerTemplate } = await import('../project/platformerTemplate');
               await createPlatformerTemplate();
             } else if (template === 'parcel-panic') {
@@ -815,44 +861,9 @@ export const useProjectStore = create<ProjectState>()(
           }
         },
 
-        newProjectFromPackageUrl: async (url, name) => {
-          if (get().busy || blockProjectLifecycleDuringCollaboration()) return false;
-          set({ busy: true, error: null });
-          try {
-            const archive = readPackageFile(await fetchPackage(url));
-            await verifyPackageIntegrity(archive);
-            if (archive.pkg.kind !== 'project' || !archive.pkg.content.scenes?.length) {
-              throw new Error('That package is a module, not a project template. Install it into an open project instead.');
-            }
-            // Only create the project once we know the package is usable — otherwise a bad download
-            // would leave the user staring at an empty project they didn't ask for.
-            const previousScenes = useEditorStore.getState().scenes;
-            await get().newProject(name);
-            if (get().error || !get().hasProject || useEditorStore.getState().scenes === previousScenes) return false;
+        newProjectFromPackageUrl: (url, name) => startProjectFromPackage(() => fetchPackage(url), name),
 
-            const platform = await getPlatform();
-            const summary = await applyPackage(
-              archive,
-              get().projectDir,
-              platform,
-              useEditorStore.getState().mergeProjectPackage,
-            );
-            const scenes = useEditorStore.getState().scenes.length;
-            set({
-              toast: {
-                kind: 'success',
-                message: `Created "${name}" from "${summary.name}" (${scenes} scene(s)).`,
-              },
-            });
-            return true;
-          } catch (error) {
-            const message = errorMessage(error);
-            set({ error: message, toast: { kind: 'error', message: `Could not use that template: ${message}` } });
-            return false;
-          } finally {
-            set({ busy: false });
-          }
-        },
+        newProjectFromPackageFile: (name) => startProjectFromPackage(async () => (await getPlatform()).openPackage(), name),
 
         importPackageFromFile: async () => {
           if (!get().hasProject) return;

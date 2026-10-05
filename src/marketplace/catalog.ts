@@ -2,17 +2,9 @@ import { parseTemplateLesson, type TemplateLesson } from '../creator/templateLes
 import { normalizePackageKind, type PackageKind } from '../project/package';
 import { isRetiredStoreSlug } from './retiredPackages';
 
-/**
- * Asset-store catalog client.
- *
- * The catalog is just an index — one JSON document listing packages and where to download each
- * `.nfpack` from. Today it is served statically out of `public/store/` (built by
- * `scripts/build-store-catalog.mjs`); pointing `VITE_STORE_URL` at a hosted catalog is the whole
- * migration to a real backend, because nothing below assumes where the JSON came from.
- */
-
-/** Where the catalog lives. Relative paths resolve against the app's base URL. */
-export const STORE_BASE_URL: string = import.meta.env.VITE_STORE_URL || 'store/';
+/** The hosted catalog and files live in Supabase; VITE_STORE_URL can select another catalog. */
+import storeConfig from '../../store.config.json';
+export const STORE_BASE_URL: string = import.meta.env.VITE_STORE_URL || storeConfig.publicBaseUrl;
 
 const CATALOG_FORMAT = 'feather-store-catalog';
 
@@ -45,6 +37,8 @@ export interface StoreListing {
   priceCents: number;
   /** Data URL or absolute image URL for the card. */
   thumbnail?: string;
+  previewType?: 'capture';
+  screenshots?: { url: string; alt: string }[];
   sizeBytes: number;
   /** Absolute after `fetchCatalog` resolves it against the catalog's own location. */
   downloadUrl: string;
@@ -92,6 +86,8 @@ function parseListing(raw: unknown, baseUrl: string): StoreListing | null {
     learning: parseTemplateLesson(raw.learning),
     priceCents: num(raw.priceCents),
     thumbnail: typeof raw.thumbnail === 'string' ? raw.thumbnail : undefined,
+    previewType: raw.previewType === 'capture' ? 'capture' : undefined,
+    screenshots: Array.isArray(raw.screenshots) ? raw.screenshots.filter(isRecord).filter(image => typeof image.url === 'string').map(image => ({ url: new URL(str(image.url), baseUrl).href, alt: str(image.alt) })) : undefined,
     sizeBytes: num(raw.sizeBytes),
     // Resolved here so callers only ever handle absolute URLs — the store can move hosts freely.
     downloadUrl: new URL(downloadUrl, baseUrl).toString(),

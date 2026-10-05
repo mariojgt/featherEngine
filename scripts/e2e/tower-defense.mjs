@@ -1,4 +1,4 @@
-/** Sproutwatch real-input smoke: launcher, Asset Store install, combat and standalone/mobile HUD. */
+/** Sproutwatch real-input smoke: explicit starter builder, Asset Store install, combat and standalone/mobile HUD. */
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { openEditor } from './harness.mjs';
@@ -16,8 +16,12 @@ const saveShot = async (page, name) => {
 const app = await openEditor({ baseUrl, readySelector: '.launcher', width: 1440, height: 1000 });
 let bundle;
 try {
-  assert.match(await app.text('[data-quick-start="tower-defense"]'), /Sproutwatch/);
-  await app.realClick('[data-quick-start="tower-defense"]');
+  assert.equal(await app.count('[data-quick-start="tower-defense"]'), 0);
+  await app.evaluate(`(async () => {
+    const { useProjectStore } = await import('/src/store/projectStore.ts');
+    const created = await useProjectStore.getState().newProjectFromStarter('Sproutwatch QA', 'tower-defense');
+    if (!created) throw new Error('Could not open the preserved Sproutwatch starter builder');
+  })()`);
   await app.waitFor('document.querySelector(".toolbar") && window.__featherStore?.scenes.some(s => s.name.includes("Sproutwatch"))', { label: 'starter project' });
   await app.evaluate(`(async () => {
     const panels = await import('/src/components/workspacePanels.ts');
@@ -84,7 +88,7 @@ try {
   await app.evaluate('window.__featherStore.setPlaying(false)');
   bundle = await app.evaluate(`(async()=>{const {buildGameBundle}=await import('/src/project/exportGame.ts');return buildGameBundle(window.__featherStore.exportProject());})()`);
   assert.ok(bundle.runtimeContract.requiredFeatures.includes('sproutwatch-tower-defense'));
-  console.log('PASS: launcher, purchases, upgrades, refunds, wave spawning, pause/resume, speed, help, replay, export.');
+  console.log('PASS: explicit starter builder, purchases, upgrades, refunds, wave spawning, pause/resume, speed, help, replay, export.');
 } catch (error) {
   console.log(await app.evaluate('({hud:document.querySelector(".sproutwatch-hud")?.textContent,state:document.querySelector(".sproutwatch-hud")?.dataset})').catch(()=>null));
   await saveShot(app.page, 'failure').catch(()=>{});

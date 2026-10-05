@@ -60,7 +60,7 @@ try {
   await new Promise(done => web.listen(0, '127.0.0.1', done));
   const port = web.address().port;
   const gameOrigin = `https://play.example.test:${port}`, publicRealm = `https://realm.example.test:${port}`;
-  const archive = readPackageFile(new Uint8Array(await readFile('public/store/packages/projects/ember-meadow.nfpack')));
+  const archive = readPackageFile(new Uint8Array(await readFile('.feather-cache/store/packages/projects/ember-meadow.nfpack')));
   const project = { ...blankProject('Ember Meadow Live Test'), ...archive.pkg.content,
     activeSceneId: archive.pkg.content.scenes[0].id, scenes: archive.pkg.content.scenes,
     assets: archive.pkg.assets.map(asset => ({ ...asset, source: undefined, data: `data:model/gltf-binary;base64,${Buffer.from(archive.bytes.get(asset.id)).toString('base64')}` })),

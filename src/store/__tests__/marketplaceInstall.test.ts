@@ -6,34 +6,40 @@ import { buildGameBundle } from '../../project/exportGame';
 import { gardenController, gardenSeed, DEFAULT_GARDEN_SEED } from '../../towerDefense/settings';
 import { generateMap } from '../../towerDefense/game';
 import type { SceneObject, UIElement } from '../../types';
+import { getPlatform } from '../../platform';
 import { useEditorStore } from '../editorStore';
 import { useProjectStore } from '../projectStore';
 import { useMarketplaceStore } from '../marketplaceStore';
 
 /**
- * End-to-end coverage for the bundled store: load the REAL catalog and install the REAL `.nfpack`
- * files from `public/store/`, through the real install pipeline.
+ * End-to-end coverage for the bundled store: load the REAL catalog and install the verified REAL `.nfpack`
+ * files restored by store:pull into `.feather-cache/store-fixtures/`, through the real install pipeline.
  *
  * This is deliberately not a mock of the seed content — it is the seed content. If
- * `scripts/build-store-catalog.mjs` ever emits something the engine can't import, this fails.
+ * `scripts/build-store-catalog.mts` ever emits something the engine can't import, this fails.
  */
 
-const PUBLIC_STORE = join(process.cwd(), 'public', 'store');
+const PUBLIC_STORE = join(process.cwd(), '.feather-cache', 'store-fixtures');
 
 const flattenUI = (root: UIElement): UIElement[] => [root, ...root.children.flatMap(flattenUI)];
 
 /**
- * Serve `public/store/**` off disk, routed by URL path, so no network is involved. Exposes both
+ * Serve the hosted catalog and its verified cached archives off disk, so tests use no network. Exposes both
  * `json()` and `arrayBuffer()` because the catalog is JSON while packages are binary archives.
  */
 function serveBundledStore() {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL) => {
-      const path = new URL(String(input), document.baseURI).pathname;
-      const relative = path.slice(path.indexOf('/store/') + '/store/'.length);
+      const url = new URL(String(input), document.baseURI);
       try {
-        const body = await readFile(join(PUBLIC_STORE, relative));
+        const seed = await readFile(join(process.cwd(), 'public/store/catalog.json'));
+        const catalog = JSON.parse(seed.toString('utf8'));
+        const listing = catalog.packages.find((entry: { downloadUrl: string }) => entry.downloadUrl === url.href);
+        const folder = { asset: 'assets', project: 'projects', plugin: 'plugins' };
+        const body = url.pathname.endsWith('/catalog.json') ? seed : listing
+          ? await readFile(join(PUBLIC_STORE, 'packages', folder[listing.kind as keyof typeof folder], `${listing.slug}.nfpack`))
+          : await readFile(join(PUBLIC_STORE, '__missing_package__'));
         return {
           ok: true,
           status: 200,
@@ -65,7 +71,7 @@ const resetMarketplace = () =>
     installedIds: [],
   });
 
-describe('bundled asset store — catalog to installed content', () => {
+describe('hosted asset store — catalog to installed content', () => {
   beforeEach(() => {
     useProjectStore.getState().useDemo();
     useProjectStore.setState({ toast: null, error: null });
@@ -73,7 +79,7 @@ describe('bundled asset store — catalog to installed content', () => {
     serveBundledStore();
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it('loads the shipped catalog', async () => {
     await useMarketplaceStore.getState().load();
@@ -98,6 +104,36 @@ describe('bundled asset store — catalog to installed content', () => {
         `${listing.slug} installs nothing`,
       ).toBeGreaterThan(0);
     }
+  });
+
+  it('opens a downloaded project template through the file picker', async () => {
+    const platform = await getPlatform();
+    const bytes = new Uint8Array(await readFile(join(PUBLIC_STORE, 'packages/projects/template-physics-lab.nfpack')));
+    vi.spyOn(platform, 'openPackage').mockResolvedValue(bytes);
+    const created = await useProjectStore.getState().newProjectFromPackageFile('Downloaded Physics Lab');
+    expect(created).toBe(true);
+    expect(useProjectStore.getState().projectName).toBe('Downloaded Physics Lab');
+    expect(useEditorStore.getState().scenes.map(scene => scene.name)).toEqual(readPackageFile(bytes).pkg.content.scenes!.map(scene => scene.name));
+    expect(useProjectStore.getState().busy).toBe(false);
+  });
+
+  it('leaves the workspace intact when the template file picker is cancelled', async () => {
+    const scenes = useEditorStore.getState().scenes;
+    vi.spyOn(await getPlatform(), 'openPackage').mockResolvedValue(null);
+    expect(await useProjectStore.getState().newProjectFromPackageFile('Cancelled')).toBe(false);
+    expect(useEditorStore.getState().scenes).toBe(scenes);
+    expect(useProjectStore.getState().busy).toBe(false);
+    expect(useProjectStore.getState().error).toBeNull();
+  });
+
+  it('rejects a UI kit as a project template before changing the workspace', async () => {
+    const scenes = useEditorStore.getState().scenes;
+    const bytes = new Uint8Array(await readFile(join(PUBLIC_STORE, 'packages/assets/ui-kit-party-royale.nfpack')));
+    vi.spyOn(await getPlatform(), 'openPackage').mockResolvedValue(bytes);
+    expect(await useProjectStore.getState().newProjectFromPackageFile('Invalid template')).toBe(false);
+    expect(useEditorStore.getState().scenes).toBe(scenes);
+    expect(useProjectStore.getState().error).toContain('not a project template');
+    expect(useProjectStore.getState().busy).toBe(false);
   });
 
   it('installs every shipped module package into a real project', async () => {
@@ -240,7 +276,7 @@ describe('bundled asset store — catalog to installed content', () => {
       tags: expect.arrayContaining(['template', 'tower-defense', 'zombies', 'procedural']),
       contents: { scenes: 1, assets: 0 },
     });
-    expect(template!.thumbnail).toMatch(/^data:image\/png;base64,/);
+    expect(template!.thumbnail).toMatch(/^https:\/\/.+\/previews\/template-tower-defense\/.+\.(png|webp)$/);
 
     await useMarketplaceStore.getState().install(template!);
 
@@ -362,7 +398,7 @@ describe('shipped package integrity', () => {
     expect(files.length).toBeGreaterThan(0);
 
     for (const file of files) {
-      const { pkg } = readPackageFile(new Uint8Array(await readFile(join(dir, file))));
+      const { pkg, bytes } = readPackageFile(new Uint8Array(await readFile(join(dir, file))));
       const available = new Set(pkg.assets.map((asset) => asset.id));
       const referenced = new Set<string>();
       const add = (id?: string) => {
@@ -401,7 +437,7 @@ describe('shipped package integrity', () => {
       const missing = [...referenced].filter((id) => !available.has(id));
       expect(missing, `${file} references assets it does not ship`).toEqual([]);
 
-      const bodiless = pkg.assets.filter((asset) => !asset.data && !asset.source);
+      const bodiless = pkg.assets.filter((asset) => !asset.data && !asset.source && !bytes.get(asset.id)?.byteLength);
       expect(bodiless.map((asset) => asset.name), `${file} has assets with no bytes`).toEqual([]);
     }
   });

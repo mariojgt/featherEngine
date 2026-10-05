@@ -75,7 +75,7 @@ function useDemoAutoload() {
       if (demo === 'uikit') {
         const market = useMarketplaceStore.getState();
         await market.load();
-        const kit = useMarketplaceStore.getState().packages.find((p) => p.id === (new URLSearchParams(window.location.search).get('kit') ?? 'pkg-feather-ui-arcade-hud'));
+        const kit = useMarketplaceStore.getState().packages.find((p) => p.id === (new URLSearchParams(window.location.search).get('kit') ?? 'pkg-feather-ui-rpg-hud'));
         if (!kit) return;
         await useMarketplaceStore.getState().install(kit);
         // A kit installs as a screen document PLUS its components — open the screen, not the last

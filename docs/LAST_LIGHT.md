@@ -4,7 +4,7 @@ Last Light is an editable cinematic project in a drowned mountain observatory. I
 
 ## Open and edit
 
-Find **Last Light** in the Asset Store's project packages and install it into a blank project. The bundled archive is `public/store/packages/projects/template-last-light.nfpack`; it includes the original score. Press **Play** to see the complete film and **R** to replay. Film Mode contains ten named camera shots and eight markers. The **Last Light · Director** Blueprint owns the live fracture and slow-motion cues. Scrubbing previews authored camera/material tracks; event-driven destruction requires playback from the beginning.
+Find **Last Light** in the Asset Store's project packages and install it into a blank project. The staged archive is `.feather-cache/store/packages/projects/template-last-light.nfpack`; it includes the original score. Press **Play** to see the complete film and **R** to replay. Film Mode contains ten named camera shots and eight markers. The **Last Light · Director** Blueprint owns the live fracture and slow-motion cues. Scrubbing previews authored camera/material tracks; event-driven destruction requires playback from the beginning.
 
 The AI authoring tool `create_last_light_template` builds the same project. It adds objects to the active scene; use a blank project for the standalone set.
 

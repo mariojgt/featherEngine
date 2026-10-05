@@ -35,3 +35,7 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+
+# Hosted store downloads are restored to .feather-cache/ for authoring and tests.
+/public/store/packages/
+/public/store/previews/

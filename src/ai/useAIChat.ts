@@ -211,6 +211,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Exported folder package';
     case 'import_package':
       return 'Imported package';
+    case 'open_template_file':
+      return 'Opened template file';
     case 'browse_asset_store':
       return 'Browsed asset store';
     case 'install_store_package':
@@ -303,6 +305,8 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return 'Built third-person template';
     case 'create_first_person_template':
       return 'Built FPS template';
+    case 'create_cinderfall_template':
+      return 'Built Cinderfall expedition';
     case 'create_last_light_template':
       return 'Built "Last Light" 70-second film';
     case 'create_verdant_template':

@@ -121,7 +121,11 @@ function pickPackageFile(): Promise<File | null> {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.nfpack,.json,application/json';
-    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.hidden = true;
+    const finish = (file: File | null) => { input.remove(); resolve(file); };
+    input.onchange = () => finish(input.files?.[0] ?? null);
+    input.addEventListener('cancel', () => finish(null), { once: true });
+    document.body.append(input);
     input.click();
   });
 }

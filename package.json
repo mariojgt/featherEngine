@@ -15,7 +15,7 @@
     "test:production": "node scripts/export-smoke-test.mjs --browser",
     "vscode:check": "npm --prefix extensions/featherscript-vscode run check",
     "vscode:build": "npm --prefix extensions/featherscript-vscode run build",
-    "build:store": "vite-node scripts/build-store-catalog.mts",
+    "build:store": "npm run store:pull && vite-node scripts/build-store-catalog.mts",
     "build:player": "node scripts/build-player.mjs",
     "build:player:fast": "node scripts/build-player.mjs --skip-typecheck",
     "prepare:runtime": "node scripts/prepare-editor-runtime.mjs",
@@ -57,7 +57,13 @@
     "cinematic:neon:preview": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic --preview",
     "cinematic:verdant:preview": "node scripts/render-cinematic.mjs --template verdant --preview",
     "cinematic:verdant:render": "node scripts/render-cinematic.mjs --template verdant",
-    "cinematic:neon:render": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic"
+    "cinematic:neon:render": "node scripts/render-cinematic.mjs --template neon-afterlight --quality Epic",
+    "store:pull": "node scripts/store/pull.mjs",
+    "store:publish": "node scripts/store/publish.mjs",
+    "pretest": "npm run store:pull",
+    "store:capture": "node scripts/store/capture.mjs",
+    "test:cinderfall": "node scripts/e2e/cinderfall.mjs",
+    "store:add": "vite-node scripts/store/add.mts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",

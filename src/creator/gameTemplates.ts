@@ -1,3 +1,14 @@
+/** Launcher curation only; package archives, builders and explicit creation APIs stay available. */
+const HIDDEN_LAUNCHER_STARTER_SLUGS: ReadonlySet<string> = new Set([
+  'template-third-person',
+  'template-sim-racing',
+  'template-tower-defense',
+]);
+
+export const isLauncherStarterVisible = (slug: string): boolean =>
+  !HIDDEN_LAUNCHER_STARTER_SLUGS.has(slug);
+
+/** Stable identifiers, including optional starters that are no longer launcher choices. */
 export const CREATOR_QUICK_START_IDS = [
   'third-person',
   'first-person',
@@ -10,7 +21,7 @@ export const CREATOR_QUICK_START_IDS = [
 ] as const;
 
 export type CreatorQuickStartId = (typeof CREATOR_QUICK_START_IDS)[number];
-export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense' | 'crystal-slice';
+export type BuiltInTemplate = 'platformer' | 'parcel-panic' | 'moba' | 'tower-defense' | 'crystal-slice' | 'cinderfall';
 
 export interface CreatorQuickStart {
   id: CreatorQuickStartId;
@@ -24,15 +35,8 @@ export interface CreatorQuickStart {
   comingSoon?: boolean;
 }
 
-/** Friendly game choices mapped onto Feather's existing project packages. */
+/** Default launcher choices mapped onto Feather's existing project packages. */
 export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
-  {
-    id: 'third-person',
-    label: 'Third Person',
-    description: 'Character, follow camera, combat and a playable tutorial world.',
-    icon: '🎮',
-    templateSlug: 'template-third-person',
-  },
   {
     id: 'first-person',
     label: 'First Person',
@@ -65,15 +69,6 @@ export const CREATOR_QUICK_STARTS: readonly CreatorQuickStart[] = [
     templateSlug: 'template-moba',
     builtInTemplate: 'moba',
     projectTitle: 'Lumen Lane',
-  },
-  {
-    id: 'tower-defense',
-    label: 'Tower Defense',
-    description: 'A cozy cartoon garden, procedural maps, upgradeable plant defenders and ten waves of goofy zombies.',
-    icon: '🌱',
-    templateSlug: 'template-tower-defense',
-    builtInTemplate: 'tower-defense',
-    projectTitle: 'Sproutwatch',
   },
   {
     id: 'crystal-slice',

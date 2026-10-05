@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Builds the bundled asset-store catalog: a set of `.nfpack` packages plus the `catalog.json`
+ * Stages the hosted asset-store catalog: a set of `.nfpack` packages plus the `catalog.json`
  * index that the Asset Store panel reads.
  *
  * The packages here are authored the same way an outside publisher would author them — plain data,
@@ -10,9 +10,10 @@
  * Run: npm run build:store  (vite-node, so it can share the container code in src/)
  */
 import { TEMPLATE_LESSONS } from '../src/creator/templateLessons';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 // Run through vite-node so the container format has ONE implementation. A hand-rolled copy of the
 // zip layout here would drift from the engine's reader the first time either changed.
 import { readPackageFile, writePackageArchive } from '../src/project/packageArchive';
@@ -23,7 +24,8 @@ import uiKits from '../src/store-assets/uiKits.json';
 import { isRetiredStoreSlug } from '../src/marketplace/retiredPackages';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT_DIR = join(ROOT, 'public', 'store');
+const OUT_DIR = join(ROOT, '.feather-cache', 'store');
+const PREVIEWS_DIR = join(OUT_DIR, 'previews');
 const PACKAGES_DIR = join(OUT_DIR, 'packages');
 
 /** Subfolder per package kind — see PackageKind in src/project/package.ts. */
@@ -835,6 +837,24 @@ function catalogEntry({ pkg, slug, file, archiveBytes, thumbnail }) {
 // ------------------------------------------------------------------------------------------------
 
 async function main() {
+  const published = JSON.parse(await readFile(join(ROOT, 'public/store/catalog.json'), 'utf8'));
+  const captures = JSON.parse(await readFile(join(PREVIEWS_DIR, 'captures.json'), 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return '{}';
+    throw error;
+  }));
+  const attachPreview = async (entry, archive: Uint8Array) => {
+    const capture = captures[entry.slug];
+    if (!capture) return entry;
+    const hash = createHash('sha256').update(archive).digest('hex');
+    if (capture.packageSha256 !== hash) return { ...entry, previewStatus: 'stale' };
+    const screenshots = [];
+    for (const image of capture.images ?? []) {
+      if (!/^[a-z0-9-]+-\d{2}\.webp$/.test(image.file)) throw new Error(`Invalid capture filename for ${entry.slug}.`);
+      const bytes = await readFile(join(PREVIEWS_DIR, image.file));
+      screenshots.push({ url: `data:image/webp;base64,${bytes.toString('base64')}`, alt: image.alt, width: image.width, height: image.height });
+    }
+    return screenshots.length ? { ...entry, thumbnail: screenshots[0].url, screenshots, previewType: 'capture', previewStatus: 'verified' } : entry;
+  };
   // One folder per kind, so what a package IS is obvious from where it lives — both here and in
   // whatever bucket this is eventually mirrored into.
   for (const dir of Object.values(KIND_DIRS)) await mkdir(join(PACKAGES_DIR, dir), { recursive: true });
@@ -852,7 +872,7 @@ async function main() {
     const archive = writePackageArchive(pkg, pack.assetBytes ?? new Map(), { mtime: new Date(EPOCH) });
     const file = `${KIND_DIRS[kind]}/${pack.slug}.nfpack`;
     await writeFile(join(PACKAGES_DIR, file), archive);
-    entries.push(catalogEntry({ pkg, slug: pack.slug, file, archiveBytes: archive.byteLength }));
+    entries.push(await attachPreview(catalogEntry({ pkg, slug: pack.slug, file, archiveBytes: archive.byteLength }), archive));
     console.log(`  ${file} — ${(archive.byteLength / 1024).toFixed(1)} KB`);
   }
 
@@ -860,31 +880,46 @@ async function main() {
   // dev-server sink in vite.config.ts) because they're imperative builders, not data. Pick up
   // whatever has been exported so far and list it.
   const projectsDir = join(PACKAGES_DIR, KIND_DIRS.project);
-  const exported = (await readdir(projectsDir))
-    .filter((file) => file.startsWith('template-') && file.endsWith('.nfpack'))
-    .filter((file) => !isRetiredStoreSlug(file.replace(/\.nfpack$/, '')))
-    .sort();
+  // Published fixtures seed a fresh checkout. Keep any newly exported authoring files intact.
+  const fixtureProjects = join(ROOT, '.feather-cache/store-fixtures/packages/projects');
+  for (const file of await readdir(fixtureProjects)) {
+    if (!file.endsWith('.nfpack')) continue;
+    await copyFile(join(fixtureProjects, file), join(projectsDir, file), 1).catch((error) => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+  }
+  const generated = new Set(packs.map(pack => pack.slug));
+  const exported: string[] = [];
+  for (const folder of Object.values(KIND_DIRS)) {
+    for (const name of (await readdir(join(PACKAGES_DIR, folder))).sort()) {
+      if (!/^[a-z0-9-]+\.nfpack$/.test(name)) continue;
+      const slug = name.replace(/\.nfpack$/, '');
+      if (!generated.has(slug) && !isRetiredStoreSlug(slug)) exported.push(`${folder}/${name}`);
+    }
+  }
   const doubled = [];
   for (const name of exported) {
-    const file = `${KIND_DIRS.project}/${name}`;
+    const file = name;
     const raw = new Uint8Array(await readFile(join(PACKAGES_DIR, file)));
     const { pkg } = readPackageFile(raw);
     const problems = detectDoubling(pkg);
     if (problems.length) doubled.push(`  ${file}: ${problems.join('; ')}`);
-    const slug = name.replace(/\.nfpack$/, '');
+    const slug = name.split('/').pop()!.replace(/\.nfpack$/, '');
+    if (file.split('/')[0] !== KIND_DIRS[pkg.kind]) throw new Error(`${slug}: package kind does not match its folder.`);
+    if (pkg.kind !== 'project' && !pkg.meta.license) throw new Error(`${slug}: choose an explicit license with store:add before staging a custom asset or plugin.`);
     const [from, to, glyph] = TEMPLATE_THUMBNAILS[slug] ?? ['#5B8CFF', '#1B2C63', '\u{1F5FA}'];
-    let cover = thumbnail(from, to, glyph);
+    let cover = published.packages.find((entry) => entry.slug === slug)?.thumbnail ?? thumbnail(from, to, glyph);
     if (slug === 'template-tower-defense') {
-      const preview = await readFile(join(OUT_DIR, 'previews', 'sproutwatch.png')).catch(() => null);
+      const preview = await readFile(join(PREVIEWS_DIR, 'sproutwatch.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
     if (['template-last-light', 'template-blackthorn', 'template-verdant', 'template-parcel-panic', 'template-moba'].includes(slug)) {
       // A real engine capture, produced by render-cinematic.mjs (or e2e/resonance.mjs). Inline like the
       // other covers so the catalog remains portable/offline, even when served from another host.
-      const preview = await readFile(join(OUT_DIR, 'previews', slug === 'template-moba' ? 'moba.png' : slug === 'template-parcel-panic' ? 'parcel-panic.png' : slug === 'template-verdant' ? 'verdant.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : 'last-light.png')).catch(() => null);
+      const preview = await readFile(join(PREVIEWS_DIR, slug === 'template-moba' ? 'moba.png' : slug === 'template-parcel-panic' ? 'parcel-panic.png' : slug === 'template-verdant' ? 'verdant.png' : slug === 'template-blackthorn' ? 'blackthorn.png' : 'last-light.png')).catch(() => null);
       if (preview) cover = `data:image/png;base64,${preview.toString('base64')}`;
     }
-    entries.push(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }));
+    entries.push(await attachPreview(catalogEntry({ pkg, slug, file, archiveBytes: raw.byteLength, thumbnail: cover }), raw));
     console.log(`  ${file} — ${(raw.byteLength / 1048576).toFixed(1)} MB single file (exported from the editor)`);
   }
 
@@ -902,7 +937,7 @@ async function main() {
     packages: entries,
   };
   await writeFile(join(OUT_DIR, 'catalog.json'), `${JSON.stringify(catalog, null, 2)}\n`, 'utf8');
-  console.log(`\nWrote ${entries.length} packages + catalog.json to public/store/`);
+  console.log(`\nStaged ${entries.length} packages + catalog.json in .feather-cache/store/. Run npm run store:publish to publish.`);
 }
 
 main().catch((error) => {

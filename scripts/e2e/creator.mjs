@@ -29,20 +29,52 @@ async function launcherSmoke() {
     }
     throw new Error(`Timed out waiting for ${label}`);
   };
+  const assertHiddenStarters = async () => {
+    for (const slug of ['template-third-person', 'template-sim-racing', 'template-tower-defense']) {
+      assert.equal(
+        await evaluate(`document.querySelectorAll('[data-template-slug="${slug}"]').length`),
+        0,
+        `${slug} stays hidden in the launcher`,
+      );
+    }
+  };
 
   try {
     await page.call('Page.navigate', { url: `${BASE_URL}/` });
     await waitFor(`document.querySelector('.launcher')`, 'Creator launcher');
     assert.equal(await evaluate(`document.querySelector('#launcher-title')?.textContent.trim()`), "Let's make something.");
-    assert.equal(await evaluate(`document.querySelectorAll('.launcher-quick-card').length`), 6);
-    assert.equal(await evaluate(`document.querySelector('[data-quick-start="tower-defense"]')?.disabled`), false);
+    assert.equal(await evaluate(`document.querySelectorAll('.launcher-quick-card').length`), 5);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-quick-start="tower-defense"], [data-quick-start="third-person"]').length`), 0);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="crystal-slice"]')?.disabled`), false);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="platformer"]')?.disabled`), false);
     assert.equal(await evaluate(`document.querySelector('[data-quick-start="platformer"]')?.textContent.includes('Coming soon')`), false);
     assert.equal(await evaluate(`document.querySelector('.hub-ai').open`), false);
     await evaluate(`document.querySelector('.hub-ai > summary').click()`);
     assert.ok(await evaluate(`document.querySelector('#launcher-game-description')?.placeholder.includes('third-person adventure')`));
+    await waitFor(`document.querySelector('.hub-library-footer')`, 'starter catalog loaded');
+    await assertHiddenStarters();
     await screenshot(page, 'launcher');
+
+    await evaluate(`document.querySelector('.hub-library-toggle').click()`);
+    await waitFor(`document.querySelector('.hub-library-toggle')?.getAttribute('aria-expanded') === 'true'`, 'all starter worlds');
+    await assertHiddenStarters();
+    for (const slug of ['template-first-person', 'template-driving', 'template-spline-studio', 'template-verdant']) {
+      assert.equal(await evaluate(`document.querySelector('[data-template-slug="${slug}"]')?.disabled`), false);
+    }
+
+    for (const query of ['First Person', 'Third Person', 'third-person', 'Sim Racing', 'sim-racing', 'Sproutwatch', 'tower-defense']) {
+      await evaluate(`(() => {
+        const input = document.querySelector('[aria-label="Search starter worlds"]');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(query)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+      await waitFor(`document.querySelector('[aria-label="Clear search"]')`, 'starter search active');
+      if (query === 'First Person') {
+        await waitFor(`document.querySelector('.hub-library-footer')?.textContent.includes('matching world')`, 'search results updated');
+        assert.equal(await evaluate(`document.querySelector('[data-template-slug="template-first-person"]')?.disabled`), false);
+      }
+      await assertHiddenStarters();
+    }
   } finally {
     await dispose();
   }

@@ -51,13 +51,28 @@ function exportRuntime(): Plugin {
  *
  * The starter templates are imperative builders that fetch real multi-megabyte models and use
  * browser-only APIs, so the only faithful way to turn one into a `.nfpack` is to run it in a real
- * browser and post the result back out. This receives that JSON and writes it into public/store/.
+ * browser and post the result back out. This receives that JSON and writes it into the ignored .feather-cache/store/.
  */
 function templateExportSink(): Plugin {
   return {
     name: 'feather-template-export-sink',
     apply: 'serve',
     configureServer(server) {
+      server.middlewares.use('/__feather/store-package', (req, res) => {
+        if (req.method !== 'GET') { res.statusCode = 405; res.end('GET only'); return; }
+        const query = new URL(req.url ?? '', 'http://localhost').searchParams;
+        const slug = query.get('slug') ?? '', kind = query.get('kind') ?? '';
+        const folders: Record<string, string> = { project: 'projects', asset: 'assets', plugin: 'plugins' };
+        if (!/^[a-z0-9-]+$/.test(slug) || !Object.prototype.hasOwnProperty.call(folders, kind)) { res.statusCode = 400; res.end('Invalid package'); return; }
+        const relative = `packages/${folders[kind]}/${slug}.nfpack`;
+        const staged = resolve(__dirname, '.feather-cache/store', relative);
+        const fixture = resolve(__dirname, '.feather-cache/store-fixtures', relative);
+        const file = existsSync(staged) ? staged : fixture;
+        if (!existsSync(file)) { res.statusCode = 404; res.end('Run store:pull or export this template first.'); return; }
+        res.setHeader('content-type', 'application/octet-stream');
+        res.setHeader('cache-control', 'no-store');
+        createReadStream(file).pipe(res);
+      });
       server.middlewares.use('/__feather/export-template', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;
@@ -74,12 +89,12 @@ function templateExportSink(): Plugin {
             if (!bytes.length) throw new Error('empty body');
             // Templates are kind:project, so they land in the projects folder (see KIND_DIRS in
             // scripts/build-store-catalog.mts — the catalog generator reads them back from there).
-            const dir = resolve(__dirname, 'public/store/packages/projects');
+            const dir = resolve(__dirname, '.feather-cache/store/packages/projects');
             mkdirSync(dir, { recursive: true });
             writeFileSync(resolve(dir, `${slug}.nfpack`), bytes);
             const mb = (bytes.length / 1048576).toFixed(1);
             server.config.logger.info(
-              `[template-export] wrote public/store/packages/projects/${slug}.nfpack (${mb} MB)`,
+              `[template-export] staged .feather-cache/store/packages/projects/${slug}.nfpack (${mb} MB)`,
             );
             res.setHeader('content-type', 'application/json');
             res.end(JSON.stringify({ ok: true, slug }));

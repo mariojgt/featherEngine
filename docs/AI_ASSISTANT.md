@@ -18,6 +18,20 @@ use a new feature it needs three things — **a way to do it** (a tool), **a way
 | [`src/ai/systemPrompt.ts`](../src/ai/systemPrompt.ts) | `COMPACT_ENGINE_GUIDE` — **the guide actually sent** to the model (in-app chat and MCP) — plus the long-form `ENGINE_GUIDE` reference, and `buildSceneSnapshot()` (the live project state injected every turn). |
 | [`src/ai/useAIChat.ts`](../src/ai/useAIChat.ts) | `describeToolCall()` — the human-readable chip shown when a tool runs. |
 
+## Launcher recommendations
+
+Recommend the visible launcher choices for a first project: Blank, Platformer, Parcel Panic,
+Lumen Lane and Crystal Slice are included offline; First Person, Driving, Spline Studio and the
+remaining catalog samples are available in Starter worlds, its expanded list and search.
+
+Third Person Starter (`template-third-person`), Sim Racing (`template-sim-racing`) and Sproutwatch
+(`template-tower-defense`) are hidden from all default launcher choices. Their builders, runtime,
+package archives and explicit APIs remain supported for existing projects and optional samples.
+The tools `create_third_person_template`, `create_sim_racing_template` and
+`create_tower_defense_template` remain valid for requests for those samples; do not tell users to
+find them in the launcher or recommend them as first-run choices. Keep both `COMPACT_ENGINE_GUIDE`
+and `ENGINE_GUIDE` accurate about this distinction.
+
 ## Checklist — adding a new capability to the AI
 
 Work top to bottom; skip a step only if it genuinely doesn't apply.
@@ -172,3 +186,30 @@ Use `set_ui_button_action(documentId, elementId, action)` to configure common me
 Two starters exist: `pkg-feather-ember-meadow` (one zone) and `pkg-feather-sunlit-reach` (three zone scenes marked `Realm zone · <id>`, classes, a boss, per-zone cinematics, zone chat). `feather.titan.open-starter` takes `template`. The scene snapshot's `titan` object reports `zone` and `zones`. See [Sunlit Reach — Mini MMO](SUNLIT_REACH_MMO.md).
 
 Enabling `feather.titan` exposes `feather.titan.configure`, `feather.titan.open-starter`, `feather.titan.start-realm`, `feather.titan.stop-realm` and `feather.titan.export-server` through the plugin tool registry. The starter opens a new project via the standard project lifecycle. Scene snapshots report whether the Titan marker is active, the realm URL, release mode, game website origin and whether public API configuration exists. Guide users through Connect → Test → Publish. The widget includes instructions for Projects → Connect your game → Feather Engine, field examples, a first-character checklist, troubleshooting and a diagram distinguishing the realm from the Titan API. The API field starts with Unreal’s example default (`https://yourproject.supabase.co`); live accounts require the dashboard’s actual project URL. Test & save validates the key without creating a player. The setup panel opens for an unconfigured installed starter, and Play automatically starts or reuses the configured local realm. The start/stop tools remain available; online builds include configured server files. Hosting still requires deployment. Never include player passwords or tokens in project variables or assistant messages. See [the Titan guide](TITAN_MMO_STARTER.md).
+
+## Hosted store and local template files
+
+`browse_asset_store` and `install_store_package` use the Supabase-hosted free catalog.
+Downloads require internet; store archives are no longer bundled in the repository or editor.
+The website at https://feather-engine.com/store/ provides a curated subset with package details.
+Users can download project `.nfpack` files and choose **Open template file** in the launcher.
+`open_template_file(name)` opens the same picker through
+`useProjectStore.newProjectFromPackageFile(name)` and returns the created project’s active scene.
+Only use this tool when starting a new project is requested; it replaces the current workspace.
+Cancellation and a module selected as a project template leave the workspace unchanged.
+Use `import_package` for downloaded UI kits, and `install_store_package` for built-in plugins.
+Both template file and URL paths share validation and project creation. See [ASSET_STORE.md](ASSET_STORE.md).
+
+## Cinderfall and store previews
+
+`create_cinderfall_template()` invokes the original editable mining/extraction FPS builder and
+returns its player object ID. `newProjectFromStarter(name, 'cinderfall')` creates its own project.
+All gameplay rules, art and menus are authored project data; there is no game-specific player
+runtime. Model Forge assets can now render as camera view-models. Full-screen opaque interactive
+UI menus release pointer lock so buttons remain usable; transparent HUD controls retain it.
+Both ENGINE_GUIDE versions describe controls and the requirement for an updated engine build.
+
+The store catalog can include `previewType: 'capture'` and a `screenshots` gallery. Publishing
+requires current captured previews for featured listings. See [ASSET_STORE.md](ASSET_STORE.md)
+for store:add, store:capture, provenance/checksums, publishing, website sync and rollback, and
+[CINDERFALL.md](CINDERFALL.md) for the editable gameplay and source files.

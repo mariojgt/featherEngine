@@ -60,7 +60,7 @@ try {
   await app.dispose();
   // Write public art only after closing the page; Vite reloads open tabs when public files change.
   if (passed && hasPreview) {
-    mkdirSync('public/store/previews', {recursive:true});
-    copyFileSync('/tmp/feather-resonance-preview.png', 'public/store/previews/resonance.png');
+    mkdirSync('.feather-cache/store/previews', {recursive:true});
+    copyFileSync('/tmp/feather-resonance-preview.png', '.feather-cache/store/previews/resonance.png');
   }
 }

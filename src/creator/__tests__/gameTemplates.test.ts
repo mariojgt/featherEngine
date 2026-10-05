@@ -25,14 +25,14 @@ describe('Creator quick starts', () => {
     expect(lesson?.lessons.length).toBeGreaterThan(0);
   });
 
-  it('offers the complete tower-defense starter offline', () => {
-    expect(findCreatorQuickStart('tower-defense')).toMatchObject({
-      templateSlug: 'template-tower-defense', builtInTemplate: 'tower-defense',
-    });
-    expect(findCreatorQuickStart('tower-defense')?.comingSoon).toBeUndefined();
+  it('offers only the curated quick starts', () => {
+    expect(CREATOR_QUICK_STARTS.map((entry) => entry.id)).toEqual([
+      'first-person', 'platformer', 'parcel-panic', 'moba', 'crystal-slice', 'blank',
+    ]);
+    expect(findCreatorQuickStart('third-person')).toBeUndefined();
+    expect(findCreatorQuickStart('tower-defense')).toBeUndefined();
   });
   it('maps game concepts onto the existing project template slugs', () => {
-    expect(findCreatorQuickStart('third-person')?.templateSlug).toBe('template-third-person');
     expect(findCreatorQuickStart('first-person')?.templateSlug).toBe('template-first-person');
   });
 

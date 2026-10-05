@@ -6,7 +6,7 @@ A complete **70-second cyberpunk film**, rendered live in Feather Engine at Epic
 
 In **Asset Store**, search **Neon Afterlight**, choose **Use template**, then **Create project**. Press **Play** for the film; **R** restarts it. Stop restores the authored rain and drone position.
 
-The updated template is **v1.1.0**. The standalone package is `public/store/packages/projects/template-neon-afterlight.nfpack`. It embeds all **16 assets**: eleven GLB models (including five emissive signs), four PBR surface maps and an original stereo synth score with rain/steam/electrical sound design. The models embed their own facade/sign textures. No external asset downloads are needed after import.
+The updated template is **v1.1.0**. The standalone package is `.feather-cache/store/packages/projects/template-neon-afterlight.nfpack`. It embeds all **16 assets**: eleven GLB models (including five emissive signs), four PBR surface maps and an original stereo synth score with rain/steam/electrical sound design. The models embed their own facade/sign textures. No external asset downloads are needed after import.
 
 Project packages now preserve their authored render settings, including Epic quality, bloom, ambient occlusion and color grading. Older packages retain the new project's defaults; adding an asset pack leaves the current project's render settings unchanged.
 

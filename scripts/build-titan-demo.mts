@@ -4,7 +4,7 @@ import { readPackageFile } from '../src/project/packageArchive';
 import { blankProject } from '../src/project/serialize';
 import { buildGameBundle } from '../src/project/exportGame';
 import { verifyGameBundle } from '../src/project/verifyBundle';
-const archive = readPackageFile(new Uint8Array(await readFile('public/store/packages/projects/ember-meadow.nfpack')));
+const archive = readPackageFile(new Uint8Array(await readFile('.feather-cache/store/packages/projects/ember-meadow.nfpack')));
 const project = { ...blankProject('Ember Meadow'), ...archive.pkg.content,
   activeSceneId: archive.pkg.content.scenes![0].id, scenes: archive.pkg.content.scenes!,
   assets: archive.pkg.assets.map(asset => ({ ...asset, source: undefined, data: `data:model/gltf-binary;base64,${Buffer.from(archive.bytes.get(asset.id)!).toString('base64')}` })),

@@ -55,6 +55,7 @@ import type { SimpleInteractionAction } from '../creator/simpleInteractions';
 import { CREATOR_GAMEPLAY_KIT_IDS, findCreatorGameplayKit } from '../creator/gameplayKits';
 import { createThirdPersonTemplate } from '../project/thirdPersonTemplate';
 import { createFirstPersonTemplate } from '../project/firstPersonTemplate';
+import { createCinderfallTemplate } from '../project/cinderfallTemplate';
 import { createLastLightTemplate } from '../project/lastLightTemplate';
 import { createBlackthornTemplate } from '../project/blackthornTemplate';
 import { createVerdantTemplate } from '../project/verdantTemplate';
@@ -3350,6 +3351,15 @@ const rawEngineTools = {
     },
   }),
 
+  create_cinderfall_template: tool({
+    description: 'Build Cinderfall, an original single-player sci-fi mining/extraction FPS in a new empty project. Adds an authored basalt cave, five mineable veins, eight articulated cave creatures, a live-linked Model Forge camera rifle, editable gameplay Blueprints, original synthesized audio, briefing/HUD/pause/results, timed reloads, health feedback, headlamp and replay. Returns the player object id. Use when a user requests a complete cave-mining FPS starter.',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const id = await createCinderfallTemplate();
+      return `Created Cinderfall. Surveyor objectId: ${id}. Press Play, then Begin expedition. WASD move; hold E to mine/extract; LMB fire; R reload; F headlamp; P pause.`;
+    },
+  }),
+
   create_first_person_template: tool({
     description:
       'Build a complete cyberpunk-neon FPS engine showcase from bundled assets across TWO scenes. Scene 1 = a room-based first-person template: Room 1 movement/mouse-look/sprint/jump, Room 2 crawl/slow movement plus a real [E] interaction console, Room 3 physics + shooting with dynamic boxes, breakable range targets, moving target, bounce pad, and physics tower, Room 4 bound screen UI plus a trigger/interaction-driven Film Mode cinematic finale. Includes an invisible player pawn, 5 camera-bound animated weapon arms with a 1–5 picker, hold-to-fire projectiles (each gun a distinct fire rate/damage/knockback/sound, grenade lobs an explosive orb), neon HUD (crosshair/weapon/ammo), proximity tutorial signs, night environment, bloom, vignette, and ambient bed. Scene 2 = a Call-of-Duty-style "Breach & Clear" MISSION reached from a DEPLOY pad: a neon facility where you breach, eliminate line-of-sight enemy guards across 3 rooms, then reach the extraction zone — with glowing green MEDKIT pickups (one per room, +35 integrity, consumed only when hurt, a reusable trigger→heal→destroy-self Blueprint), an objective banner, an INTEGRITY (health) bar, MISSION FAILED/COMPLETE overlays, and ENTER to redeploy/return. Weapon swaps play a click; the HUD controls strip covers move/sprint/jump/fire/aim/reload/weapons/interact. Returns pawn objectId.',
@@ -4179,6 +4189,17 @@ const rawEngineTools = {
       return added > 0
         ? `Imported a package — ${added} new prefab(s) added to the Project browser. Use instantiate_prefab to place one in the scene.`
         : `Import dialog closed — no package was imported.`;
+    },
+  }),
+
+  open_template_file: tool({
+    description: 'Open a file picker for a downloaded .nfpack project template and create a new project from its scenes. Use only when the user asks to start a new project from a local template; opening a template replaces the current workspace. UI kits import with import_package instead. Cancellation leaves the workspace unchanged.',
+    inputSchema: z.object({ name: z.string() }),
+    execute: async ({ name }) => {
+      const created = await projectStore().newProjectFromPackageFile(name);
+      return created
+        ? `Created "${name}" from a local template. Active scene: ${store().activeSceneId}.`
+        : projectStore().error ? `Could not open template: ${projectStore().error}` : 'Template picker closed; the workspace is unchanged.';
     },
   }),
 
