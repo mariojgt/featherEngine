@@ -3,8 +3,6 @@
   "bucket": "feather-store",
   "publicBaseUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/",
   "websiteSlugs": [
-    "ui-kit-party-royale",
-    "ui-kit-rpg-hud",
     "arbor-forge",
     "model-forge",
     "template-parcel-panic",

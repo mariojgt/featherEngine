@@ -135,7 +135,9 @@ import {
   applySetModelPartMeshVertices,
   applySubdivideModelPartFaces,
 } from './editor/treeActions';
-import type { ModelPart, ModelPartShape, ModelSpec } from '../types';
+import type { ModelMeshGenerator, ModelMeshOp, ModelMeshOpResult, ModelPart, ModelPartShape, ModelSpec } from '../types';
+import { applyAddImportedModelSpec, applyAddModelMeshPart, applyModelMeshOp } from './editor/modelMeshActions';
+import { applyBakeModelPartTextures, type BakeModelTexturesOptions, type BakeModelTexturesResult } from './editor/modelBakeActions';
 
 /** How a grove picks its tree asset: an explicit library spec, a stylized preset, or an archetype. */
 export interface PlantGroveOptions {
@@ -1117,6 +1119,14 @@ export interface EditorState {
   subdivideModelPartFaces: (specId: string, partId: string, faceIndices: number[]) => boolean;
   /** CSG boolean of two parts; the result lands in the first part (converted to a mesh). Returns the new part; null on failure. */
   booleanModelParts: (specId: string, partId: string, otherPartId: string, operation: 'union' | 'difference' | 'intersect') => boolean;
+  /** One Blender-style polygon edit (extrude/inset/bevel/loop cut/…) on a part; non-mesh parts convert first. One undo step. */
+  applyModelMeshOp: (specId: string, partId: string, op: ModelMeshOp) => ModelMeshOpResult;
+  /** Add a mesh part from a generator (quad primitive, lathe, tube). Returns the part id; null = bad spec/generator. */
+  addModelMeshPart: (specId: string, generator: ModelMeshGenerator, init?: Partial<Omit<ModelPart, 'id' | 'shape' | 'mesh'>>) => string | null;
+  /** Import a .glb/.gltf as a new editable model asset (one mesh part per glTF mesh). Returns its id + warnings. */
+  importModelFromGlb: (data: ArrayBuffer | File, name?: string) => Promise<{ specId: string; warnings: string[] }>;
+  /** Bake a mesh part into textures (base color × AO, optional normal map) and assign them as a project material. */
+  bakeModelPartTextures: (specId: string, partId: string, options?: BakeModelTexturesOptions) => Promise<BakeModelTexturesResult>;
   /** Replace a model asset's flat-color palette (1-16 hex colors). */
   setModelPalette: (specId: string, palette: string[]) => boolean;
   /** Place a prototype model object linked to a library asset (terrain-snapped). Returns the object id; null = unknown spec. */
@@ -1821,6 +1831,42 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   extrudeModelPartFaces: (specId, partId, faceIndices, delta) => applyExtrudeModelPartFaces(set, get, specId, partId, faceIndices, delta),
   subdivideModelPartFaces: (specId, partId, faceIndices) => applySubdivideModelPartFaces(set, get, specId, partId, faceIndices),
   booleanModelParts: (specId, partId, otherPartId, operation) => applyBooleanModelParts(set, get, specId, partId, otherPartId, operation),
+  applyModelMeshOp: (specId, partId, op) => applyModelMeshOp(set, get, specId, partId, op),
+  addModelMeshPart: (specId, generator, init) => applyAddModelMeshPart(set, get, specId, generator, init),
+  bakeModelPartTextures: (specId, partId, options) => applyBakeModelPartTextures(set, get, specId, partId, options),
+  importModelFromGlb: async (data, name) => {
+    const { importGlbAsModelSpec } = await import('../model/importModelGlb');
+    const imported = await importGlbAsModelSpec(data, name);
+    // Textures become image assets, materials become project materials, parts point at them.
+    const assetIdByKey = new Map<string, string>();
+    if (imported.textures.length) {
+      get().addAssets(imported.textures.map((texture) => texture.file));
+      const added = get().assets.slice(-imported.textures.length);
+      imported.textures.forEach((texture, index) => assetIdByKey.set(texture.key, added[index].id));
+    }
+    const materialIdByKey = new Map<string, string>();
+    for (const material of imported.materials) {
+      const id = get().createMaterial(material.name, 'Imported with a Model Forge GLB');
+      get().updateMaterial(id, {
+        color: material.color,
+        metalness: material.metalness,
+        roughness: material.roughness,
+        emissiveColor: material.emissiveColor,
+        emissiveIntensity: material.emissiveIntensity,
+        textureAssetId: material.baseColorTextureKey ? assetIdByKey.get(material.baseColorTextureKey) : undefined,
+        normalMapAssetId: material.normalTextureKey ? assetIdByKey.get(material.normalTextureKey) : undefined,
+      });
+      materialIdByKey.set(material.key, id);
+    }
+    const spec = {
+      ...imported.spec,
+      parts: imported.spec.parts.map((part) => {
+        const key = imported.partMaterials[part.id];
+        return key && materialIdByKey.has(key) ? { ...part, materialId: materialIdByKey.get(key) } : part;
+      }),
+    };
+    return { specId: applyAddImportedModelSpec(set, spec), warnings: imported.warnings };
+  },
   setModelPalette: (specId, palette) => applySetModelPalette(set, get, specId, palette),
   createModelFromSpec: (specId, options = {}) => applyCreateModelFromSpec(set, get, specId, options),
   attachModelSpec: (objectId, specId) => applyAttachModelSpec(set, get, objectId, specId),

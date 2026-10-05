@@ -61,7 +61,53 @@ export interface ModelPart {
    * physics trimeshes it exactly, and GLB baking just works.
    */
   mesh?: ModelPartMesh;
+  /**
+   * Non-destructive modifier stack (mesh parts), evaluated in order at render/bake/physics time:
+   * mirror, array and subdivision surface. The stored cage never changes, so a modifier can be
+   * toggled, reordered or removed at any time — the Blender modifier-stack contract.
+   */
+  modifiers?: ModelModifier[];
+  /**
+   * Auto-smooth angle in degrees for mesh parts: edges whose faces meet at a sharper angle render
+   * hard, everything shallower shades smooth. 0 = fully faceted, 180 = fully smooth. Undefined
+   * derives from the model finish (smooth → 40°, flat → 0°).
+   */
+  smoothAngle?: number;
+  /** Engine material override (project `materials` library id). Textured parts use the mesh UVs. */
+  materialId?: string;
+  /** Outliner group label. Parts sharing a label select, hide and move together in the Forge. */
+  group?: string;
 }
+
+/** One entry of a mesh part's non-destructive modifier stack. `enabled: false` keeps it but skips it. */
+export type ModelModifier =
+  | {
+      type: 'mirror';
+      enabled?: boolean;
+      /** Mirror across the part's local X/Y/Z = 0 plane. Several axes may be combined. */
+      axes: Array<'x' | 'y' | 'z'>;
+      /** Weld seam vertices lying on the mirror plane (within this distance, unit space). */
+      mergeDistance?: number;
+    }
+  | {
+      type: 'array';
+      enabled?: boolean;
+      /** Total copies, including the original (2-64). */
+      count: number;
+      /** 'linear' steps by `offset`; 'radial' rotates copies evenly around `axis` through the origin. */
+      mode: 'linear' | 'radial';
+      /** Linear step between copies, unit space. */
+      offset?: Vector3Tuple;
+      axis?: 'x' | 'y' | 'z';
+      /** Radial sweep in degrees (360 = full ring). */
+      angle?: number;
+    }
+  | {
+      type: 'subdivision';
+      enabled?: boolean;
+      /** Catmull-Clark levels, 1-4 (render cost grows 4x per level). */
+      levels: number;
+    };
 
 /**
  * A hand-edited mesh part. Vertices are stored in unit space (a cube is the eight ±0.5 corners) and
@@ -70,7 +116,21 @@ export interface ModelPart {
  */
 export interface ModelPartMesh {
   vertices: Vector3Tuple[];
+  /** Triangulation of `faces` — always derived on normalization; kept for physics, CSG and old saves. */
   indices: number[];
+  /**
+   * The editable topology: polygons (quads, triangles, n-gons) as CCW vertex loops seen from outside.
+   * This is the source of truth for every edit tool — loop cuts, insets, bevels and subdivision need
+   * real quads and shared edges, which a triangle list cannot express. Older saves carry only
+   * `indices`; normalization rebuilds faces from them by merging coplanar triangle pairs into quads.
+   */
+  faces?: number[][];
+  /** Palette slot per face (parallel to `faces`); -1 or missing = the part's `colorSlot`. */
+  faceSlots?: number[];
+  /** UVs per face corner (parallel to `faces`, each entry parallel to that face's loop). */
+  faceUVs?: Array<Array<[number, number]>>;
+  /** Edges marked sharp (always hard-shaded, and kept crisp by subdivision), as vertex pairs. */
+  sharpEdges?: Array<[number, number]>;
 }
 
 /**
@@ -110,3 +170,57 @@ export interface ModelComponent {
   /** Inline fallback, present only after the library entry was deleted. */
   spec?: ModelSpec;
 }
+
+/** Axis name used by mirror/symmetry tools. */
+export type ModelAxis = 'x' | 'y' | 'z';
+
+/**
+ * One Blender-style edit on a mesh part's polygon cage. Every edit path — the Forge's Edit mode, the
+ * plugin API and the AI tools — goes through this single union (store `applyModelMeshOp`), so each
+ * op is one undo step and behaves identically wherever it came from. Indices refer to the part's
+ * CURRENT cage: faces index `mesh.faces`, vertices index `mesh.vertices`, edges are vertex pairs.
+ */
+export type ModelMeshOp =
+  | { type: 'extrude'; faces: number[]; distance?: number; individual?: boolean }
+  | { type: 'inset'; faces: number[]; thickness?: number; depth?: number; individual?: boolean }
+  | { type: 'bevel'; edges: Array<[number, number]>; width?: number; segments?: number }
+  | { type: 'loopCut'; edge: [number, number]; cuts?: number; factor?: number }
+  | { type: 'subdivide'; faces: number[]; cuts?: number }
+  | { type: 'merge'; vertices: number[]; mode?: 'center' | 'first' | 'last' }
+  | { type: 'delete'; faces?: number[]; vertices?: number[] }
+  | { type: 'dissolveEdges'; edges: Array<[number, number]> }
+  | { type: 'flip'; faces: number[] }
+  | { type: 'recalculateNormals' }
+  | { type: 'fill'; vertices: number[] }
+  | { type: 'weld'; distance?: number }
+  | { type: 'mirror'; axis: ModelAxis; mergeDistance?: number }
+  | { type: 'applyModifiers' }
+  | { type: 'moveVertices'; deltas: Array<[number, Vector3Tuple]>; symmetry?: ModelAxis[] }
+  | { type: 'setVertices'; positions: Array<[number, Vector3Tuple]> }
+  | { type: 'paintFaces'; faces: number[]; slot: number }
+  | { type: 'markSharp'; edges: Array<[number, number]>; sharp: boolean }
+  | { type: 'unwrap'; method: 'box' | 'smart' | 'planar' | 'cylinder' | 'sphere'; axis?: ModelAxis; tiling?: number }
+  /** Knife: split `faces` along a plane (unit space); neighbours gain the cut vertices so nothing cracks. */
+  | { type: 'knife'; plane: { point: Vector3Tuple; normal: Vector3Tuple }; faces: number[] }
+  /** Bisect: cut the whole mesh (or `faces`) with a plane; optionally delete one side and fill the cut. */
+  | { type: 'bisect'; plane: { point: Vector3Tuple; normal: Vector3Tuple }; faces?: number[]; clear?: 'none' | 'inner' | 'outer'; fill?: boolean };
+
+/** What an op selected afterwards (Blender keeps the new geometry selected, e.g. extruded caps). */
+export interface ModelMeshOpResult {
+  ok: boolean;
+  message?: string;
+  faces?: number[];
+  edges?: Array<[number, number]>;
+  vertices?: number[];
+}
+
+/** Clean-topology mesh builders for new mesh parts (lathe a vase, sweep a pipe, quad primitives). */
+export type ModelMeshGenerator =
+  | { kind: 'primitive'; shape: Exclude<ModelPartShape, 'mesh'> }
+  | { kind: 'cube'; segments?: number }
+  | { kind: 'plane'; segmentsX?: number; segmentsZ?: number }
+  | { kind: 'cylinder'; sides?: number; heightSegments?: number }
+  | { kind: 'sphere'; segments?: number; rings?: number }
+  | { kind: 'torus'; majorSegments?: number; minorSegments?: number; minorRatio?: number }
+  | { kind: 'lathe'; profile: Array<[number, number]>; segments?: number; angle?: number; capEnds?: boolean }
+  | { kind: 'tube'; path: Vector3Tuple[]; radius?: number; sides?: number; closed?: boolean };

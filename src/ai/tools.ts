@@ -48,6 +48,7 @@ import type {
   WaterVolumeComponent,
 } from '../types';
 import { buildSceneSnapshot, type SceneSnapshotDetail } from './systemPrompt';
+import { modelMeshTools } from './modelMeshTools';
 import { graphToFeatherScript } from '../scripting/featherScript';
 import { BEHAVIOR_PRESETS } from '../project/behaviors';
 import { CREATOR_ROLE_IDS, findCreatorRole } from '../creator/roles';
@@ -1989,7 +1990,7 @@ const rawEngineTools = {
 
   convert_model_part_to_mesh: tool({
     description:
-      "Bake ANY model part's exact rendered surface into a real editable MESH part (shape 'mesh'). The result is a true triangle mesh you can vertex-move, extrude, subdivide, and boolean — unlike the 8-point box cage. Corners/deformations become literal geometry. Use this right before sculpting precise holes or merged shapes.",
+      "Bake ANY model part's exact rendered surface into a real editable MESH part (shape 'mesh'). The result is a clean polygon (quad) mesh you can edit with edit_model_mesh — extrude, inset, bevel, loop cut, subdivide, boolean — unlike the 8-point box cage. Corners/deformations become literal geometry. Use this right before sculpting precise holes or merged shapes.",
     inputSchema: z.object({ specId: z.string(), partId: z.string() }),
     execute: async ({ specId, partId }) => {
       const ok = store().convertModelPartToMesh(specId, partId);
@@ -1999,11 +2000,11 @@ const rawEngineTools = {
 
   extrude_model_faces: tool({
     description:
-      "Extrude the selected triangle faces of a MESH part along their own normals by delta (default 0.25 world units). Each chosen face grows a raised cap plus side walls, so the mesh stays closed and manifold — stack calls to build up steps, fins, sockets. Requires a mesh part (see convert_model_part_to_mesh) and the face indices you want to push out.",
+      "Extrude the selected polygon faces (quads/n-gons) of a MESH part as one region along their normals by delta (default 0.25 world units). Each chosen face grows a raised cap plus side walls, so the mesh stays closed and manifold — stack calls to build up steps, fins, sockets. Requires a mesh part (see convert_model_part_to_mesh) and the face indices you want to push out.",
     inputSchema: z.object({
       specId: z.string(),
       partId: z.string(),
-      faceIndices: z.array(z.number().min(0)).describe('Triangle face indices to extrude. Select all faces to inflate the whole part.'),
+      faceIndices: z.array(z.number().min(0)).describe('Polygon face indices to extrude (see inspect_model_mesh). Prefer edit_model_mesh, which also accepts facing selectors.'),
       delta: z.number().optional().describe('Extrusion distance in world units (default 0.25).'),
     }),
     execute: async ({ specId, partId, faceIndices, delta }) => {
@@ -2014,11 +2015,11 @@ const rawEngineTools = {
 
   subdivide_model_faces: tool({
     description:
-      "Midpoint-subdivide the selected triangle faces of a MESH part — each face becomes four, sharing midpoints across touching faces so the surface stays crack-free. Adds editable vertices (more detail to sculpt). Requires a mesh part (see convert_model_part_to_mesh).",
+      "Flat-subdivide the selected polygon faces of a MESH part (a quad becomes a 2x2 grid); neighbours gain the new edge points so the surface stays crack-free. Adds editable vertices (more detail to sculpt). Requires a mesh part (see convert_model_part_to_mesh).",
     inputSchema: z.object({
       specId: z.string(),
       partId: z.string(),
-      faceIndices: z.array(z.number().min(0)).describe('Triangle face indices to subdivide.'),
+      faceIndices: z.array(z.number().min(0)).describe('Polygon face indices to subdivide.'),
     }),
     execute: async ({ specId, partId, faceIndices }) => {
       const ok = store().subdivideModelPartFaces(specId, partId, faceIndices);
@@ -2042,6 +2043,8 @@ const rawEngineTools = {
         : `Boolean failed — the parts may not overlap, or the result was empty.`;
     },
   }),
+
+  ...modelMeshTools,
 
   set_model_style: tool({
     description:
@@ -2089,7 +2092,8 @@ const rawEngineTools = {
       const spec = store().modelSpecs.find((entry) => entry.id === specId);
       if (!spec) return `No model asset with id ${specId}.`;
       const { modelSpecToGlbFile } = await import('../model/exportModelGlb');
-      const file = await modelSpecToGlbFile(spec);
+      const { projectBakeMaterialResolver } = await import('../three/bakeMaterials');
+      const file = await modelSpecToGlbFile(spec, projectBakeMaterialResolver);
       store().addAssets([file]);
       return `Baked "${spec.name}" to ${file.name} — it is in the Assets panel now.`;
     },

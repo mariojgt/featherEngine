@@ -11,6 +11,8 @@ export const RETIRED_STORE_SLUGS = [
   'sandbox-world',
   'blade-prop',
   'ui-kit-arcade-hud',
+  'ui-kit-party-royale',
+  'ui-kit-rpg-hud',
   'starter-props',
   'neon-signage',
   'physics-playground',

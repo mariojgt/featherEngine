@@ -869,7 +869,8 @@ class FeatherGraphBuilder {
         return node;
       }
       case 'set_visible': {
-        const node = this.addNode('action.setVisible', { targetObjectId: this.targetLiteral(rawArg('target', 0)) }, 1);
+        const node = this.addNode('action.setVisible', {}, 1);
+        this.applyTargetArg(node, rawArg('target', 0));
         this.attachValueOrLiteral(node, 'visible', rawArg('visible', 1), 'boolean', 'visible');
         return node;
       }

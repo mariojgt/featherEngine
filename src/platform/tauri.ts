@@ -7,13 +7,12 @@ import {
   lstat,
   mkdir,
   readFile,
-  readTextFile,
   watch,
   writeFile,
   writeTextFile,
 } from '@tauri-apps/plugin-fs';
 import type { NodeForgeProject, ProjectManifest, Scene } from '../types';
-import { ASSETS_DIR, SCENES_DIR, blankProject, joinProject, splitProject } from '../project/serialize';
+import { ASSETS_DIR, blankProject, joinProject, splitProject } from '../project/serialize';
 import type {
   CollaborationHostStatus,
   OpenedProject,
@@ -25,8 +24,10 @@ import type {
   SteamToolReport,
 } from './types';
 import { canUseHostOnlyFeatures } from '../collaboration/access';
+import { pushToast } from '../store/toastStore';
 
-const MANIFEST = 'project.json';
+const savedRevisions = new Map<string, string | null>();
+interface DiskSnapshot { manifest: ProjectManifest; scenes: Scene[]; revision: string | null; recoveredFrom: string | null }
 const MAX_PROJECT_TEXT_BYTES = 4 * 1024 * 1024;
 const MAX_PROJECT_RELATIVE_PATH_LENGTH = 1024;
 const MAX_WATCH_ROOTS = 128;
@@ -109,27 +110,24 @@ function pathWithinProject(projectDir: string, absolutePath: string): string | n
   }
 }
 
-async function writeProjectFiles(dir: string, project: NodeForgeProject) {
+async function writeProjectFiles(dir: string, project: NodeForgeProject, creating = false) {
   const { manifest, sceneFiles } = splitProject(project);
-  await mkdir(await join(dir, SCENES_DIR), { recursive: true });
   await mkdir(await join(dir, ASSETS_DIR), { recursive: true });
-  // Manifest stays pretty-printed (small, occasionally human-inspected). Scene files are machine
-  // files and can be large (terrain heightmaps etc.) — skip the indentation to cut serialization
-  // time and file size, and write them in parallel rather than one-await-at-a-time.
-  await writeTextFile(await join(dir, MANIFEST), JSON.stringify(manifest, null, 2));
-  await Promise.all(
-    sceneFiles.map(async ({ scene }) =>
-      writeTextFile(await join(dir, SCENES_DIR, `${scene.id}.scene.json`), JSON.stringify(scene)),
-    ),
-  );
+  const result = await invoke<{ revision: string; warnings: string[] }>('save_project_snapshot', {
+    projectDir: dir,
+    manifestJson: JSON.stringify(manifest, null, 2),
+    sceneJsons: sceneFiles.map(({ scene }) => JSON.stringify(scene)),
+    expectedRevision: creating ? null : savedRevisions.get(dir) ?? null,
+  });
+  savedRevisions.set(dir, result.revision);
+  if (result.warnings.length) pushToast('warning', result.warnings.join(' '), { title: 'Project save notice', duration: 0 });
 }
 
-async function readProjectDir(dir: string): Promise<OpenedProject> {
-  const manifest = JSON.parse(await readTextFile(await join(dir, MANIFEST))) as ProjectManifest;
-  // Scene file reads are independent — run them in parallel instead of sequentially.
-  const scenes: Scene[] = await Promise.all(
-    manifest.scenes.map(async (ref) => JSON.parse(await readTextFile(await join(dir, ref.file))) as Scene),
-  );
+async function readProjectDir(dir: string, previous = false): Promise<OpenedProject> {
+  const { manifest, scenes, revision, recoveredFrom } = await invoke<DiskSnapshot>('read_project_snapshot', { projectDir: dir, previous });
+  if (previous && savedRevisions.has(dir) && savedRevisions.get(dir) !== revision) {
+    throw new Error('This project changed on disk. Reopen it before choosing a previous save.');
+  }
   const project = joinProject(manifest, scenes);
   // Resolve asset urls from disk.
   project.assets = await Promise.all(
@@ -139,19 +137,23 @@ async function readProjectDir(dir: string): Promise<OpenedProject> {
         : asset.data ? { ...asset, url: asset.data } : { ...asset, unresolved: true },
     ),
   );
-  return { dir, name: manifest.name, project };
+  savedRevisions.set(dir, revision);
+  return { dir, name: manifest.name, project, ...(recoveredFrom ? { recoveredFrom } : {}) };
 }
 
 export const tauriPlatform: Platform = {
   isDesktop: true,
 
   async createProject(name, scaffold) {
+    if (/[\\/]/.test(name)) throw new Error('Choose a project name without folder separators.');
+    safeProjectRelativePath(name);
     const parent = await open({ directory: true, multiple: false, title: 'Choose where to create the project' });
     if (typeof parent !== 'string') return null;
     const dir = await join(parent, name);
     await mkdir(dir, { recursive: true });
     const project = { ...blankProject(name), ...scaffold, name };
-    await writeProjectFiles(dir, project);
+    // Creation never replaces an existing project with the same name.
+    await writeProjectFiles(dir, project, true);
     return { dir, name, project };
   },
 
@@ -162,14 +164,18 @@ export const tauriPlatform: Platform = {
   },
 
   async openProjectAt(dir) {
-    if (!(await exists(await join(dir, MANIFEST)))) {
-      throw new Error('No project.json found in that folder.');
-    }
     return readProjectDir(dir);
   },
 
+  async openPreviousSave(dir) { return readProjectDir(dir, true); },
+
   async saveProject(dir, project) {
     if (!canUseHostOnlyFeatures()) throw new Error('Only the collaboration host can save the shared project.');
+    // Restored crash recovery has no in-memory disk checkpoint yet. Establish one without discarding its edits.
+    if (!savedRevisions.has(dir)) {
+      const snapshot = await invoke<DiskSnapshot>('read_project_snapshot', { projectDir: dir, previous: false });
+      savedRevisions.set(dir, snapshot.revision);
+    }
     await writeProjectFiles(dir, project);
   },
 
@@ -177,7 +183,7 @@ export const tauriPlatform: Platform = {
     if (!canUseHostOnlyFeatures()) throw new Error('Only the collaboration host can import project assets.');
     const assetsDir = await join(dir, ASSETS_DIR);
     await mkdir(assetsDir, { recursive: true });
-    const safeName = file.name.replace(/[^\w.\-]+/g, '_');
+    const safeName = `${crypto.randomUUID()}-${file.name.replace(/[^\w.\-]+/g, '_').slice(-160)}`;
     const abs = await join(assetsDir, safeName);
     await writeFile(abs, new Uint8Array(await file.arrayBuffer()));
     return { path: `${ASSETS_DIR}/${safeName}`, url: convertFileSrc(abs) };

@@ -297,6 +297,24 @@ export function createFeatherPluginAPI(
       requireEditableProject();
       return useEditorStore.getState().booleanModelParts(specId, partId, otherPartId, operation);
     },
+    meshOp: (specId, partId, op) => {
+      requireEditableProject();
+      return useEditorStore.getState().applyModelMeshOp(specId, partId, op);
+    },
+    addMeshPart: (specId, generator, init) => {
+      requireEditableProject();
+      const id = useEditorStore.getState().addModelMeshPart(specId, generator, init);
+      if (!id) throw new Error('Could not build that mesh — check the model id and generator parameters.');
+      return id;
+    },
+    bakePartTextures: async (specId, partId, options) => {
+      requireEditableProject();
+      return useEditorStore.getState().bakeModelPartTextures(specId, partId, options);
+    },
+    importGlb: async (data, name) => {
+      requireEditableProject();
+      return useEditorStore.getState().importModelFromGlb(data, name);
+    },
     setPalette: (specId, palette) => {
       requireEditableProject();
       return useEditorStore.getState().setModelPalette(specId, palette);
@@ -313,7 +331,8 @@ export function createFeatherPluginAPI(
     bakeToAsset: async (specId) => {
       requireEditableProject();
       const spec = requireModelSpec(specId);
-      const file = await modelSpecToGlbFile(spec);
+      const { projectBakeMaterialResolver } = await import('../three/bakeMaterials');
+      const file = await modelSpecToGlbFile(spec, projectBakeMaterialResolver);
       useEditorStore.getState().addAssets([file]);
       return { fileName: file.name };
     },

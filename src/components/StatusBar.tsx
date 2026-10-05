@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Boxes, Circle, Clock, Gauge, MousePointer2, Save } from 'lucide-react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { Boxes, Circle, Clock, Gauge, HardDrive, MousePointer2, Save } from 'lucide-react';
 import { useEditorStore, selectActiveObjects, effectiveSelection } from '../store/editorStore';
 import { getPerfSnapshot } from '../runtime/perfStats';
+import { getRecoveryStatus, subscribeRecoveryStatus } from '../store/autosave';
 
 /**
  * Persistent bottom status bar — the anchor chrome every pro editor (Unity/Unreal/VS Code) has.
@@ -26,6 +27,7 @@ export function StatusBar() {
   const sceneName = useEditorStore((s) => s.activeScene()?.name);
   const isDirty = useEditorStore((s) => s.isDirty);
   const isPlaying = useEditorStore((s) => s.isPlaying);
+  const recovery = useSyncExternalStore(subscribeRecoveryStatus, getRecoveryStatus, getRecoveryStatus);
 
   const [fps, setFps] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -79,6 +81,19 @@ export function StatusBar() {
           <span className={`status-bar__item status-bar__fps status-bar__fps--${fpsTone}`} title="Frames per second">
             <Gauge size={14} aria-hidden />
             {Math.round(fps)} FPS
+          </span>
+        )}
+        {isDirty && !isPlaying && (
+          <span
+            className={`status-bar__item status-bar__recovery status-bar__recovery--${recovery.state}`}
+            title={recovery.state === 'unavailable'
+              ? `Recovery unavailable: ${recovery.reason ?? 'storage failed'}`
+              : recovery.lastSuccess ? `Last recovery saved ${new Date(recovery.lastSuccess).toLocaleTimeString()}` : 'A recovery copy will be stored locally'}
+          >
+            <HardDrive size={13} aria-hidden />
+            {recovery.state === 'saving' ? 'Recovery saving…'
+              : recovery.state === 'saved' ? `Recovery saved ${new Date(recovery.lastSuccess!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                : recovery.state === 'unavailable' ? `Recovery unavailable: ${recovery.reason}` : 'Recovery pending'}
           </span>
         )}
         <span

@@ -1971,6 +1971,11 @@ function RenderSettingsSection() {
       {rs.bloomEnabled && (
         <>
           <label className="field-row">
+            <span>Wide glow</span>
+            <input type="checkbox" checked={rs.bloomMipmap !== false} onChange={(e) => update({ bloomMipmap: e.target.checked })} />
+          </label>
+          <p className="field-hint">A wider, softer glow at High/Epic quality. Turn off for faster rendering.</p>
+          <label className="field-row">
             <span>Intensity</span>
             <input type="number" step={0.1} value={rs.bloomIntensity} onChange={(e) => update({ bloomIntensity: Number(e.target.value) })} />
           </label>

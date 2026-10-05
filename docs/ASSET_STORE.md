@@ -40,7 +40,7 @@ directory. Restoring test fixtures never overwrites a newly exported template.
 1. For a project template, run the editor and open `/?exportTemplate=<key>`. The development
    export endpoint stages the archive under `.feather-cache/store/packages/projects/`.
    Cinematic captures write preview images under `.feather-cache/store/previews/`.
-2. Run `npm run build:store`. This regenerates authored UI kits and plugin descriptors and
+2. Run `npm run build:store`. This regenerates authored plugin descriptors and
    stages a catalog alongside project archives. Missing project archives are seeded from
    the verified fixture cache. This command does not change the live store.
 3. Run tests and the engine build. When ready, sign in with `supabase login` and link this
@@ -107,7 +107,7 @@ it does **not** deploy the website or release a new desktop engine build.
    `store:add` checks the archive and asset hashes, rejects missing embedded payloads, applies
    your explicit license/version, preserves an existing listing ID, and places the file in
    the correct ignored `assets/`, `projects/`, or `plugins/` folder. It never uploads anything.
-   Four built-in UI/plugin listings are generated from source; edit their catalog definitions
+   Two built-in plugin listings are generated from source; edit their catalog definitions
    rather than replacing their files with this command.
 4. Run the editor on a free port and capture the actual staged package:
 

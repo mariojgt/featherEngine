@@ -11,6 +11,8 @@ import {
   boxComponentCount,
 } from '../../model/modelSpec';
 import { getModelPartGeometry } from '../../model/modelGeometry';
+import { buildTopology } from '../../model/polyMesh';
+import { meshForPart } from '../editor/modelMeshActions';
 import { cloneMesh, DEFAULT_MESH, extrudeMeshFaces, meshFaceCount, normalizeMesh, subdivideMeshFaces } from '../../model/modelMesh';
 import { clearHistory, initHistory, redo, undo } from '../history';
 
@@ -215,8 +217,10 @@ describe('Model Forge store actions', () => {
     expect(part().shape).toBe('mesh');
     expect(part().mesh).toBeDefined();
     expect(part().corners).toBeUndefined();
-    // A converted box bakes to a closed watertight surface.
-    expect(meshFaceCount(part().mesh!)).toBe(12);
+    // A converted box bakes to six clean quads (not a triangle soup), with the corner offset kept.
+    expect(meshFaceCount(part().mesh!)).toBe(6);
+    expect(part().mesh!.faces!.every((loop) => loop.length === 4)).toBe(true);
+    expect(Math.max(...part().mesh!.vertices.map((vertex) => vertex[0]))).toBeCloseTo(0.7, 5);
     expect(part().mesh!.indices.length % 3).toBe(0);
 
     // Unknown ids refuse.
@@ -240,26 +244,75 @@ describe('Model Forge store actions', () => {
     expect(useEditorStore.getState().setModelPartMeshVertices(specId, otherId, [[0, [0, 0, 0]]])).toBe(false);
   });
 
-  it('extrudeModelPartFaces grows +3 verts / +7 tris and subdivide shares midpoints', () => {
+  it('extrudeModelPartFaces grows +4 verts / +4 quads and subdivide stays crack-free', () => {
     const specId = useEditorStore.getState().createModelSpec('blank')!;
     const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
     const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
     useEditorStore.getState().convertModelPartToMesh(specId, partId);
 
     expect(useEditorStore.getState().extrudeModelPartFaces(specId, partId, [0], 0.25)).toBe(true);
-    expect(part().mesh!.vertices).toHaveLength(8 + 3);
-    expect(meshFaceCount(part().mesh!)).toBe(12 + 7);
+    expect(part().mesh!.vertices).toHaveLength(8 + 4);
+    expect(meshFaceCount(part().mesh!)).toBe(6 + 4);
 
     const baseline = part().mesh!.vertices.length;
     expect(useEditorStore.getState().subdivideModelPartFaces(specId, partId, [0])).toBe(true);
     expect(part().mesh!.vertices.length).toBeGreaterThan(baseline);
-    expect(meshFaceCount(part().mesh!)).toBeGreaterThan(12 + 7);
+    expect(meshFaceCount(part().mesh!)).toBeGreaterThan(6 + 4);
 
     // Non-mesh parts reject face edits.
     useEditorStore.getState().addModelPart(specId, 'box');
     const boxId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[1].id;
     expect(useEditorStore.getState().extrudeModelPartFaces(specId, boxId, [0])).toBe(false);
     expect(useEditorStore.getState().subdivideModelPartFaces(specId, boxId, [0])).toBe(false);
+  });
+
+  it('applyModelMeshOp runs polygon tools, converts primitives first, and returns the new selection', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
+    // Bevel straight on a box part: it converts to quads, then chamfers all 12 edges.
+    const edges = buildTopology(meshForPart(part())).edges;
+    const bevel = useEditorStore.getState().applyModelMeshOp(specId, partId, { type: 'bevel', edges, width: 0.05 });
+    expect(bevel.ok).toBe(true);
+    expect(part().shape).toBe('mesh');
+    expect(meshFaceCount(part().mesh!)).toBe(26);
+    // Loop cut + inset + extrude chain, each returning its selection.
+    const cut = useEditorStore.getState().applyModelMeshOp(specId, partId, { type: 'recalculateNormals' });
+    expect(cut.ok).toBe(true);
+    const inset = useEditorStore.getState().applyModelMeshOp(specId, partId, { type: 'inset', faces: [0], thickness: 0.02 });
+    expect(inset.ok).toBe(true);
+    expect(inset.faces).toEqual([0]);
+    const extrude = useEditorStore.getState().applyModelMeshOp(specId, partId, { type: 'extrude', faces: inset.faces!, distance: 0.1 });
+    expect(extrude.ok).toBe(true);
+    // Unknown part refuses cleanly.
+    expect(useEditorStore.getState().applyModelMeshOp(specId, 'missing', { type: 'recalculateNormals' }).ok).toBe(false);
+  });
+
+  it('modifiers render non-destructively and apply into the cage on request', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const partId = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0].id;
+    const part = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts[0];
+    useEditorStore.getState().convertModelPartToMesh(specId, partId);
+    useEditorStore.getState().updateModelPart(specId, partId, { modifiers: [{ type: 'subdivision', levels: 2 }] });
+    expect(part().modifiers).toEqual([{ type: 'subdivision', levels: 2 }]);
+    expect(meshFaceCount(part().mesh!)).toBe(6);
+    expect(useEditorStore.getState().applyModelMeshOp(specId, partId, { type: 'applyModifiers' }).ok).toBe(true);
+    expect(meshFaceCount(part().mesh!)).toBe(96);
+    expect(part().modifiers).toBeUndefined();
+  });
+
+  it('addModelMeshPart builds lathe and tube parts with clean topology', () => {
+    const specId = useEditorStore.getState().createModelSpec('blank')!;
+    const vaseId = useEditorStore.getState().addModelMeshPart(specId, {
+      kind: 'lathe',
+      profile: [[0, 0], [0.3, 0.05], [0.45, 0.4], [0.2, 0.8], [0.25, 1]],
+      segments: 16,
+    })!;
+    const vase = useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts.find((entry) => entry.id === vaseId)!;
+    expect(vase.shape).toBe('mesh');
+    expect(buildTopology(vase.mesh!).edgeFaces.every((faces) => faces.length === 2)).toBe(true);
+    expect(useEditorStore.getState().addModelMeshPart(specId, { kind: 'tube', path: [[0, 0, 0], [0, 1, 0], [1, 1, 0]] })).not.toBeNull();
+    expect(useEditorStore.getState().addModelMeshPart(specId, { kind: 'lathe', profile: [[0, 0]] })).toBeNull();
   });
 
   it('booleanModelParts unions parts, keeps the result on part A, and removes B', () => {

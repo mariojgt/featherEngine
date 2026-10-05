@@ -57,6 +57,8 @@ Work top to bottom; skip a step only if it genuinely doesn't apply.
    ```
    - Validate inputs and **return a string** describing success/failure — the model uses it to decide its next step.
    - Reuse the `findObject` / `findBlueprint` guards so bad ids fail gracefully.
+   - Register the tool in one `LOCAL_TOOL_GROUPS` capability group in
+     `src/ai/local/localToolRouter.ts` so local models can discover and call it.
 
 3. **Chip label** (`useAIChat.ts` → `describeToolCall`)
    Add a `case 'my_action':` returning a short human label (e.g. `'Applied force'`). This is what

@@ -53,6 +53,18 @@ const compile = (source: string): FeatherCompileResult =>
 const print = (result: FeatherCompileResult): string =>
   graphToFeatherScript({ blueprint: result.blueprint!, graph: result.graph!, variables, blueprints: [result.blueprint!, guardBlueprint] });
 
+it('preserves the Update delta-time value through script, graph and script', () => {
+  const result = compile('blueprint Test\nvar phase: number = 0\non update(dt):\n    self.phase = self.phase + dt * 12');
+  expect(result.ok).toBe(true);
+  const update = result.graph!.nodes.find((node) => node.data.nodeKind === 'event.update')!;
+  expect(result.graph!.edges).toContainEqual(expect.objectContaining({ source: update.id, sourceHandle: 'value-out', targetHandle: 'a' }));
+  const source = print(result);
+  expect(source).toContain('dt');
+  const recompiled = compile(source);
+  expect(recompiled.ok).toBe(true);
+  expect(print(recompiled)).toBe(source);
+});
+
 const warningsOf = (result: FeatherCompileResult): string[] =>
   result.diagnostics.map((diagnostic) => `${diagnostic.severity}: ${diagnostic.message}`);
 

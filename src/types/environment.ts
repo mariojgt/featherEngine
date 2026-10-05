@@ -100,6 +100,8 @@ export interface RenderSettings {
   bloomThreshold: number;
   /** Bloom smoothing/spread (0–1). */
   bloomRadius: number;
+  /** Optional wider mipmap blur at High/Epic. False keeps the faster single-pass glow. */
+  bloomMipmap?: boolean;
   vignetteEnabled: boolean;
   /** GTA-style minimap/radar overlay (src/ui/MiniMap.tsx). When on, a circular radar draws the player at
    *  center, building footprints (objects with a `minimapShape` instance var) and colored blips (objects

@@ -100,7 +100,7 @@ export function PostFx() {
         intensity={rs.bloomIntensity}
         luminanceThreshold={rs.bloomThreshold}
         luminanceSmoothing={rs.bloomRadius}
-        mipmapBlur={profile.bloomMipmap}
+        mipmapBlur={profile.bloomMipmap && rs.bloomMipmap !== false}
       />,
     );
   }

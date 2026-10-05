@@ -8,6 +8,11 @@ Start Feather with `npm ci` followed by `npm run dev`. Open the address printed 
 4. Click **Save**. In a browser, keep the downloaded `.nforge` file: it includes imported asset bytes. Open that file to continue later. The desktop editor saves into the project folder.
 5. Choose **Export → Production**, select a platform and launch scene, then check the project. Fix any blocking errors. Desktop builds show their logs and output folder. The browser downloads a build package and displays the command to finish it locally.
 
+While editing, check the status bar for **Recovery saved**. If the app closes unexpectedly, choose
+**Restore** in the project hub, review your work, and Save. If recovery is unavailable, save your
+project file before closing. On desktop, **File → Open previous save…** also lets you review the
+last complete earlier save after saving any current edits.
+
 For the browser route, after downloading `game.json`, run this from the repository:
 
 ```bash
@@ -15,6 +20,14 @@ npm run export:production -- --bundle "/absolute/path/to/game.json" --targets we
 ```
 
 The output folder and zip are printed when the build finishes. Serve the web folder over HTTP with a static server, or upload its contents to your static host. Keep every file and subfolder together. Double-clicking `index.html` is not a hosting test. See [production export](PRODUCTION_EXPORT.md) for desktop/mobile prerequisites and signing.
+
+## Cube RPG: an action-game starter
+
+Choose **Cube RPG** in Quick starts, press **Play**, then **Begin adventure**. Cubie starts with a sword, shield and three potions. Use WASD to move, Space to jump, Shift to sprint, click/J to attack, hold Q/right click to block, 1/2 to equip or put away equipment, and E/3 to drink a potion. P pauses. Tap attack three times for a slash, a backhand and a spinning finisher that hits everything around you. Attack while airborne to plunge into a ground slam. Grumbles take turns attacking, and a pink warning means the attack is committed: light slashes won't stop it, so block, step away, or break it with the finisher or slam. King Grumble can't be interrupted while winding up. Clear each arena and follow its golden arch; leveling up adds damage, two potions and 20 health. Defeat King Grumble to win.
+
+Cube RPG also works offline. Its named scene groups contain the arenas, sky scenery, and editable VFX. In Assets, **Cube RPG · Characters** contains the reusable cube knight, **Cube RPG · Blueprints** contains combat and progression, and **Cube RPG · UI** contains the HUD and menus. Change opponent instance variables (`hp`, `max_hp`, `damage`, `pace`, `arena`, `poise`, `attack_rate`) in the Inspector to rebalance a fight. Tune named emitters for colors, size, lifetime and particle count. `npm run test:cube-rpg` checks offline creation, actual input and sword damage, all arena unlocks, replay, pause, fall recovery, exported-player hosting and phone controls; screenshots go to `exports/cube-rpg-acceptance/`.
+
+Characters have animated foot strides, attack wind-ups, jump stretch, guard braces and hurt expressions. A sword hit on an idle opponent (or a finisher/slam at any time) interrupts it, recoils and squashes its body, squints its eyes, opens a hurt mouth and briefly flashes that mesh. Impact stars, sparks and a short camera kick respond to contact; misses still play the sword swing. Defeated foes collapse before awarding loot. Edit **Cubie · Walk, Strike & Expressions**, **Grumble · Motion & Hit Reactions**, **Combat · Per-Character Damage Flash** and **Combat · Impact Star** to tune the feel. Create a fresh Cube RPG to get updated starter content; saved projects retain their own authored Blueprints.
 
 ## Replace a prop’s appearance
 

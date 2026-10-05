@@ -381,7 +381,7 @@ export const describeNode = (data: Partial<NodeForgeNodeData>): Pick<NodeForgeNo
     case 'event.start':
       return { label: 'Start', description: 'Runs once when the Blueprint starts.' };
     case 'event.update':
-      return { label: 'Update', description: 'Runs every preview frame while Play is active. Set Interval above 0 to throttle it.' };
+      return { label: 'Update', description: 'Runs every preview frame while Play is active. Delta time provides scaled seconds for this frame, zero when paused. Set Interval above 0 to throttle it.' };
     case 'event.keyDown':
       return data.keyTriggerMode === 'pressed'
         ? { label: `Key Pressed: ${keyLabel}`, description: `Fires once per ${keyLabel} press, including short taps between frames.` }

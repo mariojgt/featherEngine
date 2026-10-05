@@ -27,7 +27,7 @@ describe('Creator quick starts', () => {
 
   it('offers only the curated quick starts', () => {
     expect(CREATOR_QUICK_STARTS.map((entry) => entry.id)).toEqual([
-      'first-person', 'platformer', 'parcel-panic', 'moba', 'crystal-slice', 'blank',
+      'first-person', 'platformer', 'parcel-panic', 'moba', 'crystal-slice', 'cube-rpg', 'blank',
     ]);
     expect(findCreatorQuickStart('third-person')).toBeUndefined();
     expect(findCreatorQuickStart('tower-defense')).toBeUndefined();
@@ -46,5 +46,11 @@ describe('Creator quick starts', () => {
     expect(blank?.comingSoon).toBeUndefined();
     expect(blank?.templateSlug).toBeUndefined();
     expect(new Set(CREATOR_QUICK_STARTS.map((entry) => entry.id)).size).toBe(CREATOR_QUICK_STARTS.length);
+  });
+
+  it('offers Cube RPG as a separate, offline built-in starter', () => {
+    expect(findCreatorQuickStart('cube-rpg')).toMatchObject({
+      label: 'Cube RPG', templateSlug: 'template-cube-rpg', builtInTemplate: 'cube-rpg',
+    });
   });
 });

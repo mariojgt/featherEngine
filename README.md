@@ -95,6 +95,7 @@ Start with a blank project or launch an editable template:
 | **Platformer** | Cloudstep Garden: an animated hero, moving clouds, collectibles, checkpoints and a goal. Included offline. |
 | **[Lumen Lane](docs/LUMEN_LANE.md)** | A three-lane solo MOBA with five champions, click commands, a following camera, minimap, gold, an item shop, jungle camps, towers and cores. Included offline. |
 | **[Parcel Panic](docs/PARCEL_PANIC.md)** | An animated robot courier, seeded villages, playful physics, and five-delivery rounds. Included in launcher quick starts. |
+| **Cube RPG** | Included offline: an expressive cube knight with a 3-hit sword combo, spinning finisher and ground-slam air attack, enemies that take turns committing telegraphed attacks, animated strides and attack poses, sword/shield equipment, hurt faces, recoil, material flashes, hit VFX and camera kicks. Potions, three floating arenas and King Grumble, with editable scenery, Blueprints, a character prefab, HUD and complete adventure menus. |
 | **First-person shooter** | A neon FPS sandbox with multiple weapons, grenades, targets, and HUD logic. |
 | **Driving** | An arcade-style neon cruise with vehicle controls, chase cameras, and a garage. |
 | **Crystal Slice** | A chrome blade cuts a crystal block into colliding pieces. Included offline. |
@@ -183,9 +184,21 @@ A desktop project is deliberately readable:
 My Game/
 ├── project.json
 ├── scenes/
-│   └── <scene-id>.scene.json
+│   └── .feather/<content-hash>.scene.json
+├── .feather/
+│   └── backups/
 └── assets/
 ```
+
+Desktop saves publish `project.json` after writing every referenced scene, so interrupted saves
+leave a complete earlier or newer snapshot. The last three saved manifests and their scene files
+are retained. **File → Open previous save…** opens the latest complete earlier save for review;
+click Save to make it current. Existing projects with `scenes/<scene-id>.scene.json` still open.
+
+Unsaved edits also receive a local IndexedDB recovery copy, including imported asset bytes.
+The status bar shows when recovery succeeds or fails; the project hub offers Restore after a
+restart. Recovery remains available after restoring until you save or discard it. Browser storage
+can be cleared or run out of space, so keep your saved project file or folder.
 
 ## Ship your game
 

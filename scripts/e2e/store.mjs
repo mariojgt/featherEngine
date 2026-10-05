@@ -41,11 +41,13 @@ try {
   const installed = await app.evaluate(`(async () => {
     const { useMarketplaceStore } = await import('/src/store/marketplaceStore.ts');
     const marketplace = useMarketplaceStore.getState();
-    const kit = marketplace.packages.find(entry => entry.slug === 'ui-kit-party-royale');
-    await marketplace.install(kit);
-    return useMarketplaceStore.getState().installedIds.includes(kit.id);
+    const template = marketplace.packages.find(entry => entry.slug === 'template-cinderfall');
+    const { useProjectStore } = await import('/src/store/projectStore.ts');
+    const before = window.__featherStore.prefabs.length;
+    const imported = await useProjectStore.getState().importPackageFromUrl(template.downloadUrl);
+    return imported && window.__featherStore.prefabs.length > before;
   })()`);
-  assert.ok(installed, 'A real Supabase-hosted UI kit installs into the opened project');
+  assert.ok(installed, 'Reusable content from a real hosted template imports additively into the opened project');
   const pluginActive = await app.evaluate(`(async () => {
     const { useMarketplaceStore } = await import('/src/store/marketplaceStore.ts');
     const marketplace = useMarketplaceStore.getState();
@@ -63,5 +65,5 @@ try {
     return { installed: useMarketplaceStore.getState().installedIds.includes(template.id), objects: window.__featherStore.activeScene().objects.length };
   })()`);
   assert.ok(hostedProject.installed && hostedProject.objects > 3, 'A real hosted project downloads and opens');
-  console.log('Hosted store passed: configured live catalog, template picker/cancel, actual hosted asset install, plugin activation, and project download/open.');
+  console.log('Hosted store passed: configured live catalog, template picker/cancel, hosted content import, plugin activation, and project download/open.');
 } finally { await app.dispose(); }

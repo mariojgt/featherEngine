@@ -5,6 +5,7 @@ import { buildPackage, parsePackage, remapPackageForImport } from '../../project
 import { blankProject } from '../../project/serialize';
 import { writePackageArchive } from '../../project/packageArchive';
 import { PREFAB_EDIT_SCENE_ID, type NodeForgeNode } from '../../types';
+import { webPlatform } from '../../platform/web';
 
 /**
  * Coverage for `kind: 'project'` packages — whole worlds rather than single components. This is what
@@ -69,7 +70,7 @@ describe('kind: project packages', () => {
       id: 'pkg-cancel', name: 'Cancelled starter', version: '1.0.0',
     });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => writePackageArchive(pkg, new Map()).buffer }));
-    const createProject = vi.spyOn(useProjectStore.getState(), 'newProject').mockResolvedValue(undefined);
+    const createProject = vi.spyOn(webPlatform, 'createProject').mockResolvedValue(null);
     expect(await useProjectStore.getState().newProjectFromPackageUrl('store/cancel.nfpack', 'Cancelled')).toBe(false);
     expect(createProject).toHaveBeenCalled();
     expect(useEditorStore.getState().scenes).toBe(originalScenes);

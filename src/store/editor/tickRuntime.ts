@@ -72,6 +72,10 @@ import { aiFeelerExclude, blueprintVarTypeCache, detachedParts, fillObjectIdMap,
 import { inputTypeForHandle } from './wireTypes';
 
 /** One Call Function activation: the evaluated A/B/C arguments + the value a Return node set. */
+/** Combine two one-shot character launches on Y: any upward pop wins (jump pads), otherwise the strongest plunge. */
+const mergeLaunchY = (previous: number, next: number): number =>
+  previous > 0 || next > 0 ? Math.max(previous, next) : Math.min(previous, next);
+
 interface FunctionFrame {
   args: [GraphValue | undefined, GraphValue | undefined, GraphValue | undefined];
   ret: GraphValue | undefined;
@@ -1071,6 +1075,8 @@ export const applyRuntimeTick = (
 
             // On Receive Damage's value-out = how much HP this object lost on the hit that fired the event.
             case 'event.receiveDamage': return priorDamage[object.id] ?? 0;
+            // Update exposes scaled seconds, including zero while the game is paused.
+            case 'event.update': return delta;
 
             case 'event.land': return priorLand[object.id] ?? 0;
 
@@ -2104,6 +2110,8 @@ export const applyRuntimeTick = (
                 const next: Vector3Tuple = [Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0];
                 const tid = objectVarTarget(node);
                 physicsTeleports.add(tid);
+                // A respawned character must not carry its old fall speed into the new floor.
+                if (activeObjectById.get(tid)?.character?.enabled) nextVelocities[tid] = [0, 0, 0];
                 if (tid === object.id) {
                   position[0] = next[0];
                   position[1] = next[1];
@@ -2216,7 +2224,7 @@ export const applyRuntimeTick = (
                 // A kinematic character can't take a Rapier impulse — record it as a one-shot LAUNCH velocity
                 // (jump pad / blast knockback). The vertical pass reads the Y; X/Z displace the body this frame.
                 const prevLaunch = characterLaunch[forceTargetId] ?? [0, 0, 0];
-                characterLaunch[forceTargetId] = [prevLaunch[0] + force[0], Math.max(prevLaunch[1], force[1]), prevLaunch[2] + force[2]];
+                characterLaunch[forceTargetId] = [prevLaunch[0] + force[0], mergeLaunchY(prevLaunch[1], force[1]), prevLaunch[2] + force[2]];
               } else if (forceTarget?.physics?.enabled && forceTarget.physics.bodyType === 'dynamic') {
                 // Accumulate as an impulse (force over the frame); Rapier divides by mass on apply.
                 const accrued = physicsImpulses[forceTargetId] ?? [0, 0, 0];
@@ -2236,7 +2244,7 @@ export const applyRuntimeTick = (
               const impulse = node.data.space === 'local' && impTarget ? rotateLocalVector(imp, impTarget.transform.rotation) : imp;
               if (impTarget?.character?.enabled) {
                 const prevLaunch = characterLaunch[impTargetId] ?? [0, 0, 0];
-                characterLaunch[impTargetId] = [prevLaunch[0] + impulse[0], Math.max(prevLaunch[1], impulse[1]), prevLaunch[2] + impulse[2]];
+                characterLaunch[impTargetId] = [prevLaunch[0] + impulse[0], mergeLaunchY(prevLaunch[1], impulse[1]), prevLaunch[2] + impulse[2]];
               } else if (impTarget?.physics?.enabled && impTarget.physics.bodyType === 'dynamic') {
                 const accrued = physicsImpulses[impTargetId] ?? [0, 0, 0];
                 physicsImpulses[impTargetId] = [accrued[0] + impulse[0], accrued[1] + impulse[1], accrued[2] + impulse[2]];
@@ -2908,7 +2916,7 @@ export const applyRuntimeTick = (
 
             if (node.data.nodeKind === 'action.setVisible') {
               // Hide/show the owner (or Target) — e.g. holster the inactive weapon.
-              const target = resolveTarget(node.data.targetObjectId) || object.id;
+              const target = objectVarTarget(node);
               const visible = toBoolean(valueInput(node, 'visible', node.data.visible ?? true));
               if (visible) nextHidden.delete(target);
               else nextHidden.add(target);
@@ -4622,6 +4630,8 @@ export const applyRuntimeTick = (
           const launch = characterLaunch[object.id];
           if (launch) {
             if (launch[1] > 0) verticalVelocity = Math.max(verticalVelocity, launch[1]);
+            // A downward launch (plunge / ground-slam attack) only ever speeds up a fall, never slows it.
+            else if (launch[1] < 0) verticalVelocity = Math.min(verticalVelocity, launch[1]);
             position[0] += launch[0] * delta;
             position[2] += launch[2] * delta;
           }

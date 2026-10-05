@@ -85,6 +85,30 @@ on update(dt):
     }
   });
 
+  it('compiles vector components containing live arithmetic instead of replacing them with zero', () => {
+    const result = compileFeatherScriptToGraph({
+      blueprint, graph, variables: [],
+      source: [
+        'blueprint Player',
+        'var hp: number = 28',
+        'var max_hp: number = 56',
+        'on update(dt):',
+        '    set_scale(self, vec3(clamp(self.hp / self.max_hp, 0, 1), 1, 1))',
+      ].join('\n'),
+    });
+    expect(result.ok).toBe(true);
+    const nodes = result.graph!.nodes;
+    const vector = nodes.find((n) => n.data.nodeKind === 'math.makeVector')!;
+    const clamp = nodes.find((n) => n.data.nodeKind === 'math.clamp')!;
+    const divide = nodes.find((n) => n.data.nodeKind === 'math.divide')!;
+    const scale = nodes.find((n) => n.data.nodeKind === 'action.setScale')!;
+    expect(result.graph!.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: divide.id, target: clamp.id, targetHandle: 'value' }),
+      expect.objectContaining({ source: clamp.id, target: vector.id, targetHandle: 'x' }),
+      expect.objectContaining({ source: vector.id, target: scale.id, targetHandle: 'scale' }),
+    ]));
+  });
+
   it('applies script events, variables, calls, and conditions to a graph', () => {
     const result = compileFeatherScriptToGraph({
       blueprint,

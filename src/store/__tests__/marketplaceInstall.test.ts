@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readPackageFile } from '../../project/packageArchive';
+import { readPackageFile, writePackageArchive } from '../../project/packageArchive';
+import type { StoreListing } from '../../marketplace/catalog';
 import { buildGameBundle } from '../../project/exportGame';
 import { gardenController, gardenSeed, DEFAULT_GARDEN_SEED } from '../../towerDefense/settings';
 import { generateMap } from '../../towerDefense/game';
@@ -21,6 +22,27 @@ import { useMarketplaceStore } from '../marketplaceStore';
 
 const PUBLIC_STORE = join(process.cwd(), '.feather-cache', 'store-fixtures');
 
+// Asset installation stays covered after the old UI kits are retired. Export the real neutral
+// Cinderfall rifle as a module fixture, with its embedded models and materials, without publishing it.
+const MODULE_URL = 'https://fixtures.example.test/survey-rifle.nfpack';
+async function rifleModule() {
+  const source = readPackageFile(new Uint8Array(await readFile(join(PUBLIC_STORE, 'packages/projects/template-cinderfall.nfpack'))));
+  const rifle = source.pkg.content.prefabs.find(prefab => prefab.name === 'Cinderfall · Editable survey rifle');
+  if (!rifle) throw new Error('Cinderfall is missing its reusable rifle prefab');
+  const pkg = { ...source.pkg, kind: 'asset' as const,
+    meta: { ...source.pkg.meta, id: 'test-survey-rifle', name: 'Survey Rifle Module' },
+    content: { ...source.pkg.content, prefabs: [rifle], scenes: undefined, blueprints: [], graphs: [], uiDocuments: [], variables: [] },
+  };
+  const bytes = writePackageArchive(pkg, source.bytes);
+  const listing: StoreListing = {
+    id: pkg.meta.id, slug: 'test-survey-rifle', title: pkg.meta.name, description: 'Reusable authored rifle.',
+    author: 'Feather', version: pkg.meta.version, kind: 'asset', tags: ['model', 'weapon'], priceCents: 0,
+    sizeBytes: bytes.length, downloadUrl: MODULE_URL,
+    contents: { prefabs: 1, materials: pkg.content.materials.length, blueprints: 0, assets: pkg.assets.length, scenes: 0, uiDocuments: 0 },
+  };
+  return { listing, bytes };
+}
+
 const flattenUI = (root: UIElement): UIElement[] => [root, ...root.children.flatMap(flattenUI)];
 
 /**
@@ -37,7 +59,7 @@ function serveBundledStore() {
         const catalog = JSON.parse(seed.toString('utf8'));
         const listing = catalog.packages.find((entry: { downloadUrl: string }) => entry.downloadUrl === url.href);
         const folder = { asset: 'assets', project: 'projects', plugin: 'plugins' };
-        const body = url.pathname.endsWith('/catalog.json') ? seed : listing
+        const body = url.href === MODULE_URL ? Buffer.from((await rifleModule()).bytes) : url.pathname.endsWith('/catalog.json') ? seed : listing
           ? await readFile(join(PUBLIC_STORE, 'packages', folder[listing.kind as keyof typeof folder], `${listing.slug}.nfpack`))
           : await readFile(join(PUBLIC_STORE, '__missing_package__'));
         return {
@@ -128,7 +150,7 @@ describe('hosted asset store — catalog to installed content', () => {
 
   it('rejects a UI kit as a project template before changing the workspace', async () => {
     const scenes = useEditorStore.getState().scenes;
-    const bytes = new Uint8Array(await readFile(join(PUBLIC_STORE, 'packages/assets/ui-kit-party-royale.nfpack')));
+    const { bytes } = await rifleModule();
     vi.spyOn(await getPlatform(), 'openPackage').mockResolvedValue(bytes);
     expect(await useProjectStore.getState().newProjectFromPackageFile('Invalid template')).toBe(false);
     expect(useEditorStore.getState().scenes).toBe(scenes);
@@ -136,12 +158,11 @@ describe('hosted asset store — catalog to installed content', () => {
     expect(useProjectStore.getState().busy).toBe(false);
   });
 
-  it('installs every shipped module package into a real project', async () => {
+  it('installs a reusable module exported from a shipped template into a real project', async () => {
     await useMarketplaceStore.getState().load();
     // Templates are excluded on purpose: a kind:project package REPLACES the world, so mixing it in
     // here would wipe the very prefabs this test is counting.
-    const listings = useMarketplaceStore.getState().packages.filter((entry) => entry.kind === 'asset');
-    expect(listings.length).toBeGreaterThan(0);
+    const listings = [(await rifleModule()).listing];
 
     const prefabsBefore = useEditorStore.getState().prefabs.length;
     const materialsBefore = useEditorStore.getState().materials.length;
@@ -318,7 +339,7 @@ describe('hosted asset store — catalog to installed content', () => {
 
   it('installs a second, independent copy when the same package is installed twice', async () => {
     await useMarketplaceStore.getState().load();
-    const [listing] = useMarketplaceStore.getState().packages;
+    const { listing } = await rifleModule();
 
     await useMarketplaceStore.getState().install(listing);
     const afterFirst = useEditorStore.getState().prefabs.map((prefab) => prefab.id);
@@ -332,7 +353,7 @@ describe('hosted asset store — catalog to installed content', () => {
 
   it('refuses to install with no project open, and says why', async () => {
     await useMarketplaceStore.getState().load();
-    const [listing] = useMarketplaceStore.getState().packages;
+    const { listing } = await rifleModule();
     useProjectStore.getState().closeProject();
 
     await useMarketplaceStore.getState().install(listing);

@@ -73,19 +73,7 @@ function useDemoAutoload() {
       if (!useProjectStore.getState().hasProject) return;
       if (demo === 'store') return;
       if (demo === 'uikit') {
-        const market = useMarketplaceStore.getState();
-        await market.load();
-        const kit = useMarketplaceStore.getState().packages.find((p) => p.id === (new URLSearchParams(window.location.search).get('kit') ?? 'pkg-feather-ui-rpg-hud'));
-        if (!kit) return;
-        await useMarketplaceStore.getState().install(kit);
-        // A kit installs as a screen document PLUS its components — open the screen, not the last
-        // building block to land in the list.
-        const docs = useEditorStore.getState().uiDocuments;
-        const installed = docs.filter((d) => !d.isComponent).at(-1) ?? docs.at(-1);
-        if (installed) {
-          useEditorStore.getState().setActiveUIDocument(installed.id);
-          focusWorkspacePanel('ui');
-        }
+        focusWorkspacePanel('ui');
         return;
       }
       // `?demo=script` gives the Scripting panel a real graph to render, so the node editor can be

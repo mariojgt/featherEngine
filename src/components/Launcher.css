@@ -183,6 +183,10 @@
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
 }
+.launcher-hub .hub-basic[data-quick-start="cube-rpg"] {
+  border-color: color-mix(in srgb, #FBA06B 45%, var(--border));
+  background: color-mix(in srgb, #FBA06B 5%, var(--surface));
+}
 .launcher-hub .hub-basic {
   display: flex;
   align-items: center;

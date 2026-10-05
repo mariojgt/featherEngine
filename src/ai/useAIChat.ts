@@ -173,6 +173,18 @@ function describeToolCall(toolName: string, input: Record<string, unknown>): str
       return `Subdivided ${String(Array.isArray(input.faceIndices) ? input.faceIndices.length : 0)} mesh face(s)`;
     case 'boolean_model_parts':
       return `Boolean (${input.operation}) on model parts`;
+    case 'inspect_model_mesh':
+      return 'Inspected model mesh';
+    case 'edit_model_mesh':
+      return `Mesh: ${input.op ?? 'edit'}`;
+    case 'set_model_part_modifiers':
+      return 'Set part modifiers';
+    case 'add_model_mesh_part':
+      return `Added ${input.kind ?? 'mesh'} part`;
+    case 'bake_model_textures':
+      return input.normal ? 'Baked model textures + normal map' : 'Baked model textures';
+    case 'import_model_glb':
+      return 'Imported GLB into Model Forge';
     case 'place_model':
       return 'Placed model in scene';
     case 'bake_model_asset':

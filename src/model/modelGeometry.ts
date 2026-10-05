@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three-stdlib';
 import { DEFAULT_MESH } from './modelMesh';
+import { ensurePolyMesh } from './polyMesh';
+import { evaluateModifiers } from './meshModifiers';
+import { buildRenderArrays } from './meshRenderArrays';
+import { unwrapMesh } from './meshUV';
 import type { ModelPart, ModelPartMesh, ModelPartShape, ModelSpec, ModelStyle } from '../types';
 
 /**
@@ -55,25 +59,60 @@ function buildWedgeGeometry(): THREE.BufferGeometry {
 
 const unitGeometries = new Map<ModelPartShape, THREE.BufferGeometry>();
 
-const meshGeometryCache = new Map<string, THREE.BufferGeometry>();
+const meshGeometryCache = new WeakMap<ModelPartMesh, Map<string, THREE.BufferGeometry>>();
+
+/** Auto-smooth angle a mesh part renders with: its own, else the finish default (smooth 40°, flat faceted). */
+export const partSmoothAngle = (part: Pick<ModelPart, 'smoothAngle'>, style?: ModelStyle): number =>
+  part.smoothAngle ?? (style?.finish === 'smooth' ? 40 : 0);
 
 /**
- * The exact geometry for a Mesh part: unit-space vertices + triangle indices, indexed and with
- * smooth vertex normals. Cached per content, never disposed (shared like the unit geometries).
+ * The render geometry for a Mesh part: the cage run through its modifier stack (mirror / array /
+ * subdivision), auto-smoothed, with one material group per palette slot (materialIndex = slot) and
+ * real UVs — the mesh's own unwrap when it has one, else a world-scaled box projection so textured
+ * materials tile sensibly. Cached per mesh object (parts are immutable, so identity is the content
+ * key) plus the settings that change the output; never disposed, shared like the unit geometries.
+ * `userData.triangleFaces` maps each render triangle back to its polygon in the EVALUATED mesh.
  */
-export function buildModelPartMeshGeometry(mesh: ModelPartMesh): THREE.BufferGeometry {
-  const key = `${mesh.vertices.length}|${mesh.indices.length}|${mesh.vertices.flat().join(',')}|${mesh.indices.join(',')}`;
-  let geometry = meshGeometryCache.get(key);
+export function buildModelPartMeshGeometry(
+  mesh: ModelPartMesh,
+  part?: Pick<ModelPart, 'modifiers' | 'smoothAngle' | 'colorSlot' | 'scale'>,
+  style?: ModelStyle,
+): THREE.BufferGeometry {
+  const smoothAngle = part ? partSmoothAngle(part, style) : 0;
+  const defaultSlot = part?.colorSlot ?? 0;
+  const needsProjectedUVs = !mesh.faceUVs;
+  const scaleKey = needsProjectedUVs && part ? part.scale.map((component) => Math.round(component * 100) / 100).join(',') : '';
+  const key = `${smoothAngle}|${defaultSlot}|${scaleKey}|${part?.modifiers?.length ? JSON.stringify(part.modifiers) : ''}`;
+  let byKey = meshGeometryCache.get(mesh);
+  if (!byKey) {
+    byKey = new Map();
+    meshGeometryCache.set(mesh, byKey);
+  }
+  let geometry = byKey.get(key);
   if (!geometry) {
+    let evaluated = evaluateModifiers(ensurePolyMesh(mesh), part?.modifiers);
+    if (!evaluated.faceUVs) evaluated = unwrapMesh(evaluated, 'box', { partScale: part?.scale ?? [1, 1, 1] });
+    const arrays = buildRenderArrays(evaluated, { smoothAngle, defaultSlot });
     geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.vertices.flat(), 3));
-    geometry.setIndex([...mesh.indices]);
-    geometry.computeVertexNormals();
+    geometry.setAttribute('position', new THREE.BufferAttribute(arrays.positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(arrays.normals, 3));
+    if (arrays.uvs) geometry.setAttribute('uv', new THREE.BufferAttribute(arrays.uvs, 2));
+    geometry.setIndex(new THREE.BufferAttribute(arrays.indices, 1));
+    for (const group of arrays.groups) geometry.addGroup(group.start, group.count, group.slot);
+    geometry.userData.triangleFaces = arrays.triangleFaces;
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
-    meshGeometryCache.set(key, geometry);
+    // Bounded: a mesh object only ever renders with a handful of setting combinations.
+    if (byKey.size > 8) byKey.clear();
+    byKey.set(key, geometry);
   }
   return geometry;
+}
+
+/** Which polygon of a mesh part's EVALUATED mesh a raycast triangle hit (-1 when unknown). */
+export function polyFaceForTriangle(geometry: THREE.BufferGeometry, triangleIndex: number): number {
+  const map = geometry.userData.triangleFaces as Uint32Array | undefined;
+  return map && triangleIndex >= 0 && triangleIndex < map.length ? map[triangleIndex] : -1;
 }
 
 /** Shared unit geometry for a shape. Never dispose these — every model part in the app uses them. */
@@ -193,7 +232,7 @@ function deformBoxByCorners(base: THREE.BufferGeometry, corners: Record<number, 
 
 /** The geometry a part actually renders with under a style. Always pairs with mesh scale = part.scale. */
 export function getPartRenderGeometry(part: ModelPart, style?: ModelStyle): THREE.BufferGeometry {
-  if (part.shape === 'mesh') return buildModelPartMeshGeometry(part.mesh ?? DEFAULT_MESH);
+  if (part.shape === 'mesh') return buildModelPartMeshGeometry(part.mesh ?? DEFAULT_MESH, part, style);
   if (part.shape !== 'box') return getModelPartGeometry(part.shape);
   const beveled = style?.finish === 'smooth' && style.bevel > 0.0025;
   const base = beveled ? getRoundedUnitBox(part.scale, style.bevel) : getModelPartGeometry('box');
@@ -255,17 +294,19 @@ export function getModelPartEdges(shape: ModelPartShape): THREE.EdgesGeometry {
 // handful of materials regardless of scene size.
 const paletteMaterials = new Map<string, THREE.Material>();
 
-export function getStyledMaterial(color: string, style?: ModelStyle): THREE.Material {
+/** `ownNormals`: the geometry carries authored (auto-smoothed) normals, so the flat finish must not
+ *  force flatShading over them — mesh parts express faceting through their smooth angle instead. */
+export function getStyledMaterial(color: string, style?: ModelStyle, ownNormals = false): THREE.Material {
   const finish = style?.finish ?? 'flat';
   const roughness = quantize(style?.roughness ?? (finish === 'smooth' ? 0.55 : 0.85), 0.05);
-  const key = `${color}|${finish}|${roughness}`;
+  const key = `${color}|${finish}|${roughness}|${ownNormals ? 'n' : ''}`;
   let material = paletteMaterials.get(key);
   if (!material) {
     material =
       finish === 'smooth'
         ? // The Spline soft-plastic read: smooth shading plus a faint clearcoat over the flat color.
           new THREE.MeshPhysicalMaterial({ color, roughness, metalness: 0, clearcoat: 0.25, clearcoatRoughness: 0.6 })
-        : new THREE.MeshStandardMaterial({ color, roughness, metalness: 0, flatShading: true });
+        : new THREE.MeshStandardMaterial({ color, roughness, metalness: 0, flatShading: !ownNormals });
     paletteMaterials.set(key, material);
   }
   return material;
@@ -281,8 +322,22 @@ const slotColor = (palette: readonly string[], slot: number | undefined, fallbac
  * per `materialIndex`; holes in the index range (a cone has no top cap, index 1) are padded with the
  * part's base material so three.js never sees an undefined slot.
  */
-export function getPartMaterials(part: ModelPart, palette: readonly string[], style?: ModelStyle): THREE.Material | THREE.Material[] {
-  const base = getStyledMaterial(slotColor(palette, part.colorSlot, 0), style);
+export function getPartMaterials(
+  part: ModelPart,
+  palette: readonly string[],
+  style?: ModelStyle,
+  /** Engine material (part.materialId) replacing the part's base color; face-painted slots keep theirs. */
+  override?: THREE.Material,
+): THREE.Material | THREE.Material[] {
+  if (part.shape === 'mesh') {
+    // Mesh-part groups ARE palette slots (materialIndex = slot); see buildModelPartMeshGeometry.
+    const groups = getPartRenderGeometry(part, style).groups;
+    const maxSlot = Math.max(part.colorSlot, ...groups.map((group) => group.materialIndex ?? 0));
+    return Array.from({ length: maxSlot + 1 }, (_, slot) =>
+      override && slot === part.colorSlot ? override : getStyledMaterial(slotColor(palette, slot, part.colorSlot), style, true),
+    );
+  }
+  const base = override ?? getStyledMaterial(slotColor(palette, part.colorSlot, 0), style);
   const groups = getPartRenderGeometry(part, style).groups;
   if (!groups.length) return base;
   const materials: THREE.Material[] = [];
@@ -300,11 +355,12 @@ export function getPartMaterials(part: ModelPart, palette: readonly string[], st
  * thumbnails. Fresh materials ARE shared (palette cache), geometries are the shared units; callers
  * must not dispose either.
  */
-export function buildModelGroup(spec: ModelSpec): THREE.Group {
+export function buildModelGroup(spec: ModelSpec, materialOverrides?: ReadonlyMap<string, THREE.Material>): THREE.Group {
   const group = new THREE.Group();
   group.name = spec.name;
   for (const part of spec.parts) {
-    const mesh = new THREE.Mesh(getPartRenderGeometry(part, spec.style), getPartMaterials(part, spec.palette, spec.style));
+    const override = part.materialId ? materialOverrides?.get(part.materialId) : undefined;
+    const mesh = new THREE.Mesh(getPartRenderGeometry(part, spec.style), getPartMaterials(part, spec.palette, spec.style, override));
     mesh.name = part.name;
     mesh.position.fromArray(part.position);
     mesh.rotation.set(part.rotation[0], part.rotation[1], part.rotation[2]);

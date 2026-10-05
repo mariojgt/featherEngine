@@ -1,100 +1,8 @@
 {
   "format": "feather-store-catalog",
   "formatVersion": "1.0.0",
-  "updatedAt": "2026-10-05T14:47:22.011Z",
+  "updatedAt": "2026-10-05T16:09:10.356Z",
   "packages": [
-    {
-      "id": "pkg-feather-ui-party-royale",
-      "slug": "ui-kit-party-royale",
-      "title": "Party Royale UI Kit",
-      "description": "A chunky, candy-coloured party-platformer interface — main menu, in-match HUD and a results board. Built entirely from reusable components: one Jelly Button, one Stat Pill and one Qualifier Row are instanced across all three screens, so restyling the button restyles every screen at once. Each instance differs only by its parameters and a tone class. Installs six live variables (Crowns, Kudos, PlayersLeft, RoundName, TimeLeft, Qualified) already bound to the HUD.",
-      "author": "Feather",
-      "version": "1.0.0",
-      "kind": "asset",
-      "tags": [
-        "ui",
-        "hud",
-        "menu",
-        "party",
-        "components"
-      ],
-      "license": "CC0-1.0",
-      "priceCents": 0,
-      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/ui-kit-party-royale/82435edde3ee0363d3cb5030b1372756c46d02d9df191b716e0dd48591b54a05.webp",
-      "sizeBytes": 4740,
-      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/assets/ui-kit-party-royale/f73049c29cfce6e27cefa71f360508ea3a663b531a38464aee46f08292066070.nfpack",
-      "engineVersion": "0.8.0",
-      "contents": {
-        "prefabs": 0,
-        "materials": 0,
-        "blueprints": 0,
-        "assets": 0,
-        "scenes": 0,
-        "uiDocuments": 6
-      },
-      "screenshots": [
-        {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/ui-kit-party-royale/82435edde3ee0363d3cb5030b1372756c46d02d9df191b716e0dd48591b54a05.webp",
-          "alt": "Party Royale UI Kit: Party Royale · Main Menu, rendered by Feather's actual runtime UI renderer.",
-          "width": 1280,
-          "height": 800
-        },
-        {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/ui-kit-party-royale/dba16d50ac52319cbfce4db101a669d4acaa19ba941a5924f18a402e034f152e.webp",
-          "alt": "Party Royale UI Kit: Party Royale · Match HUD, rendered by Feather's actual runtime UI renderer.",
-          "width": 1280,
-          "height": 800
-        },
-        {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/ui-kit-party-royale/053e095fb1dc90b69a96477f7d74d04b017cfeafe8a186c86db6461fe955885c.webp",
-          "alt": "Party Royale UI Kit: Party Royale · Results, rendered by Feather's actual runtime UI renderer.",
-          "width": 1280,
-          "height": 800
-        }
-      ],
-      "previewType": "capture",
-      "sha256": "f73049c29cfce6e27cefa71f360508ea3a663b531a38464aee46f08292066070",
-      "websiteVisible": true
-    },
-    {
-      "id": "pkg-feather-ui-rpg-hud",
-      "slug": "ui-kit-rpg-hud",
-      "title": "RPG Combat HUD",
-      "description": "A full action-RPG HUD lifted from a shipped game: player and target frames, cast bar, boss bar, action bar, build palette, minimap, toasts and pickup popups. Its repeated widgets (build tiles, action buttons, key chips) ship as reusable components — edit one and every copy updates, or drop them into your own UI. Screen UI, hidden until you show it.",
-      "author": "TheDevRealm",
-      "version": "1.0.0",
-      "kind": "asset",
-      "tags": [
-        "ui",
-        "hud",
-        "rpg"
-      ],
-      "license": "CC0-1.0",
-      "priceCents": 0,
-      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/ui-kit-rpg-hud/1246fde390a6ff32b0fd26721a162c65f29af45eb0396c9fcd5b724daa9bbc57.webp",
-      "sizeBytes": 17651,
-      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/assets/ui-kit-rpg-hud/e401ce2c21033a0ffd11b2d15154df0c1cc7859ac3552a7f90260f36a9601c75.nfpack",
-      "engineVersion": "0.8.0",
-      "contents": {
-        "prefabs": 0,
-        "materials": 0,
-        "blueprints": 0,
-        "assets": 0,
-        "scenes": 0,
-        "uiDocuments": 5
-      },
-      "screenshots": [
-        {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/ui-kit-rpg-hud/1246fde390a6ff32b0fd26721a162c65f29af45eb0396c9fcd5b724daa9bbc57.webp",
-          "alt": "RPG Combat HUD: RPG Combat HUD, rendered by Feather's actual runtime UI renderer.",
-          "width": 1280,
-          "height": 800
-        }
-      ],
-      "previewType": "capture",
-      "sha256": "e401ce2c21033a0ffd11b2d15154df0c1cc7859ac3552a7f90260f36a9601c75",
-      "websiteVisible": true
-    },
     {
       "id": "pkg-feather-plugin-arbor-forge",
       "slug": "arbor-forge",
@@ -141,9 +49,9 @@
       "id": "pkg-feather-plugin-model-forge",
       "slug": "model-forge",
       "title": "Model Forge — Prototype Modeler",
-      "description": "Prototype props without leaving the engine in a Blender-inspired Object, Edit and Paint workspace. Kit-bash five primitives, shape box control cages by vertex, edge or face, search twelve starter models, paint from a stylized palette, and choose smooth rounded or crisp flat finishes. Placed copies stay live-linked; finished props bake into real GLB assets for projects and exports.",
+      "description": "Create editable polygon models in Feather with Object, Edit and Paint workspaces. Shape vertices, edges and faces; extrude, inset, bevel and cut meshes; use symmetry, modifiers and UV tools; import GLB models and bake finished props with their materials and textures. Activates the Model Forge tool included in a build with Model Forge 1.2 support.",
       "author": "Feather",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "kind": "plugin",
       "tags": [
         "plugin",
@@ -154,9 +62,9 @@
       ],
       "license": "CC0-1.0",
       "priceCents": 0,
-      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/model-forge/2ba4144dac973664cfb0ad7df46cac5c4f8d884ec1347654a8ca445d97caabfe.webp",
-      "sizeBytes": 1146,
-      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/plugins/model-forge/b4f9539498080684f48f0165c50e4bc0810e97d8bba2ba928bb74cf98ab8ee00.nfpack",
+      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/model-forge/5f3c363506194882c2228d7d0a90a0a455cdaed49326740fd7d416387e0eac38.webp",
+      "sizeBytes": 1109,
+      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/plugins/model-forge/38564fc9b7fa62dcc988477c31d39b16dedf5771d9b06989969b9c836ad59fc4.nfpack",
       "engineVersion": "0.8.0",
       "pluginId": "feather.model-forge",
       "contents": {
@@ -169,14 +77,14 @@
       },
       "screenshots": [
         {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/model-forge/2ba4144dac973664cfb0ad7df46cac5c4f8d884ec1347654a8ca445d97caabfe.webp",
+          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/model-forge/5f3c363506194882c2228d7d0a90a0a455cdaed49326740fd7d416387e0eac38.webp",
           "alt": "Model Forge editing the original Cinderfall survey rifle. The plugin activates the editor tool; this example model is shown for demonstration.",
           "width": 1280,
           "height": 800
         }
       ],
       "previewType": "capture",
-      "sha256": "b4f9539498080684f48f0165c50e4bc0810e97d8bba2ba928bb74cf98ab8ee00",
+      "sha256": "38564fc9b7fa62dcc988477c31d39b16dedf5771d9b06989969b9c836ad59fc4",
       "websiteVisible": true
     },
     {
@@ -264,9 +172,9 @@
       ],
       "license": "CC0-1.0",
       "priceCents": 0,
-      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/584ecd9674e9bc8eb14da5fd0018962538373a7b0ed48147021406c2c51a69fe.webp",
-      "sizeBytes": 448461,
-      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/projects/template-cinderfall/aea9efe483c254ce879f122693f0a1cd8e0d461f17493cc58026f523cc9ad931.nfpack",
+      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/677d473f65a57c7aec79690430aec2610174b85cef257563ca01b3f9ef34588d.webp",
+      "sizeBytes": 448789,
+      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/projects/template-cinderfall/fbb41e6964f82c7768cc68bcef3fa9a5d2afa5acfbde31eb5adc9220094a69fe.nfpack",
       "engineVersion": "0.8.0",
       "contents": {
         "prefabs": 7,
@@ -278,27 +186,88 @@
       },
       "screenshots": [
         {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/584ecd9674e9bc8eb14da5fd0018962538373a7b0ed48147021406c2c51a69fe.webp",
+          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/677d473f65a57c7aec79690430aec2610174b85cef257563ca01b3f9ef34588d.webp",
           "alt": "Cinderfall expedition briefing, original cave art, and editable survey rifle in the actual Feather player.",
           "width": 1280,
           "height": 800
         },
         {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/4c6babfab45829afbb0f5ca317c93e695d653bfa8b2bcb6933735299b7470ff5.webp",
+          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/79759c5a10f4b124cb97f96225e395ec370d2159e215d11b13599bb95ffb10eb.webp",
           "alt": "Cinderfall gameplay: live cargo and suit-integrity HUD, VX-24 magazine, aetherite veins, survey lights, and cavewardens.",
           "width": 1280,
           "height": 800
         },
         {
-          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/82c7ea74d5e709d9c45ab2fb523b08b560b9d2c541478e2afed5aff8646e637d.webp",
+          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cinderfall/635d132e76ac74424c47de36c0616bcb4bfc1a31ca8cad3a49393ffc3b87dae4.webp",
           "alt": "Cinderfall cave overview: original faceted basalt, mineral seams, and industrial survey equipment.",
           "width": 1280,
           "height": 800
         }
       ],
       "previewType": "capture",
-      "sha256": "aea9efe483c254ce879f122693f0a1cd8e0d461f17493cc58026f523cc9ad931",
+      "sha256": "fbb41e6964f82c7768cc68bcef3fa9a5d2afa5acfbde31eb5adc9220094a69fe",
       "websiteVisible": true
+    },
+    {
+      "id": "pkg-feather-template-cube-rpg",
+      "slug": "template-cube-rpg",
+      "learning": {
+        "version": 1,
+        "difficulty": "Beginner",
+        "minutes": 15,
+        "goal": "Conquer three sky arenas with Cubie, then remix your own action RPG.",
+        "controls": "WASD move · Space jump · Shift sprint · click / J ×3 combo · jump + click ground slam · hold Q / right click block · 1 / 2 equip · E / 3 potion · P pause",
+        "lessons": [
+          "Choose Cube RPG in the launcher, press Play, then Begin adventure. This starter is included offline.",
+          "Tap attack three times for slash, backhand and a spinning finisher; jump and attack to plunge into a ground slam.",
+          "Pink sparks mean a grumble is committed: light slashes will not stop it. Block, step away, or break it with the finisher or slam; potions restore 45 health.",
+          "Clear an arena and follow the golden arch. Each new arena raises your level and grants two potions.",
+          "Select Cubie · Playable Cube Knight in Characters to edit the reusable cube, eyes, helmet, sword or shield.",
+          "Edit Grumble · Chase, Telegraph & Loot and opponent instance variables to change health, damage, speed or arena.",
+          "Select named objects in Editable VFX to change colors, size, lifetime and particle count. Edit the Adventure HUD for your own menus.",
+          "Edit Cubie · Walk, Strike & Expressions or Grumble · Motion & Hit Reactions for poses and timing. Combat · Per-Character Damage Flash and Combat · Impact Star control contact effects; CubeImpact in Cubie combat controls the camera kick."
+        ]
+      },
+      "title": "Cube RPG — The Skyward Trials",
+      "description": "A playable cube knight adventure: equip a sword and shield, slash grumbles, block telegraphed attacks, use potions and conquer three floating arenas with a final boss. Animated strides, wind-ups, hurt faces, recoil, material flashes, impact stars and camera kicks give combat weight. Asset-free stylized scenery, editable VFX, a reusable character prefab, HUD and complete adventure menus.",
+      "author": "Feather",
+      "version": "1.1.0",
+      "kind": "project",
+      "tags": [
+        "template",
+        "world",
+        "rpg",
+        "combat",
+        "stylized",
+        "beginner",
+        "cube",
+        "vfx"
+      ],
+      "license": "CC0-1.0",
+      "priceCents": 0,
+      "thumbnail": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cube-rpg/566729ea6e6aee79b597e119f3d3063228007aa67eb33d69ce6fe8eaf04c8363.webp",
+      "sizeBytes": 174499,
+      "downloadUrl": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/packages/projects/template-cube-rpg/bbfe45be1a5de02708d324b81b3bb213cd03b3b2fc188690b33a9c99bc376a0e.nfpack",
+      "engineVersion": "0.8.0",
+      "contents": {
+        "prefabs": 1,
+        "materials": 14,
+        "blueprints": 12,
+        "assets": 0,
+        "scenes": 1,
+        "uiDocuments": 1
+      },
+      "screenshots": [
+        {
+          "url": "https://ndzxqemfrmrinzklzfsb.supabase.co/storage/v1/object/public/feather-store/previews/template-cube-rpg/566729ea6e6aee79b597e119f3d3063228007aa67eb33d69ce6fe8eaf04c8363.webp",
+          "alt": "Actual Cube RPG gameplay: Cubie faces three grumbles in the first floating arena.",
+          "width": 1280,
+          "height": 800
+        }
+      ],
+      "previewType": "capture",
+      "sha256": "bbfe45be1a5de02708d324b81b3bb213cd03b3b2fc188690b33a9c99bc376a0e",
+      "websiteVisible": false
     },
     {
       "id": "pkg-feather-template-driving",

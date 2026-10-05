@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react';
 import type {
+  ModelMeshGenerator,
+  ModelMeshOp,
+  ModelMeshOpResult,
   ModelPart,
   ModelPartShape,
   ModelSpec,
@@ -208,6 +211,17 @@ export interface FeatherPluginAPI {
     subdividePartFaces(specId: string, partId: string, faceIndices: number[]): boolean;
     /** CSG boolean of two parts; the result lands in the first part (converted to a mesh). */
     booleanParts(specId: string, partId: string, otherPartId: string, operation: 'union' | 'difference' | 'intersect'): boolean;
+    /**
+     * One Blender-style polygon edit on a part (extrude, inset, bevel, loop cut, merge, mirror, UV
+     * unwrap, …). Non-mesh parts convert to clean quads first. Returns the selection the op leaves.
+     */
+    meshOp(specId: string, partId: string, op: ModelMeshOp): ModelMeshOpResult;
+    /** Add a mesh part from a generator (quad primitive, lathe profile, tube path). Returns the part id. */
+    addMeshPart(specId: string, generator: ModelMeshGenerator, init?: Partial<Omit<ModelPart, 'id' | 'shape' | 'mesh'>>): string;
+    /** Bake a mesh part into textures (base color × AO, optional normal map) and assign them as a project material. */
+    bakePartTextures(specId: string, partId: string, options?: { ao?: boolean; normal?: boolean; size?: number; samples?: number }): Promise<{ ok: boolean; message: string; materialId?: string }>;
+    /** Import a .glb as a new editable model asset. */
+    importGlb(data: ArrayBuffer | File, name?: string): Promise<{ specId: string; warnings: string[] }>;
     /** Replace the asset's flat-color palette (1-16 hex colors). */
     setPalette(specId: string, palette: string[]): boolean;
     /** Place a linked, terrain-snapped instance in the scene. Returns the object id. */

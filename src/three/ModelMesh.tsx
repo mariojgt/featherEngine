@@ -3,7 +3,9 @@ import { TransformControls } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { TransformControls as TransformControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
-import type { ModelPart, ModelSpec, ModelStyle, SceneObject, Vector3Tuple } from '../types';
+import type { MeshRendererComponent, ModelPart, ModelSpec, ModelStyle, SceneObject, Vector3Tuple } from '../types';
+import { useResolvedMaterial } from './resolveMaterial';
+import { useAssetTexture } from './ModelAsset';
 import { useEditorStore } from '../store/editorStore';
 import { useModelForgeSession } from '../store/modelForgeSessionStore';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
@@ -63,7 +65,8 @@ export function ModelPartMesh({
   // Cached per (shape | dims+bevel); beveled boxes bake true-radius rounding back into unit space,
   // so mesh scale stays part.scale for every shape.
   const geometry = getPartRenderGeometry(part, style);
-  const materials = useMemo(() => getPartMaterials(part, palette, style), [part, palette, style]);
+  const engineMaterial = usePartEngineMaterial(part.materialId);
+  const materials = useMemo(() => getPartMaterials(part, palette, style, engineMaterial), [part, palette, style, engineMaterial]);
   return (
     <>
       <mesh
@@ -91,6 +94,55 @@ export function ModelPartMesh({
       )}
     </>
   );
+}
+
+/**
+ * A project material (Material Editor asset) on a model part: PBR values plus its base-color and
+ * normal maps, tiled through the mesh UVs. Textures are clones of the shared cached maps so turning on
+ * RepeatWrapping here never changes how the same image samples on other objects.
+ */
+function usePartEngineMaterial(materialId: string | undefined): THREE.Material | undefined {
+  const renderer = useMemo(() => (materialId ? ({ materialId } as MeshRendererComponent) : undefined), [materialId]);
+  const resolved = useResolvedMaterial(renderer);
+  const baseMap = useAssetTexture(materialId ? resolved.baseColorUrl : undefined, true);
+  const normalMap = useAssetTexture(materialId ? resolved.normalUrl : undefined, true, 'data');
+  const material = useMemo(() => {
+    if (!materialId) return undefined;
+    const tiled = (texture: THREE.Texture | undefined) => {
+      if (!texture) return null;
+      const copy = texture.clone();
+      copy.wrapS = THREE.RepeatWrapping;
+      copy.wrapT = THREE.RepeatWrapping;
+      copy.needsUpdate = true;
+      return copy;
+    };
+    return new THREE.MeshPhysicalMaterial({
+      color: resolved.color,
+      metalness: resolved.metalness,
+      roughness: resolved.roughness,
+      emissive: resolved.emissiveColor,
+      emissiveIntensity: resolved.emissiveIntensity,
+      map: tiled(baseMap),
+      normalMap: tiled(normalMap),
+      clearcoat: resolved.clearcoat,
+      clearcoatRoughness: resolved.clearcoatRoughness,
+      sheen: resolved.sheen,
+      sheenColor: resolved.sheenColor,
+      transmission: resolved.transmission,
+      ior: resolved.ior,
+      thickness: resolved.thickness,
+      iridescence: resolved.iridescence,
+      transparent: resolved.opacity < 1,
+      opacity: resolved.opacity,
+    });
+  }, [materialId, resolved, baseMap, normalMap]);
+  useEffect(() => () => {
+    if (!material) return;
+    material.map?.dispose();
+    material.normalMap?.dispose();
+    material.dispose();
+  }, [material]);
+  return material;
 }
 
 export function resolveModelSpec(object: SceneObject, librarySpec: ModelSpec | undefined): ModelSpec | null {
