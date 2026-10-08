@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { generateTree } from '../tree/generateTree';
 import { STYLIZED_TREE_PRESETS, stylizedTreeSpec, type StylizedTreePreset } from '../tree/stylizedPresets';
 import { TreeMesh } from '../three/TreeMesh';
-import { RangeField } from '../components/InspectorPanel';
+import { RangeField } from '../components/RangeField';
 import type { SceneObject, TreeSpec } from '../types';
 import { defineFeatherPlugin, type FeatherPluginAPI } from './types';
 

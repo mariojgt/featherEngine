@@ -126,10 +126,8 @@ export function sampleGamepads(delta: number, setKey: (code: string, pressed: bo
   gamepadInput.moveY = moveY;
   gamepadInput.throttle = throttle;
   gamepadInput.brake = brake;
-  if (!connected) {
-    prevPressed = [];
-    return;
-  }
+  // Still publish release edges when the last pad disconnects. Dropping prevPressed early
+  // leaves its virtual keys (and keyboard/mouse aliases) held indefinitely in the runtime.
   // Right stick → shared mouse-look accumulator (squared response curve for fine aim near center).
   if (lookX || lookY) {
     mouseLook.dx += lookX * Math.abs(lookX) * LOOK_SPEED * delta;

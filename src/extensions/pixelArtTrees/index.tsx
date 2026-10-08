@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { Dices, LibraryBig, Palette, Sprout, TreePine, Trees } from 'lucide-react';
 import * as THREE from 'three';
-import { RangeField } from '../../components/InspectorPanel';
+import { RangeField } from '../../components/RangeField';
 import { generateTree } from '../../tree/generateTree';
 import { TreeMesh } from '../../three/TreeMesh';
 import type { SceneObject, TreeSpec } from '../../types';

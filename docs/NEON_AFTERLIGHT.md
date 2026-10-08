@@ -88,3 +88,5 @@ Suggested description:
 > A city after dark. Neon Afterlight is a 70-second film built and rendered in Feather Engine: rain-soaked streets, neon and water reflections, colored volumetric fog, steam, sparks and a moving searchlight drone.
 >
 > The complete editable project is included in Feather's Asset Store, with all models, materials, ten camera shots, weather direction and original synth music. Rendered at 1080p / 24 fps using Epic quality.
+
+The template is retired from the public starter catalog. Its development-only export key remains supported for authoring and capture; this does not republish it to the store.

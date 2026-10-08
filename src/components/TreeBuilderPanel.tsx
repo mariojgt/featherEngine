@@ -9,7 +9,7 @@ import { PIXEL_LEAF_ARTS } from '../tree/pixelCanopy';
 import { treeSpecFromArchetype } from '../tree/treeSpec';
 import { TreeMesh } from '../three/TreeMesh';
 import type { SceneObject, TreeArchetype, TreePixelLeafArt, TreeSpec } from '../types';
-import { RangeField } from './InspectorPanel';
+import { RangeField } from './RangeField';
 
 /**
  * The Tree Builder — authors the project's reusable tree assets.

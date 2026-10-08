@@ -65,8 +65,11 @@ export function isLodCandidate(geometry: THREE.BufferGeometry): boolean {
   const index = geometry.getIndex();
   if (!index || index.count < MIN_LOD_INDEX_COUNT) return false;
   if (geometry.groups.length > 1) return false; // multi-material: reindexing would break the group ranges
+  // A reduced index cannot preserve an authored subset of triangles.
+  if (geometry.drawRange.start !== 0 || geometry.drawRange.count < index.count) return false;
+  if (geometry.groups.some((group) => group.start !== 0 || group.count < index.count)) return false;
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-  if (!position || (position as unknown as { isInterleavedBufferAttribute?: boolean }).isInterleavedBufferAttribute) {
+  if (!position || position.itemSize < 3 || (position as unknown as { isInterleavedBufferAttribute?: boolean }).isInterleavedBufferAttribute) {
     return false;
   }
   return true;
@@ -77,6 +80,8 @@ function makeLodGeometry(source: THREE.BufferGeometry, newIndex: Uint32Array): T
   const lod = new THREE.BufferGeometry();
   for (const name of Object.keys(source.attributes)) lod.setAttribute(name, source.attributes[name]);
   lod.setIndex(new THREE.BufferAttribute(newIndex, 1));
+  // A single full-range group still selects an authored material when the mesh uses a material array.
+  if (source.groups.length === 1) lod.addGroup(0, newIndex.length, source.groups[0].materialIndex);
   // Reuse the source bounds — same vertices, so culling/raycast bounds are identical.
   if (source.boundingSphere) lod.boundingSphere = source.boundingSphere.clone();
   if (source.boundingBox) lod.boundingBox = source.boundingBox.clone();
@@ -116,8 +121,10 @@ function buildLevel(source: THREE.BufferGeometry, level: number): THREE.BufferGe
     if (!index) return null;
     const indices = index.array instanceof Uint32Array ? index.array : new Uint32Array(index.array);
     const positions = position.array instanceof Float32Array ? position.array : new Float32Array(position.array);
-    const target = Math.max(3, Math.floor(indices.length * LOD_RATIOS[level]));
-    const [newIndex, error] = MeshoptSimplifier.simplify(indices, positions, 3, target, LOD_TARGET_ERROR, ['LockBorder']);
+    // meshoptimizer requires complete triangles. Rounding indices individually silently failed for
+    // common meshes (a 32 × 24 sphere requested 1766 indices instead of 1764).
+    const target = Math.max(3, Math.floor(indices.length * LOD_RATIOS[level] / 3) * 3);
+    const [newIndex, error] = MeshoptSimplifier.simplify(indices, positions, position.itemSize, target, LOD_TARGET_ERROR, ['LockBorder']);
     // No meaningful reduction (already minimal, or couldn't collapse without exceeding the error)? Skip.
     if (newIndex.length >= indices.length * 0.95) return null;
     void error;

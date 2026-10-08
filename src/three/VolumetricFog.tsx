@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { Effect, EffectAttribute } from 'postprocessing';
 import type { SceneEnvironmentSettings } from '../types';
 import type { QualityProfile } from './quality';
-import { sunDirectionFromEnvironment, withSceneEnvironmentDefaults } from './environmentSettings';
+import { isVolumetricFogActive, sunDirectionFromEnvironment, withSceneEnvironmentDefaults } from './environmentSettings';
 import { LocalFogLights, localFogBudget, MAX_LOCAL_FOG_LIGHTS } from './localFogLights';
 
 /**
@@ -36,9 +36,8 @@ export function resolveVolumetric(
 ): VolumetricParams | null {
   if (!profile.volumetricFog) return null;
   const env = withSceneEnvironmentDefaults(environment);
-  if (!env.volumetricFogEnabled) return null;
+  if (!isVolumetricFogActive(env, profile)) return null;
   const density = env.volumetricFogDensity ?? 0.06;
-  if (density <= 0.0001) return null;
   return {
     density,
     heightStart: env.volumetricFogHeight ?? 0,

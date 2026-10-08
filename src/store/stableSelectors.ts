@@ -76,11 +76,16 @@ export const objectToken = (object: SceneObject, playing: boolean): number =>
 
 let prevObjectTokens: number[] = [];
 let prevObjectsSig = '';
+let prevObjectsSource: SceneObject[] | undefined;
+let prevObjectsPlaying = false;
 
 /** Selector: structural signature of the active scene's objects (see module docs). */
 export const structuralObjectsSignature = (state: EditorState): string => {
   const objects = selectActiveObjects(state);
   const playing = state.isPlaying;
+  if (objects === prevObjectsSource && playing === prevObjectsPlaying) return prevObjectsSig;
+  prevObjectsSource = objects;
+  prevObjectsPlaying = playing;
   let changed = objects.length !== prevObjectTokens.length;
   const tokens: number[] = new Array(objects.length);
   for (let i = 0; i < objects.length; i += 1) {
@@ -124,6 +129,8 @@ export const isTransientVfx = (object: SceneObject): boolean => Boolean(object.e
 
 let prevNonVfxTokens: number[] = [];
 let prevNonVfxSig = '';
+let prevNonVfxSource: SceneObject[] | undefined;
+let prevNonVfxPlaying = false;
 /**
  * Structural signature of the AUTHORED objects only (transient VFX excluded). Stays the same string
  * instance while effects spawn/despawn and projectiles fly, so a consumer subscribed to it does NOT
@@ -132,6 +139,9 @@ let prevNonVfxSig = '';
 export const nonVfxObjectsSignature = (state: EditorState): string => {
   const objects = selectActiveObjects(state);
   const playing = state.isPlaying;
+  if (objects === prevNonVfxSource && playing === prevNonVfxPlaying) return prevNonVfxSig;
+  prevNonVfxSource = objects;
+  prevNonVfxPlaying = playing;
   const tokens: number[] = [];
   for (let i = 0; i < objects.length; i += 1) {
     if (isTransientVfx(objects[i])) continue;
@@ -148,11 +158,16 @@ export const nonVfxObjectsSignature = (state: EditorState): string => {
 
 let prevVfxTokens: number[] = [];
 let prevVfxSig = '';
+let prevVfxSource: SceneObject[] | undefined;
+let prevVfxPlaying = false;
 /** Structural signature of the transient VFX objects only — changes when an effect spawns/despawns or
  *  a projectile's per-tick `life` mutates its token; unaffected by authored-scene changes. */
 export const vfxObjectsSignature = (state: EditorState): string => {
   const objects = selectActiveObjects(state);
   const playing = state.isPlaying;
+  if (objects === prevVfxSource && playing === prevVfxPlaying) return prevVfxSig;
+  prevVfxSource = objects;
+  prevVfxPlaying = playing;
   const tokens: number[] = [];
   for (let i = 0; i < objects.length; i += 1) {
     if (!isTransientVfx(objects[i])) continue;

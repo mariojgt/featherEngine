@@ -27,6 +27,11 @@ class Ring {
   private head = 0;
   private len = 0;
 
+  clear() {
+    this.head = 0;
+    this.len = 0;
+  }
+
   push(value: number) {
     this.buf[this.head] = value;
     this.head = (this.head + 1) % SAMPLE_CAP;
@@ -170,7 +175,14 @@ const sectionRings: Record<RuntimeSection, Ring> = {
   combat: new Ring(),
   animator: new Ring(),
 };
-const render: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0, lights: 0, shadowLights: 0, shadowCasters: 0, skinned: 0 };
+const EMPTY_RENDER_STATS: RenderStats = { calls: 0, triangles: 0, programs: 0, geometries: 0, textures: 0, lights: 0, shadowLights: 0, shadowCasters: 0, skinned: 0 };
+const render: RenderStats = { ...EMPTY_RENDER_STATS };
+
+/** A different Canvas owns the next samples; discard counters and timings from its predecessor. */
+export function resetRenderStats() {
+  renderRing.clear();
+  Object.assign(render, EMPTY_RENDER_STATS);
+}
 
 let hitch33 = 0;
 let hitch100 = 0;

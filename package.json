@@ -66,7 +66,10 @@
     "pretest": "npm run store:pull",
     "store:capture": "node scripts/store/capture.mjs",
     "test:cinderfall": "node scripts/e2e/cinderfall.mjs",
-    "store:add": "vite-node scripts/store/add.mts"
+    "store:add": "vite-node scripts/store/add.mts",
+    "check:unused": "tsc -p tsconfig.app.json --noEmit && node --test scripts/tests/unused-source.test.mjs && node scripts/check-unused-source.mjs",
+    "measure:engine": "node scripts/e2e/engine-performance.mjs",
+    "test:startup": "node scripts/e2e/deferred-panels.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.81",
@@ -82,7 +85,6 @@
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.10",
     "@react-three/postprocessing": "^2.19.1",
-    "@react-three/rapier": "^1.5.0",
     "@react-three/uikit": "^1.0.73",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
@@ -115,12 +117,14 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "esbuild": "0.25.12",
     "jsdom": "^25.0.1",
     "postcss": "^8.4.49",
     "sharp": "^0.35.4",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.3",
     "vite": "^6.0.3",
+    "vite-node": "2.1.9",
     "vitest": "^2.1.9",
     "ws": "^8.21.0"
   }

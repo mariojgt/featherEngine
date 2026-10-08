@@ -6,17 +6,12 @@ import { create } from 'zustand';
 import {
   type Prefab,
   type AssetItem,
-  type AssetType,
-  type ColliderType,
-  type CompareOperator,
   type DataAsset,
   type DataAssetColumn,
   type DataAssetRow,
   type GraphNodeCategory,
   type GraphValue,
   type GraphValueType,
-  type GraphNodeKind,
-  type GraphNodeTone,
   type AnimatorComponent,
   type CableComponent,
   type ClothComponent,
@@ -31,7 +26,6 @@ import {
   type PhysicsComponent,
   type ProjectFolder,
   type ProjectGraph,
-  type ProjectileComponent,
   type LightComponent,
   type ReflectionProbeComponent,
   type ParticleSystemComponent,
@@ -39,17 +33,14 @@ import {
   type ParticleSystemDefinition,
   type RenderSettings,
   type RenderPresetId,
-  type QualityLevel,
   type SceneEnvironmentSettings,
   type SceneStreamingSettings,
   type ProjectVariable,
-  type RigidBodyType,
   type Scene,
   type SceneObject,
   type SceneObjectKind,
   type FractureComponent,
   type ScriptBlueprint,
-  type BlueprintVariable,
   type SkeletonAsset,
   type SkeletonSocket,
   type AttachmentComponent,
@@ -67,11 +58,7 @@ import {
   type VehicleComponent,
   type CinematicAction,
   type CinematicCameraKeyframe,
-  type CinematicInterpolation,
   type CinematicMarker,
-  type CinematicMaterialKeyframe,
-  type CinematicTransformKeyframe,
-  type CinematicEase,
   type CinematicLook,
   type CinematicSequence,
   type InventoryComponent,
@@ -102,32 +89,11 @@ import {
   type ExportProfile,
   type ExportSettings,
 } from '../types';
-import { getActivePhysics, startPhysics, stopPhysics, type PhysicsContactEvent, type VehicleWheelState } from '../runtime/physicsWorld';
-import { audioEngine } from '../runtime/audioEngine';
-import { pushExplosion, clearExplosions } from '../runtime/explosionBus';
-import { addDecal, clearDecals, type DecalKind } from '../runtime/decalBus';
-import { cameraPitch as mouseCameraPitch, cameraYaw as mouseCameraYaw } from '../runtime/mouseLook';
-import { gamepadInput } from '../runtime/gamepadInput';
-import { recordValue } from '../runtime/valueTrace';
-import { addSkidMark } from '../runtime/skidMarks';
-import { isRagdoll, setRagdoll, getRagdollRoot } from '../runtime/ragdollState';
-import { sendParticleCommand } from '../runtime/particleBus';
-import { addVehicleDent, clearVehicleDents, clearVehicleDentsFor } from '../runtime/vehicleDamageBus';
-import { publishTransforms, publishRenderTransforms, clearTransformBuffer, type BufferedTransform } from '../runtime/transformBuffer';
-import { updateFoliageInteractors, clearFoliageInteractors, MAX_FOLIAGE_INTERACTORS, type FoliageInteractor } from '../three/foliageInteractors';
-import { beginPerceptionFrame, clearPerception, cachedLineOfSight, storeLineOfSight } from '../runtime/aiPerception';
+import { type PhysicsContactEvent } from '../runtime/physicsWorld';
 import { type ParticlePresetId } from '../runtime/particlePresets';
-import { applyPhysicsMaterialPreset } from '../runtime/physicsMaterials';
-import { resolveMaterial } from '../three/materialResolve';
-import { customizedModelIds, isInstanceable } from '../three/modelInstancing';
-import { WATER_LOOK_KEYS, findRenderPreset, waterStylePatch } from '../three/presets';
-import { defaultSceneEnvironment, withSceneEnvironmentDefaults } from '../three/environmentSettings';
-import { chopTree, clearTreeChops } from '../runtime/treeChop';
-import { isRollInvulnerable, meleeComboDamage } from '../runtime/combatFeel';
-import { wrapDayCycleTime } from '../three/dayCycle';
-import { DEFAULT_TREE_IDS, defaultTreeLibrary, normalizeTreeSpec, treeRng, treeSpecFromArchetype } from '../tree/treeSpec';
-import { getStylizedPreset, stylizedTreeSpec } from '../tree/stylizedPresets';
-import { defaultModelLibrary, makeModelPart, modelSpecFromStarter, normalizeModelSpec } from '../model/modelSpec';
+import { findRenderPreset } from '../three/presets';
+import { DEFAULT_TREE_IDS, defaultTreeLibrary } from '../tree/treeSpec';
+import { defaultModelLibrary } from '../model/modelSpec';
 import {
   applyBooleanModelParts,
   applyConvertModelPartToMesh,
@@ -175,61 +141,16 @@ export interface PlaytimeCameraRecordingSession {
   samples: CinematicCameraKeyframe[];
 }
 
-import { highestTerrainWorldHeight } from '../terrain/terrain';
-import { GRASS_PRESETS, applyTerrainFoliagePaint, applyTerrainPaint, applyTerrainSculpt, createTerrainHeightSampler, defaultStylizedGrass, terrainLocalPointFromWorld, type GrassPresetId } from '../terrain/terrain';
-import { worldTransformOf, worldToLocalUnderParent } from '../utils/transformHierarchy';
+import { type GrassPresetId } from '../terrain/terrain';
 import type { ModelInspection } from '../three/inspectModel';
 import type { PackageContent } from '../project/package';
-import { activeExportProfile, createDefaultExportSettings, parseExportSettings, retargetDeletedScene } from '../project/exportProfiles';
+import { createDefaultExportSettings } from '../project/exportProfiles';
 import {
-  cinematicActionsAt,
-  cinematicCameraAt,
-  cinematicFadeAt,
-  cinematicHiddenAt,
-  cinematicMaterialsAt,
-  cinematicTextAt,
-  cinematicTimeScaleAt,
-  cinematicTransformsAt,
-  clamp01,
-  initialCinematicCamera,
-  initialCinematicFade,
-  mixVec3,
-} from './editor/cinematics';
-import { getAnimatorControllerRuntime } from './editor/animatorRuntime';
-import {
-  defaultAnimator,
-  defaultCable,
-  defaultCharacter,
-  defaultCloth,
-  defaultJoint,
-  defaultRagdollSettings,
-  defaultRenderSettings,
   defaultTerrainBrush,
-  defaultVehicle,
-  defaultWaterVolume,
-  lerpAngle,
-  resolveCharacter,
-  resolveVehicle,
-  syncTerrainLayerColors,
   type CreateObjectOptions,
   type RuntimeAnimator,
 } from './editor/defaults';
 import {
-  makeUIElement,
-  cloneUIElementFresh,
-  defaultUIComponent,
-  findUIElement,
-  findUIParent,
-  makeUIDocument,
-  makeUIPreset,
-  makeUITemplate,
-  applyUIThemeToElement,
-  clearUIComponentRefs,
-  mapUIElement,
-  removeUIElementFromTree,
-  replaceUIElementInTree,
-  wouldCreateUICycle,
-  uiVariableRef,
   type UITemplateKind,
   type UIThemeKind,
 } from './editor/ui';
@@ -245,65 +166,8 @@ import {
   starterRenderSettings,
   starterVariables,
 } from './editor/starterProject';
-import {
-  axisIndex,
-  clearSaveSlot,
-  compareValues,
-  graphValueToString,
-  defaultFracture,
-  inferGraphType,
-  makeFractureChunks,
-  makeDamageNumber,
-  makeExplosion,
-  makeDustPuff,
-  makeImpactObject,
-  makeMuzzleFlash,
-  makeProjectileObject,
-  makeRuntimeVariableMap,
-  makeRuntimeVelocityMap,
-  makeSpawnedObject,
-  makeSpawnedParticleEmitter,
-  makeSplashObject,
-  readSaveSlot,
-  setSaveNamespace,
-  seedBlueprintInstanceVars,
-  toBoolean,
-  toNumber,
-  writeSaveSlot,
-  type ProjectileSetup,
-} from './editor/objectFactory';
-import { buildContactIndex, contactMatches, contactOthers, contactTouches, firstContactEvent, firstContactOther, toIdSet, toLowerCaseSet } from './editor/runtimeIndexes';
-import { makeId, stripUndefined } from './editor/ids';
 import { type FeatherCompileResult } from '../scripting/featherCompiler';
-import { buildNavGrid, findNavPath, type NavGrid, type NavObstacle } from '../runtime/navGrid';
-import {
-  cloneObjectTree,
-  collectSubtree,
-  deleteWithChildren,
-  EARTH_GRAVITY,
-  effectiveSelection,
-  effectLife,
-  EMPTY_EXEC_TARGETS,
-  ensureNavGrid,
-  indexAnimationsById,
-  indexAssetsByName,
-  indexBlueprintsById,
-  indexControllersById,
-  indexDataAssetsById,
-  indexPrefabsById,
-  indexSceneObjectsById,
-  indexTableColumnsById,
-  indexTableRowsByKey,
-  indexVariablesById,
-  indexVariablesByName,
-  mapActiveSceneObjects,
-  navPathsForPlay,
-  resetNavCache,
-  resetStreamingCache,
-  selectActiveObjects,
-  selectActiveSceneEnvironment,
-  streamedOutIds,
-} from './editor/storeHelpers';
+
 export {
   effectiveSelection,
   selectActiveObjects,
@@ -639,43 +503,6 @@ import {
   applyRevertInstanceToPrefab,
   applySetPrefabThumbnail,
 } from './editor/prefabActions';
-import { mergePrefabInstances, prefabWouldCycle } from './editor/prefabMerge';
-import {
-  aiFeelerExclude,
-  blueprintVarTypeCache,
-  clearNodeErrors,
-  detachedParts,
-  fillObjectIdMap,
-  nodeErrorsSnapshot,
-  recordNodeError,
-  pendingPartKicks,
-  pendingPartRestores,
-  impactAudioCooldown,
-  clearImpactAudioCooldown,
-  prevTransformEntryPool,
-  reportedScriptErrors,
-  resetReportedScriptErrors,
-  tickMappedById,
-  tickPrevTransforms,
-  tickRemainingById,
-  tickResolvedById,
-  tickVehicleById,
-} from './editor/tickState';
-import {
-  SURFACE_DUST,
-  checkpointIndexForName,
-  crashDebrisObject,
-  headingFromEuler,
-  keepArray,
-  keepRecord,
-  literalValueForType,
-  nextWaterImpactId,
-  rotateLocalVector,
-  tagTokens,
-  waterSurfaceHeight,
-} from './editor/runtimeHelpers';
-import { recordRuntimeSection } from '../runtime/perfStats';
-import { advanceTimelineTime, sampleTimelineCurve } from '../runtime/timelineCurve';
 
 export {
   defaultCharacter,
@@ -1599,12 +1426,6 @@ export const invalidateFeatherSourceForGraphs = (
 
 export const invalidateFeatherSourceForGraph = (blueprints: ScriptBlueprint[], graphId: string): ScriptBlueprint[] =>
   invalidateFeatherSourceForGraphs(blueprints, new Set([graphId]));
-
-/** One Call Function activation: the evaluated A/B/C arguments + the value a Return node set. */
-interface FunctionFrame {
-  args: [GraphValue | undefined, GraphValue | undefined, GraphValue | undefined];
-  ret: GraphValue | undefined;
-}
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   scenes: starterScenes,

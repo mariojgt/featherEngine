@@ -1,10 +1,12 @@
+import { RangeField } from './RangeField';
+export { RangeField } from './RangeField';
 import { ChevronRight, Link2, MousePointer2, Palette, RotateCcw, Settings2, Trash2, Unlink } from 'lucide-react';
 import { SceneSettingsBody } from './SceneSettingsPanel';
 import { QUALITY_LEVELS } from '../three/quality';
 import { Suspense, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { defaultCharacter, defaultLight, defaultReflectionProbe, defaultVehicle, selectActiveObjects, useEditorStore } from '../store/editorStore';
+import { defaultCharacter, defaultLight, defaultReflectionProbe, defaultVehicle, useEditorStore } from '../store/editorStore';
 import { objectToken, useStableActiveObjects } from '../store/stableSelectors';
 import { useAssetUrl } from '../three/ModelAsset';
 import { DRACO_DECODER_PATH, extendGLTFLoader } from '../three/gltfDecoders';
@@ -200,37 +202,6 @@ function VectorField({
           </span>
         ))}
       </div>
-    </label>
-  );
-}
-
-export function RangeField({
-  label,
-  value,
-  onChange,
-  min = 0,
-  max = 1,
-  step = 0.01,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-}) {
-  return (
-    <label className="range-field">
-      <span>{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-      <strong>{value.toFixed(2)}</strong>
     </label>
   );
 }

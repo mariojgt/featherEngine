@@ -416,7 +416,6 @@ class FeatherGraphBuilder {
   private cursorY = 60;
 
   constructor(
-    private readonly blueprint: ScriptBlueprint,
     variables: ProjectVariable[],
     blueprints?: ScriptBlueprint[],
     functionNames: Iterable<string> = [],
@@ -1594,7 +1593,6 @@ export const compileFeatherScriptToGraph = (options: FeatherCompileOptions): Fea
   if (errors.length) return { ok: false, diagnostics: parsed.diagnostics };
 
   const builder = new FeatherGraphBuilder(
-    options.blueprint,
     options.variables,
     options.blueprints,
     parsed.program.functions.map((fn) => fn.name),

@@ -5,6 +5,7 @@ import App from './App';
 import { PanelHost } from './components/PanelHost';
 import { initStoreSync } from './sync/storeSync';
 import { startMcpBridge } from './ai/mcpBridge';
+import { startAssistantRequests } from './ai/assistantRequests';
 import { startExtensionHost } from './extensions/host';
 import { useEditorStore } from './store/editorStore';
 import { useProjectStore } from './store/projectStore';
@@ -37,6 +38,7 @@ if (!panelKind) {
   initStoreSync({ requestSnapshot: false });
   // Expose engine tools to external MCP agents when the local relay (npm run mcp) is up.
   startMcpBridge();
+  startAssistantRequests();
 }
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

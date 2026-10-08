@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { SceneEnvironmentSettings } from '../types';
 import { useAssetTexture, useAssetUrl } from './ModelAsset';
 import {
+  isVolumetricFogActive,
   sunDirectionFromEnvironment,
   sunPositionFromEnvironment,
   withSceneEnvironmentDefaults,
@@ -160,9 +161,10 @@ export function SceneEnvironment({
   // IBL cubemap resolution follows the quality preset — sharper reflections at High/Epic.
   const profile = qualityProfile(useEditorStore((state) => state.renderSettings?.quality));
   const envResolution = profile.envResolution;
+  const volumetricActive = isVolumetricFogActive(env, profile);
   // The sun also casts shadows when volumetric fog is on (even in the editor viewport, which otherwise
   // skips sun shadows) — the volumetric pass samples that shadow map to carve god-ray light shafts.
-  const castSunShadow = shadows || (Boolean(env.volumetricFogEnabled) && profile.shadows);
+  const castSunShadow = profile.shadows && (shadows || (volumetricActive && profile.volumetricShafts));
 
   // Optional image-based lighting: an equirectangular panorama/HDRI drives ambient + reflections,
   // replacing the studio Lightformer rig when set. Loads the same way as any image asset.
@@ -194,10 +196,10 @@ export function SceneEnvironment({
   return (
     <>
       <color attach="background" args={[env.backgroundColor]} />
-      {/* Distance fog. Suppressed when volumetric fog is on (PostFx) to avoid doubled haze — the
+      {/* Distance fog. Suppressed while the volumetric pass actually renders to avoid doubled haze — the
           volumetric pass replaces it with height-based mist + sun in-scattering. Atmospheric mode swaps
           the flat linear haze for sky-colored exponential aerial perspective (Tier 7.2). */}
-      {env.fogEnabled && !env.volumetricFogEnabled && (
+      {env.fogEnabled && !volumetricActive && (
         env.atmosphericFog ? (
           <fogExp2 attach="fog" args={[atmosphericFogColor, Math.max(0.0002, atmosphericFogDensity)]} />
         ) : (
@@ -206,7 +208,7 @@ export function SceneEnvironment({
       )}
       {/* Height falloff + sun in-scatter on top of whichever fog model is active. Also gated on
           volumetric fog, so the two haze systems never stack. */}
-      {!env.volumetricFogEnabled && <AerialFogSync environment={env} />}
+      {!volumetricActive && <AerialFogSync environment={env} />}
 
       {/* Ambient fill. `hemisphere` grades sky→ground so undersides read cooler/darker; `flat` is the
           legacy constant term. Same intensity either way, so switching is purely a quality choice. */}

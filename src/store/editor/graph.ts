@@ -1,17 +1,4 @@
-import type { Edge } from '@xyflow/react';
-import type {
-  DataAsset,
-  GraphNodeCategory,
-  GraphNodeKind,
-  GraphNodeTone,
-  GraphValue,
-  GraphValueType,
-  NodeForgeNode,
-  NodeForgeNodeData,
-  ProjectGraph,
-  ProjectVariable,
-  Vector3Tuple,
-} from '../../types';
+import type { DataAsset, GraphNodeCategory, GraphNodeKind, GraphNodeTone, GraphValue, GraphValueType, NodeForgeNodeData, ProjectGraph, ProjectVariable, Vector3Tuple } from '../../types';
 
 import { makeId } from './ids';
 import { keyLabelByCode } from '../../utils/keyboardCodes';

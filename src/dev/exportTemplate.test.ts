@@ -33,6 +33,8 @@ function exporter(options: { assets?: AssetItem[]; ids?: string[]; build?: () =>
     '../project/package': { buildPackage },
     '../project/packageArchive': { writePackageArchive },
     '../utils/contentHash': { sha256Hex },
+    '../project/filmModeTemplate': { createFilmModeTemplate: options.build ?? (async () => 'resonance') },
+    '../project/neonAfterlightTemplate': { createNeonAfterlightTemplate: options.build ?? (async () => 'afterlight') },
     '../project/verdantTemplate': { createVerdantTemplate: options.build ?? (async () => {}) },
     '../project/mobaTemplate': { createMobaTemplate: options.build ?? (async () => 'hero') },
     '../project/parcelPanicTemplate': { createParcelPanicTemplate: options.build ?? (async () => 'courier') },
@@ -52,6 +54,24 @@ function exporter(options: { assets?: AssetItem[]; ids?: string[]; build?: () =>
 }
 
 describe('standalone template asset export', () => {
+  it.each([
+    ['cinematic', 'template-cinematic', 'Resonance — Kinetic Hall'],
+    ['neon-afterlight', 'template-neon-afterlight', 'Neon Afterlight'],
+  ])('keeps the retired %s authoring key exportable', async (key, slug, title) => {
+    let archive: Uint8Array | undefined;
+    const build = vi.fn(async () => {});
+    const tool = exporter({ assets: [], ids: [], build, fetch: vi.fn(async (input, init) => {
+      expect(String(input)).toBe(`/__feather/export-template?slug=${slug}`);
+      archive = init!.body as Uint8Array;
+      return new Response('ok');
+    }) });
+    tool.runTemplateExport(key);
+    await vi.waitFor(() => expect(tool.dataset.templateExport).toBeDefined());
+    expect(tool.dataset.templateExportError).toBeUndefined();
+    expect(build).toHaveBeenCalledOnce();
+    expect(readPackageFile(archive!).pkg.meta.name).toBe(title);
+  });
+
   it('exports the offline MOBA builder as a portable store project', async () => {
     let archive: Uint8Array | undefined;
     const build = vi.fn(async () => {});

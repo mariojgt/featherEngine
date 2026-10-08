@@ -27,8 +27,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check unused source and declarations
+        run: npm run check:unused
+
       - name: Type-check and build editor
         run: npm run build
+
+      - name: Verify deferred production panels and launcher handoff
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 17429 --strictPort > /tmp/feather-preview.log 2>&1 &
+          trap 'kill $!' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:17429/ > /dev/null; then break; fi
+            sleep 1
+          done
+          E2E_BASE_URL=http://127.0.0.1:17429 npm run test:startup
 
       - name: Verify editor starter assets
         run: test -f dist/templates/UAL1.glb

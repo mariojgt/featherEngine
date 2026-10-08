@@ -1,36 +1,9 @@
 import { useEffect } from 'react';
-import { HierarchyPanel } from './HierarchyPanel';
-import { InspectorPanel } from './InspectorPanel';
-import { AssetBrowser } from './AssetBrowser';
-import { VisualScriptingPanel } from './VisualScriptingPanel';
-import { MaterialEditorPanel } from './MaterialEditorPanel';
-import { ParticleSystemEditorPanel } from './ParticleSystemEditorPanel';
-import { AnimatorEditorPanel } from './AnimatorEditorPanel';
-import { UIEditorPanel } from './UIEditorPanel';
-import { TerrainEditorPanel } from './TerrainEditorPanel';
-import { TreeBuilderPanel } from './TreeBuilderPanel';
-import { AssetStorePanel } from './AssetStorePanel';
-import { SceneSettingsPanel } from './SceneSettingsPanel';
-import { CinematicPanel } from './CinematicPanel';
+import { BuiltInPanel, isBuiltInPanel } from './builtInPanels';
 import { broadcastPanelClosed, initStoreSync } from '../sync/storeSync';
 import { useExtensionSnapshot } from '../extensions/react';
 import { ExtensionPanelBoundary } from '../extensions/ExtensionPanelBoundary';
 
-const PANELS: Record<string, () => JSX.Element> = {
-  hierarchy: HierarchyPanel,
-  inspector: InspectorPanel,
-  project: AssetBrowser,
-  scripting: VisualScriptingPanel,
-  materials: MaterialEditorPanel,
-  terrain: TerrainEditorPanel,
-  trees: TreeBuilderPanel,
-  store: AssetStorePanel,
-  particles: ParticleSystemEditorPanel,
-  animator: AnimatorEditorPanel,
-  ui: UIEditorPanel,
-  scene: SceneSettingsPanel,
-  cinematic: CinematicPanel,
-};
 
 /**
  * Root of a popped-out panel window (loaded via ?panel=<kind>). Renders just the one
@@ -46,15 +19,15 @@ export function PanelHost({ kind }: { kind: string }) {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, [kind]);
 
-  const Panel = PANELS[kind];
-  if (!Panel && !extensionPanel) {
+  const builtIn = isBuiltInPanel(kind);
+  if (!builtIn && !extensionPanel) {
     return <div className="panel-window panel-window-empty">Unknown panel: {kind}</div>;
   }
 
   return (
     <div className="panel-window">
-      {Panel ? (
-        <Panel />
+      {isBuiltInPanel(kind) ? (
+        <BuiltInPanel kind={kind} />
       ) : extensionPanel ? (
         <ExtensionPanelBoundary
           pluginId={extensionPanel.pluginId}

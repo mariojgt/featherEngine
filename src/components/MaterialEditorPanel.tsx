@@ -12,14 +12,14 @@ import {
 } from '@xyflow/react';
 import { Hash, LayoutGrid, Palette, Plus, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
-import { useAssetTexture, useAssetUrl } from '../three/ModelAsset';
+import { useAssetTexture } from '../three/ModelAsset';
 import { useResolvedMaterial, hasPhysicalLayers } from '../three/resolveMaterial';
 import { useToonMaterial } from '../three/toonMaterial';
 import { NodeForgeGraphNode } from './NodeForgeGraphNode';
 import { NodeSearchMenu, type NodeChoice } from './NodeSearchMenu';
 import { PaletteGroup } from './PaletteGroup';
-import { RangeField } from './InspectorPanel';
-import type { AssetItem, GraphNodeCategory, MaterialDefinition, MeshRendererComponent, NodeForgeNode, ToonFinish } from '../types';
+import { RangeField } from './RangeField';
+import type { AssetItem, MaterialDefinition, MeshRendererComponent, NodeForgeNode, ToonFinish } from '../types';
 import { MATERIAL_PRESETS, materialPresetPatch } from '../three/presets';
 
 const nodeTypes: NodeTypes = { nodeforge: NodeForgeGraphNode };

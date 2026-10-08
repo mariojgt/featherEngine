@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { useEditorStore } from '../store/editorStore';
 import { qualityProfile } from './quality';
 
-const SHADOW_LOD_TMP = new THREE.Vector3();
+const SHADOW_LOD_BOUNDS = new THREE.Sphere();
+const SHADOW_LOD_CAMERA = new THREE.Vector3();
 
 /**
  * Distance-LOD for shadow CASTING. During Play, a mesh farther from the camera than the quality
@@ -41,7 +42,7 @@ export function ShadowLOD() {
     if (!profile.shadows || profile.shadowDistance <= 0) return;
     tick.current = (tick.current + 1) % 8;
     if (tick.current !== 0) return;
-    const maxDistSq = profile.shadowDistance * profile.shadowDistance;
+    camera.getWorldPosition(SHADOW_LOD_CAMERA);
     scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh & { isInstancedMesh?: boolean };
       if (!mesh.isMesh) return;
@@ -50,7 +51,13 @@ export function ShadowLOD() {
       if (mesh.isInstancedMesh) return;
       if (mesh.userData.nfWantsCastShadow === undefined) mesh.userData.nfWantsCastShadow = mesh.castShadow;
       if (!mesh.userData.nfWantsCastShadow) return; // never casts → nothing to budget
-      const within = mesh.getWorldPosition(SHADOW_LOD_TMP).distanceToSquared(camera.position) <= maxDistSq;
+      // Large meshes can be beside the camera even when their origin is far away. World bounds also
+      // respect offset geometry, parent transforms and scale; a parented camera needs world space too.
+      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+      const sphere = mesh.geometry.boundingSphere;
+      if (!sphere) return;
+      SHADOW_LOD_BOUNDS.copy(sphere).applyMatrix4(mesh.matrixWorld);
+      const within = SHADOW_LOD_BOUNDS.distanceToPoint(SHADOW_LOD_CAMERA) <= profile.shadowDistance;
       if (mesh.castShadow !== within) mesh.castShadow = within;
     });
   });

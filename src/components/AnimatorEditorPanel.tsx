@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Background,
   Controls,
@@ -18,7 +18,7 @@ import {
 } from '@xyflow/react';
 import { Layers, LayoutGrid, Plus, Trash2, Workflow } from 'lucide-react';
 import { AnimatorDebugView } from './AnimatorDebugView';
-import { RangeField } from './InspectorPanel';
+import { RangeField } from './RangeField';
 import { BlendSpaceGraph } from './BlendSpaceGraph';
 import { selectActiveObjects, useEditorStore } from '../store/editorStore';
 import type {

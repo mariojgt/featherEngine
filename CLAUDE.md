@@ -42,8 +42,9 @@ can use it. A feature isn't done until the AI chat is aware of it. Follow the ch
 1. AI-friendly store action (explicit params, returns ids)
 2. Tool in [src/ai/tools.ts](src/ai/tools.ts)
 3. Chip label in `describeToolCall` ([src/ai/useAIChat.ts](src/ai/useAIChat.ts))
-4. Update `ENGINE_GUIDE` and, if there's new state, `buildSceneSnapshot()` in
-   [src/ai/systemPrompt.ts](src/ai/systemPrompt.ts)
+4. Update `COMPACT_ENGINE_GUIDE` and, if there's new state, `buildSceneSnapshot()` in
+   [src/ai/systemPrompt.ts](src/ai/systemPrompt.ts); keep the long-form
+   [engine reference](docs/ENGINE_GUIDE.md) current.
 5. `npm run build` and verify in the running app
 
 New visual-scripting node types touch extra files — see the "new node type" section in

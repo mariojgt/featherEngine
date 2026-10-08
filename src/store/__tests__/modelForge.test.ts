@@ -13,7 +13,7 @@ import {
 import { getModelPartGeometry } from '../../model/modelGeometry';
 import { buildTopology } from '../../model/polyMesh';
 import { meshForPart } from '../editor/modelMeshActions';
-import { cloneMesh, DEFAULT_MESH, extrudeMeshFaces, meshFaceCount, normalizeMesh, subdivideMeshFaces } from '../../model/modelMesh';
+import { meshFaceCount } from '../../model/modelMesh';
 import { clearHistory, initHistory, redo, undo } from '../history';
 
 /**
@@ -321,7 +321,6 @@ describe('Model Forge store actions', () => {
     // A centered cube + a second box offset to overlap it.
     const aId = store.addModelPart(specId, 'box', { position: [0, 0, 0], scale: [1, 1, 1] })!;
     const bId = store.addModelPart(specId, 'box', { position: [0.5, 0, 0], scale: [1, 1, 1] })!;
-    const part = (id: string) => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!.parts.find((entry) => entry.id === id)!;
 
     expect(useEditorStore.getState().booleanModelParts(specId, aId, bId, 'union')).toBe(true);
     const spec = () => useEditorStore.getState().modelSpecs.find((entry) => entry.id === specId)!;

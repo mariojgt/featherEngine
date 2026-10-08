@@ -10,6 +10,7 @@ const LOD_CENTER = new THREE.Vector3();
 const LOD_SCALE = new THREE.Vector3();
 const LOD_TMP_POS = new THREE.Vector3();
 const LOD_TMP_QUAT = new THREE.Quaternion();
+const LOD_CAMERA = new THREE.Vector3();
 
 /** New geometries simplified per throttled traversal — keeps the per-tick cost bounded. */
 const GEN_PER_TICK = 2;
@@ -57,6 +58,7 @@ export function MeshLOD() {
     setLodGenBudget(GEN_PER_TICK);
     const near = lodDistance;
     const far = lodDistance * 2.5;
+    camera.getWorldPosition(LOD_CAMERA);
 
     scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh & { isInstancedMesh?: boolean; isSkinnedMesh?: boolean };
@@ -82,7 +84,7 @@ export function MeshLOD() {
       LOD_CENTER.copy(sphere.center).applyMatrix4(mesh.matrixWorld);
       mesh.matrixWorld.decompose(LOD_TMP_POS, LOD_TMP_QUAT, LOD_SCALE);
       const worldRadius = sphere.radius * Math.max(Math.abs(LOD_SCALE.x), Math.abs(LOD_SCALE.y), Math.abs(LOD_SCALE.z));
-      const distance = LOD_CENTER.distanceTo(camera.position) - worldRadius;
+      const distance = LOD_CENTER.distanceTo(LOD_CAMERA) - worldRadius;
 
       const errors = preparedLodErrors(original);
       const projectedDiameter = worldRadius * gl.domElement.height * Math.abs(camera.projectionMatrix.elements[5]) /

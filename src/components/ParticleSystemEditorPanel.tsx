@@ -5,7 +5,7 @@ import { Plus, Sparkles } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { ParticleSystem } from '../three/ParticleSystem';
 import { particlePresetIds, particlePresets, particleAssetConfig } from '../runtime/particlePresets';
-import { RangeField } from './InspectorPanel';
+import { RangeField } from './RangeField';
 import type { AssetItem, ParticleEmitterShape, ParticleSystemComponent, ParticleSystemDefinition, SceneObject } from '../types';
 
 /** A live emitter preview — a dummy object that references the asset, so it updates as you edit. */

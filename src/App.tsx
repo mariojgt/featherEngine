@@ -1,34 +1,14 @@
-import { Profiler, useEffect, type ReactNode } from 'react';
-import { profileRender, resetReactProfile } from './runtime/reactProfile';
+import { lazy, Suspense, useEffect } from 'react';
 import { Launcher } from './components/Launcher';
-import { FirstGameGuide } from './creator/components/FirstGameGuide';
 import { useProjectStore } from './store/projectStore';
-import { Toolbar } from './components/Toolbar';
-import { Workspace } from './components/Workspace';
 import { focusWorkspacePanel } from './components/workspacePanels';
-import { StatusBar } from './components/StatusBar';
-import { ToastHost } from './components/ToastHost';
-import { ConfirmDialog } from './components/ConfirmDialog';
-import { PackageDetailsDialog } from './components/PackageDetailsDialog';
-import { RuntimeConsole } from './components/RuntimeConsole';
-import { VariableWatch } from './components/VariableWatch';
-import { PrefabThumbnailHost } from './components/PrefabThumbnailer';
-import { ModelThumbnailHost } from './components/ModelThumbnailHost';
 import { useEditorStore } from './store/editorStore';
-import { useMarketplaceStore } from './store/marketplaceStore';
 import { useEditorPrefs } from './store/editorPrefsStore';
-import { useRuntimeAudio } from './runtime/useRuntimeAudio';
-import { recordFrame, resetHitches } from './runtime/perfStats';
-import { useGameRuntime, type RuntimeLoopInstrumentation } from './runtime/useGameRuntime';
-import { PerfOverlay } from './components/PerfOverlay';
-import { ShortcutsOverlay } from './components/ShortcutsOverlay';
-import { CommandPalette } from './components/CommandPalette';
 import { initHistory } from './store/history';
 import { initAutosave } from './store/autosave';
 import { initFeatherExternalSync } from './store/featherExternalStore';
-import { createTimelineShowcaseTemplate } from './project/timelineShowcaseTemplate';
-import { createSplineStudioTemplate } from './project/splineStudioTemplate';
-import { createPlatformerTemplate } from './project/platformerTemplate';
+
+const EditorShell = lazy(() => import('./components/EditorShell'));
 
 /** DEV-only headless screenshot QA hooks. No-op in production builds and for any other query.
  *  - `?demo=timeline` builds the Timeline Mechanics gallery for interaction/rendering QA.
@@ -101,15 +81,15 @@ function useDemoAutoload() {
         return;
       }
       if (demo === 'timeline') {
-        await createTimelineShowcaseTemplate();
+        await (await import('./project/timelineShowcaseTemplate')).createTimelineShowcaseTemplate();
         return;
       }
       if (demo === 'spline') {
-        await createSplineStudioTemplate();
+        await (await import('./project/splineStudioTemplate')).createSplineStudioTemplate();
         return;
       }
       if (demo === 'platformer') {
-        await createPlatformerTemplate();
+        await (await import('./project/platformerTemplate')).createPlatformerTemplate();
         const qa = new URLSearchParams(window.location.search).get('qa');
         setTimeout(() => {
           const editor = useEditorStore.getState();
@@ -207,41 +187,6 @@ function useBreakpointFocus() {
   }, [brokeAt]);
 }
 
-const EDITOR_RUNTIME_INSTRUMENTATION: RuntimeLoopInstrumentation = {
-  onSessionStart: () => {
-    resetHitches();
-    resetReactProfile();
-  },
-  onFrame: recordFrame,
-};
-
-function RuntimePreviewLoop() {
-  const isPlaying = useEditorStore((state) => state.isPlaying);
-  useRuntimeAudio();
-  useGameRuntime(isPlaying, EDITOR_RUNTIME_INSTRUMENTATION);
-  return null;
-}
-
-/**
- * Warn before closing/reloading the tab when work would be lost: either the PREFAB EDITOR is open
- * (its transient edit scene is never persisted — serialize strips it) or the project has unsaved
- * changes (`isDirty`). Autosave recovery is a safety net, but a standard confirm dialog is what
- * users expect. Play mode never sets `isDirty`, so previewing a game won't trigger the prompt.
- */
-function PrefabEditGuard() {
-  const editing = useEditorStore((state) => Boolean(state.editingPrefabId) || state.isDirty);
-  useEffect(() => {
-    if (!editing) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = ''; // required by Chrome to show the confirmation dialog
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [editing]);
-  return null;
-}
-
 export default function App() {
   const hasProject = useProjectStore((state) => state.hasProject);
 
@@ -264,33 +209,12 @@ export default function App() {
     );
   }
 
-  // Top-level chrome regions get the same render-attribution wrapper as the dock panels, so a
-  // widget re-rendering 60×/s during Play is identifiable in the perf overlay (dev builds).
-  const profiled = (id: string, node: ReactNode) => (
-    <Profiler id={id} onRender={profileRender}>
-      {node}
-    </Profiler>
-  );
-
   return (
-    <div className="editor-shell">
+    <>
       <AppearanceSync />
-      <RuntimePreviewLoop />
-      <PrefabEditGuard />
-      {profiled('toolbar', <Toolbar />)}
-      <div className="first-game-slot"><FirstGameGuide /></div>
-      <Workspace />
-      <StatusBar />
-      {profiled('console', <RuntimeConsole />)}
-      {profiled('varwatch', <VariableWatch />)}
-      <PrefabThumbnailHost />
-      <ModelThumbnailHost />
-      <PerfOverlay />
-      <ToastHost />
-      <ConfirmDialog />
-      <PackageDetailsDialog />
-      <ShortcutsOverlay />
-      <CommandPalette />
-    </div>
+      <Suspense fallback={<div className="editor-shell"><div className="empty-state" role="status">Opening editor…</div></div>}>
+        <EditorShell />
+      </Suspense>
+    </>
   );
 }

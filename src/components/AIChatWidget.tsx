@@ -1,3 +1,4 @@
+import { subscribeAssistantRequests } from '../ai/assistantRequests';
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -391,19 +392,15 @@ export function AgentPanel() {
   const askRef = useRef({ canSend, send: (_text: string) => {} });
   askRef.current = { canSend, send: (text: string) => void sendMessage(text) };
   useEffect(() => {
-    const onAsk = (event: Event) => {
-      const prompt = (event as CustomEvent<{ prompt?: string }>).detail?.prompt?.trim();
+    return subscribeAssistantRequests((prompt) => {
       focusWorkspacePanel('agent');
-      if (!prompt) return;
-      // If the selected provider is not configured/loaded, keep the prompt while settings opens.
+      // Keep the request as a draft when the provider is not configured yet.
       if (askRef.current.canSend) askRef.current.send(prompt);
       else {
         setDraft(prompt);
         setShowSettings(true);
       }
-    };
-    window.addEventListener('nf:ask-ai', onAsk);
-    return () => window.removeEventListener('nf:ask-ai', onAsk);
+    });
   }, []);
 
   const submit = () => {

@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { COMPACT_ENGINE_GUIDE } from './systemPrompt';
-import { getActiveEngineTools } from './tools';
 
 /**
  * MCP bridge — lets external agents (Claude Code, VSCode, Cursor, …) drive this editor.
@@ -46,7 +45,7 @@ const MCP_INSTRUCTIONS = COMPACT_ENGINE_GUIDE.replace(
 );
 
 /** name + description + JSON Schema for every engine tool, derived from the zod schemas. */
-function buildToolManifest() {
+function buildToolManifest(getActiveEngineTools: typeof import('./tools')['getActiveEngineTools']) {
   const live = getActiveEngineTools() as unknown as Record<string, LooseTool>;
   return Object.entries(live)
     .filter(([, def]) => typeof def.execute === 'function')
@@ -60,10 +59,11 @@ function buildToolManifest() {
 }
 
 async function executeCall(message: BridgeCallMessage): Promise<{ ok: boolean; result?: unknown; error?: string }> {
-  const live = getActiveEngineTools() as unknown as Record<string, LooseTool>;
-  const def = live[message.tool];
-  if (!def?.execute) return { ok: false, error: `Unknown tool "${message.tool}"` };
   try {
+    const { getActiveEngineTools } = await import('./tools');
+    const live = getActiveEngineTools() as unknown as Record<string, LooseTool>;
+    const def = live[message.tool];
+    if (!def?.execute) return { ok: false, error: `Unknown tool "${message.tool}"` };
     let input: unknown = message.input ?? {};
     if (isZodSchema(def.inputSchema)) {
       const parsed = def.inputSchema.safeParse(input);
@@ -95,19 +95,22 @@ export function startMcpBridge(): void {
       return;
     }
 
-    socket.onopen = () => {
+    socket.onopen = async () => {
       attempt = 0;
-      wasConnected = true;
-      console.info(`[mcp] connected to MCP relay on :${MCP_PORT} — engine tools are live for external agents`);
-      socket.send(
-        JSON.stringify({
-          type: 'register',
-          name: 'feather-engine',
-          version: '0.1.0',
-          instructions: MCP_INSTRUCTIONS,
-          tools: buildToolManifest(),
-        }),
-      );
+      try {
+        // A stopped relay must not make every editor launch load the AI tool/provider bundle.
+        const { getActiveEngineTools } = await import('./tools');
+        if (socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({
+          type: 'register', name: 'feather-engine', version: '0.1.0',
+          instructions: MCP_INSTRUCTIONS, tools: buildToolManifest(getActiveEngineTools),
+        }));
+        wasConnected = true;
+        console.info(`[mcp] connected to MCP relay on :${MCP_PORT} — engine tools are live for external agents`);
+      } catch (error) {
+        console.error('[mcp] could not register engine tools', error);
+        socket.close();
+      }
     };
 
     socket.onmessage = (event) => {

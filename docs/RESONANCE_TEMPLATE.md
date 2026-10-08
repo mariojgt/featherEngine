@@ -44,3 +44,5 @@ regenerates its packaged starter through the running development editor. Run
 `node scripts/e2e/resonance.mjs` for High-quality shot captures and a real replay-button check, then
 `npm run build:store` to refresh the catalog metadata. The focused template tests exercise Rapier,
 package reference remapping, slow-motion timing, replay and clean Stop restoration.
+
+The template is retired from the public starter catalog. Its development-only export key remains supported for authoring and capture; this does not republish it to the store.

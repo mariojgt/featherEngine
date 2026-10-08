@@ -1,6 +1,6 @@
 import type { NodeForgeProject } from '../types';
 import { migrateLoaded } from '../project/serialize';
-import type { OpenedProject, Platform } from './types';
+import type { Platform } from './types';
 import { canUseHostOnlyFeatures } from '../collaboration/access';
 
 const WEB_DIR = 'web';

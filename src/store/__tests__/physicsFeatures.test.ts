@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { selectActiveObjects, useEditorStore } from '../editorStore';
 import { getActivePhysics, initRapier } from '../../runtime/physicsWorld';
 import { defaultPhysics } from '../editor/defaults';
-import type { GraphNodeCategory, Vector3Tuple } from '../../types';
+import type { GraphNodeCategory } from '../../types';
 
 /**
  * Behavioural tests for the rigid-body features that `tsc` can't say anything about: axis locks, the
@@ -404,7 +404,6 @@ describe('physics lab template', () => {
     const pawnId = await createPhysicsLabTemplate();
     expect(pawnId).toBeTruthy();
 
-    const store = useEditorStore.getState();
     await startPlay();
     expect(() => tick(180)).not.toThrow();
     expect(useEditorStore.getState().isPlaying).toBe(true);

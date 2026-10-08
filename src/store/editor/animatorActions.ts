@@ -1,16 +1,6 @@
 import type { StoreApi } from 'zustand';
 import type { EditorState } from '../editorStore';
-import type {
-  AnimatorComponent,
-  AnimatorCondition,
-  AnimatorController,
-  AnimatorLayer,
-  AnimatorParameter,
-  AnimatorState,
-  AnimatorTransition,
-  CharacterControllerComponent,
-  SceneObject,
-} from '../../types';
+import type { AnimatorComponent, AnimatorCondition, AnimatorController, AnimatorLayer, AnimatorParameter, AnimatorState, AnimatorTransition, CharacterControllerComponent } from '../../types';
 import { mapActiveSceneObjects } from './storeHelpers';
 import { defaultAnimator, defaultCharacter } from './defaults';
 import { makeId } from './ids';
@@ -19,7 +9,6 @@ type SetState = StoreApi<EditorState>['setState'];
 type GetState = StoreApi<EditorState>['getState'];
 
 const DEFAULT_ANIMATOR = { enabled: false, speed: 1, loop: true };
-const DEFAULT_CHARACTER = { enabled: false };
 
 export const applyToggleAnimator = (set: SetState, id: string): void => {
   set((state) =>

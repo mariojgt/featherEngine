@@ -12,21 +12,7 @@ import {
 import 'dockview-react/dist/styles/dockview.css';
 import { ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useEditorPrefs } from '../store/editorPrefsStore';
-import { HierarchyPanel } from './HierarchyPanel';
-import { ViewportPanel } from './Viewport';
-import { InspectorPanel } from './InspectorPanel';
-import { AssetBrowser } from './AssetBrowser';
-import { VisualScriptingPanel } from './VisualScriptingPanel';
-import { MaterialEditorPanel } from './MaterialEditorPanel';
-import { ParticleSystemEditorPanel } from './ParticleSystemEditorPanel';
-import { AnimatorEditorPanel } from './AnimatorEditorPanel';
-import { UIEditorPanel } from './UIEditorPanel';
-import { TerrainEditorPanel } from './TerrainEditorPanel';
-import { TreeBuilderPanel } from './TreeBuilderPanel';
-import { AssetStorePanel } from './AssetStorePanel';
-import { SceneSettingsPanel } from './SceneSettingsPanel';
-import { CinematicPanel } from './CinematicPanel';
-import { AgentPanel } from './AIChatWidget';
+import { BuiltInPanel, BUILT_IN_PANEL_IDS } from './builtInPanels';
 import { ensureWorkspacePanel, focusWorkspacePanel, getWorkspaceApi, registerPanelDefs, setWorkspaceApi } from './workspacePanels';
 import { onPanelClosed } from '../sync/storeSync';
 import { POPPABLE_PANELS, openPanelWindow } from '../sync/popoutWindow';
@@ -114,23 +100,9 @@ const profiled = (id: string, node: ReactNode) => (
 );
 
 // Each Dockview panel just renders the existing panel component (they read stores directly).
-const builtInComponents = {
-  agent: () => profiled('agent', <AgentPanel />),
-  hierarchy: () => profiled('hierarchy', <HierarchyPanel />),
-  viewport: () => profiled('viewport', <ViewportPanel />),
-  inspector: () => profiled('inspector', <InspectorPanel />),
-  project: () => profiled('project', <AssetBrowser />),
-  scripting: () => profiled('scripting', <VisualScriptingPanel />),
-  materials: () => profiled('materials', <MaterialEditorPanel />),
-  terrain: () => profiled('terrain', <TerrainEditorPanel />),
-  trees: () => profiled('trees', <TreeBuilderPanel />),
-  store: () => profiled('store', <AssetStorePanel />),
-  particles: () => profiled('particles', <ParticleSystemEditorPanel />),
-  animator: () => profiled('animator', <AnimatorEditorPanel />),
-  ui: () => profiled('ui', <UIEditorPanel />),
-  scene: () => profiled('scene', <SceneSettingsPanel />),
-  cinematic: () => profiled('cinematic', <CinematicPanel />),
-};
+const builtInComponents = Object.fromEntries(
+  BUILT_IN_PANEL_IDS.map(id => [id, () => profiled(id, <BuiltInPanel kind={id} />)]),
+);
 
 /** Re-add a panel to the dock (after its popped-out window closes), avoiding duplicates. */
 function restoreDockPanel(api: DockviewApi, id: string) {

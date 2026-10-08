@@ -21,10 +21,18 @@ export interface BufferedTransform {
 }
 
 const buffer = new Map<string, BufferedTransform>();
+const liveIds = new Set<string>();
 
-/** Called once per tick with the frame's final object array. O(n) map writes, zero allocation. */
+/** Called once per tick with the frame's final objects; discard transforms of despawned objects. */
 export const publishTransforms = (objects: SceneObject[]) => {
   for (const object of objects) buffer.set(object.id, object.transform);
+  // Only scan membership after a removal or scene switch. Ordinary motion keeps the same
+  // object count and uses the existing allocation-free map-write path.
+  if (buffer.size > objects.length) {
+    for (const object of objects) liveIds.add(object.id);
+    for (const id of buffer.keys()) if (!liveIds.has(id)) buffer.delete(id);
+    liveIds.clear();
+  }
 };
 
 export const readTransform = (id: string): BufferedTransform | undefined => buffer.get(id);
@@ -41,7 +49,8 @@ export const readTransform = (id: string): BufferedTransform | undefined => buff
  * authoritative value for logic/Inspector/save.
  */
 export const publishRenderTransforms = (renderTransforms: Map<string, BufferedTransform>) => {
-  for (const [id, t] of renderTransforms) buffer.set(id, t);
+  // A replay or interpolated physics pose must not resurrect an already-despawned object.
+  for (const [id, t] of renderTransforms) if (buffer.has(id)) buffer.set(id, t);
 };
 
 /** Cleared on Stop so a fresh Play session doesn't read stale positions. */

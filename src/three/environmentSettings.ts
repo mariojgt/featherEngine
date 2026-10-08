@@ -1,5 +1,13 @@
 import * as THREE from 'three';
 import type { SceneEnvironmentSettings, Vector3Tuple } from '../types';
+import type { QualityProfile } from './quality';
+
+/** Resolved environments share this gate with the post pass and the distance-fog fallback. */
+export function isVolumetricFogActive(environment: SceneEnvironmentSettings, profile: QualityProfile): boolean {
+  const density = environment.volumetricFogDensity;
+  return profile.volumetricFog && Boolean(environment.volumetricFogEnabled)
+    && Number.isFinite(density) && density! > 0.0001;
+}
 
 export const defaultSceneEnvironment = (): SceneEnvironmentSettings => ({
   skyMode: 'procedural',

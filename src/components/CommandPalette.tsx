@@ -19,10 +19,6 @@ export const OPEN_COMMANDS_EVENT = 'nf:open-command-palette';
 
 type Command = { id: string; label: string; group: string; keywords?: string; run: () => void | Promise<void> };
 
-function isTypingTarget(target: EventTarget | null) {
-  const el = target as HTMLElement | null;
-  return Boolean(el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)));
-}
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);

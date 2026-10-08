@@ -39,6 +39,7 @@ import { DamageNumber } from '../three/DamageNumber';
 import { ProjectileVisual } from '../three/ProjectileVisual';
 import { PostFx } from '../three/PostFx';
 import { ShadowLOD } from '../three/ShadowLOD';
+import { RenderStatsProbe } from '../three/RenderStatsProbe';
 import { MeshLOD } from '../three/MeshLOD';
 import { CompressedTextureSupport } from '../three/CompressedTextureSupport';
 import { ToneMapping } from '../three/ToneMapping';
@@ -611,6 +612,7 @@ export function GameView() {
           old setDpr(1)/setDpr(1.5) pair flapped — a periodic mid-game hitch that only appeared
           above a certain speed/scene load. autoQualityStep has its own hysteresis + session latch. */}
       {capture ? <CinematicCaptureDriver /> : <PerformanceMonitor onDecline={() => { setDpr(1); autoQualityStep(-1); }} onIncline={() => autoQualityStep(1)} />}
+      <RenderStatsProbe />
       <CompressedTextureSupport />
       <ToneMapping />
       <AudioListenerSync />

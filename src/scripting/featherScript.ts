@@ -1,6 +1,5 @@
 import { buildGraphRuntime, type GraphRuntime } from '../store/editor/graphRuntime';
 import type {
-  GraphNodeKind,
   GraphValue,
   GraphValueType,
   NodeForgeNode,
@@ -747,9 +746,6 @@ class FeatherScriptPrinter {
         break;
       case 'event.receiveDamage':
         result = 'amount';
-        break;
-      case 'event.update':
-        result = 'dt';
         break;
       case 'event.land':
         result = 'speed';

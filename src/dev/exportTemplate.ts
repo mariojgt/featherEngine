@@ -18,6 +18,8 @@ import type { AssetItem } from '../types';
  */
 
 type TemplateKey =
+  | 'cinematic'
+  | 'neon-afterlight'
   | 'cinderfall'
   | 'third-person'
   | 'first-person'
@@ -46,6 +48,19 @@ interface TemplateDef {
 }
 
 const TEMPLATES: Record<TemplateKey, TemplateDef> = {
+  // Retired from the public catalog; these keys still serve the documented authoring/capture CLI.
+  cinematic: {
+    slug: 'template-cinematic', title: 'Resonance — Kinetic Hall',
+    description: 'An editable kinetic hall film with cameras, lighting and live mechanics.',
+    tags: ['template', 'cinematic', 'authoring'],
+    build: async () => (await import('../project/filmModeTemplate')).createFilmModeTemplate(),
+  },
+  'neon-afterlight': {
+    slug: 'template-neon-afterlight', title: 'Neon Afterlight', version: '1.1.0',
+    description: 'An editable seventy-second district film with an embedded city kit and original score.',
+    tags: ['template', 'cinematic', 'authoring', 'cyberpunk'],
+    build: async () => (await import('../project/neonAfterlightTemplate')).createNeonAfterlightTemplate(),
+  },
   cinderfall: {
     slug: 'template-cinderfall',
     title: 'Cinderfall — Extraction FPS',

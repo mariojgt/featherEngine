@@ -15,7 +15,8 @@ use a new feature it needs three things — **a way to do it** (a tool), **a way
 |------|------|
 | [`src/store/editorStore.ts`](../src/store/editorStore.ts) | The source of truth. AI-friendly actions take explicit params and **return ids**. |
 | [`src/ai/tools.ts`](../src/ai/tools.ts) | `engineTools` — the toolset the model can call. Each tool = a `zod` schema + an `execute` that calls the store. |
-| [`src/ai/systemPrompt.ts`](../src/ai/systemPrompt.ts) | `COMPACT_ENGINE_GUIDE` — **the guide actually sent** to the model (in-app chat and MCP) — plus the long-form `ENGINE_GUIDE` reference, and `buildSceneSnapshot()` (the live project state injected every turn). |
+| [`src/ai/systemPrompt.ts`](../src/ai/systemPrompt.ts) | `COMPACT_ENGINE_GUIDE` — **the guide actually sent** to the model (in-app chat and MCP) — and `buildSceneSnapshot()` (the live project state injected every turn). |
+| [`docs/ENGINE_GUIDE.md`](ENGINE_GUIDE.md) | Long-form engine reference for maintaining assistant capabilities. |
 | [`src/ai/useAIChat.ts`](../src/ai/useAIChat.ts) | `describeToolCall()` — the human-readable chip shown when a tool runs. |
 
 ## Launcher recommendations
@@ -30,7 +31,7 @@ package archives and explicit APIs remain supported for existing projects and op
 The tools `create_third_person_template`, `create_sim_racing_template` and
 `create_tower_defense_template` remain valid for requests for those samples; do not tell users to
 find them in the launcher or recommend them as first-run choices. Keep both `COMPACT_ENGINE_GUIDE`
-and `ENGINE_GUIDE` accurate about this distinction.
+and [ENGINE_GUIDE.md](ENGINE_GUIDE.md) accurate about this distinction.
 
 ## Checklist — adding a new capability to the AI
 
@@ -67,10 +68,10 @@ Work top to bottom; skip a step only if it genuinely doesn't apply.
 4. **Teach the model** (`systemPrompt.ts`)
    - Add a line to **`COMPACT_ENGINE_GUIDE`** explaining the capability and *when* to use it. This
      is the load-bearing edit: it is the only guide wired to the model (`useAIChat.ts` for the
-     in-app chat, `mcpBridge.ts` for MCP). `ENGINE_GUIDE` above it is the long-form reference —
+     in-app chat, `mcpBridge.ts` for MCP). [ENGINE_GUIDE.md](ENGINE_GUIDE.md) is the long-form reference —
      keep it in sync for humans, but a capability documented *only* there is invisible to the
      assistant.
-   - Backticks inside either guide must be escaped (`` \` ``) or the template literal terminates
+   - Backticks inside the compact TypeScript guide must be escaped (`` \` ``) or the template literal terminates
      early and the build breaks. `COMPACT_ENGINE_GUIDE` sidesteps this by using `**bold**` and
      plain quotes instead — prefer that. If it's a multi-step recipe (like "walk with WASD"),
      spell out the steps.
@@ -95,7 +96,7 @@ Nodes touch a few extra places. When you add a node kind:
 3. Add it to the palette `nodeGroups` in [`src/components/VisualScriptingPanel.tsx`](../src/components/VisualScriptingPanel.tsx).
 4. Give it an icon in [`src/components/NodeForgeGraphNode.tsx`](../src/components/NodeForgeGraphNode.tsx) (`kindIcon`).
 5. **AI:** add the label to `NODE_LABELS` + `NODE_CATEGORY` in `tools.ts`, and list it under the
-   node types in `ENGINE_GUIDE` (`systemPrompt.ts`) with what params it takes.
+   node types in [ENGINE_GUIDE.md](ENGINE_GUIDE.md) with what params it takes.
 
 ## Special case: Cinematic timeline features
 
@@ -119,7 +120,7 @@ tool is the plugin's job (see [`src/extensions/types.ts`](../src/extensions/type
   `pluginId.toolId`).
 - Add a chip label in `describeToolCall()` (`useAIChat.ts`) for the qualified tool id.
 - Mention the plugin's capability in `COMPACT_ENGINE_GUIDE` and the notable-plugin list in
-  `ENGINE_GUIDE` (`systemPrompt.ts`) so the model knows to reach for it.
+  [ENGINE_GUIDE.md](ENGINE_GUIDE.md) so maintainers can keep the references in sync.
 - The local (on-device) router intentionally does NOT surface plugin tools — they need a remote
   vision-capable model.
 
@@ -209,7 +210,7 @@ returns its player object ID. `newProjectFromStarter(name, 'cinderfall')` create
 All gameplay rules, art and menus are authored project data; there is no game-specific player
 runtime. Model Forge assets can now render as camera view-models. Full-screen opaque interactive
 UI menus release pointer lock so buttons remain usable; transparent HUD controls retain it.
-Both ENGINE_GUIDE versions describe controls and the requirement for an updated engine build.
+The compact prompt and long-form engine reference describe controls and the requirement for an updated engine build.
 
 The store catalog can include `previewType: 'capture'` and a `screenshots` gallery. Publishing
 requires current captured previews for featured listings. See [ASSET_STORE.md](ASSET_STORE.md)

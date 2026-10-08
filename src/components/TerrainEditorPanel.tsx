@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Brush, Eraser, Mountain, Palette, Plus, Settings2, Sprout, Trash2 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { useStableActiveObjects } from '../store/stableSelectors';
-import { RangeField } from './InspectorPanel';
+import { RangeField } from './RangeField';
 import { defaultStylizedGrass, withTerrainDefaults } from '../terrain/terrain';
 import type {
   AssetItem,

@@ -2,7 +2,7 @@ import { SceneLight } from '../three/SceneLight';
 import { requestAddObject } from './ObjectCreationMenu';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Edges, Grid, Html, PerformanceMonitor, TransformControls } from '@react-three/drei';
-import { ArrowDownToLine, Aperture, Camera, CircleDot, Globe, Magnet, Maximize2, Minimize2, Move3D, Play, Rotate3D, Scaling, Sparkles, View } from 'lucide-react';
+import { ArrowDownToLine, Aperture, Camera, CircleDot, Globe, Magnet, Maximize2, Minimize2, Move3D, Rotate3D, Scaling, Sparkles } from 'lucide-react';
 import { useViewportPrefs } from '../store/viewportPrefsStore';
 import { Component, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -12,7 +12,7 @@ import { effectiveSelection, selectActiveObjects, useEditorStore } from '../stor
 import { isTransientVfx, nonVfxObjectsSignature, useVfxObjects } from '../store/stableSelectors';
 import { undo, redo } from '../store/history';
 import { useProjectStore } from '../store/projectStore';
-import { countSceneStats, recordRender, recordRenderTime, type CountableNode } from '../runtime/perfStats';
+import { RenderStatsProbe } from '../three/RenderStatsProbe';
 import { readTransform } from '../runtime/transformBuffer';
 import { captureViewportScreenshot, setViewportCaptureHandler, setViewportImageHandler } from '../runtime/viewportCaptureBridge';
 import { saveViewportScreenshot } from '../runtime/viewportScreenshot';
@@ -1409,64 +1409,6 @@ function ViewportFallback() {
 }
 
 /**
- * Reads three.js renderer counters once per frame and feeds them to the perf overlay.
- * `gl.info` auto-resets right before each render, so in a pre-render `useFrame` these hold the
- * PREVIOUS frame's totals — a 1-frame lag that's irrelevant for a stats display.
- */
-function RenderStatsProbe() {
-  const gl = useThree((state) => state.gl);
-  const scene = useThree((state) => state.scene);
-  // Wrap WebGLRenderer.render with a wall-clock accumulator: a frame may render several times
-  // (post-fx passes, shadow updates happen inside), so sum all calls between two useFrames. The
-  // pre-render useFrame below then publishes the PREVIOUS frame's total — same 1-frame lag as gl.info.
-  const renderAccum = useRef(0);
-  // gl.info auto-resets at the START of every render call, and the post-fx composer issues several
-  // per frame — so sampling info once per frame only ever saw the LAST pass (the fullscreen copy:
-  // 1 call, 1 triangle). Sum each call's counters right after it completes instead.
-  const callsAccum = useRef(0);
-  const trianglesAccum = useRef(0);
-  useEffect(() => {
-    const original = gl.render.bind(gl);
-    (gl as { render: typeof gl.render }).render = (...args: Parameters<typeof gl.render>) => {
-      const start = performance.now();
-      original(...args);
-      renderAccum.current += performance.now() - start;
-      callsAccum.current += gl.info.render.calls;
-      trianglesAccum.current += gl.info.render.triangles;
-    };
-    return () => {
-      (gl as { render: typeof gl.render }).render = original;
-    };
-  }, [gl]);
-  // Scene counters need a graph walk, which is exactly the "excessive scene traversal" to avoid on a
-  // hot path — so they are resampled about once a second and held between samples. They change on the
-  // timescale of editing a scene, not of a frame, so a stale second is invisible in the readout.
-  const sceneCounts = useRef(countSceneStats(undefined));
-  const nextSceneSampleAt = useRef(0);
-  useFrame(() => {
-    recordRenderTime(renderAccum.current);
-    renderAccum.current = 0;
-    const now = performance.now();
-    if (now >= nextSceneSampleAt.current) {
-      sceneCounts.current = countSceneStats(scene as unknown as CountableNode);
-      nextSceneSampleAt.current = now + 1000;
-    }
-    const info = gl.info;
-    recordRender({
-      calls: callsAccum.current,
-      triangles: trianglesAccum.current,
-      programs: info.programs?.length ?? 0,
-      geometries: info.memory.geometries,
-      textures: info.memory.textures,
-      ...sceneCounts.current,
-    });
-    callsAccum.current = 0;
-    trianglesAccum.current = 0;
-  });
-  return null;
-}
-
-/**
  * Shadow budget: during Play, keep shadows on the first N shadow-capable lights and disable the rest,
  * where N comes from the active quality preset (`maxShadowCasters` — 0 on Low, up to 16 on Epic).
  * Forward rendering makes each shadow-caster a full extra depth pass, so over-budget scenes (e.g. the
@@ -1672,8 +1614,6 @@ export function ViewportPanel() {
   const closePrefabEditor = useEditorStore((state) => state.closePrefabEditor);
   // Game quality (scalability) preset — drives render resolution, shadows, and post-FX MSAA.
   const quality = useEditorStore((state) => state.renderSettings.quality);
-  const autoQuality = useEditorStore((state) => state.renderSettings.autoQuality !== false);
-  const updateRenderSettings = useEditorStore((state) => state.updateRenderSettings);
   const qProfile = qualityProfile(quality);
   const followTargetMeta = useEditorStore((state) => {
     const target = selectActiveObjects(state).find(

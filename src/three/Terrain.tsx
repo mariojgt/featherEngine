@@ -1,16 +1,11 @@
 import { useFrame, useThree } from '@react-three/fiber';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { useEditorStore, selectActiveObjects } from '../store/editorStore';
+import { useEditorStore } from '../store/editorStore';
 import { useStableActiveObjects } from '../store/stableSelectors';
 import { TerrainFoliage } from './TerrainFoliage';
 import type { SceneObject, TerrainComponent } from '../types';
-import {
-  sampleTerrainLocalHeight,
-  terrainChunkKeysAroundLocal,
-  withTerrainDefaults,
-  type TerrainChunkKey,
-} from '../terrain/terrain';
+import { terrainChunkKeysAroundLocal, withTerrainDefaults, type TerrainChunkKey } from '../terrain/terrain';
 import { buildTerrainChunkGeometryData } from '../terrain/terrainGeometry';
 import { terrainChunkLodSegments, terrainChunkSignatures } from '../terrain/terrainChunks';
 import { useTerrainSurfaceMaterial } from './terrainSurface';

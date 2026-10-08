@@ -3,6 +3,7 @@ import { Boxes, Circle, Clock, Gauge, HardDrive, MousePointer2, Save } from 'luc
 import { useEditorStore, selectActiveObjects, effectiveSelection } from '../store/editorStore';
 import { getPerfSnapshot } from '../runtime/perfStats';
 import { getRecoveryStatus, subscribeRecoveryStatus } from '../store/autosave';
+import type { Vector3Tuple } from '../types';
 
 /**
  * Persistent bottom status bar — the anchor chrome every pro editor (Unity/Unreal/VS Code) has.
@@ -20,10 +21,39 @@ function formatElapsed(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** Keep live coordinates useful without reconciling the status bar on every simulation tick. */
+function SelectionPosition({ objectId }: { objectId: string }) {
+  const isPlaying = useEditorStore((s) => s.isPlaying);
+  const editPosition = useEditorStore((s) => s.isPlaying
+    ? undefined
+    : selectActiveObjects(s).find((object) => object.id === objectId)?.transform.position);
+  const readPosition = () => selectActiveObjects(useEditorStore.getState())
+    .find((object) => object.id === objectId)?.transform.position;
+  const [runtimePosition, setRuntimePosition] = useState<Vector3Tuple | undefined>(readPosition);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const poll = () => setRuntimePosition(selectActiveObjects(useEditorStore.getState())
+      .find((object) => object.id === objectId)?.transform.position);
+    poll();
+    const id = window.setInterval(poll, 250);
+    return () => window.clearInterval(id);
+  }, [isPlaying, objectId]);
+
+  const pos = isPlaying ? runtimePosition : editPosition;
+  if (!pos) return null;
+  return (
+    <span className="status-bar__item status-bar__mono" title="World position (X, Y, Z)">
+      X {fmt(pos[0])}  Y {fmt(pos[1])}  Z {fmt(pos[2])}
+    </span>
+  );
+}
+
 export function StatusBar() {
   const objectCount = useEditorStore((s) => selectActiveObjects(s).length);
   const selectionCount = useEditorStore((s) => effectiveSelection(s).length);
-  const active = useEditorStore((s) => s.selectedObject());
+  const activeId = useEditorStore((s) => s.selectedObject()?.id);
+  const activeName = useEditorStore((s) => s.selectedObject()?.name);
   const sceneName = useEditorStore((s) => s.activeScene()?.name);
   const isDirty = useEditorStore((s) => s.isDirty);
   const isPlaying = useEditorStore((s) => s.isPlaying);
@@ -44,7 +74,6 @@ export function StatusBar() {
     return () => window.clearInterval(id);
   }, [isPlaying]);
 
-  const pos = active?.transform?.position;
   const fpsTone = fps >= 55 ? 'ok' : fps >= 30 ? 'warn' : 'bad';
 
   return (
@@ -54,15 +83,11 @@ export function StatusBar() {
           <MousePointer2 size={14} aria-hidden />
           {selectionCount > 1
             ? `${selectionCount} selected`
-            : active
-              ? active.name
+            : activeId
+              ? activeName
               : 'No selection'}
         </span>
-        {active && pos && selectionCount <= 1 && (
-          <span className="status-bar__item status-bar__mono" title="World position (X, Y, Z)">
-            X {fmt(pos[0])}  Y {fmt(pos[1])}  Z {fmt(pos[2])}
-          </span>
-        )}
+        {activeId && selectionCount <= 1 && <SelectionPosition objectId={activeId} />}
       </div>
 
       <div className="status-bar__group status-bar__group--right">

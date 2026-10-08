@@ -16,7 +16,7 @@ import { chopTree } from '../../runtime/treeChop';
 import { normalizeTreeSpec, resolveTreeSpec, treeRng, treeSpecFromArchetype } from '../../tree/treeSpec';
 import { getStylizedPreset, stylizedTreeSpec } from '../../tree/stylizedPresets';
 import { makeModelPart, modelSpecFromStarter, normalizeModelSpec } from '../../model/modelSpec';
-import { cloneMesh, extrudeMeshFaces, subdivideMeshFaces, type MeshBooleanOp } from '../../model/modelMesh';
+import { extrudeMeshFaces, subdivideMeshFaces, type MeshBooleanOp } from '../../model/modelMesh';
 import { booleanMeshParts, dedupeGeometryToMesh } from '../../model/modelMeshCsg';
 import { getPartRenderGeometry } from '../../model/modelGeometry';
 import { defaultTransform } from './defaults';
